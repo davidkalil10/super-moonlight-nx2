@@ -6,7 +6,7 @@
 //         sequence is polled to resync with a keyframe when the chain breaks.
 // Usage: node tools/moonlight/live.cjs [runs/launcher-XXXX]
 //        [--moonlight HOST APP [--bitrate KBPS] | --screen | --input FILE]
-//        [--codec hbv1|hbv2] [--size 1920x1080] [--fps 60] [--depth 2]
+//        [--codec hbv1|hbv2|h264] [--size 1920x1080] [--fps 60] [--depth 2]
 //        hbv1: [--workers 12]
 //        hbv2: [--budget 96] [--cap 256] (KiB) [--qp-min 4] [--qp-max 40]
 //              [--refresh 2] [--threads N] [--resync 1000] (ms)
@@ -285,7 +285,7 @@ async function main() {
   const option = (name, fallback) =>
     args.includes(name) ? Number(args[args.indexOf(name) + 1]) : fallback;
   const codec = args.includes('--codec') ? args[args.indexOf('--codec') + 1] : 'hbv1';
-  if (!['hbv1', 'hbv2'].includes(codec)) throw Error('--codec is hbv1 or hbv2');
+  if (!['hbv1', 'hbv2', 'h264'].includes(codec)) throw Error('--codec is hbv1, hbv2 or h264');
   const fps = option('--fps', 60);
   const size = args.includes('--size') ? args[args.indexOf('--size') + 1] : '1920x1080';
   const [width, height] = size.split('x').map(Number);
@@ -294,6 +294,19 @@ async function main() {
   const storage = await findPrivateStorage(directory);
   if (storage.bytes < ring.MEMORY_BYTES)
     throw Error('The running Moonlight app predates HBV2; rebuild and reinstall it');
+  if (codec === 'h264') {
+    await require('./native-h264.cjs').run({
+      args,
+      directory,
+      rpc,
+      storage,
+      helperPath: HELPER,
+      width,
+      height,
+      fps
+    });
+    return;
+  }
 
   const fresh = () =>
     codec === 'hbv1'

@@ -16,5 +16,30 @@ void main(){
   if(c.game.x>=60u)hbExit();
   hbEndFrame();
  }
- hbv2Step();
+ if(gl_LocalInvocationIndex==0u){
+  memory.words[CONTROL_NATIVE_READY]=NATIVE_ABI;
+  uint sequence=memory.words[CONTROL_NATIVE_SEQUENCE];
+  if(sequence!=0u){
+   if(sequence!=memory.words[CONTROL_NATIVE_APPLIED]){
+    uint index=memory.words[CONTROL_NATIVE_INDEX];
+    uint width=memory.words[CONTROL_NATIVE_WIDTH],height=memory.words[CONTROL_NATIVE_HEIGHT];
+    uint stride=memory.words[CONTROL_NATIVE_STRIDE],rows=memory.words[CONTROL_NATIVE_SLICE_HEIGHT];
+    if(index<2u&&width>=2u&&height>=2u&&width<=1920u&&height<=1088u&&stride>=width&&rows>=height&&stride*rows*3u/2u<=FRAME_BYTES){
+     memory.words[CONTROL_CURRENT]=index;
+     memory.words[CONTROL_SIZE]=width|(height<<16);
+     memory.words[CONTROL_CURRENT_STRIDE]=stride;
+     memory.words[CONTROL_CURRENT_SLICE_HEIGHT]=rows;
+     memory.words[CONTROL_CURRENT_COLOR]=memory.words[CONTROL_NATIVE_COLOR];
+     memory.words[CONTROL_MODE]=MODE_NATIVE;
+     memoryBarrierBuffer();
+     memory.words[CONTROL_NATIVE_APPLIED]=sequence;
+    }
+   }
+  }else if(memory.words[CONTROL_MODE]==MODE_NATIVE){
+   memory.words[CONTROL_MODE]=0u;
+  }
+ }
+ memoryBarrierBuffer();
+ barrier();
+ if(memory.words[CONTROL_MODE]!=MODE_NATIVE)hbv2Step();
 }

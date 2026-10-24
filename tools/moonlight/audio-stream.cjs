@@ -29,7 +29,7 @@ const check = (value, message) => {
 
 function resolver(rpc) {
   const resolved = {};
-  return async function call(name, ...args) {
+  async function resolve(name) {
     if (!resolved[name]) {
       const matches = symbols.filter(s => s.name.includes(name));
       check(matches.length === 1, 'Ambiguous audio symbol ' + name);
@@ -42,23 +42,25 @@ function resolver(rpc) {
       });
       resolved[name] = address;
     }
-    return (await rpc.callAddress(resolved[name], args)).result;
+    return resolved[name];
+  }
+  async function call(name, ...args) {
+    return (await rpc.callAddress(await resolve(name), args, 2)).result;
+  }
+  call.writeAndCall = async (address, bytes, name, ...args) => {
+    const target = await resolve(name);
+    if (rpc.writeAndCall)
+      return (await rpc.writeAndCall(address, bytes, target, args)).result;
+    await rpc.write(address, bytes);
+    return (await rpc.callAddress(target, args, 2)).result;
   };
+  return call;
 }
 
 async function allocate(rpc, bytes) {
-  const temp = rpc.a.scratch + 0x10000;
-  const saved = await rpc.read(temp, 8);
-  let base;
-  try {
-    check(
-      (await rpc.call(ALLOCATE, [temp, 65536, bytes])).result === 0n,
-      'Audio allocation failed'
-    );
-    base = Number((await rpc.read(temp, 8)).readBigUInt64LE());
-  } finally {
-    await rpc.write(temp, saved);
-  }
+  const allocation = await rpc.call(ALLOCATE, [rpc.output, 65536, bytes], 8);
+  check(allocation.result === 0n, 'Audio allocation failed');
+  const base = Number(allocation.output.readBigUInt64LE());
   check(Number.isSafeInteger(base) && base > 0 && base % 65536 === 0, 'Invalid audio allocation');
   return base;
 }
@@ -203,7 +205,7 @@ function stream(options) {
     }
 
     async function drain() {
-      for (let i = 0; i < DESCRIPTOR_COUNT; i++) {
+      for (let i = 0; i < DESCRIPTOR_COUNT && inFlight.length; i++) {
         const address = await call('GetReleasedAudioOutBuffer', base);
         if (address === 0n) break;
         const slot = index.get(Number(address));
@@ -218,9 +220,8 @@ function stream(options) {
 
     async function append(descriptor, pcm) {
       const slot = index.get(descriptor);
-      await rpc.write(slotAddress(slot), pcm);
+      check((await call.writeAndCall(slotAddress(slot), pcm, 'AppendAudioOutBuffer', base, descriptor)) === 1n, 'Append rejected');
       stats.written++;
-      check((await call('AppendAudioOutBuffer', base, descriptor)) === 1n, 'Append rejected');
       free.delete(descriptor);
       const playhead = inFlight.length ? inFlight[inFlight.length - 1].releaseAt : now();
       inFlight.push({descriptor, releaseAt: Math.max(playhead, now()) + bufferMs});
@@ -323,11 +324,16 @@ async function main() {
   process.on('SIGINT', () => session.stop());
   process.on('SIGTERM', () => session.stop());
   console.log('Continuous audio stream ready.');
+  const printing = args.includes('--stats') ? setInterval(() => {
+    console.log(JSON.stringify({event: 'audio-stats', ...session.stats}));
+  }, 1000) : null;
   let error;
   try {
     await session.done;
   } catch (e) {
     error = e;
+  } finally {
+    clearInterval(printing);
   }
   const file = path.join(directory, `moonlight-audio-${Date.now()}.json`);
   await fs.promises.writeFile(

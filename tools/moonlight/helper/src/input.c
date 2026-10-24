@@ -5,6 +5,7 @@
  * Missing controller fields keep their previous value. */
 #include "helper.h"
 
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -21,6 +22,15 @@ struct pad {
 
 static struct pad state;
 static int touch_support = -1;
+
+static bool message_type(const char *line, const char *name) {
+  const char *at = strstr(line, "\"type\"");
+  if (!at || !(at = strchr(at + 6, ':')))
+    return false;
+  while (isspace((unsigned char)*++at)) {}
+  size_t length = strlen(name);
+  return *at == '"' && strncmp(at + 1, name, length) == 0 && at[length + 1] == '"';
+}
 
 static long field(const char *line, const char *name, long previous, long low, long high) {
   char key[32];
@@ -116,7 +126,11 @@ static bool handle_touch(const char *line) {
 bool input_handle_line(const char *line) {
   if (!strchr(line, '{'))
     return false;
-  if (strstr(line, "\"type\":\"touch\""))
+  if (message_type(line, "request-idr")) {
+    LiRequestIdrFrame();
+    return true;
+  }
+  if (message_type(line, "touch"))
     return handle_touch(line);
   return handle_controller(line);
 }
