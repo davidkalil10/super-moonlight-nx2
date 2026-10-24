@@ -1,0 +1,6 @@
+FROM quay.io/fedora/fedora:44
+RUN dnf install -y --setopt=install_weak_deps=False \
+      cmake gcc gcc-c++ make pkgconf-pkg-config openssl-devel libcurl-devel expat-devel \
+      libuuid-devel opus-devel libavcodec-free-devel libavutil-free-devel \
+      libswscale-free-devel \
+ && dnf clean all
