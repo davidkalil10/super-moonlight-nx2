@@ -3,6 +3,33 @@ const assert = require('node:assert/strict');
 const ring = require('./ring.cjs');
 const {create} = require('./native-sink.cjs');
 
+test('host publication fields occupy different cache lines from GPU-written control', () => {
+  const gpu = [
+    'applied',
+    'applyCount',
+    'mode',
+    'current',
+    'size',
+    'hbv1Slot',
+    'nativeReady',
+    'nativeApplied',
+    'currentStride',
+    'currentSliceHeight',
+    'currentColor'
+  ];
+  const host = [
+    'nativeSequence',
+    'nativeIndex',
+    'nativeWidth',
+    'nativeHeight',
+    'nativeStride',
+    'nativeSliceHeight',
+    'nativeColor'
+  ];
+  const gpuLines = new Set(gpu.map(name => Math.floor(ring.CONTROL[name] / 128)));
+  for (const name of host) assert.equal(gpuLines.has(Math.floor(ring.CONTROL[name] / 128)), false);
+});
+
 function fixture() {
   const memory = Buffer.alloc(ring.CONTROL_BYTES);
   const writes = [];
