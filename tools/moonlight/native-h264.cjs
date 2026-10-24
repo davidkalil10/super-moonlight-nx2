@@ -255,11 +255,12 @@ async function run({
         await decoder.submit(unit);
         stats.submitted++;
         outstanding++;
-        // One pull per submit in the steady 1:1 case, so no known-empty
-        // acquireOutput; extra pulls happen only while the decoder owes frames.
-        // The next destination() waits for the GPU to apply the last frame, so
-        // no explicit wait is needed here and submit of N+1 is not blocked on it.
-        while (outstanding > 0) {
+        // Pull once per submit, then drain only genuine backlog. Leaving one
+        // frame in the decoder's pipeline means a one-frame decode latency never
+        // costs a known-empty acquireOutput in steady state. The next
+        // destination() waits for the GPU to apply the last frame, so no
+        // explicit wait is needed and submit of N+1 is not blocked on it.
+        for (let pull = true; pull || outstanding > 1; pull = false) {
           const destination = await sink.destination();
           const frame = await decoder.receive(destination);
           if (!frame) break;
