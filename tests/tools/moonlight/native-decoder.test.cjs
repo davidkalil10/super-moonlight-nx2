@@ -80,6 +80,13 @@ function createConsole() {
       case 'bufferCreate':
         return 0n;
       case 'createH264Configuration':
+        // The five-argument configuration call travels the wide frame through the
+        // x4/x5 preamble. a[0] is pointer('sps') (module base + 0x1000), so a[2]
+        // (pps, +0x2000) and a[4] (configuration, +0x100) prove x2 and the
+        // preamble-set x4 arrived intact. a[1]/a[3] are the NAL lengths.
+        assert.equal(a[2], a[0] + 0x1000, 'createH264Configuration x2');
+        assert.equal(a[4], a[0] - 0xf00, 'createH264Configuration x4 via preamble');
+        assert.ok(a[1] > 0 && a[3] > 0);
         return 1n;
       case 'mediaFindInt': {
         const key = cstr(a[1]);
@@ -132,23 +139,69 @@ function createConsole() {
     }
   }
 
+  // A gadget-level emulator for any worker frame six.cjs or frames.cjs build()
+  // produces. It only knows the thread-code gadget semantics (shared by both and
+  // device-proven through six.cjs), not any one layout, so it walks the chain and
+  // runs each movie/memcpy call exactly as the console thread would.
+  const LOAD_TABLE = SDK + code.loadTable.offset;
+  const CALL4 = SDK + code.call4.offset;
+  const SAVE = SDK + code.saveResult64.offset;
+  const PREAMBLE = SDK + 0x5604a8;
+  const EXIT = SDK + code.exit.offset;
+
+  function emulate(entry) {
+    const r = {x4: 0, x5: 0, x8: 0, x19: 0, x20: 0, x21: 0, x25: 0, x30: 0, sp: 0};
+    // longjmp restores x19..x30 and sp from the jmpbuf at the frame entry.
+    r.x19 = peek64(entry + 0x00);
+    r.x20 = peek64(entry + 0x08);
+    r.x21 = peek64(entry + 0x10);
+    r.x25 = peek64(entry + 0x30);
+    r.x30 = peek64(entry + 0x58);
+    r.sp = peek64(entry + 0x68);
+    let pc = r.x30,
+      acc = 0n;
+    for (let steps = 0; steps < 1 << 16; steps++) {
+      if (pc === EXIT) return acc;
+      if (pc === PREAMBLE) {
+        r.x4 = r.x21;
+        r.x5 = r.x20;
+        pc = r.x19;
+      } else if (pc === LOAD_TABLE || pc === LOAD_TABLE + 8) {
+        if (pc === LOAD_TABLE) r.x8 = peek64(r.x21);
+        r.x20 = peek64(r.sp + 0x20);
+        r.x19 = peek64(r.sp + 0x28);
+        r.x21 = peek64(r.sp + 0x10);
+        r.x30 = peek64(r.sp + 8);
+        r.sp += 0x30;
+        pc = r.x30;
+      } else if (pc === CALL4) {
+        acc = exec(peek64(r.x8 + 0x68), [r.x25, r.x21, r.x20, r.x19, r.x4, r.x5].map(BigInt));
+        // x4/x5 are caller-saved; the device leaves them stale after the call too,
+        // so a four-argument callee must never read them. Clear them here so the
+        // mock can't accidentally depend on a leaked wide value.
+        r.x4 = r.x5 = 0;
+        r.x20 = peek64(r.sp + 0xe0);
+        r.x19 = peek64(r.sp + 0xe8);
+        r.x21 = peek64(r.sp + 0xd8);
+        r.x25 = peek64(r.sp + 0xb8);
+        r.x30 = peek64(r.sp + 0xa8);
+        r.sp += 0xf0;
+        pc = r.x30;
+      } else if (pc === SAVE) {
+        poke64(r.x19, acc);
+        r.x19 = peek64(r.sp + 0x10);
+        r.x30 = peek64(r.sp + 8);
+        r.sp += 0x20;
+        pc = r.x30;
+      } else throw Error('emulator: unknown gadget at 0x' + pc.toString(16));
+    }
+    throw Error('emulator: frame did not exit');
+  }
+
   function gadget(address, args) {
     if (address === SDK + code.create.offset) {
-      const out = Number(args[0]);
-      const base = Number(args[3]);
-      const target = peek64(base + 0x1078);
-      const workerArgs = [
-        peek64(base + 0x30),
-        peek64(base + 0x10040),
-        peek64(base + 0x10050),
-        peek64(base + 0x10058),
-        peek64(base + 0x10),
-        peek64(base + 8)
-      ].map(BigInt);
-      const result = movie(target, workerArgs);
-      poke64(base + 0x800, result);
-      poke64(out, 0x7000n);
-      lastThread = result;
+      lastThread = emulate(Number(args[3]));
+      poke64(Number(args[0]), 0x7000n);
       return 0n;
     }
     if (address === SDK + code.tryWait.offset) return 1n;
@@ -307,7 +360,7 @@ async function fixture() {
   return directory;
 }
 
-const STEADY_STATE_EXCHANGES = 18;
+const STEADY_STATE_EXCHANGES = 10;
 const sps = Buffer.from('6742001eab', 'hex');
 const pps = Buffer.from('68ce0100', 'hex');
 
@@ -342,12 +395,15 @@ test('steady-state H.264 submit+receive holds its exchange budget and call order
     assert.equal(result.stride, 1920);
     const exchanges = consoleMock.count;
     // Live steady-state budget. Bump this down (never up) as the path tightens,
-    // and record the before/after in the commit message.
+    // and record the before/after in the commit message. One finite worker now
+    // runs SendInput, AcquireOutput and the next frame's AcquireInput together,
+    // and the host pairs bufferSetData with getOutput, so the frame went from 18
+    // exchanges to 10.
     assert.equal(exchanges, STEADY_STATE_EXCHANGES, 'steady-state exchanges per frame');
     assert.deepEqual(consoleMock.log, [
-      'acquireInput',
       'sendInput',
       'acquireOutput',
+      'acquireInput',
       'bufferSetData',
       'getOutput',
       'releaseOutput'
