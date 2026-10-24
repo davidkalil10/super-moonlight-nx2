@@ -20,6 +20,7 @@ const {Worker} = require('node:worker_threads');
 const ring = require('./ring.cjs');
 const {findPrivateStorage, nextSequence} = require('./feed.cjs');
 const hbv = require('./hbv.cjs');
+const {split} = require('./frames.cjs');
 const {HELPER} = require('./helper.cjs');
 const session = require('../../sdk/host/session.cjs');
 const cli = require('../../sdk/cli.cjs');
@@ -106,14 +107,9 @@ function newestRun() {
 }
 
 async function* frames(capture, frameBytes, stats) {
-  let pending = Buffer.alloc(0);
-  for await (const chunk of capture.stdout) {
-    pending = pending.length ? Buffer.concat([pending, chunk]) : chunk;
-    while (pending.length >= frameBytes) {
-      stats.captured++;
-      yield Buffer.from(pending.subarray(0, frameBytes));
-      pending = pending.subarray(frameBytes);
-    }
+  for await (const frame of split(capture.stdout, frameBytes)) {
+    stats.captured++;
+    yield Buffer.from(frame);
   }
 }
 

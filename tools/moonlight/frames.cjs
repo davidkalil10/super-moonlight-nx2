@@ -25,17 +25,22 @@ async function* readFrames(file, width, height, limit = Infinity) {
       code === 0 ? resolve() : reject(Error('ffmpeg exited with ' + code))
     );
   });
+  yield* split(ffmpeg.stdout, frameBytes, limit);
+  await exited;
+}
+
+// Cuts a raw byte stream into frameBytes-sized frames, views into the read buffers.
+async function* split(stream, frameBytes, limit = Infinity) {
   let pending = Buffer.alloc(0),
     count = 0;
-  for await (const chunk of ffmpeg.stdout) {
-    pending = Buffer.concat([pending, chunk]);
+  for await (const chunk of stream) {
+    pending = pending.length ? Buffer.concat([pending, chunk]) : chunk;
     while (pending.length >= frameBytes && count < limit) {
       yield pending.subarray(0, frameBytes);
       pending = pending.subarray(frameBytes);
       count++;
     }
   }
-  await exited;
 }
 
-module.exports = {readFrames};
+module.exports = {readFrames, split};
