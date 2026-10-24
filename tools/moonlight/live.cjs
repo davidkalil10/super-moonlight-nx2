@@ -13,8 +13,6 @@
 // --moonlight runs tools/moonlight/helper's hbmoonlight (path from $HBMOONLIGHT)
 //   and, unless --no-input / --no-audio, also feeds controller+touch into its
 //   stdin (input-feeder.cjs) and plays its audio on the console (audio-stream.cjs).
-const fs = require('node:fs');
-const os = require('node:os');
 const path = require('node:path');
 const readline = require('node:readline');
 const {spawn} = require('node:child_process');
@@ -22,10 +20,8 @@ const {Worker} = require('node:worker_threads');
 const ring = require('../../apps/moonlight/ring.cjs');
 const {findPrivateStorage, nextSequence} = require('./feed.cjs');
 const hbv = require('./hbv.cjs');
-
-const HELPER =
-  process.env.HBMOONLIGHT ||
-  path.join(os.homedir(), 'claude-builds/HBLauncher/moonlight-helper/build/hbmoonlight');
+const {HELPER} = require('./helper.cjs');
+const session = require('../../sdk/host/session.cjs');
 
 function moonlight(args, fps, width, height, directory) {
   const at = args.indexOf('--moonlight');
@@ -103,13 +99,7 @@ function source(args, fps, width, height, directory) {
 }
 
 function newestRun() {
-  const runs = path.join(__dirname, '../../runs');
-  const newest = fs
-    .readdirSync(runs)
-    .filter(name => name.startsWith('launcher-'))
-    .map(name => path.join(runs, name))
-    .sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs)[0];
-  if (!newest) throw Error('No launcher session found in runs/');
+  const newest = session.newest();
   console.log('Using ' + path.relative(process.cwd(), newest));
   return newest;
 }
@@ -290,7 +280,7 @@ async function main() {
   const size = args.includes('--size') ? args[args.indexOf('--size') + 1] : '1920x1080';
   const [width, height] = size.split('x').map(Number);
   const directory = args[0] && !args[0].startsWith('--') ? path.resolve(args[0]) : newestRun();
-  const rpc = require(path.join(directory, 'shared/rpc.cjs'));
+  const rpc = session.rpc(directory);
   const storage = await findPrivateStorage(directory);
   if (storage.bytes < ring.MEMORY_BYTES)
     throw Error('The running Moonlight app predates HBV2; rebuild and reinstall it');

@@ -4,23 +4,14 @@
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const ring = require('../../apps/moonlight/ring.cjs');
+const session = require('../../sdk/host/session.cjs');
 
 const SLOT = 32768;
 const HOST_COHERENT = 4;
 
 async function findPrivateStorage(directory) {
-  for (;;) {
-    const names = (await fs.readdir(directory)).filter(n => /^app-moonlight-.*\.json$/.test(n));
-    const reports = await Promise.all(
-      names.map(async n => JSON.parse(await fs.readFile(path.join(directory, n), 'utf8')))
-    );
-    const storage = reports
-      .filter(r => r.privateStorage)
-      .sort((a, b) => b.started.localeCompare(a.started))[0]?.privateStorage;
-    if (storage) return storage;
-    console.log('Waiting for the Moonlight app to open on the console...');
-    await new Promise(resolve => setTimeout(resolve, 1000));
-  }
+  const waiting = 'Waiting for the Moonlight app to open on the console...';
+  return (await session.appReport(directory, 'moonlight', waiting)).privateStorage;
 }
 
 // First sequence number newer than anything the console applied or that is
@@ -53,7 +44,7 @@ async function main() {
     depth = option('--depth', 1),
     inFlight = new Set();
   const directory = path.resolve(run);
-  const rpc = require(path.join(directory, 'shared/rpc.cjs'));
+  const rpc = session.rpc(directory);
   const slots = await fs.readFile(clip);
   if (slots.length % SLOT) throw Error(clip + ' is not a whole number of 32 KiB HBV1 slots');
   const count = slots.length / SLOT;

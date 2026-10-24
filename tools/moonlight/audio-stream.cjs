@@ -8,6 +8,7 @@
 //        [--buffer-frames 3840] [--queue 3] [--prime 2]
 const fs = require('node:fs');
 const path = require('node:path');
+const session = require('../../sdk/host/session.cjs');
 
 const SAMPLE_RATE = 48000;
 const CHANNELS = 2;
@@ -287,17 +288,6 @@ function stream(options) {
   return {done, stop, stats};
 }
 
-function newestRun() {
-  const runs = path.join(__dirname, '../../runs');
-  const newest = fs
-    .readdirSync(runs)
-    .filter(name => name.startsWith('launcher-'))
-    .map(name => path.join(runs, name))
-    .sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs)[0];
-  if (!newest) throw Error('No launcher session found in runs/');
-  return newest;
-}
-
 function makeInput(args) {
   const fdAt = args.indexOf('--fd');
   const fileAt = args.indexOf('--file');
@@ -310,8 +300,8 @@ async function main() {
   const args = process.argv.slice(2);
   const option = (name, fallback) =>
     args.includes(name) ? Number(args[args.indexOf(name) + 1]) : fallback;
-  const directory = args[0] && !args[0].startsWith('--') ? path.resolve(args[0]) : newestRun();
-  const rpc = require(path.join(directory, 'shared/rpc.cjs'));
+  const directory = session.resolve(args[0]);
+  const rpc = session.rpc(directory);
   const input = makeInput(args);
   const session = stream({
     rpc,
@@ -348,7 +338,7 @@ async function main() {
   if (error) throw error;
 }
 
-module.exports = {stream, ByteQueue, newestRun};
+module.exports = {stream, ByteQueue, newestRun: session.newest};
 
 if (require.main === module)
   main().catch(error => {
