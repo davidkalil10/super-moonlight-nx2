@@ -317,15 +317,18 @@ Commands (status and errors are one JSON object per line on stderr):
 pushes an Annex B file through the same video callbacks, for checks without a
 host. On m5 (Strix Halo iGPU, 10 s 1080p60 testsrc2 at 20 Mb/s, output 1080p RGB24):
 
-| Path | Decode + convert per frame | Throughput |
+| Path | 1 slice per frame | 4 slices per frame |
 |---|---|---|
-| H.264 VAAPI | 7.1 ms | 140 fps |
-| HEVC VAAPI | 7.0 ms | 143 fps |
-| H.264 software (4 slice threads) | 2.1 ms | 475 fps |
+| H.264 VAAPI | 7.6 ms (131 fps) | 6.4 ms (157 fps) |
+| H.264 software | 3.3 ms (299 fps) | 2.8 ms (353 fps) |
+| HEVC VAAPI (1 x265 frame thread) | 7.0 ms (143 fps) | |
 
-The VAAPI time is dominated by `av_hwframe_transfer_data` (reading the NV12
-surface back from VRAM); synthetic content flatters software decode, so
-compare again on a real game stream before changing the default. With a
+The helper asks Sunshine for 4 slices per frame
+(`CAPABILITY_SLICES_PER_FRAME`) so software decode can use its slice threads.
+VAAPI is slower end to end here, most likely because of the NV12 readback
+(`av_hwframe_transfer_data`, not profiled yet). Synthetic content flatters
+software decode, so compare on a real game stream before changing the default
+(`--software` switches). With a
 reader that stalls for 1 s, 470 of 600 frames were dropped and decode speed did
 not change. Raw mode reproduced the input byte for byte (600 units, SPS first).
 
