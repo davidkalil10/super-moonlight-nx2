@@ -74,6 +74,8 @@ async function create({rpc, directory, workerDirectory, log = () => {}, cancelle
   // output acquired by the current frame, both waiting for the host to use them.
   let pendingInput = null;
   let pendingOutput = null;
+  // The decoder step in flight, reported by the live stats when a frame stalls.
+  let step = 'idle';
 
   async function call(name, args) {
     const value = await api.call(name, args);
@@ -246,6 +248,10 @@ async function create({rpc, directory, workerDirectory, log = () => {}, cancelle
   }
 
   return {
+    get step() {
+      return step;
+    },
+
     async configure(sps, pps, fps = 60) {
       if (configured || closed) throw Error('Decoder configuration is not available');
       if (
@@ -293,14 +299,19 @@ async function create({rpc, directory, workerDirectory, log = () => {}, cancelle
         unit.pts < 0
       )
         throw Error('Invalid decoder access unit');
+      step = 'acquireInput';
       if (pendingInput === null) pendingInput = await acquireInput();
       const index = pendingInput;
+      step = 'cacheInput';
       await cacheInput(index);
       const {address, capacity} = inputs.get(index);
       if (!Number.isSafeInteger(address) || address <= 0 || unit.data.length > capacity)
         throw Error('H.264 access unit exceeds the native input buffer');
+      step = 'writeUnit';
       await rpc.write(address, unit.data);
+      step = 'pump';
       const {statuses, control} = await pump(unit.data.length, unit.pts);
+      step = 'idle';
       if (statuses[0] !== 0)
         throw Object.assign(Error('movie::sendInput returned 0x' + statuses[0].toString(16)), {
           result: statuses[0]
@@ -323,8 +334,10 @@ async function create({rpc, directory, workerDirectory, log = () => {}, cancelle
       if (!running || closed) throw Error('Decoder is not running');
       if (outputIndex >= 0) throw Error('A decoder output buffer is still owned');
       // submit() already acquired this frame's output; a drain pull acquires one.
+      step = 'acquireOutput';
       const out = pendingOutput ?? (await acquireOutput());
       pendingOutput = null;
+      step = 'idle';
       outputIndex = out.index;
       if (outputIndex < 0 && out.status === 0x100e) return null;
       if (out.status !== 0)
@@ -334,6 +347,7 @@ async function create({rpc, directory, workerDirectory, log = () => {}, cancelle
       if (outputIndex < 0) return null;
       const timestamp = out.pts;
       try {
+        step = 'getOutputSize';
         if (!sizing) {
           await success('getOutputSize', [
             pointer('decoder'),
@@ -353,6 +367,7 @@ async function create({rpc, directory, workerDirectory, log = () => {}, cancelle
         )
           throw Error('Native output does not fit the aligned destination surface');
         // Point the surface and fetch the frame in one two-call exchange.
+        step = 'getOutput';
         const paired = await rpc.pair([
           {
             address: fn.bufferSetData,
@@ -368,6 +383,7 @@ async function create({rpc, directory, workerDirectory, log = () => {}, cancelle
           throw Object.assign(Error('movie::getOutput returned 0x' + got.toString(16)), {
             result: got
           });
+        step = 'outputFormat';
         if (!layout) {
           const width = (await integer(pointer('format'), 'width')) ?? dimensions.width;
           const height = (await integer(pointer('format'), 'height')) ?? dimensions.height;
@@ -399,7 +415,9 @@ async function create({rpc, directory, workerDirectory, log = () => {}, cancelle
           format: 'nv12'
         };
       } finally {
+        step = 'releaseOutput';
         await release();
+        step = 'idle';
       }
     },
 

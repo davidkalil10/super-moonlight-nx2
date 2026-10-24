@@ -228,14 +228,23 @@ async function run({
       }
     }, 500);
     let dropped = 0;
+    let stage = 'read';
     printing = setInterval(() => {
-      console.log(JSON.stringify({codec: 'h264', ...stats, dropped: reader.dropped - dropped}));
+      console.log(
+        JSON.stringify({
+          codec: 'h264',
+          ...stats,
+          dropped: reader.dropped - dropped,
+          at: stage + '/' + (decoder?.step ?? '-')
+        })
+      );
       dropped = reader.dropped;
       Object.keys(stats).forEach(key => {
         stats[key] = 0;
       });
     }, 1000);
     for await (const unit of reader) {
+      stage = 'unit';
       if (stopping) break;
       stats.received++;
       stats.bytes += unit.data.length;
@@ -254,6 +263,7 @@ async function run({
         configured = true;
       }
       try {
+        stage = 'submit';
         await decoder.submit(unit);
         stats.submitted++;
         outstanding++;
@@ -263,11 +273,14 @@ async function run({
         // destination() waits for the GPU to apply the last frame, so no
         // explicit wait is needed and submit of N+1 is not blocked on it.
         for (let pull = true; pull || outstanding > 1; pull = false) {
+          stage = 'destination';
           const destination = await sink.destination();
+          stage = 'receive';
           const frame = await decoder.receive(destination);
           if (!frame) break;
           outstanding--;
           stats.decoded++;
+          stage = 'publish';
           await sink.publish(destination, frame);
           stats.presented++;
         }
@@ -275,6 +288,7 @@ async function run({
         if (stopping || error.result === undefined) throw error;
         await resync(error);
       }
+      stage = 'read';
     }
   } catch (error) {
     if (!stopping) {
