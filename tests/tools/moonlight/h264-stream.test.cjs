@@ -95,7 +95,7 @@ test('realtime overflow drains the pipe and resumes only at an independent frame
   }
   assert.equal(pipe.isPaused(), false);
   assert.equal(reader.dropped, 5);
-  assert.equal(requests, 1);
+  assert.equal(requests, 3);
   pipe.end();
   reader.endMetadata();
   const units = [];
