@@ -46,18 +46,17 @@ ssh rig 'cd /media/storage/own/HBLauncher && SPIRV_VAL=true GLSLANG=tools/moonli
 node tools/moonlight/live.cjs --moonlight 192.168.8.245 Desktop --codec hbv2 --budget 96 --no-audio
 ```
 Move the sticks / tap the screen; the cursor on the host desktop should follow.
-Touch is sent as native multi-touch. **Caveat:** B or Minus still exits the app
-(the app's compute shader returns to the launcher on those), so avoid them until
-that is changed.
+Touch is sent as native multi-touch. B and Minus reach the game; hold Plus and
+Minus together for one second to return to the launcher.
 
 ### 3. Add audio
 ```
 node tools/moonlight/live.cjs --moonlight 192.168.8.245 Desktop --codec hbv2 --budget 96
 ```
-Sound should play. **Caveat:** `start-launcher.cjs` already runs `game-audio.cjs`,
-which holds one AudioOut open; this opens a second. If `OpenDefaultAudioOut`
-fails, the audio-stream process prints a hint and exits but video+input keep
-running. If so, we run the Moonlight route without the effects stage.
+Sound should play. `game-audio.cjs` opens AudioOut only for a package with
+effects and closes it otherwise, so the stream owns the device while Moonlight
+runs. If `OpenDefaultAudioOut` still fails, the audio-stream process prints a
+hint and exits but video+input keep running.
 
 ### 4. A real game
 Pick a game from `hbmoonlight list 192.168.8.245` (Steam Big Picture, Kameo, …)
@@ -65,10 +64,9 @@ and swap it for `Desktop` above. Expect ~59 fps at a steady budget; raise
 `--budget`/`--cap` for sharper stills at the cost of fps on a slower link.
 
 ## Known follow-ups (not blockers)
-- B/Minus exit: change the app's exit chord (needs a shader rebuild).
 - After launch/resync the picture sharpens over ~8 s as refresh chunks heal
   static blocks; raise `--refresh` to speed it.
-- Two concurrent AudioOut (above).
+- AudioOut sharing with game-audio is untested live (above).
 
 ## Console hardware decode (separate, unbuilt)
 `hbmoonlight stream HOST APP --raw-h264-fd 3 3>feed.h264` emits the raw Annex-B
