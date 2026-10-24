@@ -5,6 +5,7 @@
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
+moonlight=$(dirname "$here")
 build=${1:-$HOME/claude-builds/HBLauncher/moonlight-helper}
 mkdir -p "$build"
 build=$(cd "$build" && pwd -P)
@@ -19,7 +20,7 @@ if pkg-config --exists $packages 2>/dev/null; then
 else
   podman build -q -t hbmoonlight-build -f "$here/Containerfile" "$here" >/dev/null
   podman run --rm --userns=keep-id --security-opt label=disable \
-    -v "$here:$here:ro" -v "$build:$build" \
+    -v "$moonlight:$moonlight:ro" -v "$build:$build" \
     hbmoonlight-build bash -c "$compile" "$here" "$build"
 fi
 echo "$build/build/hbmoonlight"

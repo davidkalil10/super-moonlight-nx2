@@ -1,0 +1,152 @@
+/* GameStream session plumbing shared by hbmoonlight and hbmoonlight-host:
+ * client keys, reaching and pairing state of the host, app lookup, the stream
+ * configuration and the connection listener. */
+#include "helper.h"
+
+#include <client.h>
+#include <errors.h>
+
+#include <errno.h>
+#include <stdarg.h>
+#include <stdatomic.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <strings.h>
+#include <sys/stat.h>
+#include <unistd.h>
+
+#define HTTP_PORT 47989
+#define CONNECT_TIMEOUT 15
+
+static atomic_bool started;
+static atomic_bool terminated;
+
+void session_on_alarm(int signal) {
+  static const char message[] = "{\"event\":\"error\",\"message\":\"timed out\"}\n";
+  write(STDERR_FILENO, message, sizeof(message) - 1);
+  _exit(3);
+}
+
+int session_fail(const char *message, const char *detail) {
+  char text[512];
+  json_string(text, sizeof(text), detail ? detail : "");
+  status("{\"event\":\"error\",\"message\":\"%s\",\"detail\":\"%s\"}", message, text);
+  return 1;
+}
+
+static bool make_directory(char *path) {
+  for (char *slash = strchr(path + 1, '/'); slash; slash = strchr(slash + 1, '/')) {
+    *slash = 0;
+    int result = mkdir(path, 0700);
+    *slash = '/';
+    if (result != 0 && errno != EEXIST)
+      return false;
+  }
+  return mkdir(path, 0700) == 0 || errno == EEXIST;
+}
+
+static bool key_directory(char *path, size_t size) {
+  const char *config = getenv("XDG_CONFIG_HOME");
+  if (config && *config)
+    snprintf(path, size, "%s/hblauncher/moonlight", config);
+  else
+    snprintf(path, size, "%s/.config/hblauncher/moonlight", getenv("HOME"));
+  return make_directory(path);
+}
+
+int session_connect(SERVER_DATA *server, char *host) {
+  char keys[4096];
+  if (!key_directory(keys, sizeof(keys)))
+    return session_fail("cannot create the key directory", keys);
+  fflush(stdout);
+  int saved_stdout = dup(STDOUT_FILENO);
+  dup2(STDERR_FILENO, STDOUT_FILENO);
+  alarm(CONNECT_TIMEOUT);
+  int result = gs_init(server, host, HTTP_PORT, keys, 0, true);
+  alarm(0);
+  fflush(stdout);
+  dup2(saved_stdout, STDOUT_FILENO);
+  close(saved_stdout);
+  if (result != GS_OK)
+    return session_fail("cannot reach the GameStream host", gs_error ? gs_error : host);
+  return 0;
+}
+
+int session_find_app(SERVER_DATA *server, const char *wanted) {
+  PAPP_LIST apps;
+  if (gs_applist(server, &apps) != GS_OK)
+    return -1;
+  char *end;
+  long id = strtol(wanted, &end, 10);
+  for (PAPP_LIST app = apps; app; app = app->next)
+    if ((*end == 0 && app->id == id) || strcasecmp(app->name, wanted) == 0)
+      return app->id;
+  return -1;
+}
+
+void session_configure(STREAM_CONFIGURATION *config, int width, int height, int fps,
+                       int bitrate, int formats) {
+  LiInitializeStreamConfiguration(config);
+  config->width = width;
+  config->height = height;
+  config->fps = fps;
+  config->bitrate = bitrate;
+  config->packetSize = 1392;
+  config->streamingRemotely = STREAM_CFG_LOCAL;
+  config->audioConfiguration = AUDIO_CONFIGURATION_STEREO;
+  config->supportedVideoFormats = formats;
+  config->colorSpace = COLORSPACE_REC_709;
+  config->colorRange = COLOR_RANGE_LIMITED;
+  config->encryptionFlags = ENCFLG_ALL;
+}
+
+static void stage_failed(int stage, int error) {
+  status("{\"event\":\"error\",\"message\":\"stage failed\",\"stage\":\"%s\",\"code\":%d}",
+         LiGetStageName(stage), error);
+}
+
+static void connection_started(void) {
+  status("{\"event\":\"connected\"}");
+  atomic_store(&started, true);
+}
+
+static void connection_terminated(int error) {
+  status("{\"event\":\"terminated\",\"code\":%d}", error);
+  atomic_store(&terminated, true);
+}
+
+static void log_message(const char *format, ...) {
+  char text[512], escaped[1024];
+  va_list args;
+  va_start(args, format);
+  vsnprintf(text, sizeof(text), format, args);
+  va_end(args);
+  text[strcspn(text, "\n")] = 0;
+  json_string(escaped, sizeof(escaped), text);
+  status("{\"event\":\"log\",\"message\":\"%s\"}", escaped);
+}
+
+void session_listener(CONNECTION_LISTENER_CALLBACKS *listener) {
+  LiInitializeConnectionCallbacks(listener);
+  listener->stageFailed = stage_failed;
+  listener->connectionStarted = connection_started;
+  listener->connectionTerminated = connection_terminated;
+  listener->logMessage = log_message;
+}
+
+bool session_started(void) {
+  return atomic_load(&started);
+}
+
+bool session_terminated(void) {
+  return atomic_load(&terminated);
+}
+
+void session_announce_controller(void) {
+  LiSendControllerArrivalEvent(0, 1, LI_CTYPE_XBOX,
+                               A_FLAG | B_FLAG | X_FLAG | Y_FLAG | UP_FLAG | DOWN_FLAG |
+                                   LEFT_FLAG | RIGHT_FLAG | LB_FLAG | RB_FLAG | PLAY_FLAG |
+                                   BACK_FLAG | LS_CLK_FLAG | RS_CLK_FLAG | SPECIAL_FLAG,
+                               LI_CCAP_ANALOG_TRIGGERS);
+}
