@@ -57,7 +57,7 @@ async function main(directory) {
   const launcher = await latest(
     directory,
     /^launcher(-[a-z0-9-]+)?\.json$/,
-    v => v.resources?.pool
+    v => v.resources?.pool && v.controls?.mapped
   );
   const app = await latest(directory, /^app-moonlight-.*\.json$/, v => v.ready && v.privateStorage);
   const loop = await latest(directory, /^launcher.*-loop\.json$/);
