@@ -22,6 +22,7 @@ const DESCRIPTOR_STRIDE = 0x40;
 
 const {sdkResolver} = require('../../sdk/native/symbols.cjs');
 const {allocate} = require('../../sdk/native/allocate.cjs');
+const audioOut = require('../../sdk/host/audio-out.cjs');
 
 const check = (value, message) => {
   if (!value) throw Error(message);
@@ -156,28 +157,15 @@ function stream(options) {
     await rpc.write(base, Buffer.alloc(65536));
 
     const param = base + PARAM_OFFSET;
-    await call('InitializeAudioOutParameter', param);
-    const params = await rpc.read(param, 8);
-    params.writeUInt32LE(SAMPLE_RATE);
-    params.writeUInt16LE(CHANNELS, 4);
-    await rpc.write(param, params);
+    await audioOut.open(rpc, call, base, param, {
+      rate: SAMPLE_RATE,
+      channels: CHANNELS,
+      failed: opened =>
+        'OpenDefaultAudioOut failed (' + opened + '); game-audio.cjs may hold the device',
+      format: 'Unexpected AudioOut format'
+    });
 
-    const opened = await call('OpenDefaultAudioOutEPNS0_8AudioOutER', base, param);
-    check(
-      opened === 0n,
-      'OpenDefaultAudioOut failed (' + opened + '); game-audio.cjs may hold the device'
-    );
-    check(
-      (await call('GetAudioOutSampleRate', base)) === BigInt(SAMPLE_RATE) &&
-        (await call('GetAudioOutChannelCount', base)) === BigInt(CHANNELS) &&
-        (await call('GetAudioOutSampleFormat', base)) === 2n,
-      'Unexpected AudioOut format'
-    );
-
-    descriptors = Array.from(
-      {length: DESCRIPTOR_COUNT},
-      (_, i) => base + DESCRIPTOR_BASE + i * DESCRIPTOR_STRIDE
-    );
+    descriptors = audioOut.descriptors(base + DESCRIPTOR_BASE, DESCRIPTOR_COUNT, DESCRIPTOR_STRIDE);
     const index = new Map(descriptors.map((address, i) => [address, i]));
     for (let i = 0; i < DESCRIPTOR_COUNT; i++) {
       await call('SetAudioOutBufferInfo', descriptors[i], slotAddress(i), SLOT_STRIDE, bufferBytes);
