@@ -19,3 +19,9 @@ STALL=1500@4000 node tools/moonlight/live.cjs tools/moonlight/fake-console \
 Env: `RATE` (link bytes/s, default 5.7e6), `STALL=ms@at` (pause the dispatch
 once), `DECODE=1` (run the full pixel decode instead of the light apply). This
 is a host-side test harness only; it is not the console RPC.
+
+`shared/console.cjs` is a separate, byte-level model: it mirrors the
+`bootstrap.bas` `RPC()` loop for console protocols 1/2/3 (header + data recv,
+response framing, `memmove`/read/QueryMemory dispatch) over a flat memory
+buffer, so the real host (`native.cjs` over a `Connection`) can be round-tripped
+without a console. `../protocol3.test.cjs` drives it.
