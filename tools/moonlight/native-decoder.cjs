@@ -78,6 +78,8 @@ async function create({rpc, directory, workerDirectory, log = () => {}, cancelle
   let step = 'idle';
   // The last pump's tail AcquireInput, for probes that watch input readiness.
   let lastInput = null;
+  // The raw result of a caller's SDK call run just before SendInput, such as a tick.
+  let lastStamp = null;
 
   async function call(name, args) {
     const value = await api.call(name, args);
@@ -150,7 +152,7 @@ async function create({rpc, directory, workerDirectory, log = () => {}, cancelle
   // AcquireOutput, then AcquireInput for the next frame. Out-parameters land in
   // adjacent control slots so the host reads them all at once. Without the
   // output step, the next receive() acquires the output itself.
-  async function pump(length, pts, withOutput) {
+  async function pump(length, pts, withOutput, stamp) {
     const send = {
       function: fn.sendInput,
       args: [pointer('decoder'), {u32: pointer('inputIndex')}, 0, length, BigInt(pts), 0]
@@ -169,9 +171,11 @@ async function create({rpc, directory, workerDirectory, log = () => {}, cancelle
       function: fn.acquireInput,
       args: [pointer('decoder'), pointer('inputIndex'), pointer('inputCount')]
     };
-    const statuses = await worker.run(withOutput ? [send, output, input] : [send, input]);
+    const calls = withOutput ? [send, output, input] : [send, input];
+    const results = await worker.run(stamp ? [{function: stamp, args: []}, ...calls] : calls);
+    lastStamp = stamp ? results.shift() : null;
     const control = await api.read(MEMORY.inputIndex, 0x28);
-    return {statuses: statuses.map(result), control};
+    return {statuses: results.map(result), control};
   }
 
   async function acquireOutput() {
@@ -298,7 +302,11 @@ async function create({rpc, directory, workerDirectory, log = () => {}, cancelle
       return lastInput;
     },
 
-    async submit(unit, {acquireOutput: withOutput = true} = {}) {
+    get lastStamp() {
+      return lastStamp;
+    },
+
+    async submit(unit, {acquireOutput: withOutput = true, stamp = null} = {}) {
       if (!running || closed) throw Error('Decoder is not running');
       if (
         !Buffer.isBuffer(unit.data) ||
@@ -318,7 +326,7 @@ async function create({rpc, directory, workerDirectory, log = () => {}, cancelle
       step = 'writeUnit';
       await rpc.write(address, unit.data);
       step = 'pump';
-      const {statuses, control} = await pump(unit.data.length, unit.pts, withOutput);
+      const {statuses, control} = await pump(unit.data.length, unit.pts, withOutput, stamp);
       step = 'idle';
       if (statuses[0] !== 0)
         throw Object.assign(Error('movie::sendInput returned 0x' + statuses[0].toString(16)), {
