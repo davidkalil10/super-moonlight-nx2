@@ -14,6 +14,7 @@
 #include "host.h"
 
 #include "../../hbv2-tables.h"
+#include <errno.h>
 #include <pthread.h>
 #include <stdatomic.h>
 #include <stdlib.h>
@@ -197,7 +198,8 @@ static void *poll_applied(void *unused) {
     until.tv_nsec += POLL_MS * 1000000L;
     until.tv_sec += until.tv_nsec / 1000000000L;
     until.tv_nsec %= 1000000000L;
-    pthread_cond_timedwait(&changed, &lock, &until);
+    while (!stopping && pthread_cond_timedwait(&changed, &lock, &until) != ETIMEDOUT)
+      continue;
     if (stopping)
       break;
     pthread_mutex_unlock(&lock);
