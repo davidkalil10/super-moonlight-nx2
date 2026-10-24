@@ -4,6 +4,8 @@
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const ring = require('./ring.cjs');
+const hbv = require('./hbv.cjs');
+const hbv2 = require('./hbv2.cjs');
 const session = require('../../sdk/host/session.cjs');
 const cli = require('../../sdk/cli.cjs');
 
@@ -21,7 +23,7 @@ async function nextSequence(rpc, mapped) {
   let newest = (await rpc.read(mapped + ring.CONTROL.applied, 4)).readUInt32LE();
   for (let slot = 0; slot < ring.SLOTS; slot++) {
     const header = await rpc.read(mapped + ring.slotOffset(slot), 8);
-    if ([0x31564248, 0x32564248].includes(header.readUInt32LE()))
+    if ([hbv.MAGIC, hbv2.MAGIC].includes(header.readUInt32LE()))
       newest = Math.max(newest, header.readUInt32LE(4));
   }
   return newest + 1;
