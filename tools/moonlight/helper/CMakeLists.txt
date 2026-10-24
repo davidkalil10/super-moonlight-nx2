@@ -46,3 +46,9 @@ target_link_libraries(hbv2 PUBLIC OpenMP::OpenMP_C m Threads::Threads)
 add_executable(hbv2-encode-check src/encode-check.c)
 target_compile_options(hbv2-encode-check PRIVATE -Wall -Wextra)
 target_link_libraries(hbv2-encode-check PRIVATE hbv2)
+
+add_executable(hbmoonlight-host
+  src/host.c src/run.c src/bridge.c src/sender.c
+  src/session.c src/status.c src/mailbox.c src/video.c)
+target_compile_options(hbmoonlight-host PRIVATE -Wall -Wextra -Wno-unused-parameter)
+target_link_libraries(hbmoonlight-host PRIVATE gamestream hbv2 Threads::Threads)
