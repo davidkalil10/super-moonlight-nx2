@@ -9,10 +9,10 @@ const fs = require('node:fs/promises'),
   os = require('node:os');
 const assert = require('node:assert/strict');
 const {execFileSync} = require('node:child_process');
-const ring = require('./ring.cjs');
 const {testCard} = require('./build.cjs');
 
 const root = path.resolve(__dirname, '../..');
+const ring = require(path.join(root, 'tools/moonlight/ring.cjs'));
 const hbv = require(path.join(root, 'tools/moonlight/hbv.cjs'));
 const hbv2 = require(path.join(root, 'tools/moonlight/hbv2.cjs'));
 const {psnr} = require(path.join(root, 'tools/moonlight/reference.cjs'));
