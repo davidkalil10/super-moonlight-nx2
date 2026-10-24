@@ -1,16 +1,16 @@
 // Writes src/console-layout.h for hbmoonlight-host from the JS sources of truth:
-// the app ring (apps/moonlight/ring.cjs), the launcher state buffer, the
+// the app ring (tools/moonlight/ring.cjs), the launcher state buffer, the
 // controller/touch decoders and the verified AudioOut symbol table. The header
 // is committed because the build container has no Node; host-layout.test.cjs
 // fails when it is stale.
 // Usage: node tools/moonlight/helper/generate-layout.cjs [--check]
 const fs = require('node:fs');
 const path = require('node:path');
-const ring = require('../../../apps/moonlight/ring.cjs');
-const {STATE} = require('../../../homebrew-launcher/state-layout.cjs');
+const ring = require('../ring.cjs');
+const {STATE} = require('../../../sdk/host/state-layout.cjs');
 const {NPAD_BYTES} = require('../controller.cjs');
 const {TOUCH_BYTES, PANEL, MAX_POINTS} = require('../touch.cjs');
-const symbols = require('../../../homebrew-launcher/audio-symbols.json');
+const symbols = require('../../../sdk/native/audio-symbols.json');
 const sdkImage = require('../../../smilebasic/reference/sdk-checks.cjs');
 
 const OUTPUT = path.join(__dirname, 'src/console-layout.h');
