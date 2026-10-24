@@ -349,7 +349,7 @@ async function fixture() {
   return directory;
 }
 
-const STEADY_STATE_EXCHANGES = 18;
+const STEADY_STATE_EXCHANGES = 10;
 const sps = Buffer.from('6742001eab', 'hex');
 const pps = Buffer.from('68ce0100', 'hex');
 
@@ -384,12 +384,15 @@ test('steady-state H.264 submit+receive holds its exchange budget and call order
     assert.equal(result.stride, 1920);
     const exchanges = consoleMock.count;
     // Live steady-state budget. Bump this down (never up) as the path tightens,
-    // and record the before/after in the commit message.
+    // and record the before/after in the commit message. One finite worker now
+    // runs SendInput, AcquireOutput and the next frame's AcquireInput together,
+    // and the host pairs bufferSetData with getOutput, so the frame went from 18
+    // exchanges to 10.
     assert.equal(exchanges, STEADY_STATE_EXCHANGES, 'steady-state exchanges per frame');
     assert.deepEqual(consoleMock.log, [
-      'acquireInput',
       'sendInput',
       'acquireOutput',
+      'acquireInput',
       'bufferSetData',
       'getOutput',
       'releaseOutput'
