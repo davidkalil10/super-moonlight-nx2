@@ -137,11 +137,11 @@ class AccessUnits {
         this.dropped += this.ready.length;
         this.ready = [];
         this.dropping = true;
-        if (!record.keyframe) this.onBacklog();
       }
       if (this.dropping) {
         if (!record.keyframe) {
           this.dropped++;
+          this.onBacklog();
           continue;
         }
         this.dropping = false;

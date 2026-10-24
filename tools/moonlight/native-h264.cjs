@@ -76,7 +76,8 @@ async function run({
     presented: 0,
     bytes: 0,
     keyframes: 0,
-    resyncs: 0
+    resyncs: 0,
+    idr: 0
   };
   const log = value => console.error(JSON.stringify(value));
   const cancelled = () => stopping;
@@ -100,6 +101,7 @@ async function run({
         idrTimer = null;
         if (stopping) return;
         lastIdr = Date.now();
+        stats.idr++;
         helper.stdin.write(JSON.stringify({type: 'request-idr'}) + '\n');
       },
       Math.max(0, lastIdr + IDR_COOLDOWN_MS - Date.now())
