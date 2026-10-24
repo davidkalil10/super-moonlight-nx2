@@ -10,32 +10,13 @@
 // supported here; the extra pad sources live far outside that window.
 //
 // Usage: node tools/moonlight/input-feeder.cjs [runs/launcher-XXXX] [--hz 60] [--labels]
-const fs = require('node:fs');
-const path = require('node:path');
-const {STATE} = require('../../homebrew-launcher/state-layout.cjs');
+const session = require('../../sdk/host/session.cjs');
+const cli = require('../../sdk/cli.cjs');
+const {STATE} = require('../../sdk/host/state-layout.cjs');
 const {NEUTRAL, decode, toMoonlight, same, NPAD_BYTES} = require('./controller.cjs');
 const {TOUCH_BYTES, parseTouch, createTracker, step, flush, touchLine} = require('./touch.cjs');
 
 const READ_BYTES = STATE.touch + TOUCH_BYTES;
-
-function newestRun() {
-  const runs = path.join(__dirname, '../../runs');
-  const newest = fs
-    .readdirSync(runs)
-    .filter(name => name.startsWith('launcher-'))
-    .map(name => path.join(runs, name))
-    .sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs)[0];
-  if (!newest) throw Error('No launcher session found in runs/');
-  return newest;
-}
-
-function readSource(directory) {
-  try {
-    return JSON.parse(fs.readFileSync(path.join(directory, 'game-audio-source.json'), 'utf8'));
-  } catch {
-    return null;
-  }
-}
 
 // Pure per-frame mapping, shared with the tests: one state buffer in, the lines
 // to emit plus the controller state to remember next frame out.
@@ -50,10 +31,10 @@ function frame(previous, bytes, tracker, layout) {
 
 async function main() {
   const args = process.argv.slice(2);
-  const hz = args.includes('--hz') ? Number(args[args.indexOf('--hz') + 1]) : 60,
+  const hz = cli.number(args, '--hz', 60),
     layout = args.includes('--labels') ? 'labels' : 'position';
-  const directory = args[0] && !args[0].startsWith('--') ? path.resolve(args[0]) : newestRun();
-  const rpc = require(path.join(directory, 'shared/rpc.cjs'));
+  const directory = session.resolve(args[0]);
+  const rpc = session.rpc(directory);
 
   const tracker = createTracker();
   let stopping = false,
@@ -76,7 +57,7 @@ async function main() {
   while (!stopping) {
     const started = performance.now();
     if (started - sourceChecked > 250) {
-      source = readSource(directory);
+      source = session.readSource(directory);
       sourceChecked = started;
     }
     if (source?.package?.id === 'moonlight') {

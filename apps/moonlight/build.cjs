@@ -4,7 +4,8 @@
 const fs = require('node:fs/promises'),
   path = require('node:path');
 const {execFileSync} = require('node:child_process');
-const ring = require('./ring.cjs');
+const ring = require(path.join(root(), 'tools/moonlight/ring.cjs'));
+const {STATE} = require(path.join(root(), 'sdk/host/state-layout.cjs'));
 
 function root() {
   let directory = __dirname;
@@ -56,7 +57,7 @@ async function main() {
   const hbv = require(path.join(root(), 'tools/moonlight/hbv.cjs'));
   const hbv2 = require(path.join(root(), 'tools/moonlight/hbv2.cjs'));
   const state = Buffer.alloc(1024);
-  state.writeFloatLE(1, 960);
+  state.writeFloatLE(1, STATE.fade);
   await fs.writeFile(path.join(__dirname, 'assets/state.bin'), state);
   await fs.writeFile(path.join(__dirname, 'shaders/hbv.glsl'), hbv.glsl());
   await fs.writeFile(path.join(__dirname, 'shaders/hbv2-tables.glsl'), hbv2.glslTables());

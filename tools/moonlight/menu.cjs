@@ -24,12 +24,15 @@ const os = require('node:os');
 const path = require('node:path');
 const readline = require('node:readline');
 const {spawn} = require('node:child_process');
-const ring = require('../../apps/moonlight/ring.cjs');
+const ring = require('./ring.cjs');
 const hbv2 = require('./hbv2.cjs');
 const {findPrivateStorage, nextSequence} = require('./feed.cjs');
-const {STATE} = require('../../homebrew-launcher/state-layout.cjs');
+const {STATE} = require('../../sdk/host/state-layout.cjs');
 const {NPAD, NPAD_BYTES, decode} = require('./controller.cjs');
 const {TOUCH_BYTES, parseTouch, createTracker, step} = require('./touch.cjs');
+const {HELPER} = require('./helper.cjs');
+const session = require('../../sdk/host/session.cjs');
+const cli = require('../../sdk/cli.cjs');
 
 const WIDTH = 1920;
 const HEIGHT = 1080;
@@ -428,31 +431,9 @@ class MenuSender {
 
 // --- helpers ------------------------------------------------------------
 
-function newestRun() {
-  const runs = path.join(__dirname, '../../runs');
-  const newest = fs
-    .readdirSync(runs)
-    .filter(name => name.startsWith('launcher-'))
-    .map(name => path.join(runs, name))
-    .sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs)[0];
-  if (!newest) throw Error('No launcher session found in runs/');
-  return newest;
-}
-
-function readSource(directory) {
-  try {
-    return JSON.parse(fs.readFileSync(path.join(directory, 'game-audio-source.json'), 'utf8'));
-  } catch {
-    return null;
-  }
-}
-
 function runHelper(args) {
-  const helper =
-    process.env.HBMOONLIGHT ||
-    path.join(os.homedir(), 'claude-builds/HBLauncher/moonlight-helper/build/hbmoonlight');
   return new Promise(resolve => {
-    const child = spawn(helper, args, {stdio: ['ignore', 'pipe', 'pipe']});
+    const child = spawn(HELPER, args, {stdio: ['ignore', 'pipe', 'pipe']});
     let out = '';
     let err = '';
     child.stdout.on('data', d => (out += d));
@@ -468,22 +449,18 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 async function main() {
   const args = process.argv.slice(2);
-  const option = (name, fallback) =>
-    args.includes(name) ? args[args.indexOf(name) + 1] : fallback;
-  const number = (name, fallback) =>
-    args.includes(name) ? Number(args[args.indexOf(name) + 1]) : fallback;
   const extraHosts = [];
   for (let i = 0; i < args.length; i++) if (args[i] === '--host') extraHosts.push(args[i + 1]);
-  const budget = number('--budget', 96);
-  const qp = number('--qp', 8);
-  const rateHz = number('--rate', 2);
+  const budget = cli.number(args, '--budget', 96);
+  const qp = cli.number(args, '--qp', 8);
+  const rateHz = cli.number(args, '--rate', 2);
   const noInput = args.includes('--no-input');
   const script = args.includes('--script')
-    ? option('--script', '').split(',').filter(Boolean)
+    ? cli.option(args, '--script', '').split(',').filter(Boolean)
     : null;
 
-  const directory = args[0] && !args[0].startsWith('--') ? path.resolve(args[0]) : newestRun();
-  const rpc = require(path.join(directory, 'shared/rpc.cjs'));
+  const directory = session.resolve(args[0]);
+  const rpc = session.rpc(directory);
   const storage = await findPrivateStorage(directory);
   if (storage.bytes < ring.MEMORY_BYTES)
     throw Error('The running Moonlight app predates HBV2; rebuild and reinstall it');
@@ -515,7 +492,7 @@ async function main() {
   async function run(intent) {
     if (!intent) return;
     if (intent.type === 'exit') {
-      const source = readSource(directory);
+      const source = session.readSource(directory);
       if (source?.mapped !== undefined) {
         const one = Buffer.alloc(4);
         one.writeUInt32LE(1, 0);
@@ -547,10 +524,7 @@ async function main() {
   }
 
   async function pairFlow(host) {
-    const helper =
-      process.env.HBMOONLIGHT ||
-      path.join(os.homedir(), 'claude-builds/HBLauncher/moonlight-helper/build/hbmoonlight');
-    const child = spawn(helper, ['pair', host.address], {stdio: ['ignore', 'pipe', 'inherit']});
+    const child = spawn(HELPER, ['pair', host.address], {stdio: ['ignore', 'pipe', 'inherit']});
     let cancelled = false;
     const closed = new Promise(resolve => child.on('close', resolve));
     readline.createInterface({input: child.stdout}).on('line', line => {
@@ -567,7 +541,7 @@ async function main() {
     while (!noInput) {
       const done = await Promise.race([closed.then(() => true), sleep(150).then(() => false)]);
       if (done) break;
-      const source = readSource(directory);
+      const source = session.readSource(directory);
       if (source?.mapped === undefined) continue;
       try {
         const pad = decode((await rpc.read(source.mapped, NPAD_BYTES)).subarray(0, NPAD_BYTES));
@@ -613,7 +587,7 @@ async function main() {
     while (live && !stopping) {
       const done = await Promise.race([exited.then(() => true), sleep(100).then(() => false)]);
       if (done) break;
-      const source = readSource(directory);
+      const source = session.readSource(directory);
       if (!noInput && source?.mapped !== undefined) {
         try {
           const pad = decode((await rpc.read(source.mapped, NPAD_BYTES)).subarray(0, NPAD_BYTES));
@@ -670,7 +644,7 @@ async function main() {
   let seenActive = false;
   while (!stopping && !model.exit) {
     const started = performance.now();
-    const source = readSource(directory);
+    const source = session.readSource(directory);
     const active = noInput || source?.package?.id === 'moonlight';
     if (!active) {
       // The app is gone (e.g. the user held +/- to exit); stop writing its ring.

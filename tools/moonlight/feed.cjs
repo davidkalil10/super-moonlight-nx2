@@ -3,24 +3,18 @@
 // Usage: node tools/moonlight/feed.cjs runs/launcher-XXXX CLIP.hbv [--fps 60] [--seconds 60] [--depth 1]
 const fs = require('node:fs/promises');
 const path = require('node:path');
-const ring = require('../../apps/moonlight/ring.cjs');
+const ring = require('./ring.cjs');
+const hbv = require('./hbv.cjs');
+const hbv2 = require('./hbv2.cjs');
+const session = require('../../sdk/host/session.cjs');
+const cli = require('../../sdk/cli.cjs');
 
 const SLOT = 32768;
 const HOST_COHERENT = 4;
 
 async function findPrivateStorage(directory) {
-  for (;;) {
-    const names = (await fs.readdir(directory)).filter(n => /^app-moonlight-.*\.json$/.test(n));
-    const reports = await Promise.all(
-      names.map(async n => JSON.parse(await fs.readFile(path.join(directory, n), 'utf8')))
-    );
-    const storage = reports
-      .filter(r => r.privateStorage)
-      .sort((a, b) => b.started.localeCompare(a.started))[0]?.privateStorage;
-    if (storage) return storage;
-    console.log('Waiting for the Moonlight app to open on the console...');
-    await new Promise(resolve => setTimeout(resolve, 1000));
-  }
+  const waiting = 'Waiting for the Moonlight app to open on the console...';
+  return (await session.appReport(directory, 'moonlight', waiting)).privateStorage;
 }
 
 // First sequence number newer than anything the console applied or that is
@@ -29,7 +23,7 @@ async function nextSequence(rpc, mapped) {
   let newest = (await rpc.read(mapped + ring.CONTROL.applied, 4)).readUInt32LE();
   for (let slot = 0; slot < ring.SLOTS; slot++) {
     const header = await rpc.read(mapped + ring.slotOffset(slot), 8);
-    if ([0x31564248, 0x32564248].includes(header.readUInt32LE()))
+    if ([hbv.MAGIC, hbv2.MAGIC].includes(header.readUInt32LE()))
       newest = Math.max(newest, header.readUInt32LE(4));
   }
   return newest + 1;
@@ -46,14 +40,13 @@ async function main() {
     throw Error(
       'Usage: feed.cjs runs/launcher-XXXX CLIP.hbv [--fps 60] [--seconds 60] [--depth 1]'
     );
-  const option = (name, fallback) =>
-    args.includes(name) ? Number(args[args.indexOf(name) + 1]) : fallback;
+  const option = (name, fallback) => cli.number(args, name, fallback);
   const fps = option('--fps', 60),
     seconds = option('--seconds', 60),
     depth = option('--depth', 1),
     inFlight = new Set();
   const directory = path.resolve(run);
-  const rpc = require(path.join(directory, 'shared/rpc.cjs'));
+  const rpc = session.rpc(directory);
   const slots = await fs.readFile(clip);
   if (slots.length % SLOT) throw Error(clip + ' is not a whole number of 32 KiB HBV1 slots');
   const count = slots.length / SLOT;
