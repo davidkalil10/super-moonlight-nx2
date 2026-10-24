@@ -17,13 +17,13 @@ const {serve} = require('../../../smilebasic/engine/lib/bridge.cjs');
 const symbols = require('../../../sdk/native/audio-symbols.json');
 const sdkImage = require('../../../smilebasic/reference/sdk-checks.cjs');
 const fake = require('./shared/rpc.cjs');
+const {ALLOCATE} = require('../../../sdk/native/allocate.cjs');
 const report = require('./app-moonlight-1.json');
 
 const SCRATCH = 0x20000000,
   STATE = 0x30000000,
   SDK = 0x40000000,
   HEAP = 0x60000000,
-  ALLOCATE = 5732112,
   COPY = 0x5872f0,
   SAMPLE_RATE = 48000;
 
@@ -143,8 +143,20 @@ const native = {
     stats.writes++;
     stats.writeMs += performance.now() - started;
   },
-  async exchange() {
-    throw Error('pair is not simulated');
+  async exchange(calls, data, outputBytes) {
+    if (calls.length !== 1 || data?.length) throw Error('pair is not simulated');
+    const [{offset, address, args}] = calls;
+    const reply =
+      address === undefined
+        ? await this.call(offset, ...args)
+        : await this.callAddress(address, ...args);
+    return {...reply, output: Buffer.from(fake.peek(this.output, outputBytes))};
+  },
+  async writeAndCall(address, bytes, target, args) {
+    if (!this.verified.has(target)) throw Error('Native function has not been verified');
+    await this.write(address, bytes);
+    stats.calls++;
+    return {result: BigInt(simulate(target, args)), output: Buffer.alloc(2)};
   },
   async query() {
     throw Error('query is not simulated');
