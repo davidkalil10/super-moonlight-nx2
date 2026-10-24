@@ -76,6 +76,8 @@ async function create({rpc, directory, workerDirectory, log = () => {}, cancelle
   let pendingOutput = null;
   // The decoder step in flight, reported by the live stats when a frame stalls.
   let step = 'idle';
+  // The last pump's tail AcquireInput, for probes that watch input readiness.
+  let lastInput = null;
 
   async function call(name, args) {
     const value = await api.call(name, args);
@@ -146,28 +148,28 @@ async function create({rpc, directory, workerDirectory, log = () => {}, cancelle
 
   // One finite worker frame: SendInput (reads the primed index slot), then
   // AcquireOutput, then AcquireInput for the next frame. Out-parameters land in
-  // adjacent control slots so the host reads them all at once.
-  async function pump(length, pts) {
-    const statuses = await worker.run([
-      {
-        function: fn.sendInput,
-        args: [pointer('decoder'), {u32: pointer('inputIndex')}, 0, length, BigInt(pts), 0]
-      },
-      {
-        function: fn.acquireOutput,
-        args: [
-          pointer('decoder'),
-          pointer('outputIndex'),
-          pointer('timestamp'),
-          pointer('flags'),
-          pointer('outputCount')
-        ]
-      },
-      {
-        function: fn.acquireInput,
-        args: [pointer('decoder'), pointer('inputIndex'), pointer('inputCount')]
-      }
-    ]);
+  // adjacent control slots so the host reads them all at once. Without the
+  // output step, the next receive() acquires the output itself.
+  async function pump(length, pts, withOutput) {
+    const send = {
+      function: fn.sendInput,
+      args: [pointer('decoder'), {u32: pointer('inputIndex')}, 0, length, BigInt(pts), 0]
+    };
+    const output = {
+      function: fn.acquireOutput,
+      args: [
+        pointer('decoder'),
+        pointer('outputIndex'),
+        pointer('timestamp'),
+        pointer('flags'),
+        pointer('outputCount')
+      ]
+    };
+    const input = {
+      function: fn.acquireInput,
+      args: [pointer('decoder'), pointer('inputIndex'), pointer('inputCount')]
+    };
+    const statuses = await worker.run(withOutput ? [send, output, input] : [send, input]);
     const control = await api.read(MEMORY.inputIndex, 0x28);
     return {statuses: statuses.map(result), control};
   }
@@ -252,7 +254,8 @@ async function create({rpc, directory, workerDirectory, log = () => {}, cancelle
       return step;
     },
 
-    async configure(sps, pps, fps = 60) {
+    // beforeStart runs between Configure and Start, where RegisterClientEvents belongs.
+    async configure(sps, pps, fps = 60, {beforeStart} = {}) {
       if (configured || closed) throw Error('Decoder configuration is not available');
       if (
         !Buffer.isBuffer(sps) ||
@@ -283,6 +286,7 @@ async function create({rpc, directory, workerDirectory, log = () => {}, cancelle
       await api.write(MEMORY.key, Buffer.from('frame-rate\0'));
       await api.call('mediaSetInt', [pointer('configuration'), pointer('key'), fps]);
       await success('configure', [pointer('decoder'), pointer('configuration')]);
+      await beforeStart?.(pointer('decoder'));
       await success('start', [pointer('decoder')]);
       configured = running = true;
       dimensions = {width, height};
@@ -290,7 +294,11 @@ async function create({rpc, directory, workerDirectory, log = () => {}, cancelle
       return dimensions;
     },
 
-    async submit(unit) {
+    get lastInput() {
+      return lastInput;
+    },
+
+    async submit(unit, {acquireOutput: withOutput = true} = {}) {
       if (!running || closed) throw Error('Decoder is not running');
       if (
         !Buffer.isBuffer(unit.data) ||
@@ -310,18 +318,21 @@ async function create({rpc, directory, workerDirectory, log = () => {}, cancelle
       step = 'writeUnit';
       await rpc.write(address, unit.data);
       step = 'pump';
-      const {statuses, control} = await pump(unit.data.length, unit.pts);
+      const {statuses, control} = await pump(unit.data.length, unit.pts, withOutput);
       step = 'idle';
       if (statuses[0] !== 0)
         throw Object.assign(Error('movie::sendInput returned 0x' + statuses[0].toString(16)), {
           result: statuses[0]
         });
-      const nextIndex = control.readInt32LE(0);
-      if (statuses[2] !== 0 && !(nextIndex < 0 && [0x100e, 0x1011].includes(statuses[2])))
-        throw Object.assign(Error('Decoder input queue returned 0x' + statuses[2].toString(16)), {
-          result: statuses[2]
+      const nextIndex = control.readInt32LE(0),
+        inputStatus = statuses.at(-1);
+      lastInput = {status: inputStatus, index: nextIndex};
+      if (inputStatus !== 0 && !(nextIndex < 0 && [0x100e, 0x1011].includes(inputStatus)))
+        throw Object.assign(Error('Decoder input queue returned 0x' + inputStatus.toString(16)), {
+          result: inputStatus
         });
       pendingInput = nextIndex >= 0 ? nextIndex : null;
+      if (!withOutput) return;
       pendingOutput = {
         status: statuses[1],
         index: control.readInt32LE(0x10),
