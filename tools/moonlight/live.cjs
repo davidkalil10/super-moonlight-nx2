@@ -1,7 +1,8 @@
 // Live HBV1 sender: captures frames, encodes them on worker threads and writes
 // the newest finished frame into the running Moonlight app's ring.
-// Usage: node tools/moonlight/live.cjs runs/launcher-XXXX [--screen | --input FILE]
+// Usage: node tools/moonlight/live.cjs [runs/launcher-XXXX] [--screen | --input FILE]
 //        [--size 1280x720] [--fps 60] [--depth 2] [--workers 8]
+const fs = require('node:fs');
 const path = require('node:path');
 const {spawn} = require('node:child_process');
 const {Worker} = require('node:worker_threads');
@@ -35,6 +36,18 @@ function source(args, fps, width, height) {
   );
 }
 
+function newestRun() {
+  const runs = path.join(__dirname, '../../runs');
+  const newest = fs
+    .readdirSync(runs)
+    .filter(name => name.startsWith('launcher-'))
+    .map(name => path.join(runs, name))
+    .sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs)[0];
+  if (!newest) throw Error('No launcher session found in runs/');
+  console.log('Using ' + path.relative(process.cwd(), newest));
+  return newest;
+}
+
 async function main() {
   const args = process.argv.slice(2);
   const option = (name, fallback) =>
@@ -47,7 +60,7 @@ async function main() {
   if (hbv.layout(width, height).slotBytes > ring.SLOT_BYTES)
     throw Error(`${size} frames do not fit a ${ring.SLOT_BYTES / 1024} KiB ring slot`);
   const frameBytes = width * height * 3;
-  const directory = path.resolve(args[0] ?? '');
+  const directory = args[0] && !args[0].startsWith('--') ? path.resolve(args[0]) : newestRun();
   const rpc = require(path.join(directory, 'shared/rpc.cjs'));
   const storage = await findPrivateStorage(directory);
 
