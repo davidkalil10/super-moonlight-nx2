@@ -28,7 +28,7 @@ void main(){
  vec3 color;
  if(newest<RING_SLOTS){
   uint base=newest*RING_SLOT_WORDS,size=ring.words[base+2u];
-  color=hbvSample(base,p*vec2(size&0xffffu,size>>16)/vec2(1920.0,1080.0));
+  color=hbvSample(base,p*float(size&0xffffu)/1920.0);
  }else{
   color=vec3(.03,.05,.08);
   color=mix(color,vec3(.25,.85,.90),text(p,vec2(960-TEXT_TITLE.z/2,440),TEXT_TITLE));

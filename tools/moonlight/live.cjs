@@ -1,7 +1,7 @@
 // Live HBV1 sender: captures frames, encodes them on worker threads and writes
 // the newest finished frame into the running Moonlight app's ring.
 // Usage: node tools/moonlight/live.cjs [runs/launcher-XXXX] [--screen | --input FILE]
-//        [--size 1280x720] [--fps 60] [--depth 2] [--workers 8]
+//        [--size 1920x1080] [--fps 60] [--depth 2] [--workers 12]
 const fs = require('node:fs');
 const path = require('node:path');
 const {spawn} = require('node:child_process');
@@ -54,10 +54,10 @@ async function main() {
     args.includes(name) ? Number(args[args.indexOf(name) + 1]) : fallback;
   const fps = option('--fps', 60),
     depth = option('--depth', 2),
-    workerCount = option('--workers', 8);
-  const size = args.includes('--size') ? args[args.indexOf('--size') + 1] : '1280x720';
+    workerCount = option('--workers', 12);
+  const size = args.includes('--size') ? args[args.indexOf('--size') + 1] : '1920x1080';
   const [width, height] = size.split('x').map(Number);
-  if (hbv.layout(width, height).slotBytes > ring.SLOT_BYTES)
+  if (hbv.layout(width, Math.ceil(height / 16) * 16).slotBytes > ring.SLOT_BYTES)
     throw Error(`${size} frames do not fit a ${ring.SLOT_BYTES / 1024} KiB ring slot`);
   const frameBytes = width * height * 3;
   const directory = args[0] && !args[0].startsWith('--') ? path.resolve(args[0]) : newestRun();
