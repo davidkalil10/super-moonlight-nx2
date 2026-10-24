@@ -64,6 +64,10 @@ async function run({
   let stopped = false;
   let idrTimer;
   let lastIdr = 0;
+  // Minimum spacing between IDR requests. Each IDR is an order of magnitude
+  // larger than a P frame, so spacing them keeps a transient backlog from
+  // spiralling into a flood of keyframes that saturates the link.
+  const IDR_COOLDOWN_MS = 1000;
   const children = [];
   const stats = {
     received: 0,
@@ -98,7 +102,7 @@ async function run({
         lastIdr = Date.now();
         helper.stdin.write(JSON.stringify({type: 'request-idr'}) + '\n');
       },
-      Math.max(0, lastIdr + 500 - Date.now())
+      Math.max(0, lastIdr + IDR_COOLDOWN_MS - Date.now())
     );
   }
   try {
@@ -133,7 +137,7 @@ async function run({
       {stdio: ['pipe', 'ignore', 'pipe', audio ? 'pipe' : 'ignore', 'pipe']}
     );
     reader = new AccessUnits(helper.stdio[4], {
-      maxQueuedUnits: 2,
+      maxQueuedUnits: 3,
       onBacklog: requestIdr
     });
     helper.stdin.on('error', error => {
@@ -198,7 +202,8 @@ async function run({
     }
     let sps,
       pps,
-      configured = false;
+      configured = false,
+      outstanding = 0;
     async function resync(error) {
       resets = resets.filter(time => Date.now() - time < 30000);
       if (resets.length >= 3) throw error;
@@ -209,6 +214,7 @@ async function run({
       generation++;
       decoder = await makeDecoder();
       configured = false;
+      outstanding = 0;
       requestIdr();
     }
     monitor = setInterval(async () => {
@@ -248,13 +254,19 @@ async function run({
       try {
         await decoder.submit(unit);
         stats.submitted++;
-        for (;;) {
+        outstanding++;
+        // Pull once per submit, then drain only genuine backlog. Leaving one
+        // frame in the decoder's pipeline means a one-frame decode latency never
+        // costs a known-empty acquireOutput in steady state. The next
+        // destination() waits for the GPU to apply the last frame, so no
+        // explicit wait is needed and submit of N+1 is not blocked on it.
+        for (let pull = true; pull || outstanding > 1; pull = false) {
           const destination = await sink.destination();
           const frame = await decoder.receive(destination);
           if (!frame) break;
+          outstanding--;
           stats.decoded++;
           await sink.publish(destination, frame);
-          await sink.wait();
           stats.presented++;
         }
       } catch (error) {
