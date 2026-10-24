@@ -92,9 +92,15 @@ static int connect_server(SERVER_DATA *server, char *host) {
   char keys[4096];
   if (!key_directory(keys, sizeof(keys)))
     return fail("cannot create the key directory", keys);
+  fflush(stdout);
+  int saved_stdout = dup(STDOUT_FILENO);
+  dup2(STDERR_FILENO, STDOUT_FILENO);
   alarm(CONNECT_TIMEOUT);
   int result = gs_init(server, host, HTTP_PORT, keys, 0, true);
   alarm(0);
+  fflush(stdout);
+  dup2(saved_stdout, STDOUT_FILENO);
+  close(saved_stdout);
   if (result != GS_OK)
     return fail("cannot reach the GameStream host", gs_error ? gs_error : host);
   return 0;

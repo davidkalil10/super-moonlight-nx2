@@ -285,6 +285,7 @@ void video_callbacks(DECODER_RENDERER_CALLBACKS *callbacks) {
   callbacks->setup = setup;
   callbacks->cleanup = cleanup;
   callbacks->submitDecodeUnit = submit;
+  callbacks->capabilities = CAPABILITY_SLICES_PER_FRAME(4);
 }
 
 void video_take_stats(struct video_stats *out) {
