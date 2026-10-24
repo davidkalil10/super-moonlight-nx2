@@ -30,9 +30,22 @@ const CONTROL = {
   current: 12,
   size: 16,
   hbv1Slot: 20,
+  nativeReady: 24,
+  nativeApplied: 32,
+  currentStride: 64,
+  currentSliceHeight: 68,
+  currentColor: 72,
+  nativeSequence: 256,
+  nativeIndex: 260,
+  nativeWidth: 264,
+  nativeHeight: 268,
+  nativeStride: 272,
+  nativeSliceHeight: 276,
+  nativeColor: 280,
   written: 1024
 };
-const MODE = {none: 0, hbv1: 1, hbv2: 2};
+const MODE = {none: 0, hbv1: 1, hbv2: 2, native: 3};
+const NATIVE_ABI = 0x484e5632;
 const LOCAL_SIZE = 1024;
 
 function slotOffset(sequence) {
@@ -62,6 +75,8 @@ const uint FRAME_BYTES = ${FRAME_BYTES}u;
 const uint FRAMES_OFFSET = ${FRAMES_OFFSET}u;
 const uint MODE_HBV1 = ${MODE.hbv1}u;
 const uint MODE_HBV2 = ${MODE.hbv2}u;
+const uint MODE_NATIVE = ${MODE.native}u;
+const uint NATIVE_ABI = ${NATIVE_ABI}u;
 #define HBV2_LOCAL_SIZE ${LOCAL_SIZE}
 ${words}
 `;
@@ -100,6 +115,7 @@ module.exports = {
   TEST_CARD_SEQUENCE,
   CONTROL,
   MODE,
+  NATIVE_ABI,
   LOCAL_SIZE,
   slotOffset,
   frameOffset,

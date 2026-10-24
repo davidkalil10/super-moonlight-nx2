@@ -1,0 +1,164 @@
+{
+  "decoderCreate": {
+    "symbol": "_ZN5movie7DecoderC2ENS_11DecoderTypeENS_19DecoderOutputFormatE",
+    "offset": 45462512,
+    "size": 76,
+    "hex": "7f2303d5fd7bbda9f50b00f9f44f02a9fd030091f303022af403012af50300aa7c000294e403002ae00315aae103142ae203132af44f42a9f50b40f923008052"
+  },
+  "decoderDestroy": {
+    "symbol": "_ZN5movie7DecoderD2Ev",
+    "offset": 45463712,
+    "size": 232,
+    "hex": "7f2303d5ff0302d1fd7b06a9f33b00f9fd830191e8a600b0f3a6009008d142f9ff7f05a9ff7f04a9ff7f03a9ff7f02a908410091ff7f01a9ff0700f9080000f9"
+  },
+  "configure": {
+    "symbol": "_ZN5movie7Decoder9ConfigureEPNS_9MediaDataE",
+    "offset": 45464000,
+    "size": 52,
+    "hex": "000440f9400100b47f2303d5fd7bbfa9fd030091080040f9081140f900013fd6fd7bc1a8ff2303d55e38001480018252c0035fd6"
+  },
+  "start": {
+    "symbol": "_ZN5movie7Decoder5StartEv",
+    "offset": 45464128,
+    "size": 52,
+    "hex": "000440f9400100b47f2303d5fd7bbfa9fd030091080040f9081d40f900013fd6fd7bc1a8ff2303d53e38001440008452c0035fd6"
+  },
+  "stop": {
+    "symbol": "_ZN5movie7Decoder4StopEv",
+    "offset": 45464192,
+    "size": 52,
+    "hex": "000440f9400100b47f2303d5fd7bbfa9fd030091080040f9082140f900013fd6fd7bc1a8ff2303d52e38001460008452c0035fd6"
+  },
+  "flush": {
+    "symbol": "_ZN5movie7Decoder5FlushEv",
+    "offset": 45464320,
+    "size": 52,
+    "hex": "000440f9400100b47f2303d5fd7bbfa9fd030091080040f9082940f900013fd6fd7bc1a8ff2303d50e38001400008252c0035fd6"
+  },
+  "acquireInput": {
+    "symbol": "_ZN5movie7Decoder23AcquireInputBufferIndexEPiS1_",
+    "offset": 45464992,
+    "size": 52,
+    "hex": "000440f9400100b47f2303d5fd7bbfa9fd030091080040f9082d40f900013fd6fd7bc1a8ff2303d56637001400008252c0035fd6"
+  },
+  "getInput": {
+    "symbol": "_ZN5movie7Decoder14GetInputBufferEiPNS_6BufferE",
+    "offset": 45465056,
+    "size": 236,
+    "hex": "7f2303d5ffc301d1fd7b04a9f52b00f9f44f06a9fd030191150440f9550400b4f30302aaf403012aaadcff9780040036e0030091ff7f03a9ff7f02a9ff7f01a9"
+  },
+  "sendInput": {
+    "symbol": "_ZN5movie7Decoder24SendInputBufferForDecodeEiiilj",
+    "offset": 45464384,
+    "size": 52,
+    "hex": "000440f9400100b47f2303d5fd7bbfa9fd030091080040f9083540f900013fd6fd7bc1a8ff2303d5fe37001400008252c0035fd6"
+  },
+  "acquireOutput": {
+    "symbol": "_ZN5movie7Decoder24AcquireOutputBufferIndexEPiPlPjS1_",
+    "offset": 45464576,
+    "size": 52,
+    "hex": "000440f9400100b47f2303d5fd7bbfa9fd030091080040f9083940f900013fd6fd7bc1a8ff2303d5ce37001400008252c0035fd6"
+  },
+  "getOutput": {
+    "symbol": "_ZN5movie7Decoder15GetOutputBufferEiPNS_6BufferEPNS_9MediaDataE",
+    "offset": 45465360,
+    "size": 416,
+    "hex": "7f2303d5ff0302d1fd7b04a9f72b00f9f65706a9f44f07a9fd030191160440f9560400b4f30303aaf50302aaf403012af70300aa5bdcff97c0030036e0030091"
+  },
+  "releaseOutput": {
+    "symbol": "_ZN5movie7Decoder24ReleaseOutputBufferIndexEi",
+    "offset": 45464448,
+    "size": 52,
+    "hex": "000440f9400100b47f2303d5fd7bbfa9fd030091080040f9084540f900013fd6fd7bc1a8ff2303d5ee37001400008252c0035fd6"
+  },
+  "getFormat": {
+    "symbol": "_ZN5movie7Decoder15GetOutputFormatEPNS_9MediaDataE",
+    "offset": 45464512,
+    "size": 52,
+    "hex": "000440f9400100b47f2303d5fd7bbfa9fd030091080040f9081940f900013fd6fd7bc1a8ff2303d5de37001400008252c0035fd6"
+  },
+  "lastError": {
+    "symbol": "_ZN5movie7Decoder12GetLastErrorEv",
+    "offset": 45465296,
+    "size": 52,
+    "hex": "000440f9400100b47f2303d5fd7bbfa9fd030091080040f9084940f900013fd6fd7bc1a8ff2303d51a37001400008252c0035fd6"
+  },
+  "mediaCreate": {
+    "symbol": "_ZN5movie9MediaDataC2Ev",
+    "offset": 45419168,
+    "size": 60,
+    "hex": "7f2303d5fd7bbea9f44f01a9fd030091f30300aa1f0000f900c180522d080094800000b4f40300aa1ea85997740200f9f44f41a9fd7bc2a8ff0f5fd6"
+  },
+  "mediaDestroy": {
+    "symbol": "_ZN5movie9MediaDataD2Ev",
+    "offset": 45419232,
+    "size": 56,
+    "hex": "7f2303d5fd7bbea9f30b00f9fd030091f30300aacf2a0294680240f9880000b4a0630091a80f00f986080094f30b40f9fd7bc2a8ff0f5fd6"
+  },
+  "mediaSetInt": {
+    "symbol": "_ZN5movie9MediaData8SetInt32EPKci",
+    "offset": 45420112,
+    "size": 16,
+    "hex": "000040f9400000b44aa75917c0035fd6"
+  },
+  "mediaFindInt": {
+    "symbol": "_ZNK5movie9MediaData9FindInt32EPKcPi",
+    "offset": 45420128,
+    "size": 28,
+    "hex": "000040f9a00000b4e80301aae10302aae20308aa7baa5917c0035fd6"
+  },
+  "mediaFindBuffer": {
+    "symbol": "_ZNK5movie9MediaData10FindBufferEPKcPPNS_6BufferE",
+    "offset": 45421488,
+    "size": 108,
+    "hex": "000040f9200300b47f2303d5fd7bbea9f30b00f9fd030091e80301aaa1630091f30302aabf0f00f9e20308aa81a9599740010036a80f40f9080100b4090140b9"
+  },
+  "bufferCreate": {
+    "symbol": "_ZN5movie6BufferC1Ev",
+    "offset": 45414064,
+    "size": 132,
+    "hex": "7f2303d5fd7bbea9f30b00f9fd030091f30300aa60008052e1031f2ae2031f2a680e0094200200360008805259000094600200f9e00000b41f1800b91ffc00a9"
+  },
+  "bufferDestroy": {
+    "symbol": "_ZN5movie6BufferD2Ev",
+    "offset": 45414992,
+    "size": 148,
+    "hex": "7f2303d5fd7bbea9f30b00f9fd030091f30300aa60008052e1031f2ae2031f2a800d009460000036730240f9f30200b460008052e1031f2ae2031f2a790d0094"
+  },
+  "bufferData": {
+    "symbol": "_ZNK5movie6Buffer4DataEv",
+    "offset": 45415408,
+    "size": 132,
+    "hex": "7f2303d5fd7bbea9f30b00f9fd030091f30300aa60008052e1031f2ae2031f2a180d009460000036730240f9530200b460008052e1031f2ae2031f2a110d0094"
+  },
+  "bufferCapacity": {
+    "symbol": "_ZNK5movie6Buffer8CapacityEv",
+    "offset": 45415552,
+    "size": 112,
+    "hex": "7f2303d5fd7bbea9f30b00f9fd030091f30300aa60008052e1031f2ae2031f2af40c009460000036730240f9b30100b460008052e1031f2ae2031f2aed0c0094"
+  },
+  "bufferSize": {
+    "symbol": "_ZNK5movie6Buffer4SizeEv",
+    "offset": 45415664,
+    "size": 112,
+    "hex": "7f2303d5fd7bbea9f30b00f9fd030091f30300aa60008052e1031f2ae2031f2ad80c009460000036730240f9b30100b460008052e1031f2ae2031f2ad10c0094"
+  },
+  "createH264Configuration": {
+    "symbol": "_ZN5movie34CreateH264DecoderConfigurationDataEPKhmS1_mPNS_9MediaDataE",
+    "offset": 45425088,
+    "size": 736,
+    "hex": "7f2303d5fd7bbaa9fc6f01a9fa6702a9fd030091f85f03a9f65704a9f44f05a9ff8301d1f90300aae0031f2a810a00b4790a00b4420a00b4240a00b4f60303aa"
+  },
+  "bufferSetData": {
+    "symbol": "_ZN5movie6Buffer18SetDataAndCapacityEPvm",
+    "offset": 45416368,
+    "size": 168,
+    "hex": "7f2303d5fd7bbda9f50b00f9f44f02a9fd030091f40300aa60008052f30302aaf50301aae1031f2ae2031f2a250c009460000036940240f9140300b460008052"
+  },
+  "getOutputSize": {
+    "symbol": "_ZN5movie7Decoder19GetOutputBufferSizeEPiS1_",
+    "offset": 45464640,
+    "size": 112,
+    "hex": "7f2303d5fd7bbea9f44f01a9fd030091000440f9400200b4080040f9f30302aa084140f900013fd6be370094f403002a80008052e1031f2ae2031f2afddcff97"
+  }
+}

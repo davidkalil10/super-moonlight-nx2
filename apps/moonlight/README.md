@@ -7,6 +7,11 @@ inter-coded variable-rate slots that the compute shader decodes into a
 persistent 1080p frame). Without a sender the app shows the built-in HBV2 test
 card. Design, format and measurements: `docs/moonlight/DESIGN.md`.
 
+`--codec h264` also accepts the helper's raw H.264 stream and decodes it through
+the console's native movie API into NV12 surfaces. Audio, controller and touch
+remain enabled. Setup, DUT results and performance limits are documented in
+[Native H.264](../../docs/moonlight/NATIVE-H264.md).
+
 Build and check from the project root:
 
 ```sh
