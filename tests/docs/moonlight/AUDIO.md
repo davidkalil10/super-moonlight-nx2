@@ -47,9 +47,13 @@ the input ends or `stop()` is called; `stop()` tears down cleanly.
   asserts the buffer stays within one exchange and the slot stays page aligned.
 - `SetAudioOutBufferInfo` is called once per descriptor at init, never per
   append: descriptor i always points at slot i with a constant size, so each
-  cycle is just one write (fresh PCM into the slot) plus one append. That is
-  ~12.5 buffers/s x 2 exchanges = ~25 exchanges/s, matching DESIGN.md's audio
-  budget estimate.
+  cycle is just one write (fresh PCM into the slot) plus one append, ~12.5
+  buffers/s x 2 = ~25 exchanges/s. The loop also polls
+  GetReleasedAudioOutBuffer, but buffers are modelled as releasing sequentially
+  (`releaseAt` is cumulative, not `now + bufferMs`) and the idle wait is floored
+  at `bufferMs / 8`, so polling stays near one call per buffer (~40 total for 20
+  buffers in the test) instead of spinning once per round trip. Total audio load
+  is therefore ~35 exchanges/s, within DESIGN.md's budget.
 - Priming: queue `prime` buffers, then StartAudioOut once. Steady state keeps at
   most `queue` buffers in flight. Added latency is about
   `queue x bufferMs + one exchange` (3 x 80 + ~13 = ~250 ms by default; drop
@@ -93,7 +97,10 @@ node tools/moonlight/audio-stream.cjs runs/launcher-XXXX < /tmp/hbaudio
   not, the Moonlight route must run without the effects stage. On a non-zero
   OpenDefaultAudioOut the module prints a hint naming `game-audio.cjs`.
 - Underrun/latency with real Wi-Fi jitter and the real helper's drop behaviour
-  (DESIGN.md section 4 item 5), sharing the exchange budget with video.
+  (DESIGN.md section 4 item 5), sharing the exchange budget with video. The
+  `underruns` counter is a host-side proxy (in-flight hitting 0 at poll time)
+  and under-counts gaps shorter than a poll; the honest live measurement is
+  GetAudioOutBufferCount reaching 0 or GetAudioOutPlayedSampleCount deltas.
 
 Offline, verified with `tools/moonlight/audio-stream.test.cjs`: priming and
 start order, back-to-back in-order appends across ring wraparound, descriptor

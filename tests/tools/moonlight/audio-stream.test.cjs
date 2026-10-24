@@ -32,7 +32,10 @@ function mockRpc(options = {}) {
   const queued = []; // appended descriptors, FIFO {descriptor, releaseAt}
   const released = [];
   const liveSet = new Set();
+  const playMs = options.playMs ?? 80;
   let retrievedCount = 0;
+  let getReleasedCalls = 0;
+  let playhead = 0; // buffers play sequentially, not all at once
 
   function dispatch(address, args) {
     const name = nameOf(address);
@@ -47,7 +50,8 @@ function mockRpc(options = {}) {
       const descriptor = args[1];
       assert.ok(!liveSet.has(descriptor), 'descriptor appended while still queued');
       liveSet.add(descriptor);
-      queued.push({descriptor, releaseAt: clock.t + (options.playMs ?? 80)});
+      playhead = Math.max(playhead, clock.t) + playMs;
+      queued.push({descriptor, releaseAt: playhead});
       return 1n;
     }
     if (name.includes('StartAudioOut')) return 0n;
@@ -61,6 +65,7 @@ function mockRpc(options = {}) {
       return 0n;
     }
     if (name.includes('GetReleasedAudioOutBuffer')) {
+      getReleasedCalls++;
       if (!released.length) return 0n;
       retrievedCount++;
       return BigInt(released.shift());
@@ -114,6 +119,9 @@ function mockRpc(options = {}) {
     liveSet,
     get retrieved() {
       return retrievedCount;
+    },
+    get getReleasedCalls() {
+      return getReleasedCalls;
     }
   };
 }
@@ -126,12 +134,13 @@ function sine(buffers) {
 }
 
 // a sleep that yields to the event loop (so stream 'data' events fire) then
-// advances the mock's virtual clock.
+// advances the mock's virtual clock by the requested amount. A zero sleep must
+// not move the clock, so a module that spins on sleep(0) hangs the test.
 function virtualSleep(mock) {
   return ms =>
     new Promise(resolve =>
       setImmediate(() => {
-        mock.advance(ms || 1);
+        mock.advance(ms);
         resolve();
       })
     );
@@ -173,6 +182,13 @@ test('primes, starts, appends in order and recycles across wraparound', async ()
   assert.strictEqual(stats.released, 20);
   assert.strictEqual(stats.overruns, 0);
   assert.strictEqual(mock.queued.length, 0, 'queue fully drained');
+
+  // sequential release must not make the loop spin on GetReleasedAudioOutBuffer:
+  // one poll per buffer plus a bounded idle margin, not one per clock tick.
+  assert.ok(
+    mock.getReleasedCalls <= 2 * stats.appended + 16,
+    'GetReleasedAudioOutBuffer polling stays within the exchange budget: ' + mock.getReleasedCalls
+  );
 });
 
 test('bounds host ring and counts overruns when the reader floods', async () => {
