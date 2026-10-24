@@ -222,13 +222,14 @@ function stream(options) {
       stats.written++;
       check((await call('AppendAudioOutBuffer', base, descriptor)) === 1n, 'Append rejected');
       free.delete(descriptor);
-      inFlight.push({descriptor, releaseAt: now() + bufferMs});
+      const playhead = inFlight.length ? inFlight[inFlight.length - 1].releaseAt : now();
+      inFlight.push({descriptor, releaseAt: Math.max(playhead, now()) + bufferMs});
       stats.appended++;
     }
 
     try {
       while (true) {
-        await drain();
+        if (inFlight.length) await drain();
         const cap = started ? queueMax : prime;
         while (free.size > 0 && inFlight.length < cap && pending.bytes >= bufferBytes) {
           await append(free.values().next().value, pending.pull(bufferBytes));
@@ -260,8 +261,8 @@ function stream(options) {
         if (done) break;
 
         const wait = inFlight.length
-          ? Math.max(0, Math.min(bufferMs, inFlight[0].releaseAt - now()))
-          : Math.min(bufferMs, bufferMs / 4);
+          ? Math.max(bufferMs / 8, Math.min(bufferMs, inFlight[0].releaseAt - now()))
+          : bufferMs / 4;
         await sleep(wait);
       }
     } finally {
@@ -322,14 +323,29 @@ async function main() {
   process.on('SIGINT', () => session.stop());
   process.on('SIGTERM', () => session.stop());
   console.log('Continuous audio stream ready.');
-  const stats = await session.done;
+  let error;
+  try {
+    await session.done;
+  } catch (e) {
+    error = e;
+  }
   const file = path.join(directory, `moonlight-audio-${Date.now()}.json`);
   await fs.promises.writeFile(
     file,
-    JSON.stringify({session: rpc.a.session, completed: new Date().toISOString(), ...stats}, null, 2)
+    JSON.stringify(
+      {
+        session: rpc.a.session,
+        completed: new Date().toISOString(),
+        ...session.stats,
+        error: error?.message
+      },
+      null,
+      2
+    )
   );
-  console.log(JSON.stringify(stats));
+  console.log(JSON.stringify(session.stats));
   console.log('Saved ' + file);
+  if (error) throw error;
 }
 
 module.exports = {stream, ByteQueue, newestRun};
