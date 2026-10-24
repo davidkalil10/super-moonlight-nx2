@@ -20,10 +20,10 @@ const SLOT_BASE = 0x10000;
 const PARAM_OFFSET = 0x300;
 const DESCRIPTOR_BASE = 0x400;
 const DESCRIPTOR_STRIDE = 0x40;
-const ALLOCATE = 5732112;
 
 const symbols = require('../../sdk/native/audio-symbols.json');
 const sdkImage = require('../../smilebasic/reference/sdk-checks.cjs');
+const {allocate} = require('../../sdk/native/allocate.cjs');
 
 const check = (value, message) => {
   if (!value) throw Error(message);
@@ -56,14 +56,6 @@ function resolver(rpc) {
     return (await rpc.callAddress(target, args, 2)).result;
   };
   return call;
-}
-
-async function allocate(rpc, bytes) {
-  const allocation = await rpc.call(ALLOCATE, [rpc.output, 65536, bytes], 8);
-  check(allocation.result === 0n, 'Audio allocation failed');
-  const base = Number(allocation.output.readBigUInt64LE());
-  check(Number.isSafeInteger(base) && base > 0 && base % 65536 === 0, 'Invalid audio allocation');
-  return base;
 }
 
 class ByteQueue {
@@ -173,7 +165,11 @@ function stream(options) {
     const call = resolver(rpc);
 
     const alloc = 65536 + DESCRIPTOR_COUNT * SLOT_STRIDE;
-    base = await allocate(rpc, alloc);
+    base = await allocate(rpc, alloc, {
+      align: 65536,
+      failed: 'Audio allocation failed',
+      invalid: 'Invalid audio allocation'
+    });
     await rpc.write(base, Buffer.alloc(65536));
 
     const param = base + PARAM_OFFSET;
