@@ -11,6 +11,9 @@ verify thread.tryWait 20B 4b5fb88e
 verify thread.tryWaitImplementation 112B 1a9bb7df
 verify thread.sleep 4B fcfa327b
 verify ipc.copy 16B c50102f7
+verify timing.tick 8B 7c090659
+verify timing.frequency 12B 1396137e
+callAddress timing.frequency() out=2
 verify os.initializeEvent 32B 38512290
 verify os.waitEvent 32B f3dbe41d
 verify os.signalEvent 32B 4c0ab05b
@@ -22,9 +25,9 @@ write heap+0x0 256 96fb36da
 callAddress os.initializeEvent(heap+0x0, 0, 1, 0) out=2
 callAddress os.initializeEvent(heap+0x40, 0, 1, 0) out=2
 call sdk.allocate(scratch+0x4040, 4096, 0x400000) out=8
-write heap+0x11000 94208 584432cc
-write heap+0x211000 94208 584432cc
-write heap+0x321000 16 e129f27c
+write heap+0x11000 94208 ec2c09c3
+write heap+0x211000 94208 ec2c09c3
+write heap+0x321000 24 d3399b72
 write heap+0x351000 176 46d00cd8
 write heap+0x3f1000 8 9ec85eac
 read heap+0x211000 94208
@@ -46,14 +49,17 @@ call sdk.allocate(scratch+0x4040, 4096, 4096) out=8
 read heap+0xc0 8
 read heap+0xc0 8
 read heap+0xc0 8
+read heap+0x321000 24
 read heap+0x801000 192
 read heap+0xc0 8
 read heap+0xc0 8
 read heap+0xc0 8
+read heap+0x321000 24
 read heap+0x801000 192
 read heap+0xc0 8
 read heap+0xc0 8
 read heap+0xc0 8
+read heap+0x321000 24
 read heap+0x801000 192
 read heap+0xc0 8
 read heap+0xc0 8

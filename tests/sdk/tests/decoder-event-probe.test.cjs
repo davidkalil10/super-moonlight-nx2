@@ -46,7 +46,8 @@ function clipFiles(display) {
 
 // hold: frames the decoder keeps until more input arrives (released in display order).
 // silent: it never signals the output event. corrupt: frame 1 comes out wrong.
-function fakeDecoder(fake, {hold = 0, silent = false, corrupt = false} = {}) {
+// slots: frames it can hold, decoded or not taken, before its input side is full.
+function fakeDecoder(fake, {hold = 0, silent = false, corrupt = false, slots = Infinity} = {}) {
   const {memory, rpc} = fake;
   const state = {struct: null, inside: [], ready: [], closed: false, configured: null};
   const signal = offset => {
@@ -60,6 +61,7 @@ function fakeDecoder(fake, {hold = 0, silent = false, corrupt = false} = {}) {
   };
   const create = async () => ({
     lastInput: null,
+    lastStamp: null,
     async configure(sps, pps, fps, {beforeStart}) {
       rpc.note('decoder.configure');
       await beforeStart(0x5a000000);
@@ -67,8 +69,10 @@ function fakeDecoder(fake, {hold = 0, silent = false, corrupt = false} = {}) {
       signal(0);
       return {width: WIDTH, height: HEIGHT};
     },
-    async submit(unit, {acquireOutput}) {
+    async submit(unit, {acquireOutput, stamp}) {
       assert.equal(acquireOutput, false);
+      assert.equal(fake.rpc.names.get(stamp), 'timing.tick');
+      this.lastStamp = fake.clock();
       state.inside.push(unit.pts);
       state.inside.sort((a, b) => a - b);
       while (state.inside.length > hold) {
@@ -76,7 +80,10 @@ function fakeDecoder(fake, {hold = 0, silent = false, corrupt = false} = {}) {
         if (!silent) signal(8);
       }
       signal(0);
-      this.lastInput = {status: 0, index: 1};
+      this.lastInput = {
+        status: 0,
+        index: state.inside.length + state.ready.length < slots ? 1 : -1
+      };
     },
     async receive(destination) {
       if (!state.ready.length) return null;
@@ -189,6 +196,10 @@ test('immediate output: one event and one first-try acquire per AU', async () =>
   assert.equal(report.afterStart.input, 1);
   assert.deepEqual(report.correctness.matched, 4);
   assert.equal(report.registerStatus, 0);
+  assert.equal(report.tickFrequency, 19200000);
+  assert.equal(loop.consoleLatencyMs.n, 4);
+  assert.ok(loop.consoleLatencyMs.max >= 0);
+  assert.equal(loop.submitMs.n, 4);
   // One submit and one receive that hits plus the empty one, per AU.
   assert.equal(report.exchangeCalls.submit, 4);
   assert.equal(report.exchangeCalls.receive, 8);
@@ -203,7 +214,8 @@ test('immediate output: one event and one first-try acquire per AU', async () =>
 });
 
 test('held frames show as output latency and as frames left after the drain', async () => {
-  const {report} = await run([0, 2, 1, 4, 3], {decoder: {hold: 2}});
+  const {report, record} = await run([0, 2, 1, 4, 3], {decoder: {hold: 2}});
+  assert.equal(record.error, undefined);
   assert.equal(report.verdict, 'PASS');
   const loop = report.loop;
   assert.equal(loop.firstOutputAfterAu, 2);
@@ -299,8 +311,95 @@ test('every event function is verified before use, the worker ones before spawn'
   }
   assert.ok(position(lines, /^verify os\.waitEvent /) < spawned);
   assert.ok(position(lines, /^verify os\.atomicAddU32 /) < spawned);
+  assert.ok(position(lines, /^verify timing\.tick /) < spawned);
+  assert.ok(
+    position(lines, /^verify timing\.frequency /) <
+      position(lines, /^callAddress timing\.frequency/)
+  );
   assert.ok(
     position(lines, /^verify movie\.registerClientEvents /) <
       position(lines, /^callAddress movie\.registerClientEvents\(/)
   );
+});
+
+test('burst keeps sending while outputs keep up and times them on the console', async () => {
+  const {report, error} = await run([0, 1, 2, 3, 4, 5], {burst: true});
+  assert.equal(error, undefined);
+  assert.equal(report.verdict, 'PASS');
+  const loop = report.loop;
+  assert.equal(loop.submitted, 6);
+  assert.equal(loop.received, 6);
+  assert.equal(loop.held, 0);
+  assert.equal(loop.inputBlocked, 0);
+  assert.equal(loop.host.submitMs.n, 6);
+  assert.equal(loop.console.oneEventPerOutput, true);
+  assert.equal(loop.console.eventsTimed, 6);
+  assert.equal(loop.console.latencyMs.n, 6);
+  assert.equal(loop.console.outputIntervalMs.n, 5);
+  assert.equal(loop.console.maxInFlight, 0);
+  assert.equal(report.correctness.matched, 6);
+  // One submit, one sample and one receive per AU; no empty acquires while outputs keep up.
+  assert.equal(report.exchangeCalls.submit, 6);
+  assert.equal(
+    report.frames.every((f, i) => f.afterAu === i),
+    true
+  );
+});
+
+test('burst drains when the input side fills and reports what stayed inside', async () => {
+  const {report, record} = await run([0, 2, 1, 4, 3, 5], {
+    burst: true,
+    decoder: {hold: 2, slots: 3}
+  });
+  assert.equal(record.error, undefined);
+  assert.equal(report.verdict, 'PASS');
+  const loop = report.loop;
+  assert.equal(loop.submitted, 6);
+  assert.equal(loop.received, 4);
+  assert.deepEqual(loop.heldDisplays, [4, 5]);
+  assert.equal(loop.displayOrder, true);
+  assert.ok(loop.inputBlocked > 0);
+  assert.ok(report.sends.filter(s => s.blocked).every(s => s.au > 0));
+  assert.ok(loop.console.maxInFlight >= 2);
+  assert.equal(report.finalized, true);
+});
+
+test('burst shuts down in the same order as the per-AU run', async () => {
+  const {report, fake} = await run([0, 1, 2], {burst: true});
+  assert.equal(report.finalized, true);
+  const lines = fake.rpc.lines;
+  const closed = position(lines, /^decoder\.close$/);
+  const joins = lines.flatMap((l, i) => (l.startsWith('callAddress thread.join') ? [i] : []));
+  assert.equal(joins.length, 2);
+  assert.ok(joins.every(i => i < closed));
+  assert.ok(position(lines, /^callAddress os\.finalizeEvent\(/, closed) > closed);
+});
+
+test('a reference subset is compared by display index and large frames are read only there', () => {
+  const sends = [0, 1, 2].map(au => ({
+    au,
+    display: au,
+    hostAt: au * 5,
+    sendTick: String(1000 + au * 100)
+  }));
+  const samples = [
+    {count: 1, tick: '1050', sent: 1, received: 0},
+    {count: 2, tick: '1150', sent: 2, received: 1},
+    {count: 3, tick: '1250', sent: 3, received: 2}
+  ];
+  const frames = [0, 1, 2].map(display => ({display, afterAu: display, hostAt: display * 10}));
+  const loop = probe.summarizeBurst({
+    sends,
+    samples,
+    frames,
+    held: [],
+    eventCount: 3,
+    ms: ticks => Number(ticks) / 10
+  });
+  assert.deepEqual(loop.console.latencyMs, {n: 3, p50: 5, p95: 5, max: 5, mean: 5});
+  assert.equal(loop.console.outputIntervalMs.p50, 10);
+  assert.equal(loop.console.outputFps, 100);
+  assert.equal(loop.console.inputFps, 100);
+  assert.equal(loop.console.maxInFlight, 0);
+  assert.equal(loop.host.fps, 150);
 });

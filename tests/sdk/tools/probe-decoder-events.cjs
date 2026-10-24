@@ -1,7 +1,10 @@
 // Decoder event probe for the persistent decode worker. A plain EventType registered through
 // RegisterClientEvents is watched by a repeating worker (WaitEvent, then an atomic add), so
 // the host can count output-ready (and input-available) notifications per access unit while
-// it feeds an offline clip, acquires every output itself and checks the frames.
+// it feeds an offline clip, acquires every output itself and checks the frames. The output
+// watcher also reads the console tick on each wake and SendInput is stamped the same way, so
+// decoder latency is measured on the console clock, apart from the host's round trips.
+// --burst keeps the input side full instead of waiting for each AU's output.
 const fs = require('node:fs/promises'),
   os = require('node:os'),
   path = require('node:path');
@@ -15,6 +18,7 @@ const {CODE: code, verifyCode, verifyCopy, spawn, wait, join} = require('../nati
 const {nals, parameterSets} = require('../../tools/moonlight/h264-stream.cjs');
 const SYNC = require('../native/os-sync-functions.json');
 const MOVIE_EVENTS = require('../native/movie-event-functions.json');
+const TIMING = require('../../smilebasic/engine/switch2/app/timing-code.json').functions;
 
 const USED = ['initializeEvent', 'waitEvent', 'signalEvent', 'finalizeEvent', 'atomicAddU32'];
 // Its own allocation, so no repeating region restores over the events or counters.
@@ -33,6 +37,21 @@ const sleep = milliseconds => new Promise(resolve => setTimeout(resolve, millise
 const sha256 = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 const histogram = values =>
   values.reduce((counts, value) => ((counts[value] = (counts[value] || 0) + 1), counts), {});
+
+function stats(values) {
+  if (!values.length) return null;
+  const sorted = [...values].sort((a, b) => a - b),
+    at = p => sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * p))];
+  return {
+    n: sorted.length,
+    p50: round(at(0.5)),
+    p95: round(at(0.95)),
+    max: round(sorted.at(-1)),
+    mean: round(sorted.reduce((sum, v) => sum + v, 0) / sorted.length)
+  };
+}
+
+const differences = values => values.slice(1).map((value, i) => value - values[i]);
 
 // Annex-B access units: a new one starts at each VCL NAL whose first_mb_in_slice is 0, and
 // carries the SPS/PPS/SEI that precede it.
@@ -120,7 +139,69 @@ function summarize(units, frames, held) {
     inputEventsPerAu: histogram(units.map(u => u.inputEvents)),
     inputReadyAfterSend: units.filter(u => u.input && u.input.index >= 0).length,
     inputEventWithoutSlot: units.filter(u => u.inputEvents > 0 && u.input && u.input.index < 0)
-      .length
+      .length,
+    consoleLatencyMs: stats(
+      seen.filter(u => u.consoleLatencyMs !== null).map(u => u.consoleLatencyMs)
+    ),
+    submitMs: stats(units.map(u => u.submitMs))
+  };
+}
+
+// Burst answers. Console times come from ticks: SendInput's stamp, and the tick the output
+// watcher took on the wake that brought its counter to k, read back with k by host samples.
+// Events can coalesce, so per-frame latency only holds when every output got its own event.
+function summarizeBurst({sends, samples, frames, held, eventCount, ms}) {
+  const tickOf = new Map();
+  for (const sample of samples) if (sample.count) tickOf.set(sample.count, BigInt(sample.tick));
+  const known = [...tickOf.keys()].sort((a, b) => a - b);
+  const consecutive = known.filter(k => tickOf.has(k + 1));
+  const decodeIndex = new Map(sends.map(send => [send.display, send.au]));
+  const oneToOne = eventCount === frames.length;
+  const latency = oneToOne
+    ? known
+        .filter(k => k <= frames.length)
+        .map(k =>
+          ms(tickOf.get(k) - BigInt(sends[decodeIndex.get(frames[k - 1].display)].sendTick))
+        )
+    : [];
+  const sendTicks = sends.map(send => BigInt(send.sendTick));
+  const firstKnown = known[0],
+    lastKnown = known.at(-1);
+  const span = frames.length ? frames.at(-1).hostAt - sends[0].hostAt : null;
+  const displays = frames.map(f => f.display);
+  return {
+    submitted: sends.length,
+    received: frames.length,
+    held: held.length,
+    heldDisplays: held,
+    displayOrder: displays.every((d, i) => !i || d > displays[i - 1]),
+    inputBlocked: sends.filter(send => send.blocked).length,
+    host: {
+      spanMs: span === null ? null : round(span),
+      fps: span ? round((frames.length * 1000) / span) : null,
+      submitMs: stats(sends.map(send => send.hostMs)),
+      outputIntervalMs: stats(differences(frames.map(f => f.hostAt))),
+      maxInFlight: Math.max(0, ...frames.map((f, i) => f.afterAu + 1 - i)),
+      maxUnreceived: Math.max(0, ...samples.map(s => s.sent - s.received))
+    },
+    console: {
+      inputFps:
+        sends.length > 1
+          ? round(((sends.length - 1) * 1000) / ms(sendTicks.at(-1) - sendTicks[0]))
+          : null,
+      sendIntervalMs: stats(differences(sendTicks).map(ms)),
+      outputFps:
+        lastKnown > firstKnown
+          ? round(
+              ((lastKnown - firstKnown) * 1000) / ms(tickOf.get(lastKnown) - tickOf.get(firstKnown))
+            )
+          : null,
+      outputIntervalMs: stats(consecutive.map(k => ms(tickOf.get(k + 1) - tickOf.get(k)))),
+      eventsTimed: known.length,
+      oneEventPerOutput: oneToOne,
+      latencyMs: stats(latency),
+      maxInFlight: Math.max(0, ...samples.map(s => s.sent - s.count))
+    }
   };
 }
 
@@ -134,6 +215,7 @@ async function main(
     pollMs = 5,
     drainMs = 1000,
     stopTimeoutMs = 5000,
+    burst = false,
     output = process.env.HB_NATIVE_LOG_DIR,
     createDecoder = require('../../tools/moonlight/native-decoder.cjs').create
   } = {}
@@ -163,6 +245,13 @@ async function main(
     () => null
   );
   const references = reference ? await fs.readFile(reference) : null;
+  // A large clip's reference holds only some frames, listed by display index in the sidecar.
+  const referenceAt = new Map(
+    (timing?.references ?? [...new Set(display)].sort((a, b) => a - b)).map((shown, i) => [
+      shown,
+      i
+    ])
+  );
   const {sps, pps} = parameterSets(bytes);
   if (!sps || !pps) throw Error('Clip has no SPS/PPS');
 
@@ -185,7 +274,9 @@ async function main(
       settleMs,
       pollMs,
       drainMs,
-      stopTimeoutMs
+      stopTimeoutMs,
+      burst,
+      referenceFrames: reference ? referenceAt.size : 0
     }
   };
   const file = path.join(output, 'decoder-event-probe.json');
@@ -197,14 +288,21 @@ async function main(
     rows = [],
     frames = [],
     expected = new Set(display);
-  let started = null;
+  const sends = [],
+    samples = [];
+  let started = null,
+    frequency = null,
+    eventCount = 0;
+  const ms = ticks => (Number(ticks) * 1000) / frequency;
   // Kept for a run that fails part way, so the AUs that did run still answer.
   function conclude() {
-    const fed = new Set(rows.map(row => row.display));
+    const fed = new Set((burst ? sends : rows).map(row => row.display));
     const held = [...expected].filter(shown => fed.has(shown)).sort((a, b) => a - b);
     record.loop = {
       totalMs: round(performance.now() - started),
-      ...summarize(rows, frames, held)
+      ...(burst
+        ? summarizeBurst({sends, samples, frames, held, eventCount, ms})
+        : summarize(rows, frames, held))
     };
     const compared = frames.filter(f => f.match !== undefined);
     record.correctness = {
@@ -228,6 +326,13 @@ async function main(
   try {
     await verifyCode(rpc);
     await verifyCopy(rpc);
+    await verifyCode(rpc, [TIMING.tick, TIMING.frequency]);
+    fn.tick = sdk + TIMING.tick.offset;
+    frequency = Number(
+      BigInt.asUintN(32, (await rpc.callAddress(sdk + TIMING.frequency.offset, [], SHORT)).result)
+    );
+    if (!frequency) throw Error('The console tick frequency is zero');
+    record.tickFrequency = frequency;
     for (const name of USED) {
       await verify(rpc, sdk + SYNC[name].offset, SYNC[name].hex);
       fn[name] = sdk + SYNC[name].offset;
@@ -280,6 +385,7 @@ async function main(
         code,
         calls: [
           {function: fn.waitEvent, args: [w.event]},
+          ...(w.name === 'output' ? [{function: fn.tick, args: []}] : []),
           {function: fn.atomicAddU32, args: [1, w.counter]}
         ]
       });
@@ -289,6 +395,7 @@ async function main(
         failed: 'Event watcher creation failed'
       });
     }
+    const timed = watchers[0].program.addresses[0];
     record.watchers = watchers.map(w => ({
       name: w.name,
       base: w.base,
@@ -323,39 +430,61 @@ async function main(
     await sleep(settleMs);
     record.afterStart = await counters();
 
-    const exchanges = {submit: 0, counterRead: 0, receive: 0, frameRead: 0};
+    const exchanges = {submit: 0, counterRead: 0, sampleRead: 0, receive: 0, frameRead: 0};
     record.units = rows;
     record.frames = frames;
     record.exchangeCalls = exchanges;
+    // The output watcher's results: WaitEvent status, its wake tick, the counter before its add.
+    async function sample() {
+      exchanges.sampleRead++;
+      const b = await rpc.read(timed, 24);
+      const tick = b.readBigUInt64LE(8);
+      const count = tick ? Number(b.readBigUInt64LE(16) & 0xffffffffn) + 1 : 0;
+      return {hostAt: round(performance.now() - started), count, tick};
+    }
+    // Small frames are always read; large ones only where the reference has them.
+    const readAll = frameBytes <= 0x10000;
     async function take(afterAu) {
       exchanges.receive++;
       const frame = await decoder.receive(destination);
       if (!frame) return null;
       const shown = Number(frame.pts);
-      const row = {display: shown, afterAu};
+      const row = {display: shown, afterAu, hostAt: round(performance.now() - started)};
       if (!expected.delete(shown)) throw Error('Unexpected or repeated output pts ' + frame.pts);
-      exchanges.frameRead++;
-      const surface = await rpc.read(
-        destination.address,
-        (frame.stride * frame.sliceHeight * 3) / 2
-      );
-      const packed = packNv12(surface, frame);
-      row.sha256 = sha256(packed);
-      if (references) {
-        const want = references.subarray(shown * frameBytes, (shown + 1) * frameBytes);
-        if (want.length === frameBytes)
-          Object.assign(row, compareFrame(packed, want, frame.width, frame.height));
+      const want = references && referenceAt.has(shown);
+      if (readAll || want) {
+        exchanges.frameRead++;
+        const surface = await rpc.read(
+          destination.address,
+          (frame.stride * frame.sliceHeight * 3) / 2
+        );
+        const packed = packNv12(surface, frame);
+        row.sha256 = sha256(packed);
+        const at = referenceAt.get(shown) * frameBytes;
+        if (want && at + frameBytes <= references.length)
+          Object.assign(
+            row,
+            compareFrame(
+              packed,
+              references.subarray(at, at + frameBytes),
+              frame.width,
+              frame.height
+            )
+          );
       }
       frames.push(row);
       return row;
     }
+    const stamp = {acquireOutput: false, stamp: fn.tick};
 
     started = performance.now();
-    for (let au = 0; au < units.length; au++) {
+    for (let au = 0; au < units.length && !burst; au++) {
       const before = await counters();
       exchanges.counterRead++;
       const at = performance.now();
-      await decoder.submit({data: units[au].data, pts: display[au]}, {acquireOutput: false});
+      await decoder.submit({data: units[au].data, pts: display[au]}, stamp);
+      const submitMs = performance.now() - at,
+        sendTick = decoder.lastStamp;
       exchanges.submit++;
       let now = before,
         polls = 0;
@@ -367,6 +496,7 @@ async function main(
       }
       const eventSeen = now.output > before.output;
       const eventMs = performance.now() - at;
+      const woke = eventSeen ? await sample() : null;
       const outputs = [];
       for (let frame; (frame = await take(au));) outputs.push(frame.display);
       const after = await counters();
@@ -380,25 +510,64 @@ async function main(
         eventSeen,
         eventMs: eventSeen ? round(eventMs) : null,
         polls,
+        submitMs: round(submitMs),
+        sendTick: String(sendTick),
+        eventTick: woke && woke.tick ? String(woke.tick) : null,
+        consoleLatencyMs: woke && woke.tick ? round(ms(woke.tick - sendTick)) : null,
         firstTry: outputs.length > 0,
         outputs,
         outputEvents: after.output - before.output,
         inputEvents: after.input - before.input
       });
     }
+    // Burst: submit whenever an input slot is ready, take one output per submit while the
+    // watcher reports more outputs than were taken, and drain fully only when input blocks.
+    if (burst) {
+      record.sends = sends;
+      record.samples = samples;
+      const note = async () => {
+        const s = await sample();
+        samples.push({...s, tick: String(s.tick), sent: sends.length, received: frames.length});
+        return s;
+      };
+      for (let au = 0; au < units.length; au++) {
+        const blocked = au > 0 && decoder.lastInput.index < 0;
+        if (blocked) while (await take(au - 1));
+        const at = performance.now();
+        await decoder.submit({data: units[au].data, pts: display[au]}, stamp);
+        exchanges.submit++;
+        sends.push({
+          au,
+          display: display[au],
+          hostAt: round(at - started),
+          hostMs: round(performance.now() - at),
+          sendTick: String(decoder.lastStamp),
+          input: decoder.lastInput,
+          blocked
+        });
+        if ((await note()).count > frames.length) await take(au);
+      }
+      while ((await note()).count > frames.length && (await take(units.length - 1)));
+    }
     // Whatever is still inside the decoder after the last AU, given time but no more input.
     const drainStarted = performance.now();
     while (expected.size && performance.now() - drainStarted < drainMs) {
-      if (!(await take(null))) await sleep(pollMs * 4);
+      if (!(await take(burst ? units.length - 1 : null))) await sleep(pollMs * 4);
     }
-    record.drain = {...(await counters()), ms: round(performance.now() - drainStarted)};
+    const drained = await counters();
+    eventCount = drained.output;
+    if (burst) {
+      const last = await sample();
+      samples.push({...last, tick: String(last.tick), sent: sends.length, received: frames.length});
+    }
+    record.drain = {...drained, ms: round(performance.now() - drainStarted)};
     const compared = conclude();
     if (compared.length !== compared.filter(f => f.match).length)
       throw Error('Decoded frames differ from the reference');
     if (references && !compared.length && frames.length) throw Error('No frame was compared');
   } catch (error) {
     failure = error;
-    if (rows.length && !record.loop) conclude();
+    if ((burst ? sends : rows).length && !record.loop) conclude();
   }
 
   // A watcher blocked in WaitEvent only sees the stop selector after a wake, and the decoder's
@@ -473,7 +642,41 @@ async function main(
   if (failure) record.error = failure.message;
   await save();
   const loop = record.loop;
-  if (loop) {
+  if (loop && burst) {
+    const {host, console: device} = loop;
+    console.log(
+      'burst:',
+      loop.submitted,
+      'AUs,',
+      loop.received,
+      'frames,',
+      loop.held,
+      'held; host',
+      host.fps,
+      'fps over',
+      host.spanMs,
+      'ms, submit ms',
+      JSON.stringify(host.submitMs),
+      ', output interval ms',
+      JSON.stringify(host.outputIntervalMs),
+      ', input blocked',
+      loop.inputBlocked
+    );
+    console.log(
+      'console: input',
+      device.inputFps,
+      'fps, output',
+      device.outputFps,
+      'fps, output interval ms',
+      JSON.stringify(device.outputIntervalMs),
+      ', latency ms',
+      JSON.stringify(device.latencyMs),
+      ', one event per output',
+      device.oneEventPerOutput,
+      ', max in flight',
+      device.maxInFlight
+    );
+  } else if (loop) {
     console.log(
       'decoder events:',
       loop.submitted,
@@ -499,6 +702,12 @@ async function main(
       loop.outputWithoutEvent,
       ', event ms',
       JSON.stringify(loop.eventMs)
+    );
+    console.log(
+      'console latency ms (SendInput to output wake)',
+      JSON.stringify(loop.consoleLatencyMs),
+      ', host submit ms',
+      JSON.stringify(loop.submitMs)
     );
     console.log(
       'input event: events/AU',
@@ -532,6 +741,7 @@ module.exports = {
   compareFrame,
   packNv12,
   summarize,
+  summarizeBurst,
   CONTROL_BYTES,
   OUTPUT_EVENT,
   INPUT_EVENT,
@@ -545,6 +755,7 @@ if (require.main === module) {
     clip: cli.option(args, '--clip') || undefined,
     reference: cli.option(args, '--reference') || undefined,
     watchInput: !args.includes('--no-input-watch'),
+    burst: args.includes('--burst'),
     settleMs: cli.number(args, '--settle-ms', 250),
     drainMs: cli.number(args, '--drain-ms', 1000),
     output: cli.option(args, '--output') || undefined
