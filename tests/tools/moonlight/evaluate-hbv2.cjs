@@ -13,6 +13,7 @@ const path = require('node:path');
 const {spawnSync} = require('node:child_process');
 const hbv = require('./hbv.cjs');
 const hbv2 = require('./hbv2.cjs');
+const {psnr} = require('./reference.cjs');
 const {Encoder} = require('./hbv2-encoder.cjs');
 const cli = require('../../sdk/cli.cjs');
 
@@ -57,12 +58,6 @@ function luma(rgb) {
       Math.round(0.299 * rgb[3 * i] + 0.587 * rgb[3 * i + 1] + 0.114 * rgb[3 * i + 2])
     );
   return y;
-}
-
-function psnr(a, b) {
-  let sum = 0;
-  for (let i = 0; i < WIDTH * HEIGHT; i++) sum += (a[i] - b[i]) ** 2;
-  return sum ? 10 * Math.log10((255 * 255 * WIDTH * HEIGHT) / sum) : 99;
 }
 
 function reconFrame(file, index) {
