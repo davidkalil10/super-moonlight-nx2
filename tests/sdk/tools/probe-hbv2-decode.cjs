@@ -10,7 +10,7 @@
 const fs = require('node:fs/promises'),
   path = require('node:path');
 const {struct, latest, compat, job, report} = require('./probe-job.cjs');
-const ring = require('../../apps/moonlight/ring.cjs');
+const ring = require('../../tools/moonlight/ring.cjs');
 const hbv2 = require('../../tools/moonlight/hbv2.cjs');
 
 const STATE_BYTES = 4096;
