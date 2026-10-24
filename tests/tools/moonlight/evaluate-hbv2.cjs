@@ -14,6 +14,7 @@ const {spawnSync} = require('node:child_process');
 const hbv = require('./hbv.cjs');
 const hbv2 = require('./hbv2.cjs');
 const {Encoder} = require('./hbv2-encoder.cjs');
+const cli = require('../../sdk/cli.cjs');
 
 const WIDTH = 1920,
   HEIGHT = 1080,
@@ -186,7 +187,7 @@ function saveCrop(rgb, crop, file) {
 
 async function main() {
   const args = process.argv.slice(2),
-    option = (name, fallback) => (args.includes(name) ? args[args.indexOf(name) + 1] : fallback);
+    option = (name, fallback) => cli.option(args, name, fallback);
   const optionValues = new Set(
     ['--frames', '--budgets', '--rates', '--crop'].map(name => option(name))
   );

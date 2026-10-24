@@ -6,11 +6,12 @@
 //        [--labels] [--sources]
 const path = require('node:path');
 const session = require('../../sdk/host/session.cjs');
+const cli = require('../../sdk/cli.cjs');
 const {NEUTRAL, toMoonlight, same, readController} = require('./controller.cjs');
 
 async function main() {
   const args = process.argv.slice(2);
-  const hz = args.includes('--hz') ? Number(args[args.indexOf('--hz') + 1]) : 60,
+  const hz = cli.number(args, '--hz', 60),
     layout = args.includes('--labels') ? 'labels' : 'position',
     sources = args.includes('--sources');
   const directory = session.resolve(args[0]);

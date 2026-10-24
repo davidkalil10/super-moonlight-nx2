@@ -4,14 +4,14 @@
 const fs = require('node:fs');
 const hbv = require('./hbv.cjs');
 const {readFrames} = require('./frames.cjs');
+const cli = require('../../sdk/cli.cjs');
 
 async function main() {
   const args = process.argv.slice(2),
     [clip, output] = args;
   if (!clip || !output) throw Error('Usage: encode.cjs CLIP OUT.hbv [--size WxH] [--frames N]');
-  const option = name => (args.includes(name) ? args[args.indexOf(name) + 1] : null);
-  const [width, height] = (option('--size') || '640x352').split('x').map(Number);
-  const frames = option('--frames') ? Number(option('--frames')) : Infinity;
+  const [width, height] = (cli.option(args, '--size') || '640x352').split('x').map(Number);
+  const frames = Number(cli.option(args, '--frames') || Infinity);
   const map = hbv.layout(width, height),
     out = fs.createWriteStream(output);
   let sequence = 0,

@@ -5,6 +5,7 @@ const fs = require('node:fs/promises');
 const hbv = require('./hbv.cjs');
 const {bc1, yuv420, bilinear, psnr, changedFraction} = require('./reference.cjs');
 const {readFrames} = require('./frames.cjs');
+const cli = require('../../sdk/cli.cjs');
 
 const EXCHANGE_MS = 13;
 const DISPLAY = [1280, 720];
@@ -131,8 +132,7 @@ async function main() {
   const args = process.argv.slice(2),
     clip = args[0];
   if (!clip) throw Error('Usage: evaluate.cjs CLIP [--frames N] [--json OUT]');
-  const option = name => (args.includes(name) ? args[args.indexOf(name) + 1] : null);
-  const frames = Number(option('--frames') || 30);
+  const frames = Number(cli.option(args, '--frames') || 30);
   const report = {clip, frames, exchangeMs: EXCHANGE_MS, native: [], budget: []};
   for (const [format, width, height] of NATIVE)
     report.native.push(await measure(clip, format, width, height, frames, false));
@@ -144,8 +144,8 @@ async function main() {
   console.log(
     `Budget-fitting (1 and 2 exchanges per frame), PSNR after upscale to 1280x720:\n\n${table(report.budget, true)}\n`
   );
-  if (option('--json'))
-    await fs.writeFile(option('--json'), JSON.stringify(report, null, 2) + '\n');
+  const json = cli.option(args, '--json');
+  if (json) await fs.writeFile(json, JSON.stringify(report, null, 2) + '\n');
 }
 
 main().catch(error => {
