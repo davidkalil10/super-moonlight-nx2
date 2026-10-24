@@ -1,16 +1,36 @@
 # Moonlight
 
-Displays PC game frames streamed by the host in the HBV1 format
-(`tools/moonlight/hbv.cjs`). The host stream service that fills the frame ring
-is not written yet; without it the app shows the built-in test card. Design and
-budget: `docs/moonlight/DESIGN.md`.
+Displays PC frames written by the host into the app's private storage. Two
+formats share the ring: HBV1 (`tools/moonlight/hbv.cjs`, fixed-size intra
+slots drawn straight from the ring) and HBV2 (`tools/moonlight/hbv2.cjs`,
+inter-coded variable-rate slots that the compute shader decodes into a
+persistent 1080p frame). Without a sender the app shows the built-in HBV2 test
+card. Design, format and measurements: `docs/moonlight/DESIGN.md`.
 
 Build and check from the project root:
 
 ```sh
+tools/moonlight/build-hbv2enc.sh       # native encoder, used by check.cjs CLIP and live.cjs
 node apps/moonlight/build.cjs          # needs glslangValidator and spirv-val
-node apps/moonlight/check.cjs [CLIP]   # desktop Vulkan decode check
+node apps/moonlight/check.cjs [CLIP]   # desktop Vulkan decode check, bit-exact against hbv2.cjs
 ```
 
-`build.cjs` regenerates `shaders/hbv.glsl`, `shaders/ring.glsl` and
-`assets/memory.bin`; do not edit those by hand.
+`build.cjs` regenerates `shaders/hbv.glsl`, `shaders/hbv2-tables.glsl`,
+`shaders/ring.glsl` and `assets/memory.bin`; do not edit those by hand.
+
+Without glslangValidator, build through `tools/moonlight/glslang-shim.sh`,
+which maps the `-V ... SRC -o OUT` call onto `glslc -Os --target-env=vulkan1.0`:
+
+```sh
+GLSLANG=tools/moonlight/glslang-shim.sh node apps/moonlight/build.cjs
+```
+
+The committed `app.comp.spv` and `app.frag.spv` were built that way;
+`app.vert.spv` is still the glslangValidator build. Rebuild all three with
+glslangValidator when it is available.
+
+Stream to a running app (the newest `runs/launcher-*` session):
+
+```sh
+node tools/moonlight/live.cjs --screen --codec hbv2 --budget 96
+```

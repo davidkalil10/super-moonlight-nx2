@@ -23,6 +23,18 @@ async function findPrivateStorage(directory) {
   }
 }
 
+// First sequence number newer than anything the console applied or that is
+// still in its ring, so a new sender never collides with an old session.
+async function nextSequence(rpc, mapped) {
+  let newest = (await rpc.read(mapped + ring.CONTROL.applied, 4)).readUInt32LE();
+  for (let slot = 0; slot < ring.SLOTS; slot++) {
+    const header = await rpc.read(mapped + ring.slotOffset(slot), 8);
+    if ([0x31564248, 0x32564248].includes(header.readUInt32LE()))
+      newest = Math.max(newest, header.readUInt32LE(4));
+  }
+  return newest + 1;
+}
+
 function percentile(sorted, p) {
   return sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * p))];
 }
@@ -53,7 +65,8 @@ async function main() {
       `(${storage.memoryFlags & HOST_COHERENT ? 'host coherent' : 'NOT host coherent'})`
   );
 
-  const interval = 1000 / fps,
+  const first = await nextSequence(rpc, storage.mapped),
+    interval = 1000 / fps,
     exchanges = [],
     started = performance.now();
   let sequence = 0,
@@ -71,12 +84,12 @@ async function main() {
     const slot = Buffer.from(
       slots.subarray((sequence % count) * SLOT, ((sequence % count) + 1) * SLOT)
     );
-    slot.writeUInt32LE(sequence + 1, 4);
-    slot.writeUInt32LE(sequence + 1, SLOT - 4);
+    slot.writeUInt32LE(first + sequence, 4);
+    slot.writeUInt32LE(first + sequence, SLOT - 4);
     while (inFlight.size >= depth) await Promise.race(inFlight);
     const before = performance.now();
     const write = rpc
-      .write(storage.mapped + ring.slotOffset(sequence + 1), slot)
+      .write(storage.mapped + ring.slotOffset(first + sequence), slot)
       .then(() => exchanges.push(performance.now() - before))
       .finally(() => inFlight.delete(write));
     inFlight.add(write);
@@ -109,7 +122,7 @@ async function main() {
   console.log('Saved ' + out);
 }
 
-module.exports = {findPrivateStorage};
+module.exports = {findPrivateStorage, nextSequence};
 
 if (require.main === module)
   main().catch(error => {
