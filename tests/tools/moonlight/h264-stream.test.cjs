@@ -100,7 +100,10 @@ test('realtime overflow drains the pipe and resumes only at an independent frame
   reader.endMetadata();
   const units = [];
   for await (const unit of reader) units.push(unit);
-  assert.deepEqual(units.map(unit => unit.seq), [5, 6]);
+  assert.deepEqual(
+    units.map(unit => unit.seq),
+    [5, 6]
+  );
   assert.equal(units[0].keyframe, true);
   reader.close();
 });
