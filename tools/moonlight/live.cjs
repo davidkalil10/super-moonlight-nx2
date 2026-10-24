@@ -249,6 +249,7 @@ async function sendHbv2(context) {
     latest = null;
     const result = await encoder.encode(frame, width, height, {
       ...settings,
+      budget: keyframe ? settings.cap : settings.budget,
       sequence: sequence + 1,
       keyframe
     });
