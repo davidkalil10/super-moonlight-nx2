@@ -190,6 +190,12 @@ Shader correctness check:
 
 ## 3. Architecture
 
+This section describes the original HBV1-only route and is superseded by
+section 6 for the shipped app: the ring is 8 slots plus two persistent 1920x1088
+frames and a control block (8,695,808 bytes), the compute shader decodes and
+picks, and HBV1 slots ride in the same ring. The diagram and bullets below are
+kept for the HBV1 path and its history.
+
 ```
 rig: Sunshine (H.264/HEVC + Opus over RTP/ENet)
         |  LAN
@@ -238,11 +244,6 @@ Switch 2: apps/moonlight
   - give the service the app's `privateStorage.mapped` address.
 
 ### Console side (`apps/moonlight`)
-
-The bullets below describe the original HBV1-only app (three 64 KiB slots,
-fragment-shader selection). The shipped app is superseded by section 6: an
-8-slot ring, two persistent frames and compute-shader decode, with HBV1 slots
-carried in the same ring. Kept here for the HBV1 path and its history.
 
 - Private storage (binding 1) holds three 64 KiB slots. `gpu-app.cjs` creates
   both bindings with stage flags 49 (vertex, fragment and compute), so the
@@ -477,9 +478,10 @@ under `~/claude-builds/HBLauncher/hbv2-eval/`.
    Measure it: read the binding-0 frame counter and `applyCount` over ~10 s; if
    the shown rate is below 60 the dispatch is the bottleneck. Fallbacks in
    order: lower `--budget`, `--size 1280x720`, then `--codec hbv1`.
-2. **Launch cost.** `restorePrivateStorage` writes the whole 8.69 MB allocation
-   on every launch (~3.5 s at the measured rate). Confirm it is one-time and
-   does not stall the first frames.
+2. **Launch cost.** `restorePrivateStorage` writes the whole 8.70 MB allocation
+   on every launch through the same pipelined `rpc.write` as the feed (~1.5 s at
+   5.7 MB/s; up to ~3.5 s if the writes serialize at ~13 ms each). Confirm it is
+   one-time and does not stall the first frames.
 3. **Coherent write-back.** The shader's control writes must be visible to the
    next dispatch through `coherent` + barriers; confirm no stale `applied` on
    the console. Each `applied` poll also costs a full upstream exchange, so the
@@ -491,7 +493,7 @@ Live-test commands:
 
 ```
 tools/moonlight/build-hbv2enc.sh                       # native encoder on m5
-GLSLANG=<glslc shim> node apps/moonlight/build.cjs     # regenerate shaders + memory
+GLSLANG=tools/moonlight/glslang-shim.sh node apps/moonlight/build.cjs  # regenerate shaders + memory
 # apps/moonlight already lives under apps/ on the host; after build.cjs tap
 # Refresh in the launcher and relaunch the Moonlight app on the console, then:
 node tools/moonlight/live.cjs --screen --codec hbv2 --budget 96
