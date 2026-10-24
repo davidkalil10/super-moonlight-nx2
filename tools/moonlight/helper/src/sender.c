@@ -8,6 +8,7 @@
  * frame it references, so when the console stops advancing for resync_ms
  * while newer slots exist, the next frame is coded as a keyframe (spending
  * the cap budget). */
+#define _GNU_SOURCE
 #include "console-layout.h"
 #include "helper.h"
 #include "host.h"
@@ -95,6 +96,7 @@ static void fail(const char *message, const char *detail) {
 }
 
 static void *encode_frames(void *unused) {
+  pthread_setname_np(pthread_self(), "hbv2-encode");
   struct hbv2_encoder *encoder = hbv2_create(options.width, options.height, options.threads);
   if (!encoder) {
     fail("unsupported HBV2 frame size", "");
@@ -151,6 +153,7 @@ static void *encode_frames(void *unused) {
  * a stop is still sent. */
 static void *write_slots(void *context) {
   struct writer *writer = context;
+  pthread_setname_np(pthread_self(), "ring-write");
   for (;;) {
     pthread_mutex_lock(&lock);
     while (!stopping && !writer->ready)
@@ -184,6 +187,7 @@ static void *write_slots(void *context) {
 }
 
 static void *poll_applied(void *unused) {
+  pthread_setname_np(pthread_self(), "ring-poll");
   uint32_t applied = 0;
   double progress_at = now_ms();
   pthread_mutex_lock(&lock);

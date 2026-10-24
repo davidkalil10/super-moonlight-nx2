@@ -12,6 +12,7 @@
  * --input plays a file through ffmpeg exactly like live.cjs --input, for
  * offline runs against tools/moonlight/fake-console/bridge.cjs. One JSON stats
  * line per second goes to stdout; events go to stderr. */
+#define _GNU_SOURCE
 #include "console-layout.h"
 #include "helper.h"
 #include "host.h"
@@ -21,6 +22,7 @@
 
 #include <curl/curl.h>
 #include <errno.h>
+#include <limits.h>
 #include <pthread.h>
 #include <signal.h>
 #include <stdatomic.h>
@@ -81,6 +83,7 @@ static bool read_frame(int fd, uint8_t *out, size_t size) {
 }
 
 static void *read_frames(void *unused) {
+  pthread_setname_np(pthread_self(), "file-input");
   while (read_frame(file.fd, mailbox_back(&frames), file.frame_bytes)) {
     atomic_fetch_add(&captured, 1);
     if (mailbox_publish(&frames, now_ms()))
@@ -218,8 +221,13 @@ static void summarize(void) {
 static void passive_openmp(char **argv) {
   if (getenv("OMP_WAIT_POLICY"))
     return;
+  char path[PATH_MAX];
+  ssize_t length = readlink("/proc/self/exe", path, sizeof(path) - 1);
+  if (length <= 0)
+    return;
+  path[length] = 0;
   setenv("OMP_WAIT_POLICY", "passive", 1);
-  execv("/proc/self/exe", argv);
+  execv(path, argv);
 }
 
 int main(int argc, char **argv) {
