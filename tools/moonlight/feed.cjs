@@ -1,6 +1,6 @@
 // Live test feeder: streams pre-encoded HBV1 slots into the running Moonlight
 // app's frame ring and reports the sustained write rate.
-// Usage: node tools/moonlight/feed.cjs runs/launcher-XXXX CLIP.hbv [--fps 60] [--seconds 60]
+// Usage: node tools/moonlight/feed.cjs runs/launcher-XXXX CLIP.hbv [--fps 60] [--seconds 60] [--depth 1]
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const ring = require('../../apps/moonlight/ring.cjs');
@@ -31,11 +31,15 @@ async function main() {
   const args = process.argv.slice(2);
   const [run, clip] = args;
   if (!run || !clip)
-    throw Error('Usage: feed.cjs runs/launcher-XXXX CLIP.hbv [--fps 60] [--seconds 60]');
+    throw Error(
+      'Usage: feed.cjs runs/launcher-XXXX CLIP.hbv [--fps 60] [--seconds 60] [--depth 1]'
+    );
   const option = (name, fallback) =>
     args.includes(name) ? Number(args[args.indexOf(name) + 1]) : fallback;
   const fps = option('--fps', 60),
-    seconds = option('--seconds', 60);
+    seconds = option('--seconds', 60),
+    depth = option('--depth', 1),
+    inFlight = new Set();
   const directory = path.resolve(run);
   const rpc = require(path.join(directory, 'shared/rpc.cjs'));
   const slots = await fs.readFile(clip);
@@ -69,17 +73,23 @@ async function main() {
     );
     slot.writeUInt32LE(sequence + 1, 4);
     slot.writeUInt32LE(sequence + 1, SLOT - 4);
+    while (inFlight.size >= depth) await Promise.race(inFlight);
     const before = performance.now();
-    await rpc.write(storage.mapped + ring.slotOffset(sequence + 1), slot);
-    exchanges.push(performance.now() - before);
+    const write = rpc
+      .write(storage.mapped + ring.slotOffset(sequence + 1), slot)
+      .then(() => exchanges.push(performance.now() - before))
+      .finally(() => inFlight.delete(write));
+    inFlight.add(write);
     sequence++;
   }
+  await Promise.all(inFlight);
 
   const elapsed = (performance.now() - started) / 1000;
   const sorted = [...exchanges].sort((a, b) => a - b);
   const result = {
     clip,
     targetFps: fps,
+    depth,
     seconds: +elapsed.toFixed(2),
     written: exchanges.length,
     deliveredFps: +(exchanges.length / elapsed).toFixed(1),
