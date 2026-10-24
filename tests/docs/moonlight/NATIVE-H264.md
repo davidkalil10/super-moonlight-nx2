@@ -102,8 +102,9 @@ What changed:
 - The six-argument worker returns the pthread handle and exit value in the
   create/join replies (two fewer reads per worker call), and flushes its record
   file at most once a second instead of on every status change.
-- `receive` is called once per submitted unit, tracking frames the decoder still
-  owes, so the steady 1:1 case never pays for a known-empty `acquireOutput`.
+- `receive` is pulled once per submitted unit, draining extra only for genuine
+  backlog, so a decoder with up to one frame of pipeline latency never pays for a
+  known-empty `acquireOutput`. The budget above assumes that ≤1-frame latency.
 - The explicit presentation wait is gone: the next `destination()` already waits
   for the GPU to apply the previous frame, so submit of N+1 is not blocked on it.
 - The frame destination query is cached per surface and re-verified once a
@@ -159,5 +160,7 @@ Watch the per-second stats line (`{"codec":"h264",...}`): `decoded` and
 0, and `resyncs` should stay 0. `IDR frame request sent` should now appear at
 most about once a second, not several times. If audio under/overruns persist in
 the `audio-stats` line, the link is still saturated: start with `--fps 30` and
-`--bitrate 8000`, and try longer audio buffers before raising either. `HB_PIPELINE`
-(1–4) keeps that many requests on the wire if the link has spare latency.
+`--bitrate 8000`, and try longer audio buffers before raising either.
+`HB_PIPELINE` does not help the decoder: the bridge serializes every command
+except raw write chunks, and the per-decoder calls are serialized again by the
+module, so only the single AU write could overlap.
