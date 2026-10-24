@@ -149,6 +149,43 @@ test('touchTarget maps a down event to the row under it', () => {
   assert.equal(menu.touchTarget([{action: 'down', x: 0.5, y: 0.01}], 3), -1, 'above the list');
 });
 
+// --- onInput: edge-detected pad + touch, native A/B ------------------
+
+test('onInput moves on D-pad press, not while held', () => {
+  const start = hostsModel(); // cursor 0
+  const down = menu.onInput(start, 0, NPAD.down, []);
+  assert.equal(down.model.cursor, 1);
+  assert.equal(down.intent, null);
+  const held = menu.onInput(down.model, NPAD.down, NPAD.down, []);
+  assert.equal(held.model, down.model, 'a held direction does not re-trigger');
+});
+
+test('onInput activates on physical A and backs on physical B', () => {
+  const opened = menu.onInput(hostsModel(), 0, NPAD.a, []);
+  assert.equal(opened.intent.type, 'openHost');
+  const games = menu.toGames(hostsModel(), {apps: [{id: 1, name: 'Desktop'}], currentGame: 0});
+  games.host = hosts[0];
+  const backed = menu.onInput(games, 0, NPAD.b, []);
+  assert.equal(backed.model.screen, 'hosts');
+});
+
+test('onInput with nothing pressed returns the same model reference', () => {
+  const start = hostsModel();
+  const quiet = menu.onInput(start, 0, 0, []);
+  assert.equal(quiet.model, start);
+  assert.equal(quiet.intent, null);
+});
+
+test('onInput taps a row via touch when no button is pressed', () => {
+  const y = menu.LAYOUT.listTop + menu.LAYOUT.rowHeight * 1.5; // the Den row
+  const tap = menu.onInput(hostsModel(), 0, 0, [
+    {action: 'down', x: 0.5, y: y / menu.LAYOUT.height}
+  ]);
+  assert.equal(tap.model.cursor, 1);
+  assert.equal(tap.intent.type, 'openHost');
+  assert.equal(tap.intent.host.address, '10.0.0.5');
+});
+
 // --- state machine: splash -> hosts -> [pair] -> games -> streaming ----
 
 test('the full menu flow transitions screen by screen', () => {
