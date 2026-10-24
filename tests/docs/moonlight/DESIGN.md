@@ -310,3 +310,20 @@ not have. The committed SPIR-V was compiled with
 `glslc --target-env=vulkan1.0 -O` and passes
 `spirv-val --target-env vulkan1.0`. Rebuild with glslangValidator once it is
 installed, so the package matches the SDK toolchain.
+
+## Live results (2026-10-24)
+
+640x352 HBV1, one 32 KiB slot per frame, `tools/moonlight/feed.cjs`, 20 s at a 60 fps target.
+
+| Session | Protocol | Depth | Ping | Delivered | p50 / p90 ms |
+|---|---|---|---|---|---|
+| launcher-6cuEwx | 1 | 1 | n/a | 30.8 fps | 31.5 / 47.3 |
+| launcher-gw7PCW | 1 (+region cache) | 1 / 2 | 52 ms avg, 457 retransmits | 6.8 / 8.6 fps | 130 / 237, 204 / 397 |
+| launcher-idrgtq | 2 | 1 | 3 ms | 56.9 fps | 9.1 / 36.5 |
+| launcher-idrgtq | 2 | 2 | 3 ms | 59.3 fps | 11.0 / 22.2 |
+
+- Private storage is host coherent (flags 7); writes show without a flush.
+- Reopening the app reloads `assets/memory.bin`, which wipes the ring.
+- Slight tearing is visible; not investigated yet.
+- Wi-Fi quality varies by an order of magnitude between sessions; the feeder
+  must drop frames rather than queue them.
