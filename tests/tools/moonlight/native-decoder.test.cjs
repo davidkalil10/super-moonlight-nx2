@@ -414,4 +414,48 @@ test('steady-state H.264 submit+receive holds its exchange budget and call order
   }
 });
 
+test('configure runs beforeStart between Configure and Start', async () => {
+  const {consoleMock, decoder, directory} = await build();
+  try {
+    let seen = null;
+    await decoder.configure(sps, pps, 30, {
+      beforeStart(decoderAddress) {
+        seen = {decoderAddress, log: [...consoleMock.log]};
+      }
+    });
+    assert.ok(Number.isSafeInteger(seen.decoderAddress) && seen.decoderAddress > 0);
+    assert.equal(seen.log.at(-1), 'configure');
+    assert.equal(consoleMock.log.at(-1), 'start');
+  } finally {
+    await decoder.close().catch(() => {});
+    await fs.rm(directory, {recursive: true, force: true});
+  }
+});
+
+test('submit can leave the output acquire to receive', async () => {
+  const {consoleMock, decoder, destination, directory} = await build();
+  try {
+    await decoder.configure(sps, pps, 30);
+    consoleMock.reset();
+    await decoder.submit({data: Buffer.alloc(4000, 7), pts: 1000}, {acquireOutput: false});
+    assert.deepEqual(decoder.lastInput, {status: 0, index: 0});
+    assert.deepEqual(consoleMock.log, [
+      'acquireInput',
+      'getInput',
+      'bufferData',
+      'bufferCapacity',
+      'sendInput',
+      'acquireInput'
+    ]);
+    consoleMock.reset();
+    const result = await decoder.receive(destination);
+    assert.equal(result.format, 'nv12');
+    assert.equal(consoleMock.log[0], 'acquireOutput');
+    assert.equal(await decoder.receive(destination), null);
+  } finally {
+    await decoder.close().catch(() => {});
+    await fs.rm(directory, {recursive: true, force: true});
+  }
+});
+
 module.exports = {createConsole};
