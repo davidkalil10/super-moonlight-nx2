@@ -9,9 +9,13 @@ native or IPC probing. `RESEARCH.md` covers the NVDEC route this design avoids.
 Summary: the host-to-console write path is the bottleneck, not the GPU. Today it
 moves **one 32 KiB block per round trip, about 13 ms per round trip in the best
 recorded session**. That is roughly 32 KiB per frame at 60 fps, so 720p60 and
-540p60 are out of reach in any format we can decode in a shader. The plan is a
-fixed-rate DCT format (HBV1) at **640x352, one round trip per frame, upscaled to
-1080p in the fragment shader**, with an 864x480 two-round-trip mode at 30 fps.
+540p60 are out of reach for a fixed-rate format we can decode in a shader. HBV1
+(section 2) is that fixed-rate DCT fallback at **640x352, one round trip per
+frame, upscaled to 1080p in the fragment shader**. **HBV2 (section 6)** is the
+1080p answer: inter-coded, variable-rate frames that send only what changed and
+decode on the compute shader into persistent storage, so a sharp 1080p desktop
+costs a few tens of KiB per frame and games fit a chosen budget, with the frame
+rate degrading before the quality.
 
 ## 1. Measured transfer budget
 
@@ -45,10 +49,10 @@ and the 4 MiB catalog right after `vkMapMemory2`. That is 14,681,088 bytes in
 few unjournaled `guard` queries and pointer reads also fall inside the gap,
 which makes about 450 exchanges in total and keeps the error within 2%:
 
-| Session | Gap | Per 32 KiB exchange | Throughput |
-|---|---|---|---|
-| launcher-kTCkLD (good Wi-Fi) | 5,817 ms | 13.0 ms | 2.52 MB/s |
-| launcher-W71IDj (same day, poor) | 43,559 ms | 97 ms | 0.34 MB/s |
+| Session                          | Gap       | Per 32 KiB exchange | Throughput |
+| -------------------------------- | --------- | ------------------- | ---------- |
+| launcher-kTCkLD (good Wi-Fi)     | 5,817 ms  | 13.0 ms             | 2.52 MB/s  |
+| launcher-W71IDj (same day, poor) | 43,559 ms | 97 ms               | 0.34 MB/s  |
 
 Calls with almost no payload took 13-27 ms in kTCkLD and 55-200 ms in W71IDj.
 Every exchange carries the full 32 KiB request and response, so the cost is per
@@ -60,12 +64,12 @@ frames at 0.9993-1.0002 s each, so the display runs at a steady **60 Hz**.
 
 ### Budget
 
-| | Best session | Poor session |
-|---|---|---|
-| Exchanges per second | ~77 | ~10 |
-| Exchanges per 16.7 ms frame | 1 | 0.17 |
-| Bytes per frame at 60 fps | **32 KiB** | n/a (~10 fps at 32 KiB) |
-| Bytes per frame at 30 fps | 64 KiB | n/a (~5 fps) |
+|                             | Best session | Poor session            |
+| --------------------------- | ------------ | ----------------------- |
+| Exchanges per second        | ~77          | ~10                     |
+| Exchanges per 16.7 ms frame | 1            | 0.17                    |
+| Bytes per frame at 60 fps   | **32 KiB**   | n/a (~10 fps at 32 KiB) |
+| Bytes per frame at 30 fps   | 64 KiB       | n/a (~5 fps)            |
 
 Other traffic shares those ~77 exchanges per second:
 
@@ -112,30 +116,31 @@ bit extraction and dequantisation as the shader.
 
 ### Cost at the requested sizes (10 frames each, PSNR at the coded size)
 
-| Format | Size | Bytes/frame | Exch./frame | fps @13 ms | PSNR pan | PSNR mandelbrot | PSNR testsrc2 |
-|---|---|---|---|---|---|---|---|
-| YUV420 | 1280x720 | 1,382,400 | 43 | 1.8 | 52.3 | 51.1 | 50.6 |
-| BC1 | 1280x720 | 460,800 | 15 | 5.1 | 33.8 | 33.4 | 37.8 |
-| HBV1 | 1280x720 | 129,620 | 4 | 19.2 | 26.6 | 27.7 | 26.0 |
-| YUV420 | 960x540 | 777,600 | 24 | 3.2 | 49.2 | 38.7 | 35.5 |
-| BC1 | 960x540 | 259,200 | 8 | 9.6 | 34.9 | 34.3 | 37.5 |
-| HBV1 | 960x544 | 73,460 | 3 | 25.6 | 28.3 | 28.9 | 26.9 |
+| Format | Size     | Bytes/frame | Exch./frame | fps @13 ms | PSNR pan | PSNR mandelbrot | PSNR testsrc2 |
+| ------ | -------- | ----------- | ----------- | ---------- | -------- | --------------- | ------------- |
+| YUV420 | 1280x720 | 1,382,400   | 43          | 1.8        | 52.3     | 51.1            | 50.6          |
+| BC1    | 1280x720 | 460,800     | 15          | 5.1        | 33.8     | 33.4            | 37.8          |
+| HBV1   | 1280x720 | 129,620     | 4           | 19.2       | 26.6     | 27.7            | 26.0          |
+| YUV420 | 960x540  | 777,600     | 24          | 3.2        | 49.2     | 38.7            | 35.5          |
+| BC1    | 960x540  | 259,200     | 8           | 9.6        | 34.9     | 34.3            | 37.5          |
+| HBV1   | 960x544  | 73,460      | 3           | 25.6       | 28.3     | 28.9            | 26.9          |
 
 Even HBV1 needs 3-4 exchanges per frame at these sizes. At the measured rate
 there is no 60 fps format for 720p or 540p.
 
 ### Budget-fitting sizes (PSNR after upscaling to 1280x720 vs the 720p source)
 
-| Format | Size | Bytes/frame | Exch. | pan | mandelbrot | testsrc2 | changed (pan / testsrc2) |
-|---|---|---|---|---|---|---|---|
-| YUV420 | 192x108 | 31,104 | 1 | 22.64 | 24.80 | 22.67 | 100% / 47% |
-| BC1 | 320x180 | 28,800 | 1 | 23.44 | **26.02** | **23.99** | 100% / 12% |
-| HBV1 | 640x352 | 31,700 | 1 | **23.72** | 25.32 | 22.27 | 100% / 19% |
-| YUV420 | 256x144 | 55,296 | 2 | 23.16 | 25.70 | 22.49 | 100% / 36% |
-| BC1 | 448x252 | 56,448 | 2 | 24.30 | **27.04** | **25.41** | 100% / 11% |
-| HBV1 | 864x480 | 58,340 | 2 | **24.59** | 26.20 | 23.50 | 100% / 17% |
+| Format | Size    | Bytes/frame | Exch. | pan       | mandelbrot | testsrc2  | changed (pan / testsrc2) |
+| ------ | ------- | ----------- | ----- | --------- | ---------- | --------- | ------------------------ |
+| YUV420 | 192x108 | 31,104      | 1     | 22.64     | 24.80      | 22.67     | 100% / 47%               |
+| BC1    | 320x180 | 28,800      | 1     | 23.44     | **26.02**  | **23.99** | 100% / 12%               |
+| HBV1   | 640x352 | 31,700      | 1     | **23.72** | 25.32      | 22.27     | 100% / 19%               |
+| YUV420 | 256x144 | 55,296      | 2     | 23.16     | 25.70      | 22.49     | 100% / 36%               |
+| BC1    | 448x252 | 56,448      | 2     | 24.30     | **27.04**  | **25.41** | 100% / 11%               |
+| HBV1   | 864x480 | 58,340      | 2     | **24.59** | 26.20      | 23.50     | 100% / 17%               |
 
 Clips (3 s, 60 fps, generated with ffmpeg; not committed):
+
 - `pan`: a camera pan over a detailed forest photo, the closest of the three to
   game content.
 - `mandelbrot`: lavfi zoom, very high-frequency edges.
@@ -177,6 +182,7 @@ macroblock rows across 3-4 `worker_threads` for 60 fps, or for 864x480 (about
 30 ms on one core).
 
 Shader correctness check:
+
 - `apps/moonlight/check.cjs` renders the real fragment shader on desktop Vulkan
   (`homebrew-launcher/game-render`) and compares it with the JS decoder.
 - The PSNR between them at 1920x1080 is 64-67 dB. The only differences are float
@@ -220,6 +226,7 @@ Switch 2: apps/moonlight
   In both cases `ffmpeg -f h264 -i - -vf scale=640:352 -f rawvideo -pix_fmt rgb24 -`
   feeds the Node encoder (`tools/moonlight/frames.cjs` already reads that
   format).
+
 - **Stream settings**: ask Sunshine for a low resolution (for example 1280x720
   at 60 fps and modest bitrate) so PC decode and scaling stay cheap. Encode
   quality is limited by HBV1 anyway.
@@ -254,14 +261,14 @@ Switch 2: apps/moonlight
 
 ### Latency estimate (best session)
 
-| Stage | Time |
-|---|---|
-| Sunshine encode and network | ~5-10 ms |
-| PC decode | ~3 ms |
-| HBV1 encode | ~5 ms with workers |
-| One exchange | ~13 ms |
-| Wait for the next 60 Hz scan-out | up to 16.7 ms |
-| **Total** | **about 40-50 ms**, plus the controller path |
+| Stage                            | Time                                         |
+| -------------------------------- | -------------------------------------------- |
+| Sunshine encode and network      | ~5-10 ms                                     |
+| PC decode                        | ~3 ms                                        |
+| HBV1 encode                      | ~5 ms with workers                           |
+| One exchange                     | ~13 ms                                       |
+| Wait for the next 60 Hz scan-out | up to 16.7 ms                                |
+| **Total**                        | **about 40-50 ms**, plus the controller path |
 
 ## 4. What needs a live console session
 
@@ -281,21 +288,189 @@ Switch 2: apps/moonlight
    frame-dropping policy, and whether to fall back to 30 fps or BC1 320x180
    automatically.
 
+## 6. HBV2: inter-coded 1080p
+
+HBV1 is fixed-rate and intra-only, so sharp 1080p is out of reach in one
+exchange and desktop text is mush (24-25 dB, section 6.5). HBV2 keeps the same
+32 KiB bridge but sends only what changed: a variable-rate, inter-coded frame
+that the compute shader decodes into persistent private storage, so a 1080p
+desktop sits at a few tens of KiB per frame and games fit a chosen budget.
+
+### 6.1 Slot format
+
+A slot is an 8-word header, a list of coded chunks, then one LSB-first
+bitstream. A **chunk** is eight consecutive 16x16 macroblocks in raster order;
+chunks whose blocks are all unchanged are omitted, and each list entry packs the
+chunk index (low 11 bits) with its bit offset (upper 21 bits) so every chunk
+decodes on its own GPU invocation. Inside a chunk each macroblock is `1` =
+skip (copied from the reference frame), `00` + motion vector + 6-bit cbp +
+residual = inter, or `01` + DC-predicted intra. The transform is an integer
+IDCT shared by the JS decoder, the C encoder and the shader, so reconstruction
+is bit-identical and P frames never drift.
+
+Header words: magic `0x32564248`, sequence, `w | h<<16`, payload bytes,
+reference sequence (0 = keyframe), `qp | chromaQp<<8`, chunk count, 0. The
+sequence is repeated in the last word of the last used exchange; a reader that
+sees a mismatch treats the slot as torn and ignores it. A frame is at most 8
+exchanges (256 KiB).
+
+### 6.2 Decoder rules (console and `check.cjs`)
+
+- The ring is 8 slots; the host writes slot `sequence % 8`. Memory holds two
+  1920x1088 4:2:0 frames plus a 64 KiB control block the shader writes back
+  (`applied`, `applyCount`, `mode`, `current`, size, `hbv1Slot`).
+- A P frame is **eligible** only when its reference equals `applied`, the mode
+  is already HBV2 and the size matches. An independent frame (keyframe or HBV1)
+  is always eligible.
+- **Pick**: take the newest eligible independent slot if it is newer than the
+  smallest-sequence eligible P frame; otherwise take that P frame. This applies
+  P frames strictly in order and never on the wrong reference.
+- Up to 3 slots apply per dispatch (catch-up), decoding into the other frame
+  buffer (`current ^ 1`) so the displayed frame is never half-written.
+- Skip blocks copy lazily: a macroblock is copied from the reference only when
+  its chunk is not otherwise coded this frame.
+- The fragment shader only samples the finished frame (bilinear, integer luma
+  MVs, half-pel chroma). All decode is in the compute dispatch.
+
+Robustness is checked offline in `apps/moonlight/check.cjs`: a 1080p P chain
+with a torn slot and a stray-reference slot (both ignored), two P frames applied
+in one dispatch (catch-up), and the control words asserted exact.
+
+### 6.3 Rate control
+
+The encoder bisects qp (`qpMin..qpMax`) for the largest frame under `budget`,
+then if the coarsest qp still overshoots `cap` it defers the lowest
+distortion-per-bit macroblocks to later frames (they come back as skips now,
+real blocks later). A rolling `refresh` chunks per frame are forced intra, so
+lost blocks heal without a full keyframe. The live sender polls the console's
+`applied` sequence and forces a keyframe only when the chain stalls past
+`--resync` ms.
+
+### 6.4 Why these choices
+
+- **Integer IDCT, shared tables** — the only way P-frame prediction stays exact
+  across three implementations; a float transform drifts and the picture rots.
+- **Chunk list, not a per-MB bitmap** — one coherent GPU invocation per 8 MBs,
+  and static regions cost nothing in the stream.
+- **Two persistent frames** — the reference must survive between dispatches, and
+  double-buffering keeps scan-out off the frame being decoded.
+- **One write per slot, ring of 8** — a slot goes out in a single `rpc.write`
+  whose 32 KiB parts stay ordered; 8 slots absorb a few in flight, and the
+  trailer check plus eligibility make reordering or tearing safe.
+- **OMP passive wait** — spinning encoder threads starved the capture and RPC
+  processes on m5 (58 ms vs 6.5 ms per frame); the wrapper sets
+  `OMP_WAIT_POLICY=passive`.
+
+### 6.5 Measured quality, bytes and speed
+
+`tools/moonlight/evaluate-hbv2.cjs` replays each 1080p sequence (120 frames)
+through a latest-wins sender on a 32 KiB-per-exchange link and scores what the
+screen shows at every 60 Hz vsync. `coded` is the luma PSNR of a delivered
+frame against its own source; `displayed` compares the frame on screen at each
+vsync with that vsync's source, so dropped frames count against it. HBV1 is the
+1080p fixed-rate slot (288 KiB). Encode is m5, one thread set busy by the
+screencast during the run.
+
+Desktop, 5.7 MB/s (the measured link):
+
+| Sequence | Codec     | KiB | fps | coded dB | displayed dB | ms  |
+| -------- | --------- | --- | --- | -------- | ------------ | --- |
+| typing   | HBV1 288K | 288 | 19  | 24.5     | 24.5         | -   |
+| typing   | HBV2 64K  | 34  | 59  | 52.1     | 48.6         | 2.9 |
+| typing   | HBV2 96K  | 35  | 59  | 55.1     | 49.7         | 2.6 |
+| scroll   | HBV1 288K | 288 | 19  | 25.1     | 17.8         | -   |
+| scroll   | HBV2 64K  | 35  | 59  | 58.2     | 18.8         | 2.4 |
+| drag     | HBV1 288K | 288 | 19  | 24.9     | 16.1         | -   |
+| drag     | HBV2 96K  | 52  | 59  | 51.7     | 16.4         | 4.2 |
+
+Clips (720p upscaled to 1080p), 5.7 MB/s then 12 MB/s:
+
+| Sequence   | Codec     | KiB | fps | coded | displayed | KiB | fps | coded | displayed |
+| ---------- | --------- | --- | --- | ----- | --------- | --- | --- | ----- | --------- |
+| pan        | HBV1 288K | 288 | 19  | 45.5  | 23.0      | 288 | 40  | 45.5  | 25.1      |
+| pan        | HBV2 64K  | 66  | 59  | 53.7  | 28.9      | 65  | 59  | 53.7  | 29.1      |
+| mandelbrot | HBV1 288K | 288 | 19  | 35.8  | 23.6      | 288 | 40  | 35.8  | 25.8      |
+| mandelbrot | HBV2 96K  | 97  | 56  | 44.3  | 25.7      | 97  | 59  | 44.4  | 28.1      |
+| mandelbrot | HBV2 160K | 161 | 34  | 48.0  | 24.6      | 160 | 59  | 48.2  | 26.2      |
+| testsrc2   | HBV1 288K | 288 | 19  | 39.7  | 24.5      | 288 | 40  | 39.7  | 25.0      |
+| testsrc2   | HBV2 96K  | 97  | 56  | 56.7  | 25.4      | 97  | 59  | 56.7  | 28.3      |
+
+Reading the numbers:
+
+- HBV2 is sharper on every sequence while sending a fraction of the bytes:
+  desktop text is near-lossless at 34-52 KiB (coded 52-58 dB vs HBV1's 24-25),
+  and the text-crop PNGs show HBV1 ringing where HBV2 is clean.
+- The design goal holds: **rate degrades, not quality.** On the clips at
+  5.7 MB/s a bigger budget raises coded PSNR but drops fps (160K pushes
+  mandelbrot to 34 fps), while at 12 MB/s every budget holds ~59 fps. So the
+  sender should keep the budget near 64-96K on the 5.7 MB/s link and may open it
+  up on a faster one.
+- `displayed` is low for the hard-motion desktop scenes (scroll 3 px/frame, drag
+  13 px/frame) for both codecs: comparing the shown frame against the exact
+  vsync source punishes even a one-tick display offset of sharp moving text, so
+  the metric floor there is a sampling artifact, not reconstruction error (coded
+  stays 50-58 dB). It still ranks HBV2 at 59 fps above HBV1 at 19.
+- Encode is 2.4-5.8 ms per 1080p frame, inside the 16.7 ms frame budget even
+  with a core busy; the GPU decode on desktop RADV is 1-5 ms per frame
+  (section 6.6 covers the console unknown).
+
+Caveat: the three clips are 720p content upscaled, which is soft and flatters
+PSNR; the desktop sequences are rendered natively at 1920x1080 and are where
+text readability is judged. Artifacts, `results.json` and the text-crop PNGs are
+under `~/claude-builds/HBLauncher/hbv2-eval/`.
+
+### 6.6 What still needs a live console session
+
+1. **Single-workgroup compute time on T239.** Decode is one workgroup of 1024
+   invocations. Desktop RADV (Strix Halo) runs it in 1-5 ms, but one workgroup
+   is one CU, and the per-CU gap to the console could be several times that, so
+   10-25 ms per P frame is possible and would break 60 Hz. Measure it: read the
+   binding-0 frame counter and `applyCount` over ~10 s; if the shown rate is
+   below 60 the dispatch is the bottleneck. Fallbacks in order: lower
+   `--budget`, `--size 1280x720`, then `--codec hbv1`.
+2. **Launch cost.** `restorePrivateStorage` writes the whole 8.69 MB allocation
+   on every launch (~3.5 s at the measured rate). Confirm it is one-time and
+   does not stall the first frames.
+3. **Coherent write-back.** The shader's control writes must be visible to the
+   next dispatch through `coherent` + barriers; confirm no stale `applied` on
+   the console. Each `applied` poll also costs a full upstream exchange, so the
+   sender polls at 500 ms, not per frame.
+4. **Tearing and resync.** Watch for a tear line during catch-up and confirm a
+   forced keyframe recovers a stalled chain on real Wi-Fi.
+
+Live-test commands:
+
+```
+tools/moonlight/build-hbv2enc.sh                       # native encoder on m5
+GLSLANG=<glslc shim> node apps/moonlight/build.cjs     # regenerate shaders + memory
+# rebuild and reinstall apps/moonlight, launch it on the console, then:
+node tools/moonlight/live.cjs --screen --codec hbv2 --budget 96
+node apps/moonlight/check.cjs CLIP                      # offline bit-exact re-check
+```
+
 ## 5. Files
 
 - `tools/moonlight/hbv.cjs`: HBV1 constants, encoder, shader-equivalent decoder,
   and the GLSL generator (single source of truth).
+- `tools/moonlight/hbv2.cjs`: HBV2 reference decoder and encoder, the integer
+  IDCT, and the generated GLSL/C tables (single source of truth).
+- `tools/moonlight/hbv2enc.c` + `hbv2-encoder.cjs`: the native OpenMP encoder
+  and its Node wrapper (built by `build-hbv2enc.sh`, run with passive OMP wait).
 - `tools/moonlight/reference.cjs`: BC1, YUV420, bilinear upscale, PSNR, changed
   blocks.
-- `tools/moonlight/evaluate.cjs CLIP [--frames N] [--json OUT]`: the tables
-  above.
+- `tools/moonlight/evaluate.cjs CLIP [--frames N] [--json OUT]`: the HBV1 format
+  tables in section 2.
+- `tools/moonlight/evaluate-hbv2.cjs OUT SEQUENCE...`: the HBV2-vs-HBV1 tables in
+  section 6.5. `desktop-scenes.py` renders the synthetic 1080p sequences.
 - `tools/moonlight/encode.cjs CLIP OUT.hbv [--size WxH]`: the slot stream the
   host would write.
-- `tools/moonlight/hbv.test.cjs`: layout, bit extraction, torn-slot rejection,
-  and a check that the generated GLSL matches.
+- `tools/moonlight/live.cjs [...] --codec hbv1|hbv2`: the live sender.
+- `tools/moonlight/hbv.test.cjs`, `hbv2.test.cjs`: layout, bit extraction,
+  torn-slot rejection, and a native-C cross-check that decodes bit-exactly.
 - `apps/moonlight/`: the app. `build.cjs` regenerates `shaders/hbv.glsl`,
-  `shaders/ring.glsl`, and the test-card memory. `check.cjs` runs the desktop
-  Vulkan check.
+  `shaders/hbv2.glsl`'s tables, `shaders/ring.glsl`, and the HBV2 test-card
+  memory. `check.cjs` runs the desktop Vulkan check (test card, HBV1 slot, and
+  the HBV2 P chain with catch-up, all bit-exact).
 
 Reproduce:
 
@@ -315,12 +490,12 @@ installed, so the package matches the SDK toolchain.
 
 640x352 HBV1, one 32 KiB slot per frame, `tools/moonlight/feed.cjs`, 20 s at a 60 fps target.
 
-| Session | Protocol | Depth | Ping | Delivered | p50 / p90 ms |
-|---|---|---|---|---|---|
-| launcher-6cuEwx | 1 | 1 | n/a | 30.8 fps | 31.5 / 47.3 |
+| Session         | Protocol          | Depth | Ping                       | Delivered     | p50 / p90 ms         |
+| --------------- | ----------------- | ----- | -------------------------- | ------------- | -------------------- |
+| launcher-6cuEwx | 1                 | 1     | n/a                        | 30.8 fps      | 31.5 / 47.3          |
 | launcher-gw7PCW | 1 (+region cache) | 1 / 2 | 52 ms avg, 457 retransmits | 6.8 / 8.6 fps | 130 / 237, 204 / 397 |
-| launcher-idrgtq | 2 | 1 | 3 ms | 56.9 fps | 9.1 / 36.5 |
-| launcher-idrgtq | 2 | 2 | 3 ms | 59.3 fps | 11.0 / 22.2 |
+| launcher-idrgtq | 2                 | 1     | 3 ms                       | 56.9 fps      | 9.1 / 36.5           |
+| launcher-idrgtq | 2                 | 2     | 3 ms                       | 59.3 fps      | 11.0 / 22.2          |
 
 - Private storage is host coherent (flags 7); writes show without a flush.
 - Reopening the app reloads `assets/memory.bin`, which wipes the ring.
