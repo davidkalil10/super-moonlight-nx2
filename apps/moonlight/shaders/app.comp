@@ -9,10 +9,11 @@ layout(set=0,binding=1,std430) coherent buffer PrivateMemory { uint words[]; } m
 #include "hbv2.glsl"
 void main(){
  if(gl_LocalInvocationIndex==0u){
-  uint pressed=hbPressed();
+  uint held=hbButtons();
   c.motion.x+=1.0/60.0;c.state.z++;
   c.transition.x=max(0.0,c.transition.x-1.0/15.0);
-  if(hbConnected() && (pressed&(HB_B|HB_MINUS))!=0u)hbExit();
+  if(hbConnected() && (held&(HB_PLUS|HB_MINUS))==(HB_PLUS|HB_MINUS))c.game.x++;else c.game.x=0u;
+  if(c.game.x>=60u)hbExit();
   hbEndFrame();
  }
  hbv2Step();
