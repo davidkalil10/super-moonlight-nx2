@@ -17,13 +17,13 @@ const {serve} = require('../../../smilebasic/engine/lib/bridge.cjs');
 const symbols = require('../../../sdk/native/audio-symbols.json');
 const sdkImage = require('../../../smilebasic/reference/sdk-checks.cjs');
 const fake = require('./shared/rpc.cjs');
+const {ALLOCATE} = require('../../../sdk/native/allocate.cjs');
 const report = require('./app-moonlight-1.json');
 
 const SCRATCH = 0x20000000,
   STATE = 0x30000000,
   SDK = 0x40000000,
   HEAP = 0x60000000,
-  ALLOCATE = 5732112,
   COPY = 0x5872f0,
   SAMPLE_RATE = 48000;
 

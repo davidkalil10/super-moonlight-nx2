@@ -10,6 +10,7 @@
 const fs = require('node:fs/promises'),
   path = require('node:path');
 const {struct, latest, compat, job, report} = require('./probe-job.cjs');
+const {allocate} = require('../native/allocate.cjs');
 const ring = require('../../tools/moonlight/ring.cjs');
 const hbv2 = require('../../tools/moonlight/hbv2.cjs');
 
@@ -98,10 +99,10 @@ async function main(directory) {
     const r = Number(BigInt.asIntN(32, (await rpc.callAddress(f[name], args)).result));
     if (r !== 0) throw Error(`${name}: VkResult ${r}`);
   };
-  const a = await rpc.call(5732112, [rpc.output, 4096, 0x4000]);
-  if (a.result !== 0n) throw Error('Probe allocation failed');
-  const p = Number(a.output.readBigUInt64LE());
-  if (!Number.isSafeInteger(p) || p <= 0 || p % 4096) throw Error('Invalid probe allocation');
+  const p = await allocate(rpc, 0x4000, {
+    failed: 'Probe allocation failed',
+    invalid: 'Invalid probe allocation'
+  });
   await rpc.write(p, Buffer.alloc(0x4000));
 
   console.log('Encoding the synthetic chain...');
