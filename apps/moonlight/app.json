@@ -18,7 +18,7 @@
     "capabilities": []
   },
   "memory": {
-    "bytes": 196608,
+    "bytes": 393216,
     "initial": "assets/memory.bin"
   }
 }

@@ -1,25 +1,22 @@
 // Live HBV1 sender: captures frames, encodes them on worker threads and writes
 // the newest finished frame into the running Moonlight app's ring.
 // Usage: node tools/moonlight/live.cjs runs/launcher-XXXX [--screen | --input FILE]
-//        [--fps 60] [--depth 2] [--workers 6]
+//        [--size 1280x720] [--fps 60] [--depth 2] [--workers 8]
 const path = require('node:path');
 const {spawn} = require('node:child_process');
 const {Worker} = require('node:worker_threads');
 const ring = require('../../apps/moonlight/ring.cjs');
 const {findPrivateStorage} = require('./feed.cjs');
+const hbv = require('./hbv.cjs');
 
-const WIDTH = 640,
-  HEIGHT = 352,
-  FRAME_BYTES = WIDTH * HEIGHT * 3;
-
-function source(args, fps) {
+function source(args, fps, width, height) {
   if (args.includes('--screen'))
-    return spawn('python3', [path.join(__dirname, 'screencast.py'), WIDTH, HEIGHT, fps], {
+    return spawn('python3', [path.join(__dirname, 'screencast.py'), width, height, fps], {
       stdio: ['ignore', 'pipe', 'inherit']
     });
   const file = args[args.indexOf('--input') + 1];
   if (!args.includes('--input') || !file) throw Error('Pass --screen or --input FILE');
-  const scale = `scale=${WIDTH}:${HEIGHT}:flags=area,fps=${fps}`;
+  const scale = `scale=${width}:${height}:flags=area,fps=${fps}`;
   return spawn(
     'ffmpeg',
     [
@@ -44,7 +41,12 @@ async function main() {
     args.includes(name) ? Number(args[args.indexOf(name) + 1]) : fallback;
   const fps = option('--fps', 60),
     depth = option('--depth', 2),
-    workerCount = option('--workers', 6);
+    workerCount = option('--workers', 8);
+  const size = args.includes('--size') ? args[args.indexOf('--size') + 1] : '1280x720';
+  const [width, height] = size.split('x').map(Number);
+  if (hbv.layout(width, height).slotBytes > ring.SLOT_BYTES)
+    throw Error(`${size} frames do not fit a ${ring.SLOT_BYTES / 1024} KiB ring slot`);
+  const frameBytes = width * height * 3;
   const directory = path.resolve(args[0] ?? '');
   const rpc = require(path.join(directory, 'shared/rpc.cjs'));
   const storage = await findPrivateStorage(directory);
@@ -95,7 +97,7 @@ async function main() {
       pump();
     });
 
-  const capture = source(args, fps);
+  const capture = source(args, fps, width, height);
   const report = setInterval(() => {
     console.log(JSON.stringify(stats));
     for (const key of Object.keys(stats)) stats[key] = 0;
@@ -105,9 +107,9 @@ async function main() {
   let pending = Buffer.alloc(0);
   for await (const chunk of capture.stdout) {
     pending = pending.length ? Buffer.concat([pending, chunk]) : chunk;
-    while (pending.length >= FRAME_BYTES) {
-      const frame = pending.subarray(0, FRAME_BYTES);
-      pending = pending.subarray(FRAME_BYTES);
+    while (pending.length >= frameBytes) {
+      const frame = pending.subarray(0, frameBytes);
+      pending = pending.subarray(frameBytes);
       stats.captured++;
       const worker = idle.pop();
       if (!worker) {
@@ -115,7 +117,7 @@ async function main() {
         continue;
       }
       const rgb = new Uint8Array(frame).buffer;
-      worker.postMessage({rgb, width: WIDTH, height: HEIGHT, sequence: ++sequence}, [rgb]);
+      worker.postMessage({rgb, width, height, sequence: ++sequence}, [rgb]);
     }
   }
   clearInterval(report);
