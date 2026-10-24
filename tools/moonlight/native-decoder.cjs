@@ -190,12 +190,13 @@ async function create({rpc, directory, workerDirectory, log = () => {}, cancelle
       const until = Date.now() + 5000;
       let index = -1;
       while (Date.now() < until && !cancelled()) {
-        const value = await call('acquireInput', [
-          pointer('decoder'),
-          pointer('inputIndex'),
-          pointer('inputCount')
-        ]);
-        index = (await api.read(MEMORY.inputIndex, 4)).readInt32LE();
+        const reply = await api.callOut(
+          'acquireInput',
+          [pointer('decoder'), rpc.output, rpc.output + 4],
+          8
+        );
+        const value = result(reply.result);
+        index = reply.output.readInt32LE(0);
         if (value !== 0 && !(index < 0 && [0x100e, 0x1011].includes(value)))
           throw Object.assign(Error('Decoder input queue returned 0x' + value.toString(16)), {
             result: value
