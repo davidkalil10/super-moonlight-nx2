@@ -11,6 +11,9 @@ async function create(rpc, storage, {cancelled = () => false, color = 1} = {}) {
   let sequence = ready.readUInt32LE(8);
   let pending = 0;
   let index = (await rpc.read(storage.mapped + ring.CONTROL.current, 4)).readUInt32LE();
+  // The two frame surfaces are fixed mapped memory; re-verify each at most once
+  // a second rather than querying it on every frame.
+  const verified = new Map();
 
   async function wait() {
     if (!pending) return;
@@ -44,13 +47,16 @@ async function create(rpc, storage, {cancelled = () => false, color = 1} = {}) {
       await wait();
       const target = index ^ 1;
       const address = storage.mapped + ring.frameOffset(target);
-      const region = await rpc.query(address);
-      if (
-        (region.permissions & 3) !== 3 ||
-        region.ipcReferences ||
-        address + ring.FRAME_BYTES > region.address + region.size
-      )
-        throw Error('The native frame destination is not writable mapped memory');
+      if (!(verified.get(target) > Date.now())) {
+        const region = await rpc.query(address);
+        if (
+          (region.permissions & 3) !== 3 ||
+          region.ipcReferences ||
+          address + ring.FRAME_BYTES > region.address + region.size
+        )
+          throw Error('The native frame destination is not writable mapped memory');
+        verified.set(target, Date.now() + 1000);
+      }
       return {index: target, address, bytes: ring.FRAME_BYTES};
     },
     async publish(destination, frame) {
