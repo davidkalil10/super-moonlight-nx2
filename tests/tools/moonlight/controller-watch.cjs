@@ -4,37 +4,18 @@
 // sender for console exchanges; DESIGN.md plans to fold it into the frame write.
 // Usage: node tools/moonlight/controller-watch.cjs [runs/launcher-XXXX] [--hz 60]
 //        [--labels] [--sources]
-const fs = require('node:fs');
 const path = require('node:path');
+const session = require('../../sdk/host/session.cjs');
 const {NEUTRAL, toMoonlight, same, readController} = require('./controller.cjs');
-
-function newestRun() {
-  const runs = path.join(__dirname, '../../runs');
-  const newest = fs
-    .readdirSync(runs)
-    .filter(name => name.startsWith('launcher-'))
-    .map(name => path.join(runs, name))
-    .sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs)[0];
-  if (!newest) throw Error('No launcher session found in runs/');
-  return newest;
-}
-
-function readSource(directory) {
-  try {
-    return JSON.parse(fs.readFileSync(path.join(directory, 'game-audio-source.json'), 'utf8'));
-  } catch {
-    return null;
-  }
-}
 
 async function main() {
   const args = process.argv.slice(2);
   const hz = args.includes('--hz') ? Number(args[args.indexOf('--hz') + 1]) : 60,
     layout = args.includes('--labels') ? 'labels' : 'position',
     sources = args.includes('--sources');
-  const directory = args[0] && !args[0].startsWith('--') ? path.resolve(args[0]) : newestRun();
+  const directory = session.resolve(args[0]);
   console.log(`Using ${path.relative(process.cwd(), directory)} (${layout} layout, ${hz} Hz)`);
-  const rpc = require(path.join(directory, 'shared/rpc.cjs'));
+  const rpc = session.rpc(directory);
 
   let stopping = false,
     previous = null,
@@ -45,7 +26,7 @@ async function main() {
   while (!stopping) {
     const started = performance.now();
     if (started - sourceChecked > 250) {
-      source = readSource(directory);
+      source = session.readSource(directory);
       sourceChecked = started;
     }
     let pad = NEUTRAL;
