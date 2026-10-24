@@ -14,7 +14,9 @@ const {mapped: BASE} = require('../app-moonlight-1.json').privateStorage;
 
 const EXCHANGE = 0x8000,
   RATE = Number(process.env.RATE || 5.7e6),
+  PAGE = 0x100000,
   memory = Buffer.alloc(ring.MEMORY_BYTES),
+  pages = new Map(),
   decoder = new hbv2.Decoder(),
   queue = [],
   started = performance.now(),
@@ -30,8 +32,11 @@ function pump() {
     part = job.parts.shift();
   setTimeout(
     () => {
-      if (part.bytes) part.bytes.copy(memory, part.offset);
-      else job.result = Buffer.from(memory.subarray(part.offset, part.offset + part.length));
+      if (part.bytes) part.bytes.copy(...locate(part.address, part.bytes.length));
+      else if (part.length) {
+        const [bytes, at] = locate(part.address, part.length);
+        job.result = Buffer.from(bytes.subarray(at, at + part.length));
+      }
       if (!job.parts.length) {
         queue.splice(queue.indexOf(job), 1);
         job.done(job.result);
@@ -41,6 +46,16 @@ function pump() {
     },
     (EXCHANGE / RATE) * 1000
   );
+}
+
+// Addresses outside private storage (launcher state, scratch, audio memory)
+// land in sparse 1 MiB pages so the bridge shim can serve them too.
+function locate(address, length) {
+  if (address >= BASE && address + length <= BASE + memory.length) return [memory, address - BASE];
+  const page = Math.floor(address / PAGE);
+  if (Math.floor((address + length - 1) / PAGE) !== page) throw Error('Access crosses a fake page');
+  if (!pages.has(page)) pages.set(page, Buffer.alloc(PAGE));
+  return [pages.get(page), address - page * PAGE];
 }
 
 function enqueue(parts) {
@@ -53,12 +68,27 @@ function enqueue(parts) {
 async function write(address, bytes) {
   const parts = [];
   for (let at = 0; at < bytes.length; at += EXCHANGE)
-    parts.push({offset: address - BASE + at, bytes: bytes.subarray(at, at + EXCHANGE)});
+    parts.push({address: address + at, bytes: bytes.subarray(at, at + EXCHANGE)});
   await enqueue(parts);
 }
 
 async function read(address, length) {
-  return enqueue([{offset: address - BASE, length}]);
+  return enqueue([{address, length}]);
+}
+
+// One exchange with no memory transfer, the link cost of a native call.
+async function exchange() {
+  await enqueue([{address: BASE, length: 0}]);
+}
+
+// Immediate access without link cost, for the bridge shim's simulated natives.
+function peek(address, length) {
+  const [bytes, at] = locate(address, length);
+  return bytes.subarray(at, at + length);
+}
+
+function poke(address, data) {
+  data.copy(...locate(address, data.length));
 }
 
 // Without DECODE, skip the pixel work but keep the eligibility and sequence
@@ -94,4 +124,4 @@ setInterval(() => {
   shown = 0;
 }, 1000).unref();
 
-module.exports = {read, write};
+module.exports = {read, write, exchange, peek, poke};

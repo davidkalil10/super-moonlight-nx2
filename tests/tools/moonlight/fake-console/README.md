@@ -19,3 +19,18 @@ STALL=1500@4000 node tools/moonlight/live.cjs tools/moonlight/fake-console \
 Env: `RATE` (link bytes/s, default 5.7e6), `STALL=ms@at` (pause the dispatch
 once), `DECODE=1` (run the full pixel decode instead of the light apply). This
 is a host-side test harness only; it is not the console RPC.
+
+## Over HTTP (`bridge.cjs`)
+
+`bridge.cjs DIR` serves the same fake console through the real bridge
+(`smilebasic/engine/lib/bridge.cjs`) and writes a run directory there, so tools
+that speak the bridge protocol (the native `hbmoonlight-host`, or `live.cjs` /
+`input-feeder.cjs` through a copy of the real `shared/rpc.cjs`) pay the same
+HTTP, JSON and base64 costs as on a console. It also simulates the sound-memory
+allocation and an AudioOut that plays appended buffers in real time (underruns
+are counted), and `--pad` cycles a scripted controller + touch state.
+
+```sh
+HB_PIPELINE=2 RATE=12e6 node tools/moonlight/fake-console/bridge.cjs /tmp/fake --pad &
+node tools/moonlight/live.cjs /tmp/fake --input clip.mp4 --codec hbv2 --budget 64
+```
