@@ -379,6 +379,14 @@ not change. Raw mode reproduced the input byte for byte (600 units, SPS first).
 - `tools/moonlight/encode.cjs CLIP OUT.hbv [--size WxH]`: the slot stream the
   host would write.
 - `tools/moonlight/live.cjs [...] --codec hbv1|hbv2`: the live sender.
+- `tools/moonlight/ring.cjs`: the slot ring layout, source of `shaders/ring.glsl`.
+- `tools/moonlight/feed.cjs`: replays a recorded `.hbv` stream into the ring.
+- `tools/moonlight/frames.cjs`: ffmpeg raw-RGB reader and frame splitter.
+- `tools/moonlight/controller.cjs`, `touch.cjs`, `input-feeder.cjs`: console
+  pad and touch state to the helper's tagged stdin (INPUT.md).
+- `tools/moonlight/audio-stream.cjs`: helper PCM to the console AudioOut
+  (AUDIO.md).
+- `tools/moonlight/menu.cjs`: the console menu (MENU.md).
 - `tools/moonlight/hbv.test.cjs`, `hbv2.test.cjs`: layout, bit extraction,
   torn-slot rejection, and a native-C cross-check that decodes bit-exactly.
 - `apps/moonlight/`: the app. `build.cjs` regenerates `shaders/hbv.glsl`,
