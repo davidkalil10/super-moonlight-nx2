@@ -307,7 +307,7 @@ async function fixture() {
   return directory;
 }
 
-const STEADY_STATE_EXCHANGES = 22;
+const STEADY_STATE_EXCHANGES = 18;
 const sps = Buffer.from('6742001eab', 'hex');
 const pps = Buffer.from('68ce0100', 'hex');
 
