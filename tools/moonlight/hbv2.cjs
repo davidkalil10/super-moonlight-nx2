@@ -295,7 +295,6 @@ class Decoder {
     this.mode = 0;
     this.current = 0;
     this.hbv1Slot = 0;
-    this.rejected = 0;
     this.frames = [null, null];
     this.written = new Uint32Array(MAX_CHUNKS * CHUNK_MBS);
   }

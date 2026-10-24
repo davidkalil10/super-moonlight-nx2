@@ -17,5 +17,4 @@ const uint CONTROL_MODE = 2u;
 const uint CONTROL_CURRENT = 3u;
 const uint CONTROL_SIZE = 4u;
 const uint CONTROL_HBV1_SLOT = 5u;
-const uint CONTROL_REJECTED = 6u;
 const uint CONTROL_WRITTEN = 256u;
