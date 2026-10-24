@@ -52,6 +52,7 @@ async function fixture(audioFailure = false) {
           ready = true;
         },
         async receive() {
+          events.push({type: 'receive'});
           if (!ready) return null;
           ready = false;
           return {format: 'nv12', width: 128, height: 96, stride: 128, sliceHeight: 96};
@@ -149,6 +150,11 @@ test(
         '6742001eab'
       );
       assert.equal(f.events.filter(event => event.type === 'publish').length, 1);
+      assert.equal(
+        f.events.filter(event => event.type === 'receive').length,
+        f.events.filter(event => event.type === 'submit').length,
+        'one receive per submit; no known-empty acquireOutput poll'
+      );
       assert.deepEqual(
         f.events.slice(-2).map(event => event.type),
         ['decoder-close', 'sink-close']
