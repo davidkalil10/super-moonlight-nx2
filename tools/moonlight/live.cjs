@@ -1,22 +1,59 @@
 // Live HBV1 sender: captures frames, encodes them on worker threads and writes
 // the newest finished frame into the running Moonlight app's ring.
-// Usage: node tools/moonlight/live.cjs [runs/launcher-XXXX] [--screen | --input FILE]
+// Usage: node tools/moonlight/live.cjs [runs/launcher-XXXX]
+//        [--moonlight HOST APP [--bitrate KBPS] | --screen | --input FILE]
 //        [--size 1920x1080] [--fps 60] [--depth 2] [--workers 12]
+// --moonlight runs tools/moonlight/helper's hbmoonlight (path from $HBMOONLIGHT).
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
+const readline = require('node:readline');
 const {spawn} = require('node:child_process');
 const {Worker} = require('node:worker_threads');
 const ring = require('../../apps/moonlight/ring.cjs');
 const {findPrivateStorage} = require('./feed.cjs');
 const hbv = require('./hbv.cjs');
 
+const HELPER =
+  process.env.HBMOONLIGHT ||
+  path.join(os.homedir(), 'claude-builds/HBLauncher/moonlight-helper/build/hbmoonlight');
+
+function moonlight(args, fps, width, height) {
+  const at = args.indexOf('--moonlight');
+  const [host, app] = [args[at + 1], args[at + 2]];
+  if (!host || !app) throw Error('Pass --moonlight HOST APP');
+  const bitrate = args.includes('--bitrate') ? args[args.indexOf('--bitrate') + 1] : '20000';
+  const helper = spawn(
+    HELPER,
+    [
+      'stream',
+      host,
+      app,
+      '--size',
+      `${width}x${height}`,
+      '--fps',
+      String(fps),
+      '--bitrate',
+      bitrate
+    ],
+    {stdio: ['pipe', 'pipe', 'pipe']}
+  );
+  readline.createInterface({input: helper.stderr}).on('line', line => {
+    if (!line.includes('"event":"stats"')) console.error('hbmoonlight ' + line);
+  });
+  helper.stop = () => helper.stdin.end();
+  return helper;
+}
+
 function source(args, fps, width, height) {
+  if (args.includes('--moonlight')) return moonlight(args, fps, width, height);
   if (args.includes('--screen'))
     return spawn('python3', [path.join(__dirname, 'screencast.py'), width, height, fps], {
       stdio: ['ignore', 'pipe', 'inherit']
     });
   const file = args[args.indexOf('--input') + 1];
-  if (!args.includes('--input') || !file) throw Error('Pass --screen or --input FILE');
+  if (!args.includes('--input') || !file)
+    throw Error('Pass --moonlight HOST APP, --screen or --input FILE');
   const scale = `scale=${width}:${height}:flags=area,fps=${fps}`;
   return spawn(
     'ffmpeg',
@@ -115,7 +152,7 @@ async function main() {
     console.log(JSON.stringify(stats));
     for (const key of Object.keys(stats)) stats[key] = 0;
   }, 1000);
-  process.on('SIGINT', () => capture.kill());
+  process.on('SIGINT', () => (capture.stop ? capture.stop() : capture.kill()));
 
   let pending = Buffer.alloc(0);
   for await (const chunk of capture.stdout) {
