@@ -7,11 +7,13 @@
  *       [--software] [--quit] [--seconds N]
  *       [--budget 96] [--cap 256] (KiB) [--qp-min 4] [--qp-max 40] [--refresh 2]
  *       [--depth 2] [--resync 1000] (ms) [--threads N]
+ *       [--no-input] [--labels] [--input-hz 60] [--dry-input]
  *
  * RUN_DIR defaults to the newest runs/launcher-* under the current directory.
  * --input plays a file through ffmpeg exactly like live.cjs --input, for
- * offline runs against tools/moonlight/fake-console/bridge.cjs. One JSON stats
- * line per second goes to stdout; events go to stderr. */
+ * offline runs against tools/moonlight/fake-console/bridge.cjs; with
+ * --dry-input the console input is printed as input-feeder.cjs lines instead
+ * of sent. One JSON stats line per second goes to stdout; events go to stderr. */
 #define _GNU_SOURCE
 #include "console-layout.h"
 #include "helper.h"
@@ -289,6 +291,13 @@ int main(int argc, char **argv) {
     return 1;
   }
 
+  struct input_options input_options = {.hz = number(argc, argv, "--input-hz", 60),
+                                        .labels = flag(argc, argv, "--labels"),
+                                        .dry = flag(argc, argv, "--dry-input")};
+  bool feed_input = moonlight ? !flag(argc, argv, "--no-input") : input_options.dry;
+  if (feed_input && !console_input_start(&input_options, &bridge, directory))
+    status("{\"event\":\"error\",\"message\":\"cannot start console input\"}");
+
   double seconds = number(argc, argv, "--seconds", 0), started = now_ms(),
          next_report = started + 1000;
   bool announced = false;
@@ -306,6 +315,7 @@ int main(int argc, char **argv) {
     }
   }
   status("{\"event\":\"stopping\"}");
+  console_input_stop();
   if (moonlight)
     LiStopConnection();
   else

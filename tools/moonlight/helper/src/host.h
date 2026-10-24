@@ -79,3 +79,14 @@ bool sender_failed(void);
 void sender_stop(void);
 void sender_take_stats(struct sender_stats *stats);
 void sender_latency(double *p50, double *p90, double *p99, double *max, unsigned *count);
+
+/* console-input.c: console pad + touch -> Moonlight gamepad and touch events */
+struct input_options {
+  int hz;
+  bool labels;
+  bool dry;
+};
+
+bool console_input_start(const struct input_options *options, const struct bridge_info *info,
+                         const char *directory);
+void console_input_stop(void);
