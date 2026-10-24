@@ -110,9 +110,11 @@ node tools/moonlight/menu.cjs
 ```
 
 Flags: `[runs/launcher-XXXX]` (default: newest), `--host IP` (add to hosts.json),
-`--budget 96`, `--qp 8`, `--rate 2` (Hz heartbeat), `--labels` (A/B by printed
-letter), `--js` (pure-JS encode, no native binary), `--no-input`, and
-`--script up,down,a,...` (offline driver).
+`--budget 96` (streamed game budget), `--qp 8` (menu keyframe quality), `--rate 2`
+(Hz heartbeat), `--js` (pure-JS encode, no native binary), `--no-input`, and
+`--script up,down,a,...` (offline driver). Navigation is native Switch: physical
+**A** selects, **B** backs; a touch tap selects a row. B on the pair screen
+cancels the pairing wait.
 
 ## Offline verification
 

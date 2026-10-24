@@ -17,7 +17,7 @@
 //
 // Usage: node tools/moonlight/menu.cjs [runs/launcher-XXXX]
 //        [--host IP]... [--budget 96] [--qp 8] [--rate 2] (Hz heartbeat)
-//        [--js] (pure-JS encode, no native binary) [--labels]
+//        [--js] (pure-JS encode, no native binary)
 //        [--no-input] [--script up,down,a,...] (offline driver)
 const fs = require('node:fs');
 const os = require('node:os');
@@ -242,6 +242,24 @@ function pressed(previous, current, mask) {
   return (current & mask) !== 0 && (previous & mask) === 0;
 }
 
+// One pad poll, edge-detected against the previous one, plus touch. Pure: it
+// moves the cursor, activates on A, backs on B, or taps a row, and returns the
+// next model (a new reference only when something changed) with any intent for
+// main() to act on. Native Switch layout: physical A selects, physical B backs.
+function onInput(model, previousButtons, buttons, touchEvents = []) {
+  let next = model;
+  let intent = null;
+  if (pressed(previousButtons, buttons, NPAD.up)) next = navigate(next, -1);
+  else if (pressed(previousButtons, buttons, NPAD.down)) next = navigate(next, 1);
+  if (pressed(previousButtons, buttons, NPAD.a)) ({model: next, intent} = activate(next));
+  else if (pressed(previousButtons, buttons, NPAD.b)) ({model: next, intent} = back(next));
+  if (!intent) {
+    const target = touchTarget(touchEvents, rows(next).length);
+    if (target >= 0) ({model: next, intent} = activate({...next, cursor: target}));
+  }
+  return {model: next, intent};
+}
+
 // A touch-down event -> the row it lands on, using the same geometry the
 // renderer drew. Returns the row index or -1.
 function touchTarget(events, rowCount, layout = LAYOUT) {
@@ -338,19 +356,23 @@ function jsEncoder(qp) {
   };
 }
 
-function nativeEncoder(budget, qp) {
+// A menu keyframe is ~96 KiB at qp 8, so budget=cap=96 KiB with a pinned qp sits
+// right at the edge and the encoder would defer macroblocks that never arrive
+// (the menu only re-stamps, never re-sends them). Give it a roomy cap and a qp
+// range so bisection fits the whole intra frame at `qp` or finer.
+function nativeEncoder(qp) {
   const {Encoder} = require('./hbv2-encoder.cjs');
   const encoder = new Encoder({});
-  const bytes = budget * 1024;
+  const cap = 256 * 1024;
   return {
     async encode(rgb, sequence) {
       const result = await encoder.encode(rgb, WIDTH, HEIGHT, {
         sequence,
         keyframe: true,
-        budget: bytes,
-        cap: bytes,
+        budget: cap,
+        cap,
         qpMin: qp,
-        qpMax: qp,
+        qpMax: hbv2.MAX_QP,
         refresh: 0
       });
       return result.slot;
@@ -372,7 +394,6 @@ class MenuSender {
     this.slot = null;
     this.sequence = 0;
     this.applied = 0;
-    this.paused = true;
   }
 
   async resync() {
@@ -456,7 +477,6 @@ async function main() {
   const budget = number('--budget', 96);
   const qp = number('--qp', 8);
   const rateHz = number('--rate', 2);
-  const layout = args.includes('--labels') ? 'labels' : 'position';
   const noInput = args.includes('--no-input');
   const script = args.includes('--script')
     ? option('--script', '').split(',').filter(Boolean)
@@ -473,7 +493,7 @@ async function main() {
   saveHosts(file, hosts);
 
   const renderer = spawnRenderer();
-  const encoder = args.includes('--js') ? jsEncoder(qp) : nativeEncoder(budget, qp);
+  const encoder = args.includes('--js') ? jsEncoder(qp) : nativeEncoder(qp);
   const sender = new MenuSender({rpc, mapped: storage.mapped, encoder, rateHz});
   await sender.resync();
 
@@ -505,6 +525,8 @@ async function main() {
       return;
     }
     if (intent.type === 'openHost') {
+      dirty = true;
+      await redraw(); // draw "Connecting…" before the helper call blocks the loop
       const result = await runHelper(['list', intent.host.address]);
       if (result.code === 0) {
         model = hostListed(model, {paired: true, ...parseList(result.out)});
@@ -525,23 +547,42 @@ async function main() {
   }
 
   async function pairFlow(host) {
-    await new Promise(resolve => {
-      const helper =
-        process.env.HBMOONLIGHT ||
-        path.join(os.homedir(), 'claude-builds/HBLauncher/moonlight-helper/build/hbmoonlight');
-      const child = spawn(helper, ['pair', host.address], {stdio: ['ignore', 'pipe', 'inherit']});
-      readline.createInterface({input: child.stdout}).on('line', line => {
-        try {
-          const event = JSON.parse(line);
-          if (event.event === 'pin') {
-            model = pinReceived(model, {pin: event.pin, url: event.url});
-            dirty = true;
-            redraw();
-          }
-        } catch {}
-      });
-      child.on('close', resolve);
+    const helper =
+      process.env.HBMOONLIGHT ||
+      path.join(os.homedir(), 'claude-builds/HBLauncher/moonlight-helper/build/hbmoonlight');
+    const child = spawn(helper, ['pair', host.address], {stdio: ['ignore', 'pipe', 'inherit']});
+    let cancelled = false;
+    const closed = new Promise(resolve => child.on('close', resolve));
+    readline.createInterface({input: child.stdout}).on('line', line => {
+      try {
+        const event = JSON.parse(line);
+        if (event.event === 'pin') {
+          model = pinReceived(model, {pin: event.pin, url: event.url});
+          dirty = true;
+          redraw().catch(() => {});
+        }
+      } catch {}
     });
+    // Let B on the console cancel a long pairing wait.
+    while (!noInput) {
+      const done = await Promise.race([closed.then(() => true), sleep(150).then(() => false)]);
+      if (done) break;
+      const source = readSource(directory);
+      if (source?.mapped === undefined) continue;
+      try {
+        const pad = decode((await rpc.read(source.mapped, NPAD_BYTES)).subarray(0, NPAD_BYTES));
+        if (pad.buttons & NPAD.b) {
+          cancelled = true;
+          child.kill('SIGINT');
+          break;
+        }
+      } catch {}
+    }
+    await closed;
+    if (cancelled) {
+      model = toHosts(model);
+      return;
+    }
     const result = await runHelper(['list', host.address]);
     model =
       result.code === 0
@@ -550,7 +591,6 @@ async function main() {
   }
 
   async function stream(host, game) {
-    sender.paused = true;
     await redraw(); // show the "Streaming…" screen once before handing over the ring
     live = spawn(
       process.execPath,
@@ -570,10 +610,10 @@ async function main() {
     );
     const chord = createChord(10);
     const exited = new Promise(resolve => live.on('close', resolve));
-    const source = readSource(directory);
     while (live && !stopping) {
       const done = await Promise.race([exited.then(() => true), sleep(100).then(() => false)]);
       if (done) break;
+      const source = readSource(directory);
       if (!noInput && source?.mapped !== undefined) {
         try {
           const pad = decode((await rpc.read(source.mapped, NPAD_BYTES)).subarray(0, NPAD_BYTES));
@@ -584,9 +624,8 @@ async function main() {
         } catch {}
       }
     }
-    await exited;
+    await exited; // wait for the child to drain its ring writes before we resync
     live = null;
-    sender.paused = false;
     await sender.resync();
   }
 
@@ -618,44 +657,47 @@ async function main() {
     process.exit();
   }
 
-  // Live loop: poll the pad at 30 Hz, heartbeat the ring at `rateHz`.
+  // Show the splash once, then land on the host list without needing a press.
+  await redraw();
+  model = toHosts(model);
+  dirty = true;
+
+  // Live loop: poll the pad at 30 Hz, re-render only when the model changes,
+  // and otherwise heartbeat the ring at `rateHz` so a reopened app recovers.
   const tracker = createTracker();
   let previousButtons = 0;
   let lastBeat = 0;
+  let seenActive = false;
   while (!stopping && !model.exit) {
     const started = performance.now();
-    await redraw();
     const source = readSource(directory);
-    if (!noInput && source?.package?.id === 'moonlight' && source.mapped !== undefined) {
+    const active = noInput || source?.package?.id === 'moonlight';
+    if (!active) {
+      // The app is gone (e.g. the user held +/- to exit); stop writing its ring.
+      if (seenActive) break;
+      await sleep(150);
+      continue;
+    }
+    seenActive = true;
+    if (!noInput && source?.mapped !== undefined) {
       try {
         const bytes = await rpc.read(source.mapped, STATE.touch + TOUCH_BYTES);
         const pad = decode(bytes.subarray(0, NPAD_BYTES));
-        if (pressed(previousButtons, pad.buttons, NPAD.up | NPAD.down))
-          model = navigate(model, pad.buttons & NPAD.up ? -1 : 1);
-        const faceA = layout === 'labels' ? NPAD.a : NPAD.b;
-        const faceB = layout === 'labels' ? NPAD.b : NPAD.a;
-        if (pressed(previousButtons, pad.buttons, faceA)) {
-          const result = activate(model);
-          model = result.model;
-          await run(result.intent);
-        } else if (pressed(previousButtons, pad.buttons, faceB)) {
-          ({model} = back(model));
-        }
         const {events} = step(tracker, parseTouch(bytes.subarray(STATE.touch)));
-        const target = touchTarget(events, rows(model).length);
-        if (target >= 0) {
-          model = {...model, cursor: target};
-          const result = activate(model);
-          model = result.model;
+        const result = onInput(model, previousButtons, pad.buttons, events);
+        previousButtons = pad.buttons;
+        if (result.model !== model) dirty = true;
+        model = result.model;
+        if (result.intent) {
+          dirty = true;
           await run(result.intent);
         }
-        previousButtons = pad.buttons;
-        dirty = true;
       } catch {}
     }
-    if (started - lastBeat > 1000 / rateHz) {
+    if (dirty) await redraw();
+    else if (started - lastBeat > 1000 / rateHz) {
       lastBeat = started;
-      if (!dirty) await sender.heartbeat();
+      await sender.heartbeat();
     }
     await sleep(Math.max(0, 1000 / 30 - (performance.now() - started)));
   }
@@ -687,6 +729,7 @@ module.exports = {
   createChord,
   pressed,
   touchTarget,
+  onInput,
   screenSpec,
   restampSlot
 };
