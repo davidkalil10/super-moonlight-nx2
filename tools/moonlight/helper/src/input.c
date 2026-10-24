@@ -1,6 +1,7 @@
 /* Input: one JSON object per stdin line. A line tagged {"type":"touch",...}
  * carries an events array, each {id,action,x,y,pressure} turned into a
- * LiSendTouchEvent call; any other line (tagged "controller" or untyped, kept
+ * LiSendTouchEvent call; "request-idr" requests a video keyframe. Other lines
+ * (tagged "controller" or untyped, kept
  * for backward compatibility) is the whole controller state sent as gamepad 0.
  * Missing controller fields keep their previous value. */
 #include "helper.h"
@@ -27,7 +28,9 @@ static bool message_type(const char *line, const char *name) {
   const char *at = strstr(line, "\"type\"");
   if (!at || !(at = strchr(at + 6, ':')))
     return false;
-  while (isspace((unsigned char)*++at)) {}
+  at++;
+  while (isspace((unsigned char)*at))
+    at++;
   size_t length = strlen(name);
   return *at == '"' && strncmp(at + 1, name, length) == 0 && at[length + 1] == '"';
 }

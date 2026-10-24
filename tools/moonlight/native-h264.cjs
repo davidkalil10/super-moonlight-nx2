@@ -7,7 +7,12 @@ const {execFileSync} = require('node:child_process');
 const os = require('node:os');
 const {AccessUnits, parameterSets} = require('./h264-stream.cjs');
 
-async function run({args, directory, rpc, storage, helperPath, width, height, fps}) {
+async function run({
+  args, directory, rpc, storage, helperPath, width, height, fps,
+  createDecoder = require('./native-decoder.cjs').create,
+  createSink = require('./native-sink.cjs').create,
+  spawnProcess = spawn
+}) {
   const at = args.indexOf('--moonlight');
   const host = args[at + 1],
     app = args[at + 2];
@@ -79,19 +84,22 @@ async function run({args, directory, rpc, storage, helperPath, width, height, fp
   process.on('SIGTERM', stop);
   function requestIdr() {
     if (stopping || idrTimer) return;
-    idrTimer = setTimeout(() => {
-      idrTimer = null;
-      if (stopping) return;
-      lastIdr = Date.now();
-      helper.stdin.write(JSON.stringify({type: 'request-idr'}) + '\n');
-    }, Math.max(0, lastIdr + 500 - Date.now()));
+    idrTimer = setTimeout(
+      () => {
+        idrTimer = null;
+        if (stopping) return;
+        lastIdr = Date.now();
+        helper.stdin.write(JSON.stringify({type: 'request-idr'}) + '\n');
+      },
+      Math.max(0, lastIdr + 500 - Date.now())
+    );
   }
   try {
-    sink = await require('./native-sink.cjs').create(rpc, storage, {cancelled});
+    sink = await createSink(rpc, storage, {cancelled});
     let resets = [];
     let generation = 0;
     const makeDecoder = () =>
-      require('./native-decoder.cjs').create({
+      createDecoder({
         rpc,
         directory,
         workerDirectory: path.join(output, 'decoder-' + generation),
@@ -99,7 +107,7 @@ async function run({args, directory, rpc, storage, helperPath, width, height, fp
         cancelled
       });
     decoder = await makeDecoder();
-    helper = spawn(
+    helper = spawnProcess(
       helperPath,
       [
         'stream',
@@ -142,7 +150,7 @@ async function run({args, directory, rpc, storage, helperPath, width, height, fp
     });
     statusLines.on('close', () => reader.endMetadata());
     if (!args.includes('--no-input')) {
-      const child = spawn(process.execPath, [path.join(__dirname, 'input-feeder.cjs'), directory], {
+      const child = spawnProcess(process.execPath, [path.join(__dirname, 'input-feeder.cjs'), directory], {
         stdio: ['ignore', helper.stdin, 'inherit']
       });
       child.on('error', error => reader.fail(error));
@@ -153,10 +161,23 @@ async function run({args, directory, rpc, storage, helperPath, width, height, fp
       children.push(child);
     }
     if (audio) {
-      const child = spawn(process.execPath, [path.join(__dirname, 'audio-stream.cjs'), directory,
-        '--buffer-frames', rpc.a.protocol >= 3 ? '960' : '1920', '--queue', '2', '--prime', '2', '--stats'], {
-        stdio: [helper.stdio[3], 'inherit', 'inherit']
-      });
+      const child = spawnProcess(
+        process.execPath,
+        [
+          path.join(__dirname, 'audio-stream.cjs'),
+          directory,
+          '--buffer-frames',
+          rpc.a.protocol >= 3 ? '960' : '1920',
+          '--queue',
+          '2',
+          '--prime',
+          '2',
+          '--stats'
+        ],
+        {
+          stdio: [helper.stdio[3], 'inherit', 'inherit']
+        }
+      );
       child.on('error', error => reader.fail(error));
       child.on('exit', (code, signal) => {
         if (!stopping && code !== 0)
@@ -232,7 +253,12 @@ async function run({args, directory, rpc, storage, helperPath, width, height, fp
     }
   } catch (error) {
     if (!stopping) {
-      log({event: 'native-error', message: error.message, pending: error.pending, control: error.control});
+      log({
+        event: 'native-error',
+        message: error.message,
+        pending: error.pending,
+        control: error.control
+      });
       throw error;
     }
   } finally {

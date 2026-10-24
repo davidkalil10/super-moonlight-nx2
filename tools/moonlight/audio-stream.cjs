@@ -49,8 +49,7 @@ function resolver(rpc) {
   }
   call.writeAndCall = async (address, bytes, name, ...args) => {
     const target = await resolve(name);
-    if (rpc.writeAndCall)
-      return (await rpc.writeAndCall(address, bytes, target, args)).result;
+    if (rpc.writeAndCall) return (await rpc.writeAndCall(address, bytes, target, args)).result;
     await rpc.write(address, bytes);
     return (await rpc.callAddress(target, args, 2)).result;
   };
@@ -220,7 +219,16 @@ function stream(options) {
 
     async function append(descriptor, pcm) {
       const slot = index.get(descriptor);
-      check((await call.writeAndCall(slotAddress(slot), pcm, 'AppendAudioOutBuffer', base, descriptor)) === 1n, 'Append rejected');
+      check(
+        (await call.writeAndCall(
+          slotAddress(slot),
+          pcm,
+          'AppendAudioOutBuffer',
+          base,
+          descriptor
+        )) === 1n,
+        'Append rejected'
+      );
       stats.written++;
       free.delete(descriptor);
       const playhead = inFlight.length ? inFlight[inFlight.length - 1].releaseAt : now();
@@ -324,9 +332,11 @@ async function main() {
   process.on('SIGINT', () => session.stop());
   process.on('SIGTERM', () => session.stop());
   console.log('Continuous audio stream ready.');
-  const printing = args.includes('--stats') ? setInterval(() => {
-    console.log(JSON.stringify({event: 'audio-stats', ...session.stats}));
-  }, 1000) : null;
+  const printing = args.includes('--stats')
+    ? setInterval(() => {
+        console.log(JSON.stringify({event: 'audio-stats', ...session.stats}));
+      }, 1000)
+    : null;
   let error;
   try {
     await session.done;

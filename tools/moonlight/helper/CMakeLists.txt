@@ -52,3 +52,11 @@ add_executable(hbmoonlight-host
   src/session.c src/status.c src/mailbox.c src/video.c src/audio.c)
 target_compile_options(hbmoonlight-host PRIVATE -Wall -Wextra -Wno-unused-parameter)
 target_link_libraries(hbmoonlight-host PRIVATE gamestream hbv2 Threads::Threads)
+
+include(CTest)
+if(BUILD_TESTING)
+  add_executable(hbmoonlight-input-check tests/input.c src/input.c)
+  target_include_directories(hbmoonlight-input-check PRIVATE src ${UPSTREAM_DIR}/moonlight-common-c/src)
+  target_compile_options(hbmoonlight-input-check PRIVATE -Wall -Wextra -Wno-unused-parameter -UNDEBUG)
+  add_test(NAME input-routing COMMAND hbmoonlight-input-check)
+endif()
