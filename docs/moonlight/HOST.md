@@ -62,7 +62,7 @@ $H --moonlight 192.168.8.245 Desktop --budget 64
 ```
 
 - **Session dir:** defaults to the newest `runs/launcher-*`. Pass it as the first argument to pick another.
-- **Options:** match live.cjs (`--size --fps --bitrate --budget --cap --qp-min --qp-max --refresh --depth --resync --threads`), plus `--labels`, `--input-hz`, `--buffer-frames`, `--queue` and `--prime`.
+- **Options:** match live.cjs (`--size --fps --bitrate --budget --cap --qp-min --qp-max --refresh --depth --resync --threads`), plus `--labels`, `--input-hz`, `--buffer-frames`, `--queue` and `--prime`. Here `--codec` picks the Moonlight stream codec (`h264` or `hevc`). HBV2 is the only ring format, so do not pass live.cjs's `--codec hbv2`.
 - **Output:** stdout carries one JSON stats line per second, as live.cjs prints, plus `writeMs`, `latencyMs`, `decodeMs` and audio counters. stderr carries events and the latency summary.
 - **Threads:** `--threads 8` halves encoder CPU for about 1 ms more encode time.
 
@@ -76,7 +76,7 @@ $H --moonlight 192.168.8.245 Desktop --budget 64
 
 Results at 1080p, testsrc2, depth 2, 15 s after a 4 s warm-up (2026-10-24):
 
-| Case | Host | fps | Host CPU ms/frame excluding codec and ffmpeg | Codec CPU ms/frame | Latency p50 / p99 ms |
+| Case | Host | fps | Host CPU ms per written frame, excluding codec and ffmpeg | Codec CPU ms per written frame | Latency p50 / p99 ms |
 | --- | --- | --- | --- | --- | --- |
 | 5.7 MB/s link, budget 96 | Node | 44.1 | 23.9 (node) | 59.2 | 44.9 / 86.7 |
 | | native | 60.1 | 1.2 | 52.0 | 20.1 / 31.5 |
@@ -90,7 +90,7 @@ Results at 1080p, testsrc2, depth 2, 15 s after a 4 s warm-up (2026-10-24):
 
 - **Node overhead:** in Node, the main thread costs 20-70 ms CPU per frame. Most of it comes from the capture loop concatenating 64 KiB pipe chunks into a 6 MB frame and from base64 and JSON. The native host spends about 1.2 ms per frame outside the codec (1.1 of that is reading the ffmpeg pipe). The sender and its buffers are allocated up front, so nothing is allocated per frame except inside libcurl, ffmpeg and hbv2enc.c.
 - **Codec cost:** the codec costs the same in both. With OpenMP's default thread count it is about 4 ms of wall time and 50-90 ms of CPU per frame. `--threads 4` cuts that to 28 ms of CPU at 7.6 ms of wall time.
-- **120 fps:** at 120 fps on an unlimited link, encode (4.6 ms) plus write (3.0 ms) fits the 8.3 ms frame period.
+- **120 fps:** at 120 fps on an unlimited link, encode (4.6 ms) plus write (3.0 ms) fits the 8.3 ms frame period. CPU is divided by written frames. Node captured 120/s but wrote only 15.6/s, so its per-written figures overstate the cost per captured frame (by about 25% in the 5.7 MB/s row).
 - **Full session:** video, 60 Hz input and audio together on the 5.7 MB/s fake link run at 59.7 fps with budget 64, with 0 audio underruns. With budget 96 the same session drops to 44 fps. In the fake model every input read and audio call costs one full exchange.
 - **Input parity:** `--dry-input` and input-feeder.cjs print identical lines on `bridge.cjs --pad`, in both layouts.
 - **Audio parity:** the native audio path and audio-stream.cjs play an 8 s file with the same counters: 100 appended, 0 underruns.
@@ -100,3 +100,4 @@ Results at 1080p, testsrc2, depth 2, 15 s after a 4 s warm-up (2026-10-24):
 - Not run against a real console or Sunshine yet. The first live run should follow LIVE-TEST.md.
 - `hbv2enc.c` still allocates per frame inside `globalMotion` and `deferToCap`. Its `fail()` exits the whole host, where before it only ended the hbv2enc child. Both stay as they are so the codec remains bit identical to hbv2enc.
 - On a failed AudioOut call the host stops audio the way audio-stream.cjs does: StopAudioOut and no Close. Video keeps going.
+- Bridge requests time out after 60 s (libcurl), where live.cjs waits forever. This only matters if the link itself dies.
