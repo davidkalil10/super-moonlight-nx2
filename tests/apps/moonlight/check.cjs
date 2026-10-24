@@ -13,6 +13,8 @@ const {testCard} = require('./build.cjs');
 
 const root = path.resolve(__dirname, '../..');
 const ring = require(path.join(root, 'tools/moonlight/ring.cjs'));
+const {STATE} = require(path.join(root, 'sdk/host/state-layout.cjs'));
+const {NPAD} = require(path.join(root, 'sdk/host/npad.cjs'));
 const hbv = require(path.join(root, 'tools/moonlight/hbv.cjs'));
 const hbv2 = require(path.join(root, 'tools/moonlight/hbv2.cjs'));
 const {psnr} = require(path.join(root, 'tools/moonlight/reference.cjs'));
@@ -72,19 +74,19 @@ async function run(dir, memory, patches = [], state = Buffer.alloc(1024)) {
 async function exitChecks(dir) {
   for (const [name, buttons, connected, held, want] of [
     ['idle', 0, 1, 0, 0],
-    ['B', 2, 1, 59, 0],
-    ['Minus', 2048, 1, 59, 0],
-    ['+/- first frame', 3072, 1, 0, 0],
-    ['+/- held one second', 3072, 1, 59, 1],
-    ['disconnected', 3072, 0, 59, 0]
+    ['B', NPAD.b, 1, 59, 0],
+    ['Minus', NPAD.minus, 1, 59, 0],
+    ['+/- first frame', NPAD.plus | NPAD.minus, 1, 0, 0],
+    ['+/- held one second', NPAD.plus | NPAD.minus, 1, 59, 1],
+    ['disconnected', NPAD.plus | NPAD.minus, 0, 59, 0]
   ]) {
     const state = Buffer.alloc(1024);
     state.writeUInt32LE(buttons, 8);
-    state.writeUInt32LE(connected, 32);
+    state.writeUInt32LE(connected, STATE.connected);
     state.writeUInt32LE(held, 784);
-    state.writeFloatLE(1, 960);
+    state.writeFloatLE(1, STATE.fade);
     const result = await run(dir, Buffer.alloc(ring.CONTROL_BYTES), [], state);
-    assert.equal(result.state.readUInt32LE(1016), want, name);
+    assert.equal(result.state.readUInt32LE(STATE.exitRequest), want, name);
   }
 }
 
