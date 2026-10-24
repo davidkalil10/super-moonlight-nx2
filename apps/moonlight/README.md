@@ -18,10 +18,14 @@ node apps/moonlight/check.cjs [CLIP]   # desktop Vulkan decode check, bit-exact 
 `build.cjs` regenerates `shaders/hbv.glsl`, `shaders/hbv2-tables.glsl`,
 `shaders/ring.glsl` and `assets/memory.bin`; do not edit those by hand.
 
-Without glslangValidator, point `GLSLANG` at a wrapper that maps its
-`-V ... SRC -o OUT` call onto `glslc -Os --target-env=vulkan1.0 SRC -o OUT`
-and run `GLSLANG=/path/to/wrapper node apps/moonlight/build.cjs`. The
-committed `app.comp.spv` and `app.frag.spv` were built that way;
+Without glslangValidator, build through `tools/moonlight/glslang-shim.sh`,
+which maps the `-V ... SRC -o OUT` call onto `glslc -Os --target-env=vulkan1.0`:
+
+```sh
+GLSLANG=tools/moonlight/glslang-shim.sh node apps/moonlight/build.cjs
+```
+
+The committed `app.comp.spv` and `app.frag.spv` were built that way;
 `app.vert.spv` is still the glslangValidator build. Rebuild all three with
 glslangValidator when it is available.
 
