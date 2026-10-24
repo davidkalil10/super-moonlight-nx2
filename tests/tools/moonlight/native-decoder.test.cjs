@@ -169,6 +169,10 @@ function createConsole() {
         pc = r.x30;
       } else if (pc === CALL4) {
         acc = exec(peek64(r.x8 + 0x68), [r.x25, r.x21, r.x20, r.x19, r.x4, r.x5].map(BigInt));
+        // x4/x5 are caller-saved; the device leaves them stale after the call too,
+        // so a four-argument callee must never read them. Clear them here so the
+        // mock can't accidentally depend on a leaked wide value.
+        r.x4 = r.x5 = 0;
         r.x20 = peek64(r.sp + 0xe0);
         r.x19 = peek64(r.sp + 0xe8);
         r.x21 = peek64(r.sp + 0xd8);
