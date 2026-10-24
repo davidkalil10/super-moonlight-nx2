@@ -13,7 +13,7 @@ function burst() {
   return e;
 }
 
-const symbols = require('../../homebrew-launcher/audio-symbols.json');
+const symbols = require('../../sdk/native/audio-symbols.json');
 const SDK = 0x10000000;
 const BASE = 0x100000;
 const SCRATCH = 0x200000;
