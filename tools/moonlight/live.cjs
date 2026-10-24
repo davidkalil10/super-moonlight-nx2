@@ -10,7 +10,9 @@
 //        hbv1: [--workers 12]
 //        hbv2: [--budget 96] [--cap 256] (KiB) [--qp-min 4] [--qp-max 40]
 //              [--refresh 2] [--threads N] [--resync 1000] (ms)
-// --moonlight runs tools/moonlight/helper's hbmoonlight (path from $HBMOONLIGHT).
+// --moonlight runs tools/moonlight/helper's hbmoonlight (path from $HBMOONLIGHT)
+//   and, unless --no-input / --no-audio, also feeds controller+touch into its
+//   stdin (input-feeder.cjs) and plays its audio on the console (audio-stream.cjs).
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -25,11 +27,12 @@ const HELPER =
   process.env.HBMOONLIGHT ||
   path.join(os.homedir(), 'claude-builds/HBLauncher/moonlight-helper/build/hbmoonlight');
 
-function moonlight(args, fps, width, height) {
+function moonlight(args, fps, width, height, directory) {
   const at = args.indexOf('--moonlight');
   const [host, app] = [args[at + 1], args[at + 2]];
   if (!host || !app) throw Error('Pass --moonlight HOST APP');
   const bitrate = args.includes('--bitrate') ? args[args.indexOf('--bitrate') + 1] : '20000';
+  const audio = !args.includes('--no-audio');
   const helper = spawn(
     HELPER,
     [
@@ -41,20 +44,38 @@ function moonlight(args, fps, width, height) {
       '--fps',
       String(fps),
       '--bitrate',
-      bitrate
+      bitrate,
+      ...(audio ? ['--audio-fd', '3'] : [])
     ],
-    {stdio: ['pipe', 'pipe', 'pipe']}
+    {stdio: ['pipe', 'pipe', 'pipe', ...(audio ? ['pipe'] : [])]}
   );
   readline.createInterface({input: helper.stderr}).on('line', line => {
     if (!line.includes('"event":"stats"')) console.error('hbmoonlight ' + line);
   });
-  helper.stop = () => helper.stdin.end();
+
+  const children = [];
+  if (!args.includes('--no-input'))
+    children.push(
+      spawn(process.execPath, [path.join(__dirname, 'input-feeder.cjs'), directory], {
+        stdio: ['ignore', helper.stdin, 'inherit']
+      })
+    );
+  if (audio)
+    children.push(
+      spawn(process.execPath, [path.join(__dirname, 'audio-stream.cjs'), directory], {
+        stdio: [helper.stdio[3], 'inherit', 'inherit']
+      })
+    );
+  helper.stop = () => {
+    for (const child of children) child.kill('SIGINT');
+    helper.stdin.end();
+  };
   return helper;
 }
 const POLL_MS = 500;
 
-function source(args, fps, width, height) {
-  if (args.includes('--moonlight')) return moonlight(args, fps, width, height);
+function source(args, fps, width, height, directory) {
+  if (args.includes('--moonlight')) return moonlight(args, fps, width, height, directory);
   if (args.includes('--screen'))
     return spawn('python3', [path.join(__dirname, 'screencast.py'), width, height, fps], {
       stdio: ['ignore', 'pipe', 'inherit']
@@ -302,7 +323,7 @@ async function main() {
     Object.assign(stats, fresh(), codec === 'hbv2' ? {applied: stats.applied} : {});
   }, 1000);
 
-  const capture = source(args, fps, width, height);
+  const capture = source(args, fps, width, height, directory);
   process.on('SIGINT', () => (capture.stop ? capture.stop() : capture.kill()));
   const context = {
     rpc,
