@@ -1,7 +1,6 @@
 /runs/
 /tools/
 /smilebasic/reference/*.bin
-/smilebasic/pico-keyboard/secret
 __pycache__/
 *.pyc
 **/settings.toml
@@ -11,3 +10,5 @@ __pycache__/
 /homebrew-launcher/game-render
 
 /dist/
+/.claude/
+/apps/*
