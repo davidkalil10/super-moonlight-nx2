@@ -321,6 +321,11 @@ installed, so the package matches the SDK toolchain.
 | launcher-gw7PCW | 1 (+region cache) | 1 / 2 | 52 ms avg, 457 retransmits | 6.8 / 8.6 fps | 130 / 237, 204 / 397 |
 | launcher-idrgtq | 2 | 1 | 3 ms | 56.9 fps | 9.1 / 36.5 |
 | launcher-idrgtq | 2 | 2 | 3 ms | 59.3 fps | 11.0 / 22.2 |
+| launcher-TJ2SqH, wired GL.iNet, unthrottled | 2 | 1 / 2 / 4 | 1.2 ms | 83 / 353 / 412 exchanges/s | 5.2 / 5.4 / 9.5 |
+
+Wired, the ceiling is about 412 exchanges/s (13.5 MB/s): the console loop,
+not the link, is now the limit (p50 grows with depth). A 1080p HBV1 frame is
+nine exchanges, so ~45 fps at best.
 
 - Private storage is host coherent (flags 7); writes show without a flush.
 - Reopening the app reloads `assets/memory.bin`, which wipes the ring.
