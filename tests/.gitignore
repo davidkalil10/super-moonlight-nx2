@@ -1,5 +1,6 @@
 /runs/
-/tools/
+/tools/*
+!/tools/moonlight/
 /smilebasic/reference/*.bin
 __pycache__/
 *.pyc
@@ -13,3 +14,4 @@ __pycache__/
 /.claude/
 /apps/*
 !/apps/.gitkeep
+!/apps/moonlight/
