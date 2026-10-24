@@ -4,7 +4,7 @@
 #   b2      128x96, two B-frames, so the decoder reorders
 #   ip1080  1920x1080 High, no B-frames, single-frame VBV at 20 Mbps like Sunshine,
 #           zooming fractal with grain so every frame carries motion and detail
-# Each clip.h264 comes with clip.json (per-AU display index in decode order) and
+# Each clip.h264 comes with clip.json (picture size, per-AU display index in decode order) and
 # clip-reference.nv12 (display order). ip1080's reference holds only every tenth frame and
 # the last one, listed in clip.json as references.
 set -eu
@@ -23,12 +23,15 @@ encode() {
   ffmpeg -v error -y -i "$out/$name.mp4" -c copy -bsf:v h264_mp4toannexb -f h264 "$out/$name.h264"
   ffmpeg -v error -y -i "$out/$name.h264" -vf "select='$pick'" -fps_mode passthrough \
     -f rawvideo -pix_fmt nv12 "$out/$name-reference.nv12"
+  size=$(ffprobe -v error -select_streams v -show_entries stream=width,height -of csv=p=0 \
+    "$out/$name.mp4")
   ffprobe -v error -select_streams v -show_entries packet=pts -of csv=p=0 "$out/$name.mp4" |
-    PICK="$pick" node -e '
+    PICK="$pick" SIZE="$size" node -e '
       const pts = require("fs").readFileSync(0, "utf8").trim().split("\n").map(Number);
       const first = Math.min(...pts);
       const display = pts.map(p => p - first);
-      const result = {display};
+      const [width, height] = process.env.SIZE.split(",").map(Number);
+      const result = {width, height, display};
       if (process.env.PICK !== "1") {
         const last = display.length - 1;
         result.references = display
