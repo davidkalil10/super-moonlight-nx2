@@ -4,7 +4,7 @@
 const fs = require('node:fs/promises'),
   path = require('node:path');
 const {execFileSync} = require('node:child_process');
-const ring = require('./ring.cjs');
+const ring = require(path.join(root(), 'tools/moonlight/ring.cjs'));
 
 function root() {
   let directory = __dirname;

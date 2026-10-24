@@ -3,7 +3,7 @@
 // Usage: node tools/moonlight/feed.cjs runs/launcher-XXXX CLIP.hbv [--fps 60] [--seconds 60] [--depth 1]
 const fs = require('node:fs/promises');
 const path = require('node:path');
-const ring = require('../../apps/moonlight/ring.cjs');
+const ring = require('./ring.cjs');
 const session = require('../../sdk/host/session.cjs');
 
 const SLOT = 32768;
