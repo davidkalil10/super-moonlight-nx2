@@ -198,7 +198,8 @@ async function run({
     }
     let sps,
       pps,
-      configured = false;
+      configured = false,
+      outstanding = 0;
     async function resync(error) {
       resets = resets.filter(time => Date.now() - time < 30000);
       if (resets.length >= 3) throw error;
@@ -209,6 +210,7 @@ async function run({
       generation++;
       decoder = await makeDecoder();
       configured = false;
+      outstanding = 0;
       requestIdr();
     }
     monitor = setInterval(async () => {
@@ -248,13 +250,18 @@ async function run({
       try {
         await decoder.submit(unit);
         stats.submitted++;
-        for (;;) {
+        outstanding++;
+        // One pull per submit in the steady 1:1 case, so no known-empty
+        // acquireOutput; extra pulls happen only while the decoder owes frames.
+        // The next destination() waits for the GPU to apply the last frame, so
+        // no explicit wait is needed here and submit of N+1 is not blocked on it.
+        while (outstanding > 0) {
           const destination = await sink.destination();
           const frame = await decoder.receive(destination);
           if (!frame) break;
+          outstanding--;
           stats.decoded++;
           await sink.publish(destination, frame);
-          await sink.wait();
           stats.presented++;
         }
       } catch (error) {
