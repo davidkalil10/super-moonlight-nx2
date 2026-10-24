@@ -266,16 +266,19 @@ function readHeader(words, slotWords = words.length) {
   if (magic === HBV1_MAGIC) return {kind: 1, sequence, width, height, trailer};
   if (width > MAX_WIDTH || height > MAX_HEIGHT) return null;
   const count = words[6],
+    qp = words[5] & 0xff,
+    chromaQp = (words[5] >>> 8) & 0xff,
     map = layout(width, height);
   if (count > map.chunks || HEADER_WORDS + count > trailer) return null;
+  if (qp > MAX_QP || chromaQp > MAX_QP) return null;
   return {
     kind: 2,
     sequence,
     reference: words[4],
     width,
     height,
-    qp: words[5] & 0xff,
-    chromaQp: (words[5] >>> 8) & 0xff,
+    qp,
+    chromaQp,
     count,
     trailer,
     map

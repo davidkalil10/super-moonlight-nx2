@@ -1,5 +1,6 @@
-// Generates the HBV decoder include, ring constants, a test-card frame for
-// the initial private memory, the text atlas, then compiles the shaders.
+// Generates the HBV1 decoder include, the HBV2 tables, ring constants, an HBV2
+// test-card keyframe for the initial private memory and the text atlas, then
+// compiles the shaders.
 const fs = require('node:fs/promises'),
   path = require('node:path');
 const {execFileSync} = require('node:child_process');
@@ -39,18 +40,28 @@ function testCard(width, height) {
   return rgb;
 }
 
+// Control words zeroed, the test card as keyframe TEST_CARD_SEQUENCE in its
+// ring slot; the rest of the allocation starts zeroed on the console.
+function initialMemory(hbv2) {
+  const [width, height] = ring.TEST_CARD,
+    source = hbv2.toFrame(testCard(width, height), width, height),
+    slot = hbv2.encode(source, {sequence: ring.TEST_CARD_SEQUENCE, qp: 6}),
+    offset = ring.slotOffset(ring.TEST_CARD_SEQUENCE),
+    memory = Buffer.alloc(offset + slot.length);
+  slot.copy(memory, offset);
+  return memory;
+}
+
 async function main() {
   const hbv = require(path.join(root(), 'tools/moonlight/hbv.cjs'));
+  const hbv2 = require(path.join(root(), 'tools/moonlight/hbv2.cjs'));
   const state = Buffer.alloc(1024);
   state.writeFloatLE(1, 960);
   await fs.writeFile(path.join(__dirname, 'assets/state.bin'), state);
   await fs.writeFile(path.join(__dirname, 'shaders/hbv.glsl'), hbv.glsl());
+  await fs.writeFile(path.join(__dirname, 'shaders/hbv2-tables.glsl'), hbv2.glslTables());
   await fs.writeFile(path.join(__dirname, 'shaders/ring.glsl'), ring.glsl());
-  const [width, height] = ring.TEST_CARD;
-  await fs.writeFile(
-    path.join(__dirname, 'assets/memory.bin'),
-    hbv.encode(testCard(width, height), width, height, 1)
-  );
+  await fs.writeFile(path.join(__dirname, 'assets/memory.bin'), initialMemory(hbv2));
   execFileSync('python3', [path.join(__dirname, 'assets.py')], {stdio: 'inherit'});
   await require(path.join(root(), 'sdk/build.cjs')).buildApp(__dirname);
 }
