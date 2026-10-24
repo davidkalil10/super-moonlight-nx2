@@ -981,14 +981,16 @@ int main(int argc, char **argv) {
     result.encodeMicros =
         (uint32_t)((t1.tv_sec - t0.tv_sec) * 1000000 + (t1.tv_nsec - t0.tv_nsec) / 1000);
     result.psnrCentidB = (uint32_t)(psnr(&e.source, &e.reference) * 100);
+    if (recon && bytes) {
+      for (int c = 0; c < 3; c++)
+        fwrite(e.reference.p[c], 1, (size_t)planeW(&e.reference, c) * planeH(&e.reference, c),
+               recon);
+      fflush(recon);
+    }
     if (fwrite(&result, sizeof result, 1, stdout) != 1 ||
         (bytes && fwrite(e.slot, 1, bytes, stdout) != bytes))
       fail("write failed");
     fflush(stdout);
-    if (recon && bytes)
-      for (int c = 0; c < 3; c++)
-        fwrite(e.reference.p[c], 1, (size_t)planeW(&e.reference, c) * planeH(&e.reference, c),
-               recon);
   }
   if (recon) fclose(recon);
   return 0;
