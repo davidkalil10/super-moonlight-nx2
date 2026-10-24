@@ -2,8 +2,7 @@
 // Reads interleaved 48 kHz stereo s16le from stdin (default), a numeric fd
 // (--fd N) or a file (--file PATH, offline test), keeps a small ring of console
 // AudioOut buffers primed and appended back to back, and measures underruns and
-// overruns. It reuses game-audio.cjs's function-resolution path (audio-symbols
-// + sdk-checks verify-function) and the same sound-memory allocation call.
+// overruns. Functions resolve through sdk/native/symbols.cjs like game-audio.cjs.
 // Usage: node tools/moonlight/audio-stream.cjs [runs/launcher-XXXX] [--fd N | --file PATH]
 //        [--buffer-frames 3840] [--queue 3] [--prime 2]
 const fs = require('node:fs');
@@ -21,8 +20,7 @@ const PARAM_OFFSET = 0x300;
 const DESCRIPTOR_BASE = 0x400;
 const DESCRIPTOR_STRIDE = 0x40;
 
-const symbols = require('../../sdk/native/audio-symbols.json');
-const sdkImage = require('../../smilebasic/reference/sdk-checks.cjs');
+const {sdkResolver} = require('../../sdk/native/symbols.cjs');
 const {allocate} = require('../../sdk/native/allocate.cjs');
 
 const check = (value, message) => {
@@ -30,22 +28,7 @@ const check = (value, message) => {
 };
 
 function resolver(rpc) {
-  const resolved = {};
-  async function resolve(name) {
-    if (!resolved[name]) {
-      const matches = symbols.filter(s => s.name.includes(name));
-      check(matches.length === 1, 'Ambiguous audio symbol ' + name);
-      const s = matches[0];
-      const address = rpc.a.sdk + s.offset;
-      await rpc.request({
-        command: 'verify-function',
-        address,
-        hex: sdkImage.bytes(s.offset, Math.min(32, s.size)).toString('hex')
-      });
-      resolved[name] = address;
-    }
-    return resolved[name];
-  }
+  const resolve = sdkResolver(rpc, {ambiguous: 'Ambiguous audio symbol '});
   async function call(name, ...args) {
     return (await rpc.callAddress(await resolve(name), args, 2)).result;
   }
