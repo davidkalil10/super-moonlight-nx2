@@ -27,25 +27,7 @@ const FLAG = {
   x: 0x4000,
   y: 0x8000
 };
-const NPAD = {
-  a: 1 << 0,
-  b: 1 << 1,
-  x: 1 << 2,
-  y: 1 << 3,
-  stickL: 1 << 4,
-  stickR: 1 << 5,
-  l: 1 << 6,
-  r: 1 << 7,
-  zl: 1 << 8,
-  zr: 1 << 9,
-  plus: 1 << 10,
-  minus: 1 << 11,
-  left: 1 << 12,
-  up: 1 << 13,
-  right: 1 << 14,
-  down: 1 << 15
-};
-const NPAD_BYTES = 40;
+const {NPAD, NPAD_BYTES, readPad} = require('../../sdk/host/npad.cjs');
 const {OFFSET, FIELD} = require('../../sdk/host/layout.cjs');
 const PAD_SOURCES = {offset: OFFSET + FIELD.padSources, count: 5, stride: 64};
 
@@ -67,17 +49,6 @@ const SHARED = {
 };
 
 const NEUTRAL = {connected: false, buttons: 0, lx: 0, ly: 0, rx: 0, ry: 0};
-
-function readPad(bytes, offset = 0) {
-  return {
-    connected: (bytes.readUInt32LE(offset + 32) & 1) !== 0,
-    buttons: bytes.readUInt32LE(offset + 8),
-    lx: bytes.readInt32LE(offset + 16),
-    ly: bytes.readInt32LE(offset + 20),
-    rx: bytes.readInt32LE(offset + 24),
-    ry: bytes.readInt32LE(offset + 28)
-  };
-}
 
 function decode(selected, sources) {
   const pad = readPad(selected);
