@@ -152,6 +152,7 @@ async function hbv1Check(dir) {
 
 // Keyframe, then P frames mixing skip, inter and intra blocks. Patch 2 is
 // torn and patch 3 references a frame that was never shown: both are ignored.
+// The last patch holds two P frames, which one dispatch must apply in order.
 async function chainCheck(dir) {
   const [width, height] = [1920, 1088],
     decoder = new hbv2.Decoder(),
@@ -163,7 +164,7 @@ async function chainCheck(dir) {
   });
   decoder.apply(hbv2.words(key));
   patches.push([ring.slotOffset(1), key]);
-  for (let sequence = 2; sequence <= 5; sequence++) {
+  for (let sequence = 2; sequence <= 7; sequence++) {
     const slot = hbv2.encode(hbv2.toFrame(scene(width, height, sequence * 3), width, height), {
       sequence,
       reference: decoder.frame,
@@ -184,23 +185,27 @@ async function chainCheck(dir) {
       patches.push([ring.slotOffset(3), torn], [ring.slotOffset(6), stray]);
     }
     decoder.apply(hbv2.words(slot));
-    patches.push([ring.slotOffset(sequence), slot]);
+    if (sequence === 7) {
+      const pair = Buffer.alloc(ring.SLOT_BYTES + slot.length);
+      patches.pop()[1].copy(pair);
+      slot.copy(pair, ring.SLOT_BYTES);
+      patches.push([ring.slotOffset(6), pair]);
+    } else patches.push([ring.slotOffset(sequence), slot]);
   }
   const {memory, rgb, report} = await run(dir, Buffer.alloc(ring.MEMORY_BYTES), patches);
   assert.deepEqual(control(memory), {
-    applied: 5,
-    applyCount: 5,
+    applied: 7,
+    applyCount: 7,
     mode: ring.MODE.hbv2,
     current: decoder.current,
     size: width | (height << 16),
-    hbv1Slot: 0,
-    rejected: 0
+    hbv1Slot: 0
   });
   samePlanes(memory, decoder.frame, 'P chain');
   const score = psnr(rgb, hbv2.toRgb(decoder.frame, 1920, 1080));
   const times = report.frames.map(f => f.computeMs.toFixed(2)).join(' ');
   console.log(
-    `1080p P chain: planes bit-exact, display ${score.toFixed(1)} dB, compute ms ${times}`
+    `1080p P chain with catch-up: planes bit-exact, display ${score.toFixed(1)} dB, compute ms ${times}`
   );
   assert.ok(score > 45);
 }

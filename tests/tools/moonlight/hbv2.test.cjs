@@ -169,7 +169,9 @@ test(
   'native encoder slots decode bit-exactly to its reconstruction',
   {skip: !compiler()},
   async () => {
-    const build = fs.mkdtempSync(path.join(os.tmpdir(), 'hbv2enc-'));
+    const builds = path.join(os.homedir(), 'claude-builds/HBLauncher'),
+      base = fs.existsSync(builds) ? builds : os.tmpdir(),
+      build = fs.mkdtempSync(path.join(base, 'hbv2enc-test-'));
     try {
       execFileSync('bash', [path.join(__dirname, 'build-hbv2enc.sh')], {
         env: {...process.env, HBV2_BUILD: build},
