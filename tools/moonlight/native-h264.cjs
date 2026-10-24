@@ -79,12 +79,15 @@ async function run({args, directory, rpc, storage, helperPath, width, height, fp
   process.on('SIGTERM', stop);
   function requestIdr() {
     if (stopping || idrTimer) return;
-    idrTimer = setTimeout(() => {
-      idrTimer = null;
-      if (stopping) return;
-      lastIdr = Date.now();
-      helper.stdin.write(JSON.stringify({type: 'request-idr'}) + '\n');
-    }, Math.max(0, lastIdr + 500 - Date.now()));
+    idrTimer = setTimeout(
+      () => {
+        idrTimer = null;
+        if (stopping) return;
+        lastIdr = Date.now();
+        helper.stdin.write(JSON.stringify({type: 'request-idr'}) + '\n');
+      },
+      Math.max(0, lastIdr + 500 - Date.now())
+    );
   }
   try {
     sink = await require('./native-sink.cjs').create(rpc, storage, {cancelled});
@@ -153,10 +156,23 @@ async function run({args, directory, rpc, storage, helperPath, width, height, fp
       children.push(child);
     }
     if (audio) {
-      const child = spawn(process.execPath, [path.join(__dirname, 'audio-stream.cjs'), directory,
-        '--buffer-frames', rpc.a.protocol >= 3 ? '960' : '1920', '--queue', '2', '--prime', '2', '--stats'], {
-        stdio: [helper.stdio[3], 'inherit', 'inherit']
-      });
+      const child = spawn(
+        process.execPath,
+        [
+          path.join(__dirname, 'audio-stream.cjs'),
+          directory,
+          '--buffer-frames',
+          rpc.a.protocol >= 3 ? '960' : '1920',
+          '--queue',
+          '2',
+          '--prime',
+          '2',
+          '--stats'
+        ],
+        {
+          stdio: [helper.stdio[3], 'inherit', 'inherit']
+        }
+      );
       child.on('error', error => reader.fail(error));
       child.on('exit', (code, signal) => {
         if (!stopping && code !== 0)
@@ -232,7 +248,12 @@ async function run({args, directory, rpc, storage, helperPath, width, height, fp
     }
   } catch (error) {
     if (!stopping) {
-      log({event: 'native-error', message: error.message, pending: error.pending, control: error.control});
+      log({
+        event: 'native-error',
+        message: error.message,
+        pending: error.pending,
+        control: error.control
+      });
       throw error;
     }
   } finally {
