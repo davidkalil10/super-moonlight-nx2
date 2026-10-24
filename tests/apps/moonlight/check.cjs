@@ -70,17 +70,18 @@ async function run(dir, memory, patches = [], state = Buffer.alloc(1024)) {
 }
 
 async function exitChecks(dir) {
-  for (const [name, buttons, connected, previous, want] of [
+  for (const [name, buttons, connected, held, want] of [
     ['idle', 0, 1, 0, 0],
-    ['B', 2, 1, 0, 1],
-    ['Minus', 2048, 1, 0, 1],
-    ['held B', 2, 1, 2, 0],
-    ['disconnected', 2, 0, 0, 0]
+    ['B', 2, 1, 59, 0],
+    ['Minus', 2048, 1, 59, 0],
+    ['+/- first frame', 3072, 1, 0, 0],
+    ['+/- held one second', 3072, 1, 59, 1],
+    ['disconnected', 3072, 0, 59, 0]
   ]) {
     const state = Buffer.alloc(1024);
     state.writeUInt32LE(buttons, 8);
     state.writeUInt32LE(connected, 32);
-    state.writeUInt32LE(previous, 84);
+    state.writeUInt32LE(held, 784);
     state.writeFloatLE(1, 960);
     const result = await run(dir, Buffer.alloc(ring.CONTROL_BYTES), [], state);
     assert.equal(result.state.readUInt32LE(1016), want, name);
