@@ -1,0 +1,20 @@
+{
+  "registerClientEvents": {
+    "symbol": "_ZN5movie7Decoder20RegisterClientEventsEPNS_13DecoderEventsE",
+    "offset": 45464064,
+    "size": 52,
+    "hex": "000440f9400100b47f2303d5fd7bbfa9fd030091080040f9081540f900013fd6"
+  },
+  "videoGetInputReadyEvent": {
+    "symbol": "_ZN5movie12VideoDecoder18GetInputReadyEventEPPN2nn2os15SystemEventTypeE",
+    "offset": 45731680,
+    "size": 84,
+    "hex": "7f2303d5fd7bbea9f44f01a9fd030091140040f9f30301aa80523d9165835697"
+  },
+  "videoGetOutputReadyEvent": {
+    "symbol": "_ZN5movie12VideoDecoder19GetOutputReadyEventEPPN2nn2os15SystemEventTypeE",
+    "offset": 45731776,
+    "size": 84,
+    "hex": "7f2303d5fd7bbea9f44f01a9fd030091140040f9f30301aa80523d914d835697"
+  }
+}

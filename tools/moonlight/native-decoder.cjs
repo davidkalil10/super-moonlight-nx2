@@ -3,6 +3,13 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const definitions = require('../../sdk/native/movie-functions.json');
 const {create: createModule} = require('../../sdk/native/module.cjs');
+const {create: createFinite} = require('../../sdk/native/finite.cjs');
+
+const int32 = value => {
+  const b = Buffer.alloc(4);
+  b.writeInt32LE(value);
+  return b;
+};
 
 const MEMORY = {
   decoder: 0,
@@ -46,6 +53,14 @@ async function create({rpc, directory, workerDirectory, log = () => {}, cancelle
   );
   const api = await createModule(rpc, {base: module.base, definitions, directory: workerDirectory});
   const pointer = field => api.base + MEMORY[field];
+  const fn = api.functions;
+  // One finite worker runs the per-frame SendInput/AcquireOutput/AcquireInput
+  // chain; movie functions sit outside the SDK range, so they are the frame's
+  // verified targets and the chain carries five- and six-argument calls.
+  const worker = await createFinite(rpc, {
+    verified: new Set(Object.values(fn)),
+    wide: true
+  });
   const owned = [];
   let running = false;
   let configured = false;
@@ -55,6 +70,10 @@ async function create({rpc, directory, workerDirectory, log = () => {}, cancelle
   let layout = null;
   let sizing = null;
   const inputs = new Map();
+  // The pipelined input index acquired by the previous frame's tail, and the
+  // output acquired by the current frame, both waiting for the host to use them.
+  let pendingInput = null;
+  let pendingOutput = null;
 
   async function call(name, args) {
     const value = await api.call(name, args);
@@ -86,6 +105,93 @@ async function create({rpc, directory, workerDirectory, log = () => {}, cancelle
     const index = outputIndex;
     outputIndex = -1;
     await success('releaseOutput', [pointer('decoder'), index]);
+  }
+
+  // Poll a free input slot (nonblocking on the console) and prime the control
+  // slot the worker's SendInput reads. Used once to fill the pipeline and again
+  // whenever the previous frame's tail acquire came back empty.
+  async function acquireInput() {
+    const until = Date.now() + 5000;
+    while (Date.now() < until && !cancelled()) {
+      const reply = await api.callOut(
+        'acquireInput',
+        [pointer('decoder'), rpc.output, rpc.output + 4],
+        8
+      );
+      const value = result(reply.result);
+      const index = reply.output.readInt32LE(0);
+      if (value !== 0 && !(index < 0 && [0x100e, 0x1011].includes(value)))
+        throw Object.assign(Error('Decoder input queue returned 0x' + value.toString(16)), {
+          result: value
+        });
+      if (index >= 0) {
+        await api.write(MEMORY.inputIndex, int32(index));
+        return index;
+      }
+      await sleep(5);
+    }
+    if (cancelled()) throw Error('Native decoding cancelled');
+    throw Error('Decoder input queue timed out');
+  }
+
+  async function cacheInput(index) {
+    if (inputs.has(index)) return;
+    await success('getInput', [pointer('decoder'), index, pointer('input')]);
+    const address = Number(await api.call('bufferData', [pointer('input')]));
+    const capacity = Number(await api.call('bufferCapacity', [pointer('input')]));
+    inputs.set(index, {address, capacity});
+  }
+
+  // One finite worker frame: SendInput (reads the primed index slot), then
+  // AcquireOutput, then AcquireInput for the next frame. Out-parameters land in
+  // adjacent control slots so the host reads them all at once.
+  async function pump(length, pts) {
+    const statuses = await worker.run([
+      {
+        function: fn.sendInput,
+        args: [pointer('decoder'), {u32: pointer('inputIndex')}, 0, length, BigInt(pts), 0]
+      },
+      {
+        function: fn.acquireOutput,
+        args: [
+          pointer('decoder'),
+          pointer('outputIndex'),
+          pointer('timestamp'),
+          pointer('flags'),
+          pointer('outputCount')
+        ]
+      },
+      {
+        function: fn.acquireInput,
+        args: [pointer('decoder'), pointer('inputIndex'), pointer('inputCount')]
+      }
+    ]);
+    const control = await api.read(MEMORY.inputIndex, 0x28);
+    return {statuses: statuses.map(result), control};
+  }
+
+  async function acquireOutput() {
+    const [status] = (
+      await worker.run([
+        {
+          function: fn.acquireOutput,
+          args: [
+            pointer('decoder'),
+            pointer('outputIndex'),
+            pointer('timestamp'),
+            pointer('flags'),
+            pointer('outputCount')
+          ]
+        }
+      ])
+    ).map(result);
+    const control = await api.read(MEMORY.outputIndex, 24);
+    return {
+      status,
+      index: control.readInt32LE(0),
+      pts: control.readBigUInt64LE(8),
+      flags: control.readUInt32LE(16)
+    };
   }
 
   async function close() {
@@ -187,63 +293,46 @@ async function create({rpc, directory, workerDirectory, log = () => {}, cancelle
         unit.pts < 0
       )
         throw Error('Invalid decoder access unit');
-      const until = Date.now() + 5000;
-      let index = -1;
-      while (Date.now() < until && !cancelled()) {
-        const reply = await api.callOut(
-          'acquireInput',
-          [pointer('decoder'), rpc.output, rpc.output + 4],
-          8
-        );
-        const value = result(reply.result);
-        index = reply.output.readInt32LE(0);
-        if (value !== 0 && !(index < 0 && [0x100e, 0x1011].includes(value)))
-          throw Object.assign(Error('Decoder input queue returned 0x' + value.toString(16)), {
-            result: value
-          });
-        if (index >= 0) break;
-        await sleep(5);
-      }
-      if (cancelled()) throw Error('Native decoding cancelled');
-      if (index < 0) throw Error('Decoder input queue timed out');
-      if (!inputs.has(index)) {
-        await success('getInput', [pointer('decoder'), index, pointer('input')]);
-        const address = Number(await api.call('bufferData', [pointer('input')]));
-        const capacity = Number(await api.call('bufferCapacity', [pointer('input')]));
-        inputs.set(index, {address, capacity});
-      }
+      if (pendingInput === null) pendingInput = await acquireInput();
+      const index = pendingInput;
+      await cacheInput(index);
       const {address, capacity} = inputs.get(index);
       if (!Number.isSafeInteger(address) || address <= 0 || unit.data.length > capacity)
         throw Error('H.264 access unit exceeds the native input buffer');
       await rpc.write(address, unit.data);
-      await success('sendInput', [
-        pointer('decoder'),
-        index,
-        0,
-        unit.data.length,
-        BigInt(unit.pts),
-        0
-      ]);
+      const {statuses, control} = await pump(unit.data.length, unit.pts);
+      if (statuses[0] !== 0)
+        throw Object.assign(Error('movie::sendInput returned 0x' + statuses[0].toString(16)), {
+          result: statuses[0]
+        });
+      const nextIndex = control.readInt32LE(0);
+      if (statuses[2] !== 0 && !(nextIndex < 0 && [0x100e, 0x1011].includes(statuses[2])))
+        throw Object.assign(Error('Decoder input queue returned 0x' + statuses[2].toString(16)), {
+          result: statuses[2]
+        });
+      pendingInput = nextIndex >= 0 ? nextIndex : null;
+      pendingOutput = {
+        status: statuses[1],
+        index: control.readInt32LE(0x10),
+        pts: control.readBigUInt64LE(0x18),
+        flags: control.readUInt32LE(0x20)
+      };
     },
 
     async receive(destination) {
       if (!running || closed) throw Error('Decoder is not running');
       if (outputIndex >= 0) throw Error('A decoder output buffer is still owned');
-      const value = await call('acquireOutput', [
-        pointer('decoder'),
-        pointer('outputIndex'),
-        pointer('timestamp'),
-        pointer('flags'),
-        pointer('outputCount')
-      ]);
-      const metadata = await api.read(MEMORY.outputIndex, 24);
-      outputIndex = metadata.readInt32LE();
-      if (outputIndex < 0 && value === 0x100e) return null;
-      if (value !== 0)
-        throw Object.assign(Error('Decoder output queue returned 0x' + value.toString(16)), {
-          result: value
+      // submit() already acquired this frame's output; a drain pull acquires one.
+      const out = pendingOutput ?? (await acquireOutput());
+      pendingOutput = null;
+      outputIndex = out.index;
+      if (outputIndex < 0 && out.status === 0x100e) return null;
+      if (out.status !== 0)
+        throw Object.assign(Error('Decoder output queue returned 0x' + out.status.toString(16)), {
+          result: out.status
         });
       if (outputIndex < 0) return null;
+      const timestamp = out.pts;
       try {
         if (!sizing) {
           await success('getOutputSize', [
@@ -263,17 +352,22 @@ async function create({rpc, directory, workerDirectory, log = () => {}, cancelle
           destination.address % alignment
         )
           throw Error('Native output does not fit the aligned destination surface');
-        await api.call('bufferSetData', [
-          pointer('output'),
-          destination.address,
-          destination.bytes
+        // Point the surface and fetch the frame in one two-call exchange.
+        const paired = await rpc.pair([
+          {
+            address: fn.bufferSetData,
+            args: [pointer('output'), destination.address, destination.bytes, 0]
+          },
+          {
+            address: fn.getOutput,
+            args: [pointer('decoder'), outputIndex, pointer('output'), pointer('format')]
+          }
         ]);
-        await success('getOutput', [
-          pointer('decoder'),
-          outputIndex,
-          pointer('output'),
-          pointer('format')
-        ]);
+        const got = result(paired.results[1]);
+        if (got !== 0)
+          throw Object.assign(Error('movie::getOutput returned 0x' + got.toString(16)), {
+            result: got
+          });
         if (!layout) {
           const width = (await integer(pointer('format'), 'width')) ?? dimensions.width;
           const height = (await integer(pointer('format'), 'height')) ?? dimensions.height;
@@ -295,7 +389,6 @@ async function create({rpc, directory, workerDirectory, log = () => {}, cancelle
           bytes < (stride * sliceHeight * 3) / 2
         )
           throw Error('Unsupported native NV12 output layout');
-        const timestamp = metadata.readBigUInt64LE(8);
         return {
           width,
           height,
