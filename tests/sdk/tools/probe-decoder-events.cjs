@@ -193,7 +193,30 @@ async function main(
   await save();
 
   const fn = {},
-    watchers = [];
+    watchers = [],
+    rows = [],
+    frames = [],
+    expected = new Set(display);
+  let started = null;
+  // Kept for a run that fails part way, so the AUs that did run still answer.
+  function conclude() {
+    const fed = new Set(rows.map(row => row.display));
+    const held = [...expected].filter(shown => fed.has(shown)).sort((a, b) => a - b);
+    record.loop = {
+      totalMs: round(performance.now() - started),
+      ...summarize(rows, frames, held)
+    };
+    const compared = frames.filter(f => f.match !== undefined);
+    record.correctness = {
+      compared: compared.length,
+      matched: compared.filter(f => f.match).length,
+      minPsnr: compared.length ? Math.min(...compared.map(f => f.psnr)) : null,
+      lumaMaxError: compared.length ? Math.max(...compared.map(f => f.lumaMaxError)) : null,
+      first: frames.length ? {display: frames[0].display, sha256: frames[0].sha256} : null,
+      last: frames.length ? {display: frames.at(-1).display, sha256: frames.at(-1).sha256} : null
+    };
+    return compared;
+  }
   let control = null,
     decoder = null,
     events = [],
@@ -300,10 +323,7 @@ async function main(
     await sleep(settleMs);
     record.afterStart = await counters();
 
-    const rows = [],
-      frames = [],
-      expected = new Set(display),
-      exchanges = {submit: 0, counterRead: 0, receive: 0, frameRead: 0};
+    const exchanges = {submit: 0, counterRead: 0, receive: 0, frameRead: 0};
     record.units = rows;
     record.frames = frames;
     record.exchangeCalls = exchanges;
@@ -330,7 +350,7 @@ async function main(
       return row;
     }
 
-    const started = performance.now();
+    started = performance.now();
     for (let au = 0; au < units.length; au++) {
       const before = await counters();
       exchanges.counterRead++;
@@ -372,25 +392,13 @@ async function main(
       if (!(await take(null))) await sleep(pollMs * 4);
     }
     record.drain = {...(await counters()), ms: round(performance.now() - drainStarted)};
-    const held = [...expected].sort((a, b) => a - b);
-    record.loop = {
-      totalMs: round(performance.now() - started),
-      ...summarize(rows, frames, held)
-    };
-    const compared = frames.filter(f => f.match !== undefined);
-    record.correctness = {
-      compared: compared.length,
-      matched: compared.filter(f => f.match).length,
-      minPsnr: compared.length ? Math.min(...compared.map(f => f.psnr)) : null,
-      lumaMaxError: compared.length ? Math.max(...compared.map(f => f.lumaMaxError)) : null,
-      first: frames.length ? {display: frames[0].display, sha256: frames[0].sha256} : null,
-      last: frames.length ? {display: frames.at(-1).display, sha256: frames.at(-1).sha256} : null
-    };
+    const compared = conclude();
     if (compared.length !== compared.filter(f => f.match).length)
       throw Error('Decoded frames differ from the reference');
     if (references && !compared.length && frames.length) throw Error('No frame was compared');
   } catch (error) {
     failure = error;
+    if (rows.length && !record.loop) conclude();
   }
 
   // A watcher blocked in WaitEvent only sees the stop selector after a wake, and the decoder's

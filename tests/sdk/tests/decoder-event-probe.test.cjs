@@ -278,6 +278,16 @@ test('a wrong frame fails the probe but still shuts down cleanly', async () => {
   assert.equal(record.finalized, true);
 });
 
+test('a run that fails part way still reports the AUs that ran', async () => {
+  const {error, record} = await run([0, 1, 1, 2]);
+  assert.equal(error.message, 'Unexpected or repeated output pts 1');
+  assert.equal(record.loop.submitted, 2);
+  assert.equal(record.loop.received, 2);
+  assert.equal(record.loop.held, 0);
+  assert.equal(record.correctness.matched, 2);
+  assert.equal(record.finalized, true);
+});
+
 test('every event function is verified before use, the worker ones before spawn', async () => {
   const {fake} = await run([0]);
   const lines = fake.rpc.lines;
