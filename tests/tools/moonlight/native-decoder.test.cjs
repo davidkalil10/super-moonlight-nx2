@@ -80,6 +80,13 @@ function createConsole() {
       case 'bufferCreate':
         return 0n;
       case 'createH264Configuration':
+        // The five-argument configuration call travels the wide frame through the
+        // x4/x5 preamble. a[0] is pointer('sps') (module base + 0x1000), so a[2]
+        // (pps, +0x2000) and a[4] (configuration, +0x100) prove x2 and the
+        // preamble-set x4 arrived intact. a[1]/a[3] are the NAL lengths.
+        assert.equal(a[2], a[0] + 0x1000, 'createH264Configuration x2');
+        assert.equal(a[4], a[0] - 0xf00, 'createH264Configuration x4 via preamble');
+        assert.ok(a[1] > 0 && a[3] > 0);
         return 1n;
       case 'mediaFindInt': {
         const key = cstr(a[1]);
