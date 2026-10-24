@@ -304,14 +304,16 @@ async function main(
         ? summarizeBurst({sends, samples, frames, held, eventCount, ms})
         : summarize(rows, frames, held))
     };
-    const compared = frames.filter(f => f.match !== undefined);
+    const compared = frames.filter(f => f.match !== undefined),
+      read = frames.filter(f => f.sha256);
     record.correctness = {
       compared: compared.length,
       matched: compared.filter(f => f.match).length,
       minPsnr: compared.length ? Math.min(...compared.map(f => f.psnr)) : null,
       lumaMaxError: compared.length ? Math.max(...compared.map(f => f.lumaMaxError)) : null,
-      first: frames.length ? {display: frames[0].display, sha256: frames[0].sha256} : null,
-      last: frames.length ? {display: frames.at(-1).display, sha256: frames.at(-1).sha256} : null
+      read: read.length,
+      first: read.length ? {display: read[0].display, sha256: read[0].sha256} : null,
+      last: read.length ? {display: read.at(-1).display, sha256: read.at(-1).sha256} : null
     };
     return compared;
   }

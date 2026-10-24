@@ -28,8 +28,9 @@ async function quiet(action) {
 }
 
 // An Annex-B clip of SPS/PPS and one single-slice AU per entry of display, with its timing
-// sidecar and a reference whose display frame k is filled with k.
-function clipFiles(display) {
+// sidecar and a reference whose display frame k is filled with k. With subset, the reference
+// holds only those display frames and the sidecar lists them.
+function clipFiles(display, {frame = FRAME, subset = null} = {}) {
   const folder = temporary();
   const start = [0, 0, 0, 1];
   const nal = bytes => [...start, ...bytes];
@@ -37,9 +38,13 @@ function clipFiles(display) {
   display.forEach((_, i) => bytes.push(...nal(i ? [0x41, 0x9a, i] : [0x65, 0x88, 0x84])));
   const clip = path.join(folder, 'clip.h264');
   fs.writeFileSync(clip, Buffer.from(bytes));
-  fs.writeFileSync(path.join(folder, 'clip.json'), JSON.stringify({display}));
-  const reference = Buffer.alloc(display.length * FRAME);
-  for (let k = 0; k < display.length; k++) reference.fill(k, k * FRAME, (k + 1) * FRAME);
+  fs.writeFileSync(
+    path.join(folder, 'clip.json'),
+    JSON.stringify(subset ? {display, references: subset} : {display})
+  );
+  const kept = subset ?? display.map((_, k) => k);
+  const reference = Buffer.alloc(kept.length * frame);
+  kept.forEach((k, i) => reference.fill(k, i * frame, (i + 1) * frame));
   fs.writeFileSync(path.join(folder, 'clip-reference.nv12'), reference);
   return clip;
 }
@@ -47,7 +52,11 @@ function clipFiles(display) {
 // hold: frames the decoder keeps until more input arrives (released in display order).
 // silent: it never signals the output event. corrupt: frame 1 comes out wrong.
 // slots: frames it can hold, decoded or not taken, before its input side is full.
-function fakeDecoder(fake, {hold = 0, silent = false, corrupt = false, slots = Infinity} = {}) {
+function fakeDecoder(
+  fake,
+  {hold = 0, silent = false, corrupt = false, slots = Infinity, width = WIDTH, height = HEIGHT} = {}
+) {
+  const bytes = (width * height * 3) / 2;
   const {memory, rpc} = fake;
   const state = {struct: null, inside: [], ready: [], closed: false, configured: null};
   const signal = offset => {
@@ -67,7 +76,7 @@ function fakeDecoder(fake, {hold = 0, silent = false, corrupt = false, slots = I
       await beforeStart(0x5a000000);
       rpc.note('decoder.start');
       signal(0);
-      return {width: WIDTH, height: HEIGHT};
+      return {width, height};
     },
     async submit(unit, {acquireOutput, stamp}) {
       assert.equal(acquireOutput, false);
@@ -88,13 +97,13 @@ function fakeDecoder(fake, {hold = 0, silent = false, corrupt = false, slots = I
     async receive(destination) {
       if (!state.ready.length) return null;
       const shown = state.ready.shift();
-      memory.write(destination.address, Buffer.alloc(FRAME, corrupt && shown === 1 ? 9 : shown));
+      memory.write(destination.address, Buffer.alloc(bytes, corrupt && shown === 1 ? 9 : shown));
       return {
-        width: WIDTH,
-        height: HEIGHT,
-        stride: WIDTH,
-        sliceHeight: HEIGHT,
-        bytes: FRAME,
+        width,
+        height,
+        stride: width,
+        sliceHeight: height,
+        bytes,
         pts: String(shown),
         format: 'nv12'
       };
@@ -107,7 +116,10 @@ function fakeDecoder(fake, {hold = 0, silent = false, corrupt = false, slots = I
   return {create, state};
 }
 
-async function run(display, {console: consoleOptions = {}, decoder = {}, ...options} = {}) {
+async function run(
+  display,
+  {console: consoleOptions = {}, decoder = {}, subset = null, ...options} = {}
+) {
   const fake = gateConsole({advanceOnRead: true, ...consoleOptions});
   const movie = fakeDecoder(fake, decoder);
   const directory = runDirectory(fake.rpc, {
@@ -119,7 +131,10 @@ async function run(display, {console: consoleOptions = {}, decoder = {}, ...opti
   const output = temporary();
   const outcome = await quiet(() =>
     probe.main(directory, {
-      clip: clipFiles(display),
+      clip: clipFiles(display, {
+        frame: ((decoder.width ?? WIDTH) * (decoder.height ?? HEIGHT) * 3) / 2,
+        subset
+      }),
       output,
       settleMs: 20,
       pollMs: 1,
@@ -375,7 +390,25 @@ test('burst shuts down in the same order as the per-AU run', async () => {
   assert.ok(position(lines, /^callAddress os\.finalizeEvent\(/, closed) > closed);
 });
 
-test('a reference subset is compared by display index and large frames are read only there', () => {
+test('large frames are read and compared only where the reference subset has them', async () => {
+  const {report} = await run([0, 1, 2, 3, 4], {
+    burst: true,
+    subset: [0, 3, 4],
+    decoder: {width: 256, height: 192}
+  });
+  assert.equal(report.verdict, 'PASS');
+  assert.equal(report.loop.received, 5);
+  assert.equal(report.exchangeCalls.frameRead, 3);
+  assert.deepEqual(
+    report.frames.filter(f => f.sha256).map(f => f.display),
+    [0, 3, 4]
+  );
+  assert.equal(report.correctness.compared, 3);
+  assert.equal(report.correctness.matched, 3);
+  assert.deepEqual(report.correctness.last.display, 4);
+});
+
+test('burst summary times outputs from the watcher ticks and SendInput stamps', () => {
   const sends = [0, 1, 2].map(au => ({
     au,
     display: au,
