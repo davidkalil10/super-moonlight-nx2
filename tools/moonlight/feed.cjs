@@ -5,6 +5,7 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const ring = require('./ring.cjs');
 const session = require('../../sdk/host/session.cjs');
+const cli = require('../../sdk/cli.cjs');
 
 const SLOT = 32768;
 const HOST_COHERENT = 4;
@@ -37,8 +38,7 @@ async function main() {
     throw Error(
       'Usage: feed.cjs runs/launcher-XXXX CLIP.hbv [--fps 60] [--seconds 60] [--depth 1]'
     );
-  const option = (name, fallback) =>
-    args.includes(name) ? Number(args[args.indexOf(name) + 1]) : fallback;
+  const option = (name, fallback) => cli.number(args, name, fallback);
   const fps = option('--fps', 60),
     seconds = option('--seconds', 60),
     depth = option('--depth', 1),

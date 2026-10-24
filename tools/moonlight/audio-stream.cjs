@@ -9,6 +9,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const session = require('../../sdk/host/session.cjs');
+const cli = require('../../sdk/cli.cjs');
 
 const SAMPLE_RATE = 48000;
 const CHANNELS = 2;
@@ -298,8 +299,7 @@ function makeInput(args) {
 
 async function main() {
   const args = process.argv.slice(2);
-  const option = (name, fallback) =>
-    args.includes(name) ? Number(args[args.indexOf(name) + 1]) : fallback;
+  const option = (name, fallback) => cli.number(args, name, fallback);
   const directory = session.resolve(args[0]);
   const rpc = session.rpc(directory);
   const input = makeInput(args);

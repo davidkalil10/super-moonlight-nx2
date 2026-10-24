@@ -11,6 +11,7 @@
 //
 // Usage: node tools/moonlight/input-feeder.cjs [runs/launcher-XXXX] [--hz 60] [--labels]
 const session = require('../../sdk/host/session.cjs');
+const cli = require('../../sdk/cli.cjs');
 const {STATE} = require('../../sdk/host/state-layout.cjs');
 const {NEUTRAL, decode, toMoonlight, same, NPAD_BYTES} = require('./controller.cjs');
 const {TOUCH_BYTES, parseTouch, createTracker, step, flush, touchLine} = require('./touch.cjs');
@@ -30,7 +31,7 @@ function frame(previous, bytes, tracker, layout) {
 
 async function main() {
   const args = process.argv.slice(2);
-  const hz = args.includes('--hz') ? Number(args[args.indexOf('--hz') + 1]) : 60,
+  const hz = cli.number(args, '--hz', 60),
     layout = args.includes('--labels') ? 'labels' : 'position';
   const directory = session.resolve(args[0]);
   const rpc = session.rpc(directory);

@@ -32,6 +32,7 @@ const {NPAD, NPAD_BYTES, decode} = require('./controller.cjs');
 const {TOUCH_BYTES, parseTouch, createTracker, step} = require('./touch.cjs');
 const {HELPER} = require('./helper.cjs');
 const session = require('../../sdk/host/session.cjs');
+const cli = require('../../sdk/cli.cjs');
 
 const WIDTH = 1920;
 const HEIGHT = 1080;
@@ -448,18 +449,14 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 async function main() {
   const args = process.argv.slice(2);
-  const option = (name, fallback) =>
-    args.includes(name) ? args[args.indexOf(name) + 1] : fallback;
-  const number = (name, fallback) =>
-    args.includes(name) ? Number(args[args.indexOf(name) + 1]) : fallback;
   const extraHosts = [];
   for (let i = 0; i < args.length; i++) if (args[i] === '--host') extraHosts.push(args[i + 1]);
-  const budget = number('--budget', 96);
-  const qp = number('--qp', 8);
-  const rateHz = number('--rate', 2);
+  const budget = cli.number(args, '--budget', 96);
+  const qp = cli.number(args, '--qp', 8);
+  const rateHz = cli.number(args, '--rate', 2);
   const noInput = args.includes('--no-input');
   const script = args.includes('--script')
-    ? option('--script', '').split(',').filter(Boolean)
+    ? cli.option(args, '--script', '').split(',').filter(Boolean)
     : null;
 
   const directory = session.resolve(args[0]);

@@ -22,12 +22,13 @@ const {findPrivateStorage, nextSequence} = require('./feed.cjs');
 const hbv = require('./hbv.cjs');
 const {HELPER} = require('./helper.cjs');
 const session = require('../../sdk/host/session.cjs');
+const cli = require('../../sdk/cli.cjs');
 
 function moonlight(args, fps, width, height, directory) {
   const at = args.indexOf('--moonlight');
   const [host, app] = [args[at + 1], args[at + 2]];
   if (!host || !app) throw Error('Pass --moonlight HOST APP');
-  const bitrate = args.includes('--bitrate') ? args[args.indexOf('--bitrate') + 1] : '20000';
+  const bitrate = cli.option(args, '--bitrate', '20000');
   const audio = !args.includes('--no-audio');
   const helper = spawn(
     HELPER,
@@ -272,12 +273,11 @@ async function sendHbv2(context) {
 
 async function main() {
   const args = process.argv.slice(2);
-  const option = (name, fallback) =>
-    args.includes(name) ? Number(args[args.indexOf(name) + 1]) : fallback;
-  const codec = args.includes('--codec') ? args[args.indexOf('--codec') + 1] : 'hbv1';
+  const option = (name, fallback) => cli.number(args, name, fallback);
+  const codec = cli.option(args, '--codec', 'hbv1');
   if (!['hbv1', 'hbv2'].includes(codec)) throw Error('--codec is hbv1 or hbv2');
   const fps = option('--fps', 60);
-  const size = args.includes('--size') ? args[args.indexOf('--size') + 1] : '1920x1080';
+  const size = cli.option(args, '--size', '1920x1080');
   const [width, height] = size.split('x').map(Number);
   const directory = args[0] && !args[0].startsWith('--') ? path.resolve(args[0]) : newestRun();
   const rpc = session.rpc(directory);
