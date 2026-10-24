@@ -8,12 +8,16 @@
  *       [--budget 96] [--cap 256] (KiB) [--qp-min 4] [--qp-max 40] [--refresh 2]
  *       [--depth 2] [--resync 1000] (ms) [--threads N]
  *       [--no-input] [--labels] [--input-hz 60] [--dry-input]
+ *       [--no-audio] [--buffer-frames 3840] [--queue 3] [--prime 2]
+ *       [--audio-file PCM]
  *
  * RUN_DIR defaults to the newest runs/launcher-* under the current directory.
  * --input plays a file through ffmpeg exactly like live.cjs --input, for
  * offline runs against tools/moonlight/fake-console/bridge.cjs; with
  * --dry-input the console input is printed as input-feeder.cjs lines instead
- * of sent. One JSON stats line per second goes to stdout; events go to stderr. */
+ * of sent, and --audio-file plays 48 kHz stereo s16le through the console
+ * AudioOut in real time. One JSON stats line per second goes to stdout; events
+ * go to stderr. */
 #define _GNU_SOURCE
 #include "console-layout.h"
 #include "helper.h"
@@ -126,6 +130,28 @@ static void stop_file(void) {
   close(file.fd);
 }
 
+struct pcm_source {
+  FILE *file;
+  pthread_t thread;
+  atomic_bool stop;
+};
+
+static struct pcm_source pcm;
+
+/* Paces a PCM file in 5 ms packets, the Opus frame size Sunshine sends. */
+static void *read_pcm(void *unused) {
+  uint8_t packet[240 * 4];
+  double next = now_ms();
+  size_t got;
+  while (!atomic_load(&pcm.stop) && (got = fread(packet, 1, sizeof(packet), pcm.file)) > 0) {
+    console_audio_push(packet, got);
+    next += 5;
+    sleep_ms(next - now_ms());
+  }
+  console_audio_end();
+  return NULL;
+}
+
 static void report(bool moonlight) {
   struct sender_stats sent;
   sender_take_stats(&sent);
@@ -148,7 +174,10 @@ static void report(bool moonlight) {
          sent.latency_ms / written, sent.latency_max_ms);
   if (moonlight)
     printf(",\"decodeMs\":%.2f", decode_ms);
-  printf("}\n");
+  struct audio_stats audio;
+  console_audio_stats(&audio);
+  printf(",\"audio\":{\"appended\":%u,\"underruns\":%u,\"overruns\":%u}}\n", audio.appended,
+         audio.underruns, audio.overruns);
   fflush(stdout);
 }
 
@@ -167,7 +196,7 @@ static bool find_storage(const char *directory, uint64_t *mapped) {
 }
 
 static int start_moonlight(int argc, char **argv, SERVER_DATA *server, int width, int height,
-                           int fps) {
+                           int fps, bool audio) {
   char *host = NULL;
   const char *app = NULL;
   for (int i = 0; i + 2 < argc; i++)
@@ -201,10 +230,15 @@ static int start_moonlight(int argc, char **argv, SERVER_DATA *server, int width
   video_configure(&video);
   static DECODER_RENDERER_CALLBACKS video_set;
   video_callbacks(&video_set);
+  static AUDIO_RENDERER_CALLBACKS audio_set;
+  if (audio) {
+    audio_configure_sink(console_audio_push);
+    audio_callbacks(&audio_set);
+  }
   static CONNECTION_LISTENER_CALLBACKS listener;
   session_listener(&listener);
-  if (LiStartConnection(&server->serverInfo, &config, &listener, &video_set, NULL, NULL, 0,
-                        NULL, 0) != 0)
+  if (LiStartConnection(&server->serverInfo, &config, &listener, &video_set,
+                        audio ? &audio_set : NULL, NULL, 0, NULL, 0) != 0)
     return session_fail("connection failed", NULL);
   return 0;
 }
@@ -284,9 +318,25 @@ int main(int argc, char **argv) {
   if (!sender_start(&sender, &bridge, storage, &frames))
     return session_fail("cannot start the sender", NULL);
 
+  struct audio_options audio_options = {.buffer_frames = number(argc, argv, "--buffer-frames", 3840),
+                                        .queue = number(argc, argv, "--queue", 3),
+                                        .prime = number(argc, argv, "--prime", 2)};
+  const char *audio_file = option(argc, argv, "--audio-file", NULL);
+  bool audio = moonlight ? !flag(argc, argv, "--no-audio") : audio_file != NULL;
+  if (audio && !console_audio_start(&audio_options, &bridge, directory)) {
+    status("{\"event\":\"error\",\"message\":\"cannot start console audio\"}");
+    audio = false;
+  }
+  if (audio && audio_file) {
+    pcm.file = fopen(audio_file, "rb");
+    if (!pcm.file || pthread_create(&pcm.thread, NULL, read_pcm, NULL) != 0)
+      return session_fail("cannot read --audio-file", audio_file);
+  }
+
   SERVER_DATA server;
-  if (moonlight ? start_moonlight(argc, argv, &server, width, height, fps)
+  if (moonlight ? start_moonlight(argc, argv, &server, width, height, fps, audio)
                 : !start_file(input, width, height, fps)) {
+    console_audio_stop();
     sender_stop();
     return 1;
   }
@@ -320,6 +370,12 @@ int main(int argc, char **argv) {
     LiStopConnection();
   else
     stop_file();
+  if (pcm.file) {
+    atomic_store(&pcm.stop, true);
+    pthread_join(pcm.thread, NULL);
+    fclose(pcm.file);
+  }
+  console_audio_stop();
   sender_stop();
   summarize();
   if (moonlight && flag(argc, argv, "--quit"))

@@ -28,6 +28,7 @@ struct bridge_info {
   char token[128];
   uint64_t scratch;
   uint64_t sdk;
+  char session[64];
 };
 
 struct bridge;
@@ -90,3 +91,28 @@ struct input_options {
 bool console_input_start(const struct input_options *options, const struct bridge_info *info,
                          const char *directory);
 void console_input_stop(void);
+
+/* console-audio.c: s16le stereo PCM -> console AudioOut buffers */
+struct audio_options {
+  int buffer_frames;
+  int queue;
+  int prime;
+};
+
+struct audio_stats {
+  unsigned appended;
+  unsigned released;
+  unsigned written;
+  unsigned underruns;
+  unsigned overruns;
+  unsigned tail;
+  uint64_t dropped_bytes;
+  uint64_t received_bytes;
+};
+
+bool console_audio_start(const struct audio_options *options, const struct bridge_info *info,
+                         const char *directory);
+void console_audio_push(const void *pcm, size_t bytes);
+void console_audio_end(void);
+void console_audio_stop(void);
+void console_audio_stats(struct audio_stats *stats);

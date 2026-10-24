@@ -1,6 +1,7 @@
 /* Audio: decodes the Opus stream to interleaved s16le PCM and writes it to the
- * --audio-fd descriptor. The descriptor is non-blocking; packets the reader
- * cannot take are dropped instead of stalling the receive thread. */
+ * --audio-fd descriptor, or hands it to a sink in process (hbmoonlight-host).
+ * The descriptor is non-blocking; packets the reader cannot take are dropped
+ * instead of stalling the receive thread. */
 #include "helper.h"
 
 #include <errno.h>
@@ -11,6 +12,7 @@
 #include <unistd.h>
 
 static int output = -1;
+static void (*sink)(const void *pcm, size_t bytes);
 static OpusMSDecoder *decoder;
 static int channels;
 static int frame_samples;
@@ -40,7 +42,9 @@ static void play(char *data, int length) {
   if (samples <= 0)
     return;
   size_t bytes = sizeof(int16_t) * samples * channels;
-  if (write(output, pcm, bytes) != (ssize_t)bytes)
+  if (sink)
+    sink(pcm, bytes);
+  else if (write(output, pcm, bytes) != (ssize_t)bytes)
     atomic_fetch_add(&dropped, 1);
 }
 
@@ -54,6 +58,10 @@ static void cleanup(void) {
 void audio_configure(int fd) {
   output = fd;
   fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK);
+}
+
+void audio_configure_sink(void (*callback)(const void *pcm, size_t bytes)) {
+  sink = callback;
 }
 
 void audio_callbacks(AUDIO_RENDERER_CALLBACKS *callbacks) {

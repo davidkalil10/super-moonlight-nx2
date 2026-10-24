@@ -113,6 +113,8 @@ bool bridge_load(struct bridge_info *info, const char *directory) {
   bool ok = json_u64(connection, "port", &port) &&
             json_text(connection, "token", info->token, sizeof(info->token)) && addresses &&
             json_u64(addresses, "scratch", &info->scratch) && json_u64(addresses, "sdk", &info->sdk);
+  if (addresses && !json_text(addresses, "session", info->session, sizeof(info->session)))
+    info->session[0] = 0;
   info->port = (int)port;
   free(connection);
   return ok;
