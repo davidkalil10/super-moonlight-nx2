@@ -534,12 +534,12 @@ under `~/claude-builds/HBLauncher/hbv2-eval/`.
 
 ### 6.6 What still needs a live console session
 
-1. **Single-workgroup compute, two unknowns.** Decode is one workgroup of 1024
-   invocations (`HBV2_LOCAL_SIZE`). First, the size: 1024 is NVIDIA's usual
-   `maxComputeWorkGroupInvocations` but is not verified against console data (no
-   record of it in `runs/` or the SDK), and if the console caps lower, pipeline
-   creation fails at launch and the app shows nothing. If it fails to come up,
-   rebuild with `HBV2_LOCAL_SIZE=512` (measured working, a little slower).
+1. **Single-workgroup compute, two unknowns.** Decode is one workgroup of 512
+   invocations (`HBV2_LOCAL_SIZE`). First, the size: it was 1024, but at 1024
+   the compiler caps each invocation at 64 registers and spills the private
+   arrays (RADV: 983 spilled VGPRs on Raphael). 512 is bit-exact and 2.3x
+   faster there; see `HIGH-FPS.md` section 4. `probe-present.cjs` reports the
+   console's `maxComputeWorkGroupInvocations`.
    Second, the time: desktop RADV (Strix Halo) runs the dispatch in 1-5 ms, but
    one workgroup is one CU, and the per-CU gap to the console could be several
    times that, so 10-25 ms per P frame is possible and would break 60 Hz.
