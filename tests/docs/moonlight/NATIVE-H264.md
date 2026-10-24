@@ -73,14 +73,48 @@ NV12 publication, black/white levels, borders, existing HBV1/HBV2 decoding and
 the exit chord. Unit tests cover access-unit ordering, overflow recovery,
 module qualification, surface ownership, audio recycling, controller and touch.
 
-The protocol-2 live test presented roughly 1–2 frames/s and dropped audio
-buffers under the combined RPC load. This is an experimental implementation;
-it has not demonstrated a playable frame rate or synchronized A/V playback.
-The host still performs multiple native calls per frame, including short-lived
-workers for calls with five or six arguments. Batching those calls on the
-console is the next performance step. Protocol 3 reduces request padding and
+The first protocol-2 live test presented roughly 1–2 frames/s and dropped audio
+buffers under the combined RPC load. Protocol 3 reduces request padding and
 allows larger compressed uploads; it requires replacing saved NS2 and a fresh
 connection, as described in [PROTOCOL3.md](PROTOCOL3.md).
+
+## Per-frame call budget
+
+The console loop, not the link, is the ceiling (~412 exchanges/s on the best
+recorded wired session), so the frame rate tracks exchanges per frame. The
+steady-state `submit`+`receive` budget is measured by
+`tools/moonlight/native-decoder.test.cjs`, which drives the real client, module
+and worker against an in-process console and counts every wire exchange.
+
+| Step | Before (ec56ec2) | After |
+| --- | --- | --- |
+| `submit`: acquireInput + AU write + sendInput worker | 2 + 1 + 8 = 11 | 1 + 1 + 6 = 8 |
+| `receive`: acquireOutput worker + metadata + bufferSetData + getOutput + release | 8 + 1 + 1 + 1 + 1 = 12 | 6 + 1 + 1 + 1 + 1 = 10 |
+| **submit + receive (mock-measured)** | **23** | **18** |
+| redundant empty `receive` poll | ~9 | 0 |
+| presentation (wait + query + two writes + explicit wait) | 5 | 3 |
+| **per frame, incl. presentation** | **~37** | **~21** |
+
+What changed:
+
+- `acquireInput` points its out-pointers at the RPC output region, so the index
+  comes back in the reply (one fewer read).
+- The six-argument worker returns the pthread handle and exit value in the
+  create/join replies (two fewer reads per worker call), and flushes its record
+  file at most once a second instead of on every status change.
+- `receive` is called once per submitted unit, tracking frames the decoder still
+  owes, so the steady 1:1 case never pays for a known-empty `acquireOutput`.
+- The explicit presentation wait is gone: the next `destination()` already waits
+  for the GPU to apply the previous frame, so submit of N+1 is not blocked on it.
+- The frame destination query is cached per surface and re-verified once a
+  second rather than on every frame.
+
+Decoder calls stay strictly serial (one worker thread at a time, never reused or
+freed while it may still run, fail-closed on timeout); `movie::Decoder`
+thread-safety is unverified, so the gains come from fewer exchanges, not from
+overlapping decoder calls. The remaining per-worker-call writes (the frame body)
+and the output metadata read are the next targets and need on-device
+verification before the frame layout is patched incrementally.
 
 The native route uses 40 ms audio buffers with two queued on protocol 2, or
 20 ms buffers with two queued on protocol 3. Those are queue targets, not
@@ -93,3 +127,37 @@ Each run writes a source/build manifest and worker records below
 `/media/storage2/builds/HBLauncher/native-h264/`. `HB_NATIVE_LOG_DIR` selects a
 specific fresh output directory. The native route requires `--moonlight`;
 `--screen` and `--input FILE` remain available through HBV1/HBV2.
+
+## Live test (protocol 3)
+
+The faster path assumes the protocol-3 bootstrap. Codex already pushed it to the
+Flipper, so on the console load that bootstrap and start a **fresh** SmileBASIC
+session (the re-typed loop negotiates protocol 3; an old session stays on 2).
+Sunshine must be running on rig (192.168.8.245).
+
+Run on rig from the repository root, substituting the live session directory
+under `runs/`:
+
+```sh
+HBMOONLIGHT=/media/storage2/builds/HBLauncher/native-h264/20261024T152438Z-687a8f0/helper-build-final/hbmoonlight \
+  node tools/moonlight/live.cjs runs/launcher-SESSION \
+  --moonlight 192.168.8.245 Desktop --codec h264 \
+  --size 1920x1080 --fps 30 --bitrate 8000
+```
+
+To rebuild the helper from the current source instead:
+
+```sh
+build=/media/storage2/builds/HBLauncher/moonlight-helper/$(date -u +%Y%m%dT%H%M%SZ)
+bash tools/moonlight/helper/build.sh "$build"
+HBMOONLIGHT="$build/hbmoonlight" node tools/moonlight/live.cjs runs/launcher-SESSION \
+  --moonlight 192.168.8.245 Desktop --codec h264 --size 1920x1080 --fps 30 --bitrate 8000
+```
+
+Watch the per-second stats line (`{"codec":"h264",...}`): `decoded` and
+`presented` should climb toward the requested fps, `dropped` should fall toward
+0, and `resyncs` should stay 0. `IDR frame request sent` should now appear at
+most about once a second, not several times. If audio under/overruns persist in
+the `audio-stats` line, the link is still saturated: start with `--fps 30` and
+`--bitrate 8000`, and try longer audio buffers before raising either. `HB_PIPELINE`
+(1–4) keeps that many requests on the wire if the link has spare latency.
