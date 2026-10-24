@@ -2,8 +2,7 @@
 // Reads interleaved 48 kHz stereo s16le from stdin (default), a numeric fd
 // (--fd N) or a file (--file PATH, offline test), keeps a small ring of console
 // AudioOut buffers primed and appended back to back, and measures underruns and
-// overruns. It reuses game-audio.cjs's function-resolution path (audio-symbols
-// + sdk-checks verify-function) and the same sound-memory allocation call.
+// overruns. Functions resolve through sdk/native/symbols.cjs like game-audio.cjs.
 // Usage: node tools/moonlight/audio-stream.cjs [runs/launcher-XXXX] [--fd N | --file PATH]
 //        [--buffer-frames 3840] [--queue 3] [--prime 2]
 const fs = require('node:fs');
@@ -20,32 +19,17 @@ const SLOT_BASE = 0x10000;
 const PARAM_OFFSET = 0x300;
 const DESCRIPTOR_BASE = 0x400;
 const DESCRIPTOR_STRIDE = 0x40;
-const ALLOCATE = 5732112;
 
-const symbols = require('../../sdk/native/audio-symbols.json');
-const sdkImage = require('../../smilebasic/reference/sdk-checks.cjs');
+const {sdkResolver} = require('../../sdk/native/symbols.cjs');
+const {allocate} = require('../../sdk/native/allocate.cjs');
+const audioOut = require('../../sdk/host/audio-out.cjs');
 
 const check = (value, message) => {
   if (!value) throw Error(message);
 };
 
 function resolver(rpc) {
-  const resolved = {};
-  async function resolve(name) {
-    if (!resolved[name]) {
-      const matches = symbols.filter(s => s.name.includes(name));
-      check(matches.length === 1, 'Ambiguous audio symbol ' + name);
-      const s = matches[0];
-      const address = rpc.a.sdk + s.offset;
-      await rpc.request({
-        command: 'verify-function',
-        address,
-        hex: sdkImage.bytes(s.offset, Math.min(32, s.size)).toString('hex')
-      });
-      resolved[name] = address;
-    }
-    return resolved[name];
-  }
+  const resolve = sdkResolver(rpc, {ambiguous: 'Ambiguous audio symbol '});
   async function call(name, ...args) {
     return (await rpc.callAddress(await resolve(name), args, 2)).result;
   }
@@ -56,14 +40,6 @@ function resolver(rpc) {
     return (await rpc.callAddress(target, args, 2)).result;
   };
   return call;
-}
-
-async function allocate(rpc, bytes) {
-  const allocation = await rpc.call(ALLOCATE, [rpc.output, 65536, bytes], 8);
-  check(allocation.result === 0n, 'Audio allocation failed');
-  const base = Number(allocation.output.readBigUInt64LE());
-  check(Number.isSafeInteger(base) && base > 0 && base % 65536 === 0, 'Invalid audio allocation');
-  return base;
 }
 
 class ByteQueue {
@@ -173,32 +149,23 @@ function stream(options) {
     const call = resolver(rpc);
 
     const alloc = 65536 + DESCRIPTOR_COUNT * SLOT_STRIDE;
-    base = await allocate(rpc, alloc);
+    base = await allocate(rpc, alloc, {
+      align: 65536,
+      failed: 'Audio allocation failed',
+      invalid: 'Invalid audio allocation'
+    });
     await rpc.write(base, Buffer.alloc(65536));
 
     const param = base + PARAM_OFFSET;
-    await call('InitializeAudioOutParameter', param);
-    const params = await rpc.read(param, 8);
-    params.writeUInt32LE(SAMPLE_RATE);
-    params.writeUInt16LE(CHANNELS, 4);
-    await rpc.write(param, params);
+    await audioOut.open(rpc, call, base, param, {
+      rate: SAMPLE_RATE,
+      channels: CHANNELS,
+      failed: opened =>
+        'OpenDefaultAudioOut failed (' + opened + '); game-audio.cjs may hold the device',
+      format: 'Unexpected AudioOut format'
+    });
 
-    const opened = await call('OpenDefaultAudioOutEPNS0_8AudioOutER', base, param);
-    check(
-      opened === 0n,
-      'OpenDefaultAudioOut failed (' + opened + '); game-audio.cjs may hold the device'
-    );
-    check(
-      (await call('GetAudioOutSampleRate', base)) === BigInt(SAMPLE_RATE) &&
-        (await call('GetAudioOutChannelCount', base)) === BigInt(CHANNELS) &&
-        (await call('GetAudioOutSampleFormat', base)) === 2n,
-      'Unexpected AudioOut format'
-    );
-
-    descriptors = Array.from(
-      {length: DESCRIPTOR_COUNT},
-      (_, i) => base + DESCRIPTOR_BASE + i * DESCRIPTOR_STRIDE
-    );
+    descriptors = audioOut.descriptors(base + DESCRIPTOR_BASE, DESCRIPTOR_COUNT, DESCRIPTOR_STRIDE);
     const index = new Map(descriptors.map((address, i) => [address, i]));
     for (let i = 0; i < DESCRIPTOR_COUNT; i++) {
       await call('SetAudioOutBufferInfo', descriptors[i], slotAddress(i), SLOT_STRIDE, bufferBytes);
@@ -312,24 +279,24 @@ async function main() {
   const directory = session.resolve(args[0]);
   const rpc = session.rpc(directory);
   const input = makeInput(args);
-  const session = stream({
+  const playback = stream({
     rpc,
     input,
     bufferFrames: option('--buffer-frames', 3840),
     queue: option('--queue', 3),
     prime: option('--prime', 2)
   });
-  process.on('SIGINT', () => session.stop());
-  process.on('SIGTERM', () => session.stop());
+  process.on('SIGINT', () => playback.stop());
+  process.on('SIGTERM', () => playback.stop());
   console.log('Continuous audio stream ready.');
   const printing = args.includes('--stats')
     ? setInterval(() => {
-        console.log(JSON.stringify({event: 'audio-stats', ...session.stats}));
+        console.log(JSON.stringify({event: 'audio-stats', ...playback.stats}));
       }, 1000)
     : null;
   let error;
   try {
-    await session.done;
+    await playback.done;
   } catch (e) {
     error = e;
   } finally {
@@ -342,14 +309,14 @@ async function main() {
       {
         session: rpc.a.session,
         completed: new Date().toISOString(),
-        ...session.stats,
+        ...playback.stats,
         error: error?.message
       },
       null,
       2
     )
   );
-  console.log(JSON.stringify(session.stats));
+  console.log(JSON.stringify(playback.stats));
   console.log('Saved ' + file);
   if (error) throw error;
 }

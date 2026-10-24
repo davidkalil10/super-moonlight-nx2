@@ -14,7 +14,7 @@ const symbols = require('../../../sdk/native/audio-symbols.json');
 const sdkImage = require('../../../smilebasic/reference/sdk-checks.cjs');
 
 const OUTPUT = path.join(__dirname, 'src/console-layout.h');
-const SDK_ALLOCATE = 5732112;
+const {ALLOCATE: SDK_ALLOCATE} = require('../../../sdk/native/allocate.cjs');
 const AUDIO = [
   ['AUDIO_INITIALIZE_PARAMETER', 'InitializeAudioOutParameter'],
   ['AUDIO_OPEN_DEFAULT', 'OpenDefaultAudioOutEPNS0_8AudioOutER'],
