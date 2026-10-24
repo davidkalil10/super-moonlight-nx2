@@ -3,7 +3,11 @@
  *
  * Three RGB buffers rotate between the decoder (back), a one-frame mailbox
  * (pending) and the writer (front). A frame that is still pending when the next
- * one is decoded is dropped, so a slow reader never builds a queue. */
+ * one is decoded is dropped, so a slow reader never builds a queue.
+ *
+ * With a raw fd, every access unit is written in order as Annex B (IDR units
+ * start with SPS/PPS, plus VPS for HEVC) and announced as an "au" status line.
+ * Decoding is skipped when only the raw output is wanted. */
 #include "helper.h"
 
 #include <errno.h>
@@ -141,7 +145,15 @@ static const char *codec_name(int format) {
   return "h264";
 }
 
+static uint64_t access_units;
+
 static int setup(int format, int width, int height, int fps, void *context, int flags) {
+  access_units = 0;
+  if (!options.decode) {
+    status("{\"event\":\"video\",\"codec\":\"%s\",\"decode\":false,\"stream\":\"%dx%d@%d\"}",
+           codec_name(format), width, height, fps);
+    return 0;
+  }
   enum AVCodecID id = AV_CODEC_ID_H264;
   if (format & VIDEO_FORMAT_MASK_H265)
     id = AV_CODEC_ID_HEVC;
@@ -200,9 +212,28 @@ static int submit(PDECODE_UNIT unit) {
   }
   memset(packet_data + offset, 0, AV_INPUT_BUFFER_PADDING_SIZE);
 
+  bool keyframe = unit->frameType == FRAME_TYPE_IDR;
+  if (options.raw_fd >= 0) {
+    if (!write_all(options.raw_fd, packet_data, offset)) {
+      status("{\"event\":\"error\",\"message\":\"raw output closed\"}");
+      LiInterruptConnection();
+      return DR_OK;
+    }
+    status("{\"type\":\"au\",\"seq\":%llu,\"frame\":%d,\"bytes\":%zu,\"keyframe\":%s,"
+           "\"pts\":%llu}",
+           (unsigned long long)access_units++, unit->frameNumber, offset,
+           keyframe ? "true" : "false", (unsigned long long)unit->presentationTimeUs);
+  }
+  if (!options.decode) {
+    pthread_mutex_lock(&lock);
+    stats.written++;
+    pthread_mutex_unlock(&lock);
+    return DR_OK;
+  }
+
   packet->data = packet_data;
   packet->size = (int)offset;
-  packet->flags = unit->frameType == FRAME_TYPE_IDR ? AV_PKT_FLAG_KEY : 0;
+  packet->flags = keyframe ? AV_PKT_FLAG_KEY : 0;
   if (avcodec_send_packet(codec, packet) < 0)
     goto failed;
 

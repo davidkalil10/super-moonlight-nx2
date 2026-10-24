@@ -15,6 +15,8 @@ struct video_options {
   int width;
   int height;
   bool software;
+  bool decode;
+  int raw_fd;
 };
 
 struct video_stats {

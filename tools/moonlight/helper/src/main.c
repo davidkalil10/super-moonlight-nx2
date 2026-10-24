@@ -4,6 +4,10 @@
  *   hbmoonlight list HOST
  *   hbmoonlight stream HOST APP [--size WxH] [--fps N] [--bitrate KBPS]
  *                     [--codec h264|hevc] [--software] [--audio-fd FD] [--quit]
+ *                     [--raw-h264-fd FD | --raw-hevc-fd FD] [--rgb]
+ *
+ * A raw fd receives every access unit in order as Annex B and turns off the
+ * RGB24 output unless --rgb is also given.
  *
  * Pairing and app control come from moonlight-embedded's libgamestream, the
  * stream itself from moonlight-common-c. Client keys live in
@@ -261,6 +265,11 @@ static int stream(int argc, char **argv) {
     return fail("bad --size", NULL);
   int audio_fd = atoi(option(argc, argv, "--audio-fd", "-1"));
   bool hevc = strcmp(option(argc, argv, "--codec", "h264"), "hevc") == 0;
+  int raw_h264 = atoi(option(argc, argv, "--raw-h264-fd", "-1"));
+  int raw_hevc = atoi(option(argc, argv, "--raw-hevc-fd", "-1"));
+  if (raw_h264 >= 0 && raw_hevc >= 0)
+    return fail("pass only one of --raw-h264-fd and --raw-hevc-fd", NULL);
+  int raw_fd = raw_h264 >= 0 ? raw_h264 : raw_hevc;
 
   SERVER_DATA server;
   if (connect_server(&server, host))
@@ -281,6 +290,8 @@ static int stream(int argc, char **argv) {
   config.streamingRemotely = STREAM_CFG_LOCAL;
   config.audioConfiguration = AUDIO_CONFIGURATION_STEREO;
   config.supportedVideoFormats = VIDEO_FORMAT_H264 | (hevc ? VIDEO_FORMAT_H265 : 0);
+  if (raw_fd >= 0)
+    config.supportedVideoFormats = raw_hevc >= 0 ? VIDEO_FORMAT_H265 : VIDEO_FORMAT_H264;
   config.colorSpace = COLORSPACE_REC_709;
   config.colorRange = COLOR_RANGE_LIMITED;
   config.encryptionFlags = ENCFLG_ALL;
@@ -289,7 +300,8 @@ static int stream(int argc, char **argv) {
   if (result != GS_OK)
     return fail("cannot start the app", gs_error);
 
-  struct video_options video = {width, height, flag(argc, argv, "--software")};
+  struct video_options video = {width, height, flag(argc, argv, "--software"),
+                                raw_fd < 0 || flag(argc, argv, "--rgb"), raw_fd};
   video_configure(&video);
   DECODER_RENDERER_CALLBACKS video_callbacks_set;
   video_callbacks(&video_callbacks_set);
@@ -326,7 +338,8 @@ static int usage(void) {
                   "       hbmoonlight list HOST\n"
                   "       hbmoonlight stream HOST APP [--size WxH] [--fps N] [--bitrate KBPS]\n"
                   "                         [--codec h264|hevc] [--software] [--audio-fd FD]"
-                  " [--quit]\n");
+                  " [--quit]\n"
+                  "                         [--raw-h264-fd FD | --raw-hevc-fd FD] [--rgb]\n");
   return 2;
 }
 
