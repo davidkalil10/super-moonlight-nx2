@@ -1,14 +1,16 @@
 /* Video: decodes H.264/HEVC with libavcodec (VAAPI when available), converts to
- * RGB24 at the requested size and hands the newest frame to a writer thread.
+ * RGB24 at the requested size and publishes the newest frame to a mailbox.
  *
- * Three RGB buffers rotate between the decoder (back), a one-frame mailbox
- * (pending) and the writer (front). A frame that is still pending when the next
- * one is decoded is dropped, so a slow reader never builds a queue.
+ * By default a writer thread takes frames from an internal mailbox and writes
+ * them to stdout; a frame still pending when the next one is decoded is
+ * dropped, so a slow reader never builds a queue. With options.frames the
+ * caller owns the mailbox and consumes it in process.
  *
  * With a raw fd, every access unit is written in order as Annex B (IDR units
  * start with SPS/PPS, plus VPS for HEVC) and announced as an "au" status line.
  * Decoding is skipped when only the raw output is wanted. */
 #include "helper.h"
+#include "mailbox.h"
 
 #include <errno.h>
 #include <libavcodec/avcodec.h>
@@ -31,14 +33,11 @@ static struct SwsContext *scaler;
 static uint8_t *packet_data;
 static size_t packet_capacity;
 
-static uint8_t *buffers[3];
-static int back = 0, pending = 1, front = 2;
-static bool has_pending;
-static bool stopping;
+static struct mailbox internal;
+static struct mailbox *frames;
 static bool writer_running;
 static pthread_t writer;
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
-static pthread_cond_t ready = PTHREAD_COND_INITIALIZER;
 static struct video_stats stats;
 
 static double now_ms(void) {
@@ -66,20 +65,10 @@ static bool write_all(int fd, const uint8_t *data, size_t size) {
 
 static void *write_frames(void *unused) {
   for (;;) {
-    pthread_mutex_lock(&lock);
-    while (!has_pending && !stopping)
-      pthread_cond_wait(&ready, &lock);
-    if (stopping) {
-      pthread_mutex_unlock(&lock);
+    const uint8_t *rgb = mailbox_take(frames, NULL);
+    if (!rgb)
       return NULL;
-    }
-    int swap = front;
-    front = pending;
-    pending = swap;
-    has_pending = false;
-    pthread_mutex_unlock(&lock);
-
-    if (!write_all(STDOUT_FILENO, buffers[front], frame_bytes())) {
+    if (!write_all(STDOUT_FILENO, rgb, frame_bytes())) {
       status("{\"event\":\"error\",\"message\":\"frame output closed\"}");
       LiInterruptConnection();
       return NULL;
@@ -91,16 +80,12 @@ static void *write_frames(void *unused) {
 }
 
 static void publish(double started) {
+  double now = now_ms();
+  bool dropped = mailbox_publish(frames, now);
   pthread_mutex_lock(&lock);
-  int swap = back;
-  back = pending;
-  pending = swap;
-  if (has_pending)
-    stats.dropped++;
-  has_pending = true;
+  stats.dropped += dropped;
   stats.decoded++;
-  stats.decode_ms += now_ms() - started;
-  pthread_cond_signal(&ready);
+  stats.decode_ms += now - started;
   pthread_mutex_unlock(&lock);
 }
 
@@ -131,7 +116,7 @@ static bool convert(AVFrame *decoded) {
                            full_range, sws_getCoefficients(SWS_CS_DEFAULT), 1, 0, 1 << 16,
                            1 << 16);
 
-  uint8_t *planes[4] = {buffers[back]};
+  uint8_t *planes[4] = {mailbox_back(frames)};
   int strides[4] = {options.width * 3};
   return sws_scale(scaler, (const uint8_t *const *)source->data, source->linesize, 0,
                    source->height, planes, strides) > 0;
@@ -185,11 +170,16 @@ static int setup(int format, int width, int height, int fps, void *context, int 
   packet = av_packet_alloc();
   frame = av_frame_alloc();
   transfer = av_frame_alloc();
-  for (int i = 0; i < 3; i++)
-    buffers[i] = calloc(1, frame_bytes());
-  stopping = false;
-  has_pending = false;
-  writer_running = pthread_create(&writer, NULL, write_frames, NULL) == 0;
+  if (options.frames) {
+    frames = options.frames;
+  } else {
+    frames = &internal;
+    if (!mailbox_init(frames, frame_bytes())) {
+      status("{\"event\":\"error\",\"message\":\"out of memory\"}");
+      return -1;
+    }
+    writer_running = pthread_create(&writer, NULL, write_frames, NULL) == 0;
+  }
 
   status("{\"event\":\"video\",\"codec\":\"%s\",\"hardware\":%s,\"stream\":\"%dx%d@%d\","
          "\"output\":\"%dx%d\"}",
@@ -252,13 +242,14 @@ failed:
 }
 
 static void cleanup(void) {
-  pthread_mutex_lock(&lock);
-  stopping = true;
-  pthread_cond_signal(&ready);
-  pthread_mutex_unlock(&lock);
-  if (writer_running)
-    pthread_join(writer, NULL);
-  writer_running = false;
+  if (frames == &internal) {
+    mailbox_stop(frames);
+    if (writer_running)
+      pthread_join(writer, NULL);
+    writer_running = false;
+    mailbox_free(frames);
+  }
+  frames = NULL;
 
   avcodec_free_context(&codec);
   av_buffer_unref(&device);
@@ -270,10 +261,6 @@ static void cleanup(void) {
   free(packet_data);
   packet_data = NULL;
   packet_capacity = 0;
-  for (int i = 0; i < 3; i++) {
-    free(buffers[i]);
-    buffers[i] = NULL;
-  }
 }
 
 void video_configure(const struct video_options *chosen) {
