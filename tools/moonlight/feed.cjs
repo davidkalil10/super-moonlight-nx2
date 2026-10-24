@@ -109,7 +109,10 @@ async function main() {
   console.log('Saved ' + out);
 }
 
-main().catch(error => {
-  console.error(error.message);
-  process.exitCode = 1;
-});
+module.exports = {findPrivateStorage};
+
+if (require.main === module)
+  main().catch(error => {
+    console.error(error.message);
+    process.exitCode = 1;
+  });
