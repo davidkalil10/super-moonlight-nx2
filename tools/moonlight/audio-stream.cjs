@@ -312,24 +312,24 @@ async function main() {
   const directory = session.resolve(args[0]);
   const rpc = session.rpc(directory);
   const input = makeInput(args);
-  const session = stream({
+  const playback = stream({
     rpc,
     input,
     bufferFrames: option('--buffer-frames', 3840),
     queue: option('--queue', 3),
     prime: option('--prime', 2)
   });
-  process.on('SIGINT', () => session.stop());
-  process.on('SIGTERM', () => session.stop());
+  process.on('SIGINT', () => playback.stop());
+  process.on('SIGTERM', () => playback.stop());
   console.log('Continuous audio stream ready.');
   const printing = args.includes('--stats')
     ? setInterval(() => {
-        console.log(JSON.stringify({event: 'audio-stats', ...session.stats}));
+        console.log(JSON.stringify({event: 'audio-stats', ...playback.stats}));
       }, 1000)
     : null;
   let error;
   try {
-    await session.done;
+    await playback.done;
   } catch (e) {
     error = e;
   } finally {
@@ -342,14 +342,14 @@ async function main() {
       {
         session: rpc.a.session,
         completed: new Date().toISOString(),
-        ...session.stats,
+        ...playback.stats,
         error: error?.message
       },
       null,
       2
     )
   );
-  console.log(JSON.stringify(session.stats));
+  console.log(JSON.stringify(playback.stats));
   console.log('Saved ' + file);
   if (error) throw error;
 }
