@@ -239,6 +239,11 @@ Switch 2: apps/moonlight
 
 ### Console side (`apps/moonlight`)
 
+The bullets below describe the original HBV1-only app (three 64 KiB slots,
+fragment-shader selection). The shipped app is superseded by section 6: an
+8-slot ring, two persistent frames and compute-shader decode, with HBV1 slots
+carried in the same ring. Kept here for the HBV1 path and its history.
+
 - Private storage (binding 1) holds three 64 KiB slots. `gpu-app.cjs` creates
   both bindings with stage flags 49 (vertex, fragment and compute), so the
   fragment shader can read the ring on the console as well as on desktop. A slot is the HBV1
@@ -287,6 +292,44 @@ Switch 2: apps/moonlight
 6. **Wi-Fi variance.** The two recorded sessions differ by 7x. Decide the
    frame-dropping policy, and whether to fall back to 30 fps or BC1 320x180
    automatically.
+
+## 5. Files
+
+- `tools/moonlight/hbv.cjs`: HBV1 constants, encoder, shader-equivalent decoder,
+  and the GLSL generator (single source of truth).
+- `tools/moonlight/hbv2.cjs`: HBV2 reference decoder and encoder, the integer
+  IDCT, and the generated GLSL/C tables (single source of truth).
+- `tools/moonlight/hbv2enc.c` + `hbv2-encoder.cjs`: the native OpenMP encoder
+  and its Node wrapper (built by `build-hbv2enc.sh`, run with passive OMP wait).
+- `tools/moonlight/reference.cjs`: BC1, YUV420, bilinear upscale, PSNR, changed
+  blocks.
+- `tools/moonlight/evaluate.cjs CLIP [--frames N] [--json OUT]`: the HBV1 format
+  tables in section 2.
+- `tools/moonlight/evaluate-hbv2.cjs OUT SEQUENCE...`: the HBV2-vs-HBV1 tables in
+  section 6.5. `desktop-scenes.py` renders the synthetic 1080p sequences.
+- `tools/moonlight/encode.cjs CLIP OUT.hbv [--size WxH]`: the slot stream the
+  host would write.
+- `tools/moonlight/live.cjs [...] --codec hbv1|hbv2`: the live sender.
+- `tools/moonlight/hbv.test.cjs`, `hbv2.test.cjs`: layout, bit extraction,
+  torn-slot rejection, and a native-C cross-check that decodes bit-exactly.
+- `apps/moonlight/`: the app. `build.cjs` regenerates `shaders/hbv.glsl`,
+  `shaders/hbv2.glsl`'s tables, `shaders/ring.glsl`, and the HBV2 test-card
+  memory. `check.cjs` runs the desktop Vulkan check (test card, HBV1 slot, and
+  the HBV2 P chain with catch-up, all bit-exact).
+
+Reproduce:
+
+```
+ffmpeg -f lavfi -i testsrc2=size=1280x720:rate=60 -t 3 -pix_fmt yuv420p -c:v libx264 -crf 12 testsrc2.mp4
+node tools/moonlight/evaluate.cjs testsrc2.mp4 --frames 10
+node apps/moonlight/check.cjs testsrc2.mp4
+```
+
+Shader build note: `sdk/build.cjs` needs `glslangValidator`, which this PC does
+not have. The committed SPIR-V was compiled with
+`glslc --target-env=vulkan1.0 -O` and passes
+`spirv-val --target-env vulkan1.0`. Rebuild with glslangValidator once it is
+installed, so the package matches the SDK toolchain.
 
 ## 6. HBV2: inter-coded 1080p
 
@@ -368,8 +411,8 @@ through a latest-wins sender on a 32 KiB-per-exchange link and scores what the
 screen shows at every 60 Hz vsync. `coded` is the luma PSNR of a delivered
 frame against its own source; `displayed` compares the frame on screen at each
 vsync with that vsync's source, so dropped frames count against it. HBV1 is the
-1080p fixed-rate slot (288 KiB). Encode is m5, one thread set busy by the
-screencast during the run.
+1080p fixed-rate slot (288 KiB). Encode is on an otherwise idle m5; under the
+user's live screencast session the same frames took about 6.5 ms.
 
 Desktop, 5.7 MB/s (the measured link):
 
@@ -406,13 +449,14 @@ Reading the numbers:
   sender should keep the budget near 64-96K on the 5.7 MB/s link and may open it
   up on a faster one.
 - `displayed` is low for the hard-motion desktop scenes (scroll 3 px/frame, drag
-  13 px/frame) for both codecs: comparing the shown frame against the exact
-  vsync source punishes even a one-tick display offset of sharp moving text, so
-  the metric floor there is a sampling artifact, not reconstruction error (coded
-  stays 50-58 dB). It still ranks HBV2 at 59 fps above HBV1 at 19.
-- Encode is 2.4-5.8 ms per 1080p frame, inside the 16.7 ms frame budget even
-  with a core busy; the GPU decode on desktop RADV is 1-5 ms per frame
-  (section 6.6 covers the console unknown).
+  13 px/frame) for both codecs: a single tick of display latency on sharp text
+  moving that fast is a large pixel error against the exact vsync source, so the
+  metric is reporting real latency, not a reconstruction fault (coded stays
+  50-58 dB). It still ranks HBV2 at 59 fps above HBV1 at 19, and the lower
+  latency is exactly what the higher frame rate buys.
+- Encode is 2.4-5.8 ms per 1080p frame idle (about 6.5 ms under the user's live
+  session), inside the 16.7 ms frame budget; the GPU decode on desktop RADV is
+  1-5 ms per frame (section 6.6 covers the console unknown).
 
 Caveat: the three clips are 720p content upscaled, which is soft and flatters
 PSNR; the desktop sequences are rendered natively at 1920x1080 and are where
@@ -421,13 +465,18 @@ under `~/claude-builds/HBLauncher/hbv2-eval/`.
 
 ### 6.6 What still needs a live console session
 
-1. **Single-workgroup compute time on T239.** Decode is one workgroup of 1024
-   invocations. Desktop RADV (Strix Halo) runs it in 1-5 ms, but one workgroup
-   is one CU, and the per-CU gap to the console could be several times that, so
-   10-25 ms per P frame is possible and would break 60 Hz. Measure it: read the
-   binding-0 frame counter and `applyCount` over ~10 s; if the shown rate is
-   below 60 the dispatch is the bottleneck. Fallbacks in order: lower
-   `--budget`, `--size 1280x720`, then `--codec hbv1`.
+1. **Single-workgroup compute, two unknowns.** Decode is one workgroup of 1024
+   invocations (`HBV2_LOCAL_SIZE`). First, the size: 1024 is NVIDIA's usual
+   `maxComputeWorkGroupInvocations` but is not verified against console data (no
+   record of it in `runs/` or the SDK), and if the console caps lower, pipeline
+   creation fails at launch and the app shows nothing. If it fails to come up,
+   rebuild with `HBV2_LOCAL_SIZE=512` (measured working, a little slower).
+   Second, the time: desktop RADV (Strix Halo) runs the dispatch in 1-5 ms, but
+   one workgroup is one CU, and the per-CU gap to the console could be several
+   times that, so 10-25 ms per P frame is possible and would break 60 Hz.
+   Measure it: read the binding-0 frame counter and `applyCount` over ~10 s; if
+   the shown rate is below 60 the dispatch is the bottleneck. Fallbacks in
+   order: lower `--budget`, `--size 1280x720`, then `--codec hbv1`.
 2. **Launch cost.** `restorePrivateStorage` writes the whole 8.69 MB allocation
    on every launch (~3.5 s at the measured rate). Confirm it is one-time and
    does not stall the first frames.
@@ -443,48 +492,14 @@ Live-test commands:
 ```
 tools/moonlight/build-hbv2enc.sh                       # native encoder on m5
 GLSLANG=<glslc shim> node apps/moonlight/build.cjs     # regenerate shaders + memory
-# rebuild and reinstall apps/moonlight, launch it on the console, then:
+# apps/moonlight already lives under apps/ on the host; after build.cjs tap
+# Refresh in the launcher and relaunch the Moonlight app on the console, then:
 node tools/moonlight/live.cjs --screen --codec hbv2 --budget 96
 node apps/moonlight/check.cjs CLIP                      # offline bit-exact re-check
 ```
 
-## 5. Files
-
-- `tools/moonlight/hbv.cjs`: HBV1 constants, encoder, shader-equivalent decoder,
-  and the GLSL generator (single source of truth).
-- `tools/moonlight/hbv2.cjs`: HBV2 reference decoder and encoder, the integer
-  IDCT, and the generated GLSL/C tables (single source of truth).
-- `tools/moonlight/hbv2enc.c` + `hbv2-encoder.cjs`: the native OpenMP encoder
-  and its Node wrapper (built by `build-hbv2enc.sh`, run with passive OMP wait).
-- `tools/moonlight/reference.cjs`: BC1, YUV420, bilinear upscale, PSNR, changed
-  blocks.
-- `tools/moonlight/evaluate.cjs CLIP [--frames N] [--json OUT]`: the HBV1 format
-  tables in section 2.
-- `tools/moonlight/evaluate-hbv2.cjs OUT SEQUENCE...`: the HBV2-vs-HBV1 tables in
-  section 6.5. `desktop-scenes.py` renders the synthetic 1080p sequences.
-- `tools/moonlight/encode.cjs CLIP OUT.hbv [--size WxH]`: the slot stream the
-  host would write.
-- `tools/moonlight/live.cjs [...] --codec hbv1|hbv2`: the live sender.
-- `tools/moonlight/hbv.test.cjs`, `hbv2.test.cjs`: layout, bit extraction,
-  torn-slot rejection, and a native-C cross-check that decodes bit-exactly.
-- `apps/moonlight/`: the app. `build.cjs` regenerates `shaders/hbv.glsl`,
-  `shaders/hbv2.glsl`'s tables, `shaders/ring.glsl`, and the HBV2 test-card
-  memory. `check.cjs` runs the desktop Vulkan check (test card, HBV1 slot, and
-  the HBV2 P chain with catch-up, all bit-exact).
-
-Reproduce:
-
-```
-ffmpeg -f lavfi -i testsrc2=size=1280x720:rate=60 -t 3 -pix_fmt yuv420p -c:v libx264 -crf 12 testsrc2.mp4
-node tools/moonlight/evaluate.cjs testsrc2.mp4 --frames 10
-node apps/moonlight/check.cjs testsrc2.mp4
-```
-
-Shader build note: `sdk/build.cjs` needs `glslangValidator`, which this PC does
-not have. The committed SPIR-V was compiled with
-`glslc --target-env=vulkan1.0 -O` and passes
-`spirv-val --target-env vulkan1.0`. Rebuild with glslangValidator once it is
-installed, so the package matches the SDK toolchain.
+Offline, the sender and its stall/keyframe resync can be exercised without a
+console against `tools/moonlight/fake-console` (see its README).
 
 ## Live results (2026-10-24)
 
