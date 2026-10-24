@@ -8,7 +8,7 @@
 //   DECODE  1 runs the full JS decoder (slower); otherwise a light apply that
 //           only advances `applied`, enough for link/fps behaviour
 // Point live.cjs or feed.cjs at this directory; it reads app-moonlight-*.json.
-const ring = require('../../../../apps/moonlight/ring.cjs');
+const ring = require('../../ring.cjs');
 const hbv2 = require('../../hbv2.cjs');
 const {mapped: BASE} = require('../app-moonlight-1.json').privateStorage;
 

@@ -91,10 +91,10 @@ node tools/moonlight/audio-stream.cjs runs/launcher-XXXX < /tmp/hbaudio
 
 ## Not yet tested on a live console
 
-- A second AudioOut. `start-launcher.cjs` always starts `game-audio.cjs`, which
-  holds an open AudioOut for the session. This module opens another; whether the
-  console allows two concurrently is unverified (DESIGN.md section 4 item 1). If
-  not, the Moonlight route must run without the effects stage. On a non-zero
+- AudioOut ownership. `game-audio.cjs` opens AudioOut on the first effect and
+  closes it when the running package has none, so with Moonlight in front this
+  module should be the only owner. Whether the console allows two concurrently
+  is still unverified (DESIGN.md section 4 item 1). On a non-zero
   OpenDefaultAudioOut the module prints a hint naming `game-audio.cjs`.
 - Underrun/latency with real Wi-Fi jitter and the real helper's drop behaviour
   (DESIGN.md section 4 item 5), sharing the exchange budget with video. The
