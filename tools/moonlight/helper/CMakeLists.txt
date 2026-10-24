@@ -30,3 +30,19 @@ target_link_libraries(hbmoonlight PRIVATE gamestream Threads::Threads)
 add_executable(hbmoonlight-bench src/bench.c src/status.c src/mailbox.c src/video.c)
 target_compile_options(hbmoonlight-bench PRIVATE -Wall -Wextra -Wno-unused-parameter)
 target_link_libraries(hbmoonlight-bench PRIVATE gamestream Threads::Threads)
+
+# HBV2 encoder: tools/moonlight/hbv2enc.c built as is, and linked in process
+# through src/encoder.c, with the flags of build-hbv2enc.sh.
+find_package(OpenMP REQUIRED)
+set(HBV2_FLAGS -O3 -march=native)
+add_executable(hbv2enc ../hbv2enc.c)
+target_compile_options(hbv2enc PRIVATE ${HBV2_FLAGS} -Wall -Wextra)
+target_link_libraries(hbv2enc PRIVATE OpenMP::OpenMP_C m)
+
+add_library(hbv2 STATIC src/encoder.c)
+target_compile_options(hbv2 PRIVATE ${HBV2_FLAGS} -Wall -Wextra -Wno-unused-function)
+target_link_libraries(hbv2 PUBLIC OpenMP::OpenMP_C m Threads::Threads)
+
+add_executable(hbv2-encode-check src/encode-check.c)
+target_compile_options(hbv2-encode-check PRIVATE -Wall -Wextra)
+target_link_libraries(hbv2-encode-check PRIVATE hbv2)
