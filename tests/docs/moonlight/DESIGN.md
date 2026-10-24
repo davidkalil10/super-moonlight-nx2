@@ -188,7 +188,7 @@ Shader correctness check:
 rig: Sunshine (H.264/HEVC + Opus over RTP/ENet)
         |  LAN
 HBLauncher host PC
-  moonlight client (moonlight-common-c)      pairing: moonlight-embedded `pair 192.168.8.245`
+  hbmoonlight (moonlight-common-c + libgamestream)   pairing: `hbmoonlight pair 192.168.8.245`
     video DECODE_UNITs -> ffmpeg decode (VAAPI) -> scale to 640x352 RGB24
     audio Opus -> PCM 48 kHz s16
   stream service (Node, launcher stage like ftp-service)
@@ -209,17 +209,8 @@ Switch 2: apps/moonlight
   reassembly, FEC and input encryption, but it does not pair or launch apps. Use
   moonlight-embedded (C, Linux), whose libgamestream pairs with Sunshine (PIN in
   the Sunshine web UI) and launches apps.
-- **Getting frames out**: moonlight-qt renders into its own window. It is not
-  known to expose raw frames; check its source and CLI before ruling it out. Two ways to get frames:
-  - moonlight-embedded's fake/dump platform, if it writes the elementary stream
-    to a file or FIFO (not verified, check the source first).
-  - A small C helper linked against moonlight-common-c. Its
-    `submitDecodeUnit` writes Annex-B NAL units to stdout, and its audio callback
-    writes decoded PCM to a second pipe.
-
-  In both cases `ffmpeg -f h264 -i - -vf scale=640:352 -f rawvideo -pix_fmt rgb24 -`
-  feeds the Node encoder (`tools/moonlight/frames.cjs` already reads that
-  format).
+- **Getting frames out**: done by `hbmoonlight` (below), a headless client.
+  No desktop Moonlight window and no screen capture are involved.
 - **Stream settings**: ask Sunshine for a low resolution (for example 1280x720
   at 60 fps and modest bitrate) so PC decode and scaling stay cheap. Encode
   quality is limited by HBV1 anyway.
@@ -262,6 +253,84 @@ Switch 2: apps/moonlight
 | One exchange | ~13 ms |
 | Wait for the next 60 Hz scan-out | up to 16.7 ms |
 | **Total** | **about 40-50 ms**, plus the controller path |
+
+### hbmoonlight (headless Moonlight client)
+
+`tools/moonlight/helper/`: C, links moonlight-embedded's libgamestream
+(pairing, app list, launch; `discover.c` left out, no avahi) and
+moonlight-common-c (the stream). Both are GPLv3 and fetched at pinned commits
+by `fetch.sh`, never copied into this repo, so a published `hbmoonlight`
+binary is GPLv3.
+
+Build on rig (output in `~/claude-builds/HBLauncher/moonlight-helper/build/`,
+visible on m5 through NFS):
+
+```
+tools/moonlight/helper/build.sh
+```
+
+It compiles natively when the -devel packages are present, otherwise inside a
+rootless podman `quay.io/fedora/fedora:44` image (`Containerfile`). Both
+machines run Fedora 44 with the same ffmpeg 8.1 / opus / curl sonames, so the
+container binary runs on m5 as is. Native build packages:
+
+```
+sudo dnf install gcc gcc-c++ cmake openssl-devel libcurl-devel expat-devel libuuid-devel \
+  opus-devel libavcodec-free-devel libavutil-free-devel libswscale-free-devel
+```
+
+Commands (status and errors are one JSON object per line on stderr):
+
+| Command | Output |
+|---|---|
+| `hbmoonlight pair HOST [--timeout 120]` | stdout `{"event":"pin","pin":"NNNN","url":...}`, then `{"event":"paired"}` once the PIN is entered in Sunshine's web UI (PIN page) |
+| `hbmoonlight list HOST` | stdout `{"currentGame":N,"apps":[{"id":..,"name":..}]}` |
+| `hbmoonlight stream HOST APP [--size 1920x1080] [--fps 60] [--bitrate 20000] [--codec h264\|hevc] [--software] [--audio-fd FD] [--quit]` | stdout raw RGB24 frames of exactly WxH |
+| `stream ... --raw-h264-fd FD` / `--raw-hevc-fd FD` [`--rgb`] | every access unit in order as Annex B on FD, no RGB unless `--rgb` |
+
+- Client keys and the unique id live in `~/.config/hblauncher/moonlight`
+  (`$XDG_CONFIG_HOME` respected, mode 0700). Never commit them.
+- `APP` is the app name (case-insensitive) or its id from `list`.
+- Video: libavcodec with VAAPI first (`--software` forces CPU), `sws_scale` to
+  the requested size as RGB24. Three buffers rotate between decoder, a
+  one-frame mailbox and a writer thread; a frame still pending when the next
+  one is decoded is dropped and counted, so a slow reader never queues.
+- Raw mode: Sunshine is pinned to the chosen codec. Each IDR unit starts with
+  SPS/PPS (VPS too for HEVC), as moonlight-common-c delivers it, so every
+  keyframe is a clean entry point. Writes block (bitstream, nothing dropped),
+  and each unit is announced on stderr as
+  `{"type":"au","seq":N,"frame":N,"bytes":N,"keyframe":bool,"pts":us}` so a
+  consumer can frame the stream without parsing NALs.
+- Input: stdin JSON lines
+  `{buttonFlags,leftTrigger,rightTrigger,leftStickX,leftStickY,rightStickX,rightStickY}`
+  (missing fields keep their last value) go to `LiSendMultiControllerEvent` as
+  gamepad 0, announced once as an Xbox pad with analog triggers.
+- Audio: Opus decoded to interleaved s16le (48 kHz stereo) on `--audio-fd`,
+  non-blocking; packets the reader cannot take are dropped (`audioDropped`).
+- Stop: SIGINT/SIGTERM or stdin EOF, then `LiStopConnection`; `--quit` also
+  quits the app on the host. Once a second a `stats` line reports decoded,
+  written, dropped, failed and average decode+convert ms.
+- `live.cjs --moonlight HOST APP` spawns it instead of a capture source
+  (`$HBMOONLIGHT` overrides the binary path) and keeps its stdin open for input.
+
+`hbmoonlight-bench FILE h264|hevc WxH [--software] [--raw-fd FD] [--rgb]`
+pushes an Annex B file through the same video callbacks, for checks without a
+host. On m5 (Strix Halo iGPU, 10 s 1080p60 testsrc2 at 20 Mb/s, output 1080p RGB24):
+
+| Path | 1 slice per frame | 4 slices per frame |
+|---|---|---|
+| H.264 VAAPI | 7.6 ms (131 fps) | 6.4 ms (157 fps) |
+| H.264 software | 3.3 ms (299 fps) | 2.8 ms (353 fps) |
+| HEVC VAAPI (1 x265 frame thread) | 7.0 ms (143 fps) | |
+
+The helper asks Sunshine for 4 slices per frame
+(`CAPABILITY_SLICES_PER_FRAME`) so software decode can use its slice threads.
+VAAPI is slower end to end here, most likely because of the NV12 readback
+(`av_hwframe_transfer_data`, not profiled yet). Synthetic content flatters
+software decode, so compare on a real game stream before changing the default
+(`--software` switches). With a
+reader that stalls for 1 s, 470 of 600 frames were dropped and decode speed did
+not change. Raw mode reproduced the input byte for byte (600 units, SPS first).
 
 ## 4. What needs a live console session
 
