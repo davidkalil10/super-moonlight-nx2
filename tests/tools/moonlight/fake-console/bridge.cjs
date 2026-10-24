@@ -143,8 +143,20 @@ const native = {
     stats.writes++;
     stats.writeMs += performance.now() - started;
   },
-  async exchange() {
-    throw Error('pair is not simulated');
+  async exchange(calls, data, outputBytes) {
+    if (calls.length !== 1 || data?.length) throw Error('pair is not simulated');
+    const [{offset, address, args}] = calls;
+    const reply =
+      address === undefined
+        ? await this.call(offset, ...args)
+        : await this.callAddress(address, ...args);
+    return {...reply, output: Buffer.from(fake.peek(this.output, outputBytes))};
+  },
+  async writeAndCall(address, bytes, target, args) {
+    if (!this.verified.has(target)) throw Error('Native function has not been verified');
+    await this.write(address, bytes);
+    stats.calls++;
+    return {result: BigInt(simulate(target, args)), output: Buffer.alloc(2)};
   },
   async query() {
     throw Error('query is not simulated');
