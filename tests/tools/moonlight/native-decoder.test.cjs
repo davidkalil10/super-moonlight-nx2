@@ -21,6 +21,7 @@ const ALLOCATE = 5732112;
 const QUERY = 0x158314;
 const READ = 0x586fb0;
 const code = require('../../smilebasic/engine/switch2/app/thread-code.json').functions;
+const TICK = require('../../smilebasic/engine/switch2/app/timing-code.json').functions.tick.offset;
 
 function createConsole() {
   const regions = [];
@@ -245,6 +246,10 @@ function createConsole() {
       poke(out, Buffer.from(peek(src, len)));
       return BigInt(out);
     }
+    if (target === SDK + TICK) {
+      log.push('tick');
+      return 0x123456789n;
+    }
     if (target >= SDK && target < SDK + 0x1000000) return gadget(target, args);
     return movie(target, args);
   }
@@ -452,6 +457,26 @@ test('submit can leave the output acquire to receive', async () => {
     assert.equal(result.format, 'nv12');
     assert.equal(consoleMock.log[0], 'acquireOutput');
     assert.equal(await decoder.receive(destination), null);
+  } finally {
+    await decoder.close().catch(() => {});
+    await fs.rm(directory, {recursive: true, force: true});
+  }
+});
+
+test('submit can stamp SendInput with an SDK call run just before it', async () => {
+  const {consoleMock, decoder, directory} = await build();
+  try {
+    await decoder.configure(sps, pps, 30);
+    await decoder.submit({data: Buffer.alloc(4000, 7), pts: 1000}, {acquireOutput: false});
+    assert.equal(decoder.lastStamp, null);
+    consoleMock.reset();
+    await decoder.submit(
+      {data: Buffer.alloc(4000, 7), pts: 2000},
+      {acquireOutput: false, stamp: SDK + TICK}
+    );
+    assert.equal(decoder.lastStamp, 0x123456789n);
+    assert.deepEqual(decoder.lastInput, {status: 0, index: 0});
+    assert.deepEqual(consoleMock.log, ['tick', 'sendInput', 'acquireInput']);
   } finally {
     await decoder.close().catch(() => {});
     await fs.rm(directory, {recursive: true, force: true});
