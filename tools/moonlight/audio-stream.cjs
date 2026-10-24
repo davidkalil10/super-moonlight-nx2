@@ -21,7 +21,7 @@ const DESCRIPTOR_BASE = 0x400;
 const DESCRIPTOR_STRIDE = 0x40;
 const ALLOCATE = 5732112;
 
-const symbols = require('../../homebrew-launcher/audio-symbols.json');
+const symbols = require('../../sdk/native/audio-symbols.json');
 const sdkImage = require('../../smilebasic/reference/sdk-checks.cjs');
 
 const check = (value, message) => {

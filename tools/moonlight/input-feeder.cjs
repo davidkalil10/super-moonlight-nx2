@@ -11,7 +11,7 @@
 //
 // Usage: node tools/moonlight/input-feeder.cjs [runs/launcher-XXXX] [--hz 60] [--labels]
 const session = require('../../sdk/host/session.cjs');
-const {STATE} = require('../../homebrew-launcher/state-layout.cjs');
+const {STATE} = require('../../sdk/host/state-layout.cjs');
 const {NEUTRAL, decode, toMoonlight, same, NPAD_BYTES} = require('./controller.cjs');
 const {TOUCH_BYTES, parseTouch, createTracker, step, flush, touchLine} = require('./touch.cjs');
 
