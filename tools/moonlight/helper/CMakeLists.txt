@@ -26,3 +26,7 @@ add_executable(hbmoonlight
   src/main.c src/status.c src/video.c src/audio.c src/input.c)
 target_compile_options(hbmoonlight PRIVATE -Wall -Wextra -Wno-unused-parameter)
 target_link_libraries(hbmoonlight PRIVATE gamestream Threads::Threads)
+
+add_executable(hbmoonlight-bench src/bench.c src/status.c src/video.c)
+target_compile_options(hbmoonlight-bench PRIVATE -Wall -Wextra -Wno-unused-parameter)
+target_link_libraries(hbmoonlight-bench PRIVATE gamestream Threads::Threads)
