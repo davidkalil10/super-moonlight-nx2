@@ -2,8 +2,8 @@
 
 Everything below is the PC-decode route: `hbmoonlight` decodes the Sunshine
 stream on m5, `live.cjs` re-encodes to HBV2 and writes the ring, and the app
-on the console shows it. Console-side hardware decode is a separate, unbuilt
-path (see the raw-H.264 feed note at the end).
+on the console shows it. The implemented console decoder path has its own
+[native H.264 guide and validation results](NATIVE-H264.md).
 
 ## Prebuilt artifacts (rebuild only if the source changed)
 
@@ -46,9 +46,8 @@ ssh rig 'cd /media/storage/own/HBLauncher && SPIRV_VAL=true GLSLANG=tools/moonli
 node tools/moonlight/live.cjs --moonlight 192.168.8.245 Desktop --codec hbv2 --budget 96 --no-audio
 ```
 Move the sticks / tap the screen; the cursor on the host desktop should follow.
-Touch is sent as native multi-touch. **Caveat:** B or Minus still exits the app
-(the app's compute shader returns to the launcher on those), so avoid them until
-that is changed.
+Touch is sent as native multi-touch. Hold Plus and Minus together for one second
+to exit; single B/Minus presses are forwarded to the PC.
 
 ### 3. Add audio
 ```
@@ -65,13 +64,12 @@ and swap it for `Desktop` above. Expect ~59 fps at a steady budget; raise
 `--budget`/`--cap` for sharper stills at the cost of fps on a slower link.
 
 ## Known follow-ups (not blockers)
-- B/Minus exit: change the app's exit chord (needs a shader rebuild).
 - After launch/resync the picture sharpens over ~8 s as refresh chunks heal
   static blocks; raise `--refresh` to speed it.
 - Two concurrent AudioOut (above).
 
-## Console hardware decode (separate, unbuilt)
-`hbmoonlight stream HOST APP --raw-h264-fd 3 3>feed.h264` emits the raw Annex-B
-H.264 bitstream (SPS/PPS first, each access unit tagged on stderr) with no PC
-decode. That is the feed for a console-side video-decode path; the decode calls
-and their wiring into the app are not part of this repo.
+## Console native decode
+
+`live.cjs --moonlight HOST APP --codec h264` connects raw H.264 on FD 4 to the
+console movie decoder. PCM audio stays on FD 3 and controller/touch JSON stays
+on stdin. See [NATIVE-H264.md](NATIVE-H264.md) for setup and current limits.

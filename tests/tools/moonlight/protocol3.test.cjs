@@ -80,6 +80,26 @@ test('a 200 KiB protocol-3 write arrives byte-exact in one exchange', async () =
   await cleanup();
 });
 
+test('combined writes call the qualified consumer after copying data in one exchange', async () => {
+  for (const protocol of [1, 2, 3]) {
+    const {native, addresses, fake, cleanup} = await link(protocol);
+    try {
+      const target = addresses.sdk + 0x586fb0;
+      const payload = crypto.randomBytes(4096);
+      await native.guard(TARGET, payload.length, 2);
+      const exchanges = fake.exchanges;
+      await assert.rejects(native.writeAndCall(TARGET, payload, target, [SOURCE, TARGET, payload.length]), /not been verified/);
+      assert.equal(fake.exchanges, exchanges);
+      native.functions.add(target);
+      const reply = await native.writeAndCall(TARGET, payload, target, [SOURCE, TARGET, payload.length]);
+      assert.equal(reply.result, BigInt(SOURCE));
+      assert.equal(fake.exchanges - exchanges, 1);
+      assert.ok(fake.slice(SOURCE, payload.length).equals(payload));
+      await assert.rejects(native.writeAndCall(TARGET, Buffer.alloc(32769), target, []), /32768/);
+    } finally { await cleanup(); }
+  }
+});
+
 test('the same write needs many exchanges on protocol 2', async () => {
   const {native, fake, cleanup} = await link(2);
   const big = crypto.randomBytes(200 * 1024);

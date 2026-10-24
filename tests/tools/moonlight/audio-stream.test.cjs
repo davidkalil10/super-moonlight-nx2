@@ -28,7 +28,7 @@ function nameOf(address) {
 function mockRpc(options = {}) {
   const mem = Buffer.alloc(0x300000);
   const clock = {t: 0};
-  const log = {writes: [], calls: []};
+  const log = {writes: [], calls: [], combinedWrites: 0};
   const queued = []; // appended descriptors, FIFO {descriptor, releaseAt}
   const released = [];
   const liveSet = new Set();
@@ -77,16 +77,19 @@ function mockRpc(options = {}) {
 
   const rpc = {
     a: {session: 'test-session', sdk: SDK, scratch: SCRATCH},
+    output: SCRATCH + 0x4040,
     async request(body) {
       if (body.command === 'verify-function') return {};
       throw Error('unexpected request ' + body.command);
     },
-    async call(offset, args) {
-      // the sound allocation call
+    async call(offset, args, outputBytes) {
+      assert.strictEqual(args[0], rpc.output);
+      assert.strictEqual(outputBytes, 8);
       mem.writeBigUInt64LE(BigInt(BASE), args[0]);
-      return {result: 0n};
+      return {result: 0n, output: Buffer.from(mem.subarray(args[0], args[0] + outputBytes))};
     },
-    async callAddress(address, args) {
+    async callAddress(address, args, outputBytes) {
+      assert.strictEqual(outputBytes, 2);
       return {result: dispatch(address, args), output: Buffer.alloc(0)};
     },
     async read(address, length) {
@@ -98,6 +101,13 @@ function mockRpc(options = {}) {
         log.writes.push({address, bytes: Buffer.from(bytes)});
     }
   };
+  if (options.combined) {
+    rpc.writeAndCall = async (address, bytes, target, args) => {
+      log.combinedWrites++;
+      await rpc.write(address, bytes);
+      return rpc.callAddress(target, args, 2);
+    };
+  }
 
   // virtual clock: advancing moves queued buffers whose playback elapsed to released
   function advance(ms) {
@@ -147,7 +157,7 @@ function virtualSleep(mock) {
 }
 
 test('primes, starts, appends in order and recycles across wraparound', async () => {
-  const mock = mockRpc();
+  const mock = mockRpc({combined: true});
   const input = new PassThrough();
   const pcm = sine(20);
   const session = stream({
@@ -179,6 +189,7 @@ test('primes, starts, appends in order and recycles across wraparound', async ()
   assert.strictEqual(reassembled.length, pcm.length);
   assert.ok(reassembled.equals(pcm), 'slots written back to back in order');
   assert.strictEqual(stats.appended, 20);
+  assert.strictEqual(mock.log.combinedWrites, 20);
   assert.strictEqual(stats.released, 20);
   assert.strictEqual(stats.overruns, 0);
   assert.strictEqual(mock.queued.length, 0, 'queue fully drained');
