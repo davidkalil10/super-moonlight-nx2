@@ -39,10 +39,11 @@ established practice. `gpu-app.cjs` keeps the app's private storage
 
 `launcher.cjs:47` writes 8 MiB of zeros, the 1 KiB state, the 2 MiB text atlas
 and the 4 MiB catalog right after `vkMapMemory2`. That is 14,681,088 bytes in
-449 exchanges, and no other journaled call happens until the next
-`vkCreateBuffer`. The gap between those two operations in
-`launcher-auto-operations.jsonl` is therefore a direct write-throughput
-measurement:
+449 write exchanges. No other journaled call happens until the next
+`vkCreateBuffer`, so the gap between those two operations in
+`launcher-auto-operations.jsonl` is a direct write-throughput measurement. A
+few unjournaled `guard` queries and pointer reads also fall inside the gap,
+which makes about 450 exchanges in total and keeps the error within 2%:
 
 | Session | Gap | Per 32 KiB exchange | Throughput |
 |---|---|---|---|
@@ -208,8 +209,8 @@ Switch 2: apps/moonlight
   reassembly, FEC and input encryption, but it does not pair or launch apps. Use
   moonlight-embedded (C, Linux), whose libgamestream pairs with Sunshine (PIN in
   the Sunshine web UI) and launches apps.
-- **Getting frames out**: moonlight-qt renders into its own window and has no
-  raw-frame output, so it is not usable here. Two ways to get frames:
+- **Getting frames out**: moonlight-qt renders into its own window. It is not
+  known to expose raw frames; check its source and CLI before ruling it out. Two ways to get frames:
   - moonlight-embedded's fake/dump platform, if it writes the elementary stream
     to a file or FIFO (not verified, check the source first).
   - A small C helper linked against moonlight-common-c. Its
@@ -231,7 +232,9 @@ Switch 2: apps/moonlight
 
 ### Console side (`apps/moonlight`)
 
-- Private storage (binding 1) holds three 64 KiB slots. A slot is the HBV1
+- Private storage (binding 1) holds three 64 KiB slots. `gpu-app.cjs` creates
+  both bindings with stage flags 49 (vertex, fragment and compute), so the
+  fragment shader can read the ring on the console as well as on desktop. A slot is the HBV1
   header (magic, sequence, size, payload bytes), the macroblocks, and the
   sequence number repeated in the last word of the last exchange used. The host
   writes slot `sequence % 3`.
