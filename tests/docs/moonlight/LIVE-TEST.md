@@ -2,8 +2,8 @@
 
 Everything below is the PC-decode route: `hbmoonlight` decodes the Sunshine
 stream on m5, `live.cjs` re-encodes to HBV2 and writes the ring, and the app
-on the console shows it. Console-side hardware decode is a separate, unbuilt
-path (see the raw-H.264 feed note at the end).
+on the console shows it. The implemented console decoder path has its own
+[native H.264 guide and validation results](NATIVE-H264.md).
 
 ## Prebuilt artifacts (rebuild only if the source changed)
 
@@ -68,8 +68,8 @@ and swap it for `Desktop` above. Expect ~59 fps at a steady budget; raise
   static blocks; raise `--refresh` to speed it.
 - AudioOut sharing with game-audio is untested live (above).
 
-## Console hardware decode (separate, unbuilt)
-`hbmoonlight stream HOST APP --raw-h264-fd 3 3>feed.h264` emits the raw Annex-B
-H.264 bitstream (SPS/PPS first, each access unit tagged on stderr) with no PC
-decode. That is the feed for a console-side video-decode path; the decode calls
-and their wiring into the app are not part of this repo.
+## Console native decode
+
+`live.cjs --moonlight HOST APP --codec h264` connects raw H.264 on FD 4 to the
+console movie decoder. PCM audio stays on FD 3 and controller/touch JSON stays
+on stdin. See [NATIVE-H264.md](NATIVE-H264.md) for setup and current limits.

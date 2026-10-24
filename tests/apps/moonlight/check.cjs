@@ -19,7 +19,9 @@ const hbv = require(path.join(root, 'tools/moonlight/hbv.cjs'));
 const hbv2 = require(path.join(root, 'tools/moonlight/hbv2.cjs'));
 const {psnr} = require(path.join(root, 'tools/moonlight/reference.cjs'));
 const {readFrames} = require(path.join(root, 'tools/moonlight/frames.cjs'));
-const builds = path.join(os.homedir(), 'claude-builds/HBLauncher/gpu-check');
+const builds =
+  process.env.HB_MOONLIGHT_CHECK_BUILDS ||
+  path.join(os.homedir(), 'claude-builds/HBLauncher/gpu-check');
 
 function harness() {
   const binary = path.join(builds, 'gpu-check');
@@ -77,6 +79,7 @@ async function exitChecks(dir) {
     ['B', NPAD.b, 1, 59, 0],
     ['Minus', NPAD.minus, 1, 59, 0],
     ['+/- first frame', NPAD.plus | NPAD.minus, 1, 0, 0],
+    ['+/- short of one second', NPAD.plus | NPAD.minus, 1, 58, 0],
     ['+/- held one second', NPAD.plus | NPAD.minus, 1, 59, 1],
     ['disconnected', NPAD.plus | NPAD.minus, 0, 59, 0]
   ]) {
@@ -88,6 +91,44 @@ async function exitChecks(dir) {
     const result = await run(dir, Buffer.alloc(ring.CONTROL_BYTES), [], state);
     assert.equal(result.state.readUInt32LE(STATE.exitRequest), want, name);
   }
+}
+
+async function nativeCheck(dir) {
+  const memory = Buffer.alloc(ring.MEMORY_BYTES);
+  (await fs.readFile(path.join(__dirname, 'assets/memory.bin'))).copy(memory);
+  const width = 128,
+    height = 96,
+    index = 1;
+  const frame = ring.frameOffset(index);
+  for (let y = 0; y < height; y++) {
+    memory.fill(16, frame + y * width, frame + y * width + width / 2);
+    memory.fill(235, frame + y * width + width / 2, frame + (y + 1) * width);
+  }
+  memory.fill(128, frame + width * height, frame + (width * height * 3) / 2);
+  for (const [field, value] of Object.entries({
+    nativeSequence: 1,
+    nativeIndex: index,
+    nativeWidth: width,
+    nativeHeight: height,
+    nativeStride: width,
+    nativeSliceHeight: height,
+    nativeColor: 1
+  }))
+    memory.writeUInt32LE(value, ring.CONTROL[field]);
+  const shown = await run(dir, memory);
+  assert.equal(shown.memory.readUInt32LE(ring.CONTROL.mode), ring.MODE.native);
+  assert.equal(shown.memory.readUInt32LE(ring.CONTROL.nativeApplied), 1);
+  assert.equal(shown.memory.readUInt32LE(ring.CONTROL.nativeReady), ring.NATIVE_ABI);
+  assert.ok(
+    shown.memory
+      .subarray(frame, frame + (width * height * 3) / 2)
+      .equals(memory.subarray(frame, frame + (width * height * 3) / 2))
+  );
+  const pixel = x => [...shown.rgb.subarray((540 * 1920 + x) * 3, (540 * 1920 + x) * 3 + 3)];
+  assert.deepEqual(pixel(20), [0, 0, 0], 'native letterbox');
+  assert.deepEqual(pixel(400), [0, 0, 0], 'limited-range black');
+  assert.deepEqual(pixel(1500), [255, 255, 255], 'limited-range white');
+  console.log('Native NV12: metadata publication, limited-range sampling and letterboxing passed');
 }
 
 function samePlanes(memory, frame, name) {
@@ -102,7 +143,9 @@ function samePlanes(memory, frame, name) {
 function control(memory) {
   return Object.fromEntries(
     Object.entries(ring.CONTROL)
-      .filter(([name]) => name !== 'written')
+      .filter(([name]) =>
+        ['applied', 'applyCount', 'mode', 'current', 'size', 'hbv1Slot'].includes(name)
+      )
       .map(([name, offset]) => [name, memory.readUInt32LE(offset)])
   );
 }
@@ -246,10 +289,13 @@ async function main() {
     const waiting = await run(dir, Buffer.alloc(ring.CONTROL_BYTES));
     assert.ok(waiting.rgb.readUInt8(0) < 40, 'Empty memory should show the waiting screen');
     await testCardCheck(dir);
+    await nativeCheck(dir);
     await hbv1Check(dir);
     await chainCheck(dir);
     if (process.argv[2]) await clipCheck(dir, process.argv[2]);
-    console.log('Passed: exit, waiting screen, HBV2 test card, HBV1 slot, HBV2 P chain.');
+    console.log(
+      'Passed: exit, waiting screen, native NV12, HBV2 test card, HBV1 slot, HBV2 P chain.'
+    );
   } finally {
     await fs.rm(dir, {recursive: true, force: true});
   }

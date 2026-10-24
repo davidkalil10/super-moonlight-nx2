@@ -37,7 +37,7 @@ function virtualSleep(mock) {
 }
 
 test('primes, starts, appends in order and recycles across wraparound', async () => {
-  const mock = mockRpc();
+  const mock = mockRpc({combined: true});
   const input = new PassThrough();
   const pcm = sine(20);
   const session = stream({
@@ -69,6 +69,7 @@ test('primes, starts, appends in order and recycles across wraparound', async ()
   assert.strictEqual(reassembled.length, pcm.length);
   assert.ok(reassembled.equals(pcm), 'slots written back to back in order');
   assert.strictEqual(stats.appended, 20);
+  assert.strictEqual(mock.log.combinedWrites, 20);
   assert.strictEqual(stats.released, 20);
   assert.strictEqual(stats.overruns, 0);
   assert.strictEqual(mock.queued.length, 0, 'queue fully drained');

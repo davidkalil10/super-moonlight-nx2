@@ -1,5 +1,9 @@
 # Moonlight on HBLauncher: design (PC decode, shader display)
 
+This document describes the HBV1/HBV2 path. The implemented native H.264 path,
+including its audio/input wiring and measured limitations, is documented in
+[NATIVE-H264.md](NATIVE-H264.md).
+
 Goal: play PC games streamed by Sunshine (rig, 192.168.8.245) on the Switch 2
 through HBLauncher, using only what apps already have: PC-side networking and
 decoding, frame bytes written by the host into app storage, a fragment shader
