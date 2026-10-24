@@ -150,13 +150,15 @@ function summarize(units, frames, held) {
 // Burst answers. Console times come from ticks: SendInput's stamp, and the tick the output
 // watcher took on the wake that brought its counter to k, read back with k by host samples.
 // Events can coalesce, so per-frame latency only holds when every output got its own event.
-function summarizeBurst({sends, samples, frames, held, eventCount, ms}) {
+// base is the output count before the first AU, so wake k is the (k - base)th output.
+function summarizeBurst({sends, samples, frames, held, eventCount, base = 0, ms}) {
   const tickOf = new Map();
-  for (const sample of samples) if (sample.count) tickOf.set(sample.count, BigInt(sample.tick));
+  for (const sample of samples)
+    if (sample.count > base) tickOf.set(sample.count - base, BigInt(sample.tick));
   const known = [...tickOf.keys()].sort((a, b) => a - b);
   const consecutive = known.filter(k => tickOf.has(k + 1));
   const decodeIndex = new Map(sends.map(send => [send.display, send.au]));
-  const oneToOne = eventCount === frames.length;
+  const oneToOne = eventCount - base === frames.length;
   const latency = oneToOne
     ? known
         .filter(k => k <= frames.length)
@@ -246,12 +248,8 @@ async function main(
   );
   const references = reference ? await fs.readFile(reference) : null;
   // A large clip's reference holds only some frames, listed by display index in the sidecar.
-  const referenceAt = new Map(
-    (timing?.references ?? [...new Set(display)].sort((a, b) => a - b)).map((shown, i) => [
-      shown,
-      i
-    ])
-  );
+  const listed = timing?.references ?? display.map((_, i) => i);
+  const referenceAt = new Map(listed.map((shown, i) => [shown, i]));
   const {sps, pps} = parameterSets(bytes);
   if (!sps || !pps) throw Error('Clip has no SPS/PPS');
 
@@ -301,7 +299,15 @@ async function main(
     record.loop = {
       totalMs: round(performance.now() - started),
       ...(burst
-        ? summarizeBurst({sends, samples, frames, held, eventCount, ms})
+        ? summarizeBurst({
+            sends,
+            samples,
+            frames,
+            held,
+            eventCount,
+            base: record.afterStart?.output ?? 0,
+            ms
+          })
         : summarize(rows, frames, held))
     };
     const compared = frames.filter(f => f.match !== undefined),
@@ -420,8 +426,16 @@ async function main(
     });
     record.registerStatus = registered;
     record.dimensions = dimensions;
-    const frameBytes = (dimensions.width * dimensions.height * 3) / 2;
-    const surfaceBytes = Math.ceil((frameBytes * 2) / 0x1000) * 0x1000;
+    // The decoder may report the coded size (1088 for 1080p); the sidecar has the picture.
+    const picture = timing?.width ? {width: timing.width, height: timing.height} : dimensions;
+    if (picture.width > dimensions.width || picture.height > dimensions.height)
+      throw Error(`Clip is ${picture.width}x${picture.height}, larger than the decoder's size`);
+    const frameBytes = (picture.width * picture.height * 3) / 2;
+    const surfaceBytes = Math.ceil((dimensions.width * dimensions.height * 3) / 0x1000) * 0x1000;
+    if (references && references.length !== listed.length * frameBytes)
+      throw Error(
+        `Reference is ${references.length} bytes, expected ${listed.length} frames of ${frameBytes}`
+      );
     const destination = {
       address: await allocate(rpc, surfaceBytes, {
         failed: 'Output surface allocation failed',
@@ -460,17 +474,23 @@ async function main(
           destination.address,
           (frame.stride * frame.sliceHeight * 3) / 2
         );
-        const packed = packNv12(surface, frame);
+        if (!record.outputLayout) {
+          const {width, height, stride, sliceHeight} = frame;
+          record.outputLayout = {width, height, stride, sliceHeight};
+        }
+        if (frame.width < picture.width || frame.height < picture.height)
+          throw Error(`Output ${frame.width}x${frame.height} is smaller than the clip`);
+        const packed = packNv12(surface, {...frame, ...picture});
         row.sha256 = sha256(packed);
         const at = referenceAt.get(shown) * frameBytes;
-        if (want && at + frameBytes <= references.length)
+        if (want)
           Object.assign(
             row,
             compareFrame(
               packed,
               references.subarray(at, at + frameBytes),
-              frame.width,
-              frame.height
+              picture.width,
+              picture.height
             )
           );
       }

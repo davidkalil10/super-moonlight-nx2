@@ -30,7 +30,7 @@ async function quiet(action) {
 // An Annex-B clip of SPS/PPS and one single-slice AU per entry of display, with its timing
 // sidecar and a reference whose display frame k is filled with k. With subset, the reference
 // holds only those display frames and the sidecar lists them.
-function clipFiles(display, {frame = FRAME, subset = null} = {}) {
+function clipFiles(display, {frame = FRAME, subset = null, listed = subset, size = null} = {}) {
   const folder = temporary();
   const start = [0, 0, 0, 1];
   const nal = bytes => [...start, ...bytes];
@@ -40,7 +40,7 @@ function clipFiles(display, {frame = FRAME, subset = null} = {}) {
   fs.writeFileSync(clip, Buffer.from(bytes));
   fs.writeFileSync(
     path.join(folder, 'clip.json'),
-    JSON.stringify(subset ? {display, references: subset} : {display})
+    JSON.stringify({...size, display, ...(listed && {references: listed})})
   );
   const kept = subset ?? display.map((_, k) => k);
   const reference = Buffer.alloc(kept.length * frame);
@@ -52,11 +52,23 @@ function clipFiles(display, {frame = FRAME, subset = null} = {}) {
 // hold: frames the decoder keeps until more input arrives (released in display order).
 // silent: it never signals the output event. corrupt: frame 1 comes out wrong.
 // slots: frames it can hold, decoded or not taken, before its input side is full.
+// coded: it reports this height and a padded stride, as for 1080p coded as 1088.
+// startOutput: it signals the output event once at Start.
 function fakeDecoder(
   fake,
-  {hold = 0, silent = false, corrupt = false, slots = Infinity, width = WIDTH, height = HEIGHT} = {}
+  {
+    hold = 0,
+    silent = false,
+    corrupt = false,
+    slots = Infinity,
+    width = WIDTH,
+    height = HEIGHT,
+    coded = null,
+    startOutput = false
+  } = {}
 ) {
-  const bytes = (width * height * 3) / 2;
+  const reported = coded ?? {height, stride: width};
+  const bytes = (reported.stride * reported.height * 3) / 2;
   const {memory, rpc} = fake;
   const state = {struct: null, inside: [], ready: [], closed: false, configured: null};
   const signal = offset => {
@@ -76,7 +88,8 @@ function fakeDecoder(
       await beforeStart(0x5a000000);
       rpc.note('decoder.start');
       signal(0);
-      return {width, height};
+      if (startOutput) signal(8);
+      return {width, height: reported.height};
     },
     async submit(unit, {acquireOutput, stamp}) {
       assert.equal(acquireOutput, false);
@@ -100,9 +113,9 @@ function fakeDecoder(
       memory.write(destination.address, Buffer.alloc(bytes, corrupt && shown === 1 ? 9 : shown));
       return {
         width,
-        height,
-        stride: width,
-        sliceHeight: height,
+        height: reported.height,
+        stride: reported.stride,
+        sliceHeight: reported.height,
         bytes,
         pts: String(shown),
         format: 'nv12'
@@ -118,7 +131,7 @@ function fakeDecoder(
 
 async function run(
   display,
-  {console: consoleOptions = {}, decoder = {}, subset = null, ...options} = {}
+  {console: consoleOptions = {}, decoder = {}, subset = null, listed = subset, ...options} = {}
 ) {
   const fake = gateConsole({advanceOnRead: true, ...consoleOptions});
   const movie = fakeDecoder(fake, decoder);
@@ -133,7 +146,11 @@ async function run(
     probe.main(directory, {
       clip: clipFiles(display, {
         frame: ((decoder.width ?? WIDTH) * (decoder.height ?? HEIGHT) * 3) / 2,
-        subset
+        subset,
+        listed,
+        size: decoder.coded
+          ? {width: decoder.width ?? WIDTH, height: decoder.height ?? HEIGHT}
+          : null
       }),
       output,
       settleMs: 20,
@@ -435,4 +452,27 @@ test('burst summary times outputs from the watcher ticks and SendInput stamps', 
   assert.equal(loop.console.inputFps, 100);
   assert.equal(loop.console.maxInFlight, 0);
   assert.equal(loop.host.fps, 150);
+});
+
+test('a coded size larger than the clip is cropped to the clip before comparing', async () => {
+  const {report} = await run([0, 1, 2], {decoder: {coded: {height: 16, stride: 32}}});
+  assert.equal(report.verdict, 'PASS');
+  assert.deepEqual(report.dimensions, {width: WIDTH, height: 16});
+  assert.deepEqual(report.outputLayout, {width: WIDTH, height: 16, stride: 32, sliceHeight: 16});
+  assert.equal(report.correctness.matched, 3);
+});
+
+test('a reference of the wrong size fails before any AU is sent', async () => {
+  const {error, record} = await run([0, 1, 2], {subset: [0, 2], listed: [0, 1, 2]});
+  assert.equal(error.message, 'Reference is 384 bytes, expected 3 frames of 192');
+  assert.equal(record.units, undefined);
+  assert.equal(record.finalized, true);
+});
+
+test('an output event at Start does not shift burst latency onto the wrong frames', async () => {
+  const {report} = await run([0, 1, 2, 3], {burst: true, decoder: {startOutput: true}});
+  assert.equal(report.verdict, 'PASS');
+  assert.equal(report.afterStart.output, 1);
+  assert.equal(report.loop.console.oneEventPerOutput, true);
+  assert.equal(report.loop.console.latencyMs.n, 4);
 });
