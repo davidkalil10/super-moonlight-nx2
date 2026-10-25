@@ -134,6 +134,7 @@ test('first-job probe journals each stage and closes the decoder', async () => {
       'release',
       'input',
       'done',
+      'restore',
       'fetch'
     ]);
   } finally {

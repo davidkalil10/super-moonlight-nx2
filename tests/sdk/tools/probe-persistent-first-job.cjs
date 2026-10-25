@@ -21,6 +21,7 @@ const STAGES = [
   'release',
   'input',
   'done',
+  'restore',
   'fetch'
 ];
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -211,17 +212,23 @@ async function main(
         throw Error('Probe SendInput returned 0x' + result.probe.sendStatus.toString(16));
       if (stage === 'acquire' && (result.probe.acquireStatus !== 0 || result.probe.outputIndex < 0))
         throw Error('Probe AcquireOutput did not return a frame');
-      if (['getOutput', 'release', 'input', 'done'].includes(stage) && result.probe.getStatus !== 0)
+      if (
+        ['getOutput', 'release', 'input', 'done', 'restore'].includes(stage) &&
+        result.probe.getStatus !== 0
+      )
         throw Error('Probe GetOutput returned 0x' + result.probe.getStatus.toString(16));
-      if (['release', 'input', 'done'].includes(stage) && result.probe.releaseStatus !== 0)
+      if (
+        ['release', 'input', 'done', 'restore'].includes(stage) &&
+        result.probe.releaseStatus !== 0
+      )
         throw Error('Probe ReleaseOutput returned 0x' + result.probe.releaseStatus.toString(16));
       if (
-        ['input', 'done'].includes(stage) &&
+        ['input', 'done', 'restore'].includes(stage) &&
         result.probe.inputStatus !== 0 &&
         !(result.probe.nextIndex < 0 && [0x100e, 0x1011].includes(result.probe.inputStatus))
       )
         throw Error('Probe AcquireInput returned 0x' + result.probe.inputStatus.toString(16));
-      if (stage === 'done' && result.probe.completedSequence !== 1)
+      if (['done', 'restore'].includes(stage) && result.probe.completedSequence !== 1)
         throw Error('Probe completed the wrong access unit');
     } else if (result.pts !== String(nextIndex)) {
       throw Error('Probe fetch returned the wrong presentation timestamp');

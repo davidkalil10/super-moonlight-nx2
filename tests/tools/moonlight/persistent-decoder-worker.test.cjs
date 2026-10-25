@@ -431,6 +431,66 @@ test('first full gated job carries the acquired index into output fetch', async 
   await worker.finalize();
 });
 
+test('full fetch re-enters the gate frame after signalling completion', async () => {
+  const f = fixture();
+  const worker = await create({
+    rpc: f.rpc,
+    module: f.module,
+    functions: f.functions,
+    decoder,
+    output,
+    format
+  });
+  await worker.register();
+  await worker.start();
+  const job = Buffer.alloc(24);
+  job.writeUInt32LE(1, 0);
+  job.writeInt32LE(3, 4);
+  job.writeUInt32LE(4096, 8);
+  job.writeBigUInt64LE(90000n, 16);
+  f.write(f.control + 0x1a0, job);
+  const destination = Buffer.alloc(16);
+  destination.writeBigUInt64LE(0x72000000n, 0);
+  destination.writeBigUInt64LE(0x400000n, 8);
+  f.write(f.control + 0x1c0, destination);
+  const reachedGate = Error('re-entered gate');
+  let gates = 0;
+  let done = false;
+  const entry = address => f.read(address + 0x58, 8).readBigUInt64LE();
+  const gateFrame = 0x60000000 + 0x10000;
+  const decodeFrame = 0x60000000 + 0x110000;
+  const fetchFrame = 0x60000000 + 0x210000;
+  assert.throws(
+    () =>
+      emulate(f, gateFrame, (target, args) => {
+        if (target === SDK + sync.waitLightEvent.offset && args[0] === f.control) {
+          gates++;
+          if (gates === 2) throw reachedGate;
+        }
+        if (target === f.functions.sendInput) {
+          f.write(gateFrame + 0x58, Buffer.alloc(8));
+          f.write(decodeFrame + 0x58, Buffer.alloc(8));
+        }
+        if (target === f.functions.acquireOutput) {
+          const index = Buffer.alloc(4);
+          index.writeInt32LE(2);
+          f.write(args[1], index);
+        }
+        if (target === f.functions.bufferSetData) f.write(fetchFrame + 0x58, Buffer.alloc(8));
+        if (target === SDK + sync.signalLightEvent.offset && args[0] === f.control + 0x30)
+          done = true;
+        return 0;
+      }),
+    error => error === reachedGate
+  );
+  assert.equal(done, true);
+  assert.equal(entry(gateFrame), entry(0x60000000 + 0x80000));
+  assert.equal(entry(decodeFrame), entry(0x60000000 + 0x180000));
+  assert.equal(entry(fetchFrame), entry(0x60000000 + 0x280000));
+  await worker.stop();
+  await worker.finalize();
+});
+
 test('fetch probe stages stop after the selected native call', async () => {
   const fetchNames = ['bufferSetData', 'getOutput', 'releaseOutput', 'acquireInput'];
   const stages = [
@@ -438,7 +498,8 @@ test('fetch probe stages stop after the selected native call', async () => {
     ['getOutput', ['bufferSetData', 'getOutput']],
     ['release', ['bufferSetData', 'getOutput', 'releaseOutput']],
     ['input', ['bufferSetData', 'getOutput', 'releaseOutput', 'acquireInput']],
-    ['done', ['bufferSetData', 'getOutput', 'releaseOutput', 'acquireInput']]
+    ['done', ['bufferSetData', 'getOutput', 'releaseOutput', 'acquireInput']],
+    ['restore', ['bufferSetData', 'getOutput', 'releaseOutput', 'acquireInput']]
   ];
   for (const [stage, expected] of stages) {
     const f = fixture();
@@ -490,7 +551,7 @@ test('fetch probe stages stop after the selected native call', async () => {
 });
 
 test('fetch probes release an acquired output only when their body did not', async () => {
-  for (const stage of ['setData', 'getOutput', 'release', 'input', 'done']) {
+  for (const stage of ['setData', 'getOutput', 'release', 'input', 'done', 'restore']) {
     const f = fixture({noFetchCompleted: true});
     const worker = await create({
       rpc: f.rpc,
