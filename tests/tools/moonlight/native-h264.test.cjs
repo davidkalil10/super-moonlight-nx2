@@ -87,13 +87,25 @@ async function fixture({
       };
     },
     async createSink() {
+      let workerSequence = 0;
       return {
+        workerPublication: {mapped: 0x1000000, color: 1},
         async destination() {
           events.push({type: 'destination'});
           return {address: 0x1000000, bytes: 32768, index: 1};
         },
         async publish(destination, frame) {
           events.push({type: 'publish', destination, frame});
+        },
+        async workerDestination(presentation) {
+          events.push({type: 'worker-destination', presentation});
+          return {
+            address: 0x1000000 + (++workerSequence * 32768),
+            bytes: 32768,
+            index: workerSequence % 3,
+            sequence: workerSequence,
+            color: 1
+          };
         },
         async wait() {},
         async close() {
@@ -102,7 +114,7 @@ async function fixture({
       };
     },
     async createDecoder(config) {
-      events.push({type: 'create-decoder', mode: config.workerMode});
+      events.push({type: 'create-decoder', mode: config.workerMode, publication: config.publication});
       let splitSequence = 0;
       return {
         async configure(sps, pps, fps) {
@@ -138,7 +150,7 @@ async function fixture({
         },
         async submitSplit(unit) {
           events.push({type: 'submit-split', unit});
-          return {sequence: ++splitSequence, pts: unit.pts};
+          return {sequence: ++splitSequence, pts: unit.pts, presentation: {current: 0, applied: 0}};
         },
         async queueSplitOutput(job) {
           events.push({type: 'queue-split', job});
@@ -352,6 +364,31 @@ test(
     });
   }
 );
+
+test('native split publication leaves frame commits to the output worker', {timeout: 5000}, async () => {
+  const f = await fixture({
+    units: [
+      {hex: accessUnit.toString('hex'), keyframe: true, pts: 1000},
+      {hex: accessUnit.toString('hex'), keyframe: false, pts: 2000},
+      {hex: accessUnit.toString('hex'), keyframe: false, pts: 3000}
+    ]
+  });
+  f.options.args.push('--split-decoder', '--native-publish');
+  await exercise(f, async () => {
+    await run(f.options);
+    assert.deepEqual(f.events.find(event => event.type === 'create-decoder').publication, {
+      mapped: 0x1000000,
+      color: 1
+    });
+    assert.equal(f.events.filter(event => event.type === 'publish').length, 1);
+    assert.equal(f.events.filter(event => event.type === 'worker-destination').length, 2);
+    assert.equal(f.events.filter(event => event.type === 'finish-split').length, 2);
+    assert.deepEqual(
+      f.events.filter(event => event.type === 'worker-destination').map(event => event.presentation),
+      [{current: 0, applied: 0}, null]
+    );
+  });
+});
 
 test(
   'persistent worker waits for a late first output before taking over',

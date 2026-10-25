@@ -81,7 +81,7 @@ const LAYOUT = {
     inputDone: 0x30,
     inputResults: 0x1a0,
     outputGate: 0x40,
-    outputJob: 0x160,
+    outputJob: 0x300,
     acquired: 0x50,
     acquireResults: 0x1c0,
     fetchGate: 0x60,
@@ -140,7 +140,7 @@ function createClock() {
 // A healthy console: one bridge exchange at a time, worker threads that answer the
 // host's gates after modeled latencies, and a presenter that applies each published
 // frame on the next vsync.
-function createConsole(clock, mode, model) {
+function createConsole(clock, mode, model, nativePublish = false) {
   const layout = LAYOUT[mode];
   const regions = [];
   const signaled = new Set();
@@ -180,8 +180,12 @@ function createConsole(clock, mode, model) {
 
   function present(commit) {
     const value = Buffer.from(commit);
+    const index = peek(MAPPED + ring.CONTROL.nativeIndex, 4);
     const vsync = Math.ceil((clock.now() + 1e-6) / model.vsyncMs) * model.vsyncMs;
-    at(vsync, () => poke(MAPPED + ring.CONTROL.nativeApplied, value));
+    at(vsync, () => {
+      poke(MAPPED + ring.CONTROL.current, index);
+      poke(MAPPED + ring.CONTROL.nativeApplied, value);
+    });
   }
 
   function decode(sequence, pts) {
@@ -232,7 +236,16 @@ function createConsole(clock, mode, model) {
       );
     } else if (offset === layout.decodeGate) {
       decode(sequence, pts);
-      at(clock.now() + model.submitMs, () =>
+      at(clock.now() + model.submitMs, () => {
+        if (nativePublish) {
+          const presentation = Buffer.alloc(8);
+          presentation.writeUInt32LE(peek(MAPPED + ring.CONTROL.current, 4).readUInt32LE());
+          presentation.writeUInt32LE(
+            peek(MAPPED + ring.CONTROL.nativeApplied, 4).readUInt32LE(),
+            4
+          );
+          poke(control + 0x210, presentation);
+        }
         complete(
           layout.inputResults,
           [
@@ -242,8 +255,8 @@ function createConsole(clock, mode, model) {
             [24, 'writeUInt32LE', sequence]
           ],
           layout.inputDone
-        )
-      );
+        );
+      });
     } else if (offset === layout.outputGate) {
       const output = peek(control + layout.outputJob, 4).readUInt32LE();
       const decoded = decodes.get(output);
@@ -278,9 +291,14 @@ function createConsole(clock, mode, model) {
               [32, 'writeInt32LE', 1],
               [40, 'writeUInt32LE', output]
             ];
-      at(clock.now() + model.fetchMs, () =>
+      at(clock.now() + model.fetchMs, () => {
+        if (nativePublish) {
+          const publish = peek(control + layout.outputJob + 24, 32);
+          poke(MAPPED + ring.CONTROL.nativeIndex, publish.subarray(0, 28));
+          poke(MAPPED + ring.CONTROL.nativeSequence, publish.subarray(28));
+        }
         complete(layout.fetchResults, fields, layout.fetchDone)
-      );
+      });
     }
   }
 
@@ -370,11 +388,19 @@ function createConsole(clock, mode, model) {
   };
 }
 
-async function simulate({mode, frames = 120, warmup = 4, paced = true, model = MODEL}) {
+async function simulate({
+  mode,
+  frames = 120,
+  warmup = 4,
+  paced = true,
+  nativePublish = false,
+  model = MODEL
+}) {
   if (!LAYOUT[mode]) throw Error('Unknown request budget mode ' + mode);
+  if (nativePublish && mode !== 'split') throw Error('Native worker publication needs split mode');
   const clock = createClock();
   return clock.run(async () => {
-    const machine = createConsole(clock, mode, model);
+    const machine = createConsole(clock, mode, model, nativePublish);
     let stage = 'setup';
     const bridge = instrument(machine.rpc, () => stage, clock.now);
     const rpc = bridge.rpc;
@@ -400,7 +426,8 @@ async function simulate({mode, frames = 120, warmup = 4, paced = true, model = M
       decoder: DECODER,
       output: DECODER + 0x300,
       format: DECODER + 0x180,
-      transport: machine.transport
+      transport: machine.transport,
+      publication: nativePublish ? {mapped: MAPPED, color: 1} : null
     });
     await worker.register();
     await worker.start();
@@ -433,11 +460,15 @@ async function simulate({mode, frames = 120, warmup = 4, paced = true, model = M
         );
         if (pending) {
           stage = 'destination';
-          const destination = await sink.destination();
+          const destination = nativePublish
+            ? await sink.workerDestination(current.presentation)
+            : await sink.destination();
           stage = 'split-output';
-          await worker.finishOutput(pending, destination);
-          stage = 'publish';
-          await sink.publish(destination, DECODED);
+          await worker.finishOutput(pending, destination, DECODED);
+          if (!nativePublish) {
+            stage = 'publish';
+            await sink.publish(destination, DECODED);
+          }
           presented++;
         }
         stage = 'split-queue';
@@ -462,6 +493,7 @@ async function simulate({mode, frames = 120, warmup = 4, paced = true, model = M
     return {
       frames: presented,
       paced,
+      nativePublish,
       requestsPerFrame: perFrame(counted.exchanges),
       bridgeMsPerFrame: perFrame(counted.bridgeMs),
       msPerFrame: perFrame(elapsed),
@@ -478,10 +510,12 @@ async function simulate({mode, frames = 120, warmup = 4, paced = true, model = M
 
 async function budget({frames = 120, model = MODEL} = {}) {
   const modes = {};
-  for (const mode of ['persistent', 'split']) {
-    const paced = await simulate({mode, frames, model});
-    const free = await simulate({mode, frames, model, paced: false});
-    modes[mode] = {
+  for (const name of ['persistent', 'split', 'splitPublish']) {
+    const mode = name === 'splitPublish' ? 'split' : name;
+    const nativePublish = name === 'splitPublish';
+    const paced = await simulate({mode, frames, model, nativePublish});
+    const free = await simulate({mode, frames, model, nativePublish, paced: false});
+    modes[name] = {
       requestsPerFrame: paced.requestsPerFrame,
       bridgeMsPerFrame: paced.bridgeMsPerFrame,
       predictedFps: free.fps,
@@ -495,9 +529,14 @@ async function budget({frames = 120, model = MODEL} = {}) {
     };
   }
   const planDecode = {};
-  for (const mode of ['persistent', 'split']) {
-    const options = {mode, frames, model: {...model, decodeMs: PLAN_DECODE_MS}};
-    planDecode[mode] = {
+  for (const name of ['persistent', 'split', 'splitPublish']) {
+    const options = {
+      mode: name === 'splitPublish' ? 'split' : name,
+      nativePublish: name === 'splitPublish',
+      frames,
+      model: {...model, decodeMs: PLAN_DECODE_MS}
+    };
+    planDecode[name] = {
       requestsPerFrame: (await simulate(options)).requestsPerFrame,
       predictedFps: (await simulate({...options, paced: false})).fps
     };

@@ -98,7 +98,7 @@ async function nativeCheck(dir) {
   (await fs.readFile(path.join(__dirname, 'assets/memory.bin'))).copy(memory);
   const width = 128,
     height = 96,
-    index = 1;
+    index = 2;
   const frame = ring.frameOffset(index);
   for (let y = 0; y < height; y++) {
     memory.fill(16, frame + y * width, frame + y * width + width / 2);
@@ -112,7 +112,8 @@ async function nativeCheck(dir) {
     nativeHeight: height,
     nativeStride: width,
     nativeSliceHeight: height,
-    nativeColor: 1
+    nativeColor: 1,
+    nativeCommit: ring.nativeChecksum(1, [index, width, height, width, height, 1])
   }))
     memory.writeUInt32LE(value, ring.CONTROL[field]);
   const shown = await run(dir, memory);
@@ -128,6 +129,10 @@ async function nativeCheck(dir) {
   assert.deepEqual(pixel(20), [0, 0, 0], 'native letterbox');
   assert.deepEqual(pixel(400), [0, 0, 0], 'limited-range black');
   assert.deepEqual(pixel(1500), [255, 255, 255], 'limited-range white');
+  const torn = Buffer.from(memory);
+  torn.writeUInt32LE(0, ring.CONTROL.nativeCommit);
+  const rejected = await run(dir, torn);
+  assert.equal(rejected.memory.readUInt32LE(ring.CONTROL.nativeApplied), 0);
   console.log('Native NV12: metadata publication, limited-range sampling and letterboxing passed');
 }
 

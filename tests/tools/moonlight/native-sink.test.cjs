@@ -24,7 +24,8 @@ test('host publication fields occupy different cache lines from GPU-written cont
     'nativeHeight',
     'nativeStride',
     'nativeSliceHeight',
-    'nativeColor'
+    'nativeColor',
+    'nativeCommit'
   ];
   const gpuLines = new Set(gpu.map(name => Math.floor(ring.CONTROL[name] / 128)));
   for (const name of host) assert.equal(gpuLines.has(Math.floor(ring.CONTROL[name] / 128)), false);
@@ -33,10 +34,12 @@ test('host publication fields occupy different cache lines from GPU-written cont
 function fixture() {
   const memory = Buffer.alloc(ring.CONTROL_BYTES);
   const writes = [];
+  const reads = [];
   const storage = {mapped: 0x1000000, bytes: ring.MEMORY_BYTES, memoryFlags: 7};
   memory.writeUInt32LE(ring.NATIVE_ABI, ring.CONTROL.nativeReady);
   const rpc = {
     async read(address, length) {
+      reads.push({address, length});
       return Buffer.from(
         memory.subarray(address - storage.mapped, address - storage.mapped + length)
       );
@@ -54,7 +57,7 @@ function fixture() {
       }
     }
   };
-  return {rpc, storage, memory, writes};
+  return {rpc, storage, memory, writes, reads};
 }
 
 test('empty output polls keep selecting the inactive surface, and commits publish metadata first', async () => {
@@ -79,4 +82,33 @@ test('old shaders and noncoherent allocations are rejected before any frame is w
   f.memory.writeUInt32LE(0, ring.CONTROL.nativeReady);
   await assert.rejects(create(f.rpc, f.storage), /Relaunch Moonlight/);
   assert.deepEqual(f.writes, []);
+});
+
+test('worker destinations avoid the displayed and unpublished surfaces', async () => {
+  const f = fixture();
+  const sink = await create(f.rpc, f.storage);
+  const first = await sink.workerDestination({current: 0, applied: 0});
+  assert.deepEqual([first.index, first.sequence], [1, 1]);
+  const reads = f.reads.length;
+  const second = await sink.workerDestination({current: 0, applied: 0});
+  assert.deepEqual([second.index, second.sequence], [2, 2]);
+  assert.equal(f.reads.length, reads);
+  const third = await sink.workerDestination({current: 1, applied: 1});
+  assert.deepEqual([third.index, third.sequence], [0, 3]);
+  assert.equal(f.reads.length, reads);
+  assert.equal(sink.workerPublication.mapped, f.storage.mapped);
+  assert.equal(sink.workerPublication.color, 1);
+});
+
+test('a torn presentation snapshot is refreshed before recycling a surface', async () => {
+  const f = fixture();
+  const sink = await create(f.rpc, f.storage);
+  await sink.workerDestination({current: 0, applied: 0});
+  await sink.workerDestination({current: 0, applied: 0});
+  f.memory.writeUInt32LE(2, ring.CONTROL.current);
+  f.memory.writeUInt32LE(2, ring.CONTROL.nativeApplied);
+  const before = f.reads.length;
+  const destination = await sink.workerDestination({current: 0, applied: 2});
+  assert.equal(destination.index, 0);
+  assert.ok(f.reads.length > before);
 });

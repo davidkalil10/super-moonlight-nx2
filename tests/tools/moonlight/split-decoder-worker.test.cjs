@@ -4,6 +4,7 @@ const definitions = require('../../sdk/native/movie-functions.json');
 const registration = require('../../sdk/native/movie-event-functions.json').registerClientEvents;
 const sync = require('../../sdk/native/os-sync-functions.json');
 const {CODE} = require('../../sdk/native/thread.cjs');
+const ring = require('./ring.cjs');
 const {create} = require('./split-decoder-worker.cjs');
 
 const SDK = 0x40000000;
@@ -101,7 +102,7 @@ function fixture({receiveBytes = 4096, outputIndex = 2} = {}) {
         write(control + 0x1c0, acquired);
       } else if (gate === 0x60) {
         const fetched = Buffer.alloc(28);
-        fetched.writeUInt32LE(read(control + 0x160, 4).readUInt32LE(), 24);
+        fetched.writeUInt32LE(read(control + 0x300, 4).readUInt32LE(), 24);
         write(control + 0x1f0, fetched);
       } else assert.fail('unexpected split worker gate');
       return {result: 0n};
@@ -134,7 +135,7 @@ function fixture({receiveBytes = 4096, outputIndex = 2} = {}) {
   };
 }
 
-async function workerFor(f) {
+async function workerFor(f, options = {}) {
   const worker = await create({
     rpc: f.rpc,
     module: f.module,
@@ -142,7 +143,8 @@ async function workerFor(f) {
     decoder,
     output: decoder + 0x300,
     format: decoder + 0x180,
-    transport: f.transport
+    transport: f.transport,
+    ...options
   });
   await worker.register();
   await worker.start();
@@ -182,7 +184,7 @@ test('split worker runs two input jobs before fetching the first output', async 
   await worker.queueOutput(second);
   await worker.finishOutput(second, {address: 0x73000000, bytes: 0x400000});
   assert.ok(f.calls.some(call => call.statusRead));
-  assert.ok(f.calls.filter(call => call.statusRead).every(call => call.length === 0x8c));
+  assert.ok(f.calls.filter(call => call.statusRead).every(call => call.length === 0x98));
   assert.equal(f.calls.filter(call => call.paired).length, 0);
   await worker.stop();
   await worker.finalize();
@@ -249,6 +251,39 @@ test('the first acquire status read waits for the expected decode time', async (
   const acquired = worker.waitForAcquired(job);
   assert.equal(f.calls.filter(call => call.statusRead).length, previousReads);
   assert.equal((await acquired).index, 2);
+  await worker.stop();
+  await worker.finalize();
+});
+
+test('output publication stages bounded metadata and sequence behind the fetch gate', async () => {
+  const f = fixture();
+  const mapped = 0x30000000;
+  const worker = await workerFor(f, {publication: {mapped, color: 1}});
+  const job = await worker.input({
+    index: 1,
+    length: 4096,
+    pts: 30,
+    inputAddress: 0x72000000,
+    payload: Buffer.alloc(4096)
+  });
+  assert.deepEqual(job.presentation, {current: 0, applied: 0});
+  await worker.queueOutput(job);
+  const destination = {
+    index: 2,
+    address: mapped + ring.frameOffset(2),
+    bytes: ring.FRAME_BYTES,
+    sequence: 7,
+    color: 1
+  };
+  const frame = {width: 1920, height: 1080, stride: 1920, sliceHeight: 1088};
+  await worker.finishOutput(job, destination, frame);
+  const staged = f.read(f.control + 0x308, 48);
+  assert.equal(staged.readBigUInt64LE(0), BigInt(destination.address));
+  assert.equal(staged.readBigUInt64LE(8), BigInt(ring.FRAME_BYTES));
+  assert.deepEqual(
+    Array.from({length: 8}, (_, word) => staged.readUInt32LE(16 + word * 4)),
+    [2, 1920, 1080, 1920, 1088, 1, ring.nativeChecksum(7, [2, 1920, 1080, 1920, 1088, 1]), 7]
+  );
   await worker.stop();
   await worker.finalize();
 });

@@ -49,12 +49,16 @@ copied into an acquired native input buffer, then submitted with its PTS.
 Decoded output is copied by the console SDK directly into the inactive mapped
 Vulkan frame buffer. Decoded pixels do not travel through the PC.
 
-The host publishes dimensions, stride, slice height, color space and a sequence
-number. The compute shader acknowledges the sequence after selecting that
-surface; the fragment shader samples NV12 with limited-range BT.709 conversion
-and aspect-ratio borders. Host request fields start at byte 256 and GPU-written
-fields occupy the first 128 bytes, avoiding writes by both processors to the
-same cache line. ABI marker `0x484e5632` rejects older shaders.
+By default, the host publishes dimensions, stride, slice height, color space and
+a sequence number. With `--split-decoder --native-publish`, the output worker
+publishes those fields after fetching into one of three surfaces. The host
+checks the acquired output index before opening the fetch gate and reserves a
+surface the GPU is not reading. The compute shader checks the metadata checksum
+and acknowledges the sequence after selecting that surface; the fragment
+shader samples NV12 with limited-range BT.709 conversion and aspect-ratio
+borders. Host request fields start at byte 256 and GPU-written fields occupy
+the first 128 bytes, avoiding writes by both processors to the same cache line.
+ABI marker `0x484e5633` rejects older shaders.
 
 The adapter verifies the loaded module's symbol names, offsets, sizes and
 instruction signatures before making native calls. It uses the current

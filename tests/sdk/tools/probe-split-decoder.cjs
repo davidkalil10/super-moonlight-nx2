@@ -10,9 +10,45 @@ const {accessUnits} = require('./probe-decoder-events.cjs');
 const {parameterSets} = require('../../tools/moonlight/h264-stream.cjs');
 const {create: createDecoder} = require('../../tools/moonlight/native-decoder.cjs');
 const {create: createTransport} = require('../../tools/moonlight/native-tcp.cjs');
+const {create: createSink} = require('../../tools/moonlight/native-sink.cjs');
+const ring = require('../../tools/moonlight/ring.cjs');
 
 const STAGES = ['one', 'two', 'stop-input', 'stop-output', 'short-recv'];
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+async function verifyPublication(rpc, mapped, destination, frame) {
+  const data = await rpc.read(mapped + ring.CONTROL.nativeSequence, 32);
+  const publication = {
+    sequence: data.readUInt32LE(0),
+    index: data.readUInt32LE(4),
+    width: data.readUInt32LE(8),
+    height: data.readUInt32LE(12),
+    stride: data.readUInt32LE(16),
+    sliceHeight: data.readUInt32LE(20),
+    color: data.readUInt32LE(24),
+    commit: data.readUInt32LE(28)
+  };
+  if (
+    publication.sequence !== destination.sequence ||
+    publication.index !== destination.index ||
+    publication.width !== frame.width ||
+    publication.height !== frame.height ||
+    publication.stride !== frame.stride ||
+    publication.sliceHeight !== frame.sliceHeight ||
+    publication.color !== destination.color ||
+    publication.commit !==
+      ring.nativeChecksum(publication.sequence, [
+        publication.index,
+        publication.width,
+        publication.height,
+        publication.stride,
+        publication.sliceHeight,
+        publication.color
+      ])
+  )
+    throw Error('Split worker publication differs from the fetched frame');
+  return publication;
+}
 
 function journal(file) {
   const descriptor = fs.openSync(file, 'wx', 0o600);
@@ -70,7 +106,9 @@ async function main(
     stage,
     output,
     sourceRevision,
+    nativePublish = false,
     create = createDecoder,
+    createNativeSink = createSink,
     openTransport = createTransport,
     sessionRpc,
     allocateSurface = allocate
@@ -97,7 +135,11 @@ async function main(
   if (!sps || !pps) throw Error('Probe clip needs SPS and PPS');
   output ||= path.join(
     '/media/storage2/builds/HBLauncher/native-h264',
-    new Date().toISOString().replace(/[:.]/g, '-') + '-' + revision.slice(0, 8) + '-split-' + stage
+    new Date().toISOString().replace(/[:.]/g, '-') +
+      '-' +
+      revision.slice(0, 8) +
+      (nativePublish ? '-split-publish-' : '-split-') +
+      stage
   );
   await fsp.mkdir(output, {recursive: true, mode: 0o700});
   const entries = journal(path.join(output, 'split-decoder.jsonl'));
@@ -111,13 +153,17 @@ async function main(
     targetArchitecture: 'aarch64',
     command: process.argv,
     clip,
+    nativePublish,
     started: new Date().toISOString()
   };
   await fsp.writeFile(path.join(output, 'manifest.json'), JSON.stringify(record, null, 2) + '\n', {
     mode: 0o600
   });
   let decoder = null;
+  let decoderClosed = false;
   let transport = null;
+  let sink = null;
+  let nativeRing = null;
   let failure = null;
   const step = async (name, run) => {
     entries.write({phase: 'before', step: name});
@@ -131,6 +177,26 @@ async function main(
     }
   };
   try {
+    if (nativePublish) {
+      nativeRing = await step('native ring allocation', () =>
+        allocateSurface(rpc, ring.MEMORY_BYTES, {
+          failed: 'Split publication ring allocation failed',
+          invalid: 'Invalid split publication ring allocation'
+        })
+      );
+      const ready = Buffer.alloc(12);
+      ready.writeUInt32LE(ring.NATIVE_ABI);
+      await step('native ring initialize', () =>
+        rpc.write(nativeRing + ring.CONTROL.nativeReady, ready)
+      );
+      sink = await step('native ring sink create', () =>
+        createNativeSink(rpc, {
+          mapped: nativeRing,
+          bytes: ring.MEMORY_BYTES,
+          memoryFlags: 4
+        })
+      );
+    }
     const opened = await step('TCP transport create', () => openTransport({rpc, host: rpc.host}));
     transport = {
       ...opened,
@@ -150,7 +216,8 @@ async function main(
         directory,
         workerDirectory: path.join(output, 'decoder'),
         workerMode: 'split',
-        transport
+        transport,
+        publication: sink?.workerPublication
       })
     );
     const dimensions = await step('configure', () => decoder.configure(sps, pps, 30));
@@ -218,20 +285,47 @@ async function main(
             decoder.submitSplit(unit(secondIndex))
           );
         }
+        const firstDestination = nativePublish
+          ? await step('native destination 1', () =>
+              sink.workerDestination((secondJob || firstJob).presentation)
+            )
+          : destination;
         const firstOutput = await step('output job 1 fetch', () =>
-          decoder.finishSplitOutput(firstJob, destination)
+          decoder.finishSplitOutput(firstJob, firstDestination)
         );
         if (firstOutput.pts !== String(nextIndex)) throw Error('Output job 1 PTS differs');
         const outputs = [firstOutput];
+        const publications = [];
+        if (nativePublish)
+          publications.push(
+            await step('native publication 1 readback', () =>
+              verifyPublication(rpc, nativeRing, firstDestination, firstOutput)
+            )
+          );
         if (secondJob) {
           await step('output job 2 queued', () => decoder.queueSplitOutput(secondJob));
+          const secondDestination = nativePublish
+            ? await step('native destination 2', () =>
+                sink.workerDestination(secondJob.presentation)
+              )
+            : destination;
           const secondOutput = await step('output job 2 fetch', () =>
-            decoder.finishSplitOutput(secondJob, destination)
+            decoder.finishSplitOutput(secondJob, secondDestination)
           );
           if (secondOutput.pts !== String(keyframes[2])) throw Error('Output job 2 PTS differs');
           outputs.push(secondOutput);
+          if (nativePublish)
+            publications.push(
+              await step('native publication 2 readback', () =>
+                verifyPublication(rpc, nativeRing, secondDestination, secondOutput)
+              )
+            );
         }
-        record.result = {outputs, decodeGateSignals: decoder.splitDiagnostics.decodeGateSignals};
+        record.result = {
+          outputs,
+          ...(nativePublish ? {publications} : {}),
+          decodeGateSignals: decoder.splitDiagnostics.decodeGateSignals
+        };
       }
     }
   } catch (error) {
@@ -241,6 +335,7 @@ async function main(
   if (decoder && !rpc.bridgeLost) {
     try {
       await step('decoder close', () => decoder.close());
+      decoderClosed = true;
     } catch (error) {
       failure ||= error;
     }
@@ -251,6 +346,13 @@ async function main(
   if (!decoder && transport && !rpc.bridgeLost) {
     try {
       await transport.close();
+    } catch (error) {
+      failure ||= error;
+    }
+  }
+  if (sink && !rpc.bridgeLost && (!decoder || decoderClosed)) {
+    try {
+      await step('native ring close', () => sink.close());
     } catch (error) {
       failure ||= error;
     }
@@ -267,13 +369,14 @@ async function main(
   return record;
 }
 
-module.exports = {main, STAGES, loggedRpc};
+module.exports = {main, STAGES, loggedRpc, verifyPublication};
 if (require.main === module) {
   const args = process.argv.slice(2);
   main(session.resolve(args[0]), {
     clip: cli.option(args, '--clip'),
     stage: cli.option(args, '--stage'),
-    output: cli.option(args, '--output') || undefined
+    output: cli.option(args, '--output') || undefined,
+    nativePublish: args.includes('--native-publish')
   }).catch(error => {
     console.error(error);
     process.exitCode = 1;

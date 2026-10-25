@@ -9,14 +9,22 @@ const BUILDS = '/media/storage2/builds/HBLauncher/native-h264';
 const RUNS_FILE = '/media/storage/local/hbl-notes/RUNS.md';
 const RESTART = 'Restart SmileBASIC (fresh normal START session) before any further probe run.';
 const VALUE_OPTIONS = ['--clip', '--stages', '--output'];
-const FLAGS = ['--dry-run'];
+const FLAGS = ['--dry-run', '--native-publish'];
 
 function parseArgs(args) {
-  const parsed = {directory: null, clip: null, stages: STAGES, output: null, dryRun: false};
+  const parsed = {
+    directory: null,
+    clip: null,
+    stages: STAGES,
+    output: null,
+    dryRun: false,
+    nativePublish: false
+  };
   for (let index = 0; index < args.length; index++) {
     const arg = args[index];
     if (FLAGS.includes(arg)) {
-      parsed.dryRun = true;
+      if (arg === '--dry-run') parsed.dryRun = true;
+      else parsed.nativePublish = true;
     } else if (VALUE_OPTIONS.includes(arg)) {
       const value = args[++index];
       if (value === undefined || value === '' || value.startsWith('--'))
@@ -44,10 +52,11 @@ function parseStages(value) {
   return STAGES.filter(stage => names.includes(stage));
 }
 
-function stageCommand({directory, clip, stage}) {
+function stageCommand({directory, clip, stage, nativePublish = false}) {
   const args = [PROBE];
   if (directory) args.push(path.resolve(directory));
   args.push('--clip', path.resolve(clip), '--stage', stage);
+  if (nativePublish) args.push('--native-publish');
   return {command: process.execPath, args};
 }
 
@@ -97,8 +106,11 @@ async function main(
     now = () => new Date()
   } = {}
 ) {
-  const {directory, clip, stages, dryRun} = options;
-  const commands = stages.map(stage => ({stage, ...stageCommand({directory, clip, stage})}));
+  const {directory, clip, stages, dryRun, nativePublish} = options;
+  const commands = stages.map(stage => ({
+    stage,
+    ...stageCommand({directory, clip, stage, nativePublish})
+  }));
   if (dryRun) {
     for (const {command, args} of commands) log([command, ...args].map(quote).join(' '));
     return {dryRun: true, commands};
@@ -109,7 +121,10 @@ async function main(
     options.output ||
     path.join(
       builds,
-      started.toISOString().replace(/[:.]/g, '-') + '-' + rev.slice(0, 8) + '-split-ladder'
+      started.toISOString().replace(/[:.]/g, '-') +
+        '-' +
+        rev.slice(0, 8) +
+        (nativePublish ? '-split-publish-ladder' : '-split-ladder')
     );
   await fsp.mkdir(output, {recursive: true, mode: 0o700});
   const ladder = {
@@ -117,6 +132,7 @@ async function main(
     sourceRevision: rev,
     session: directory ? path.resolve(directory) : null,
     clip: path.resolve(clip),
+    nativePublish,
     stages: [],
     started: started.toISOString()
   };

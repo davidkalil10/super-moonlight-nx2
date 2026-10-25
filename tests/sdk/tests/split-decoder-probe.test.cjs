@@ -3,7 +3,8 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
-const {main} = require('../tools/probe-split-decoder.cjs');
+const ring = require('../../tools/moonlight/ring.cjs');
+const {main, verifyPublication} = require('../tools/probe-split-decoder.cjs');
 
 async function fixture(stage) {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'hbl-split-probe-'));
@@ -104,4 +105,28 @@ test('short receive probe accepts only a closed decode gate', async () => {
   assert.ok(calls.some(call => call.startsWith('send:')));
   assert.equal(calls.includes('abort'), false);
   assert.equal(calls.at(-2), 'close');
+});
+
+test('publication readback requires matching metadata and sequence', async () => {
+  const data = Buffer.alloc(32);
+  const values = [7, 2, 1920, 1080, 1920, 1088, 1];
+  values.push(ring.nativeChecksum(7, values.slice(1)));
+  values.forEach((value, index) =>
+    data.writeUInt32LE(value, index * 4)
+  );
+  const rpc = {read: async () => data};
+  const destination = {sequence: 7, index: 2, color: 1};
+  const frame = {width: 1920, height: 1080, stride: 1920, sliceHeight: 1088};
+  assert.deepEqual(await verifyPublication(rpc, 0x30000000, destination, frame), {
+    sequence: 7,
+    index: 2,
+    ...frame,
+    color: 1,
+    commit: values[7]
+  });
+  data.writeUInt32LE(1, 4);
+  await assert.rejects(
+    verifyPublication(rpc, 0x30000000, destination, frame),
+    /publication differs/
+  );
 });

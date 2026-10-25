@@ -5,7 +5,7 @@ const {BASELINE, MODEL, simulate} = require('./request-budget.cjs');
 // Modeled steady-state requests per presented frame at 1080p30. Bump these down
 // (never up) when a scheduler change lowers them, and record before/after in the
 // commit message.
-const BUDGET = {persistent: 10.05, split: 11.05};
+const BUDGET = {persistent: 10.05, split: 11.05, splitPublish: 8};
 const REQUEST_TOLERANCE = 1;
 const BRIDGE_MS_TOLERANCE = 3;
 
@@ -54,4 +54,15 @@ test('the modeled clock restores real timers and runs without real sleeps', asyn
   assert.equal(globalThis.setTimeout, timeout);
   assert.equal(globalThis.clearTimeout, clear);
   assert.equal(Date.now, now);
+});
+
+test('native worker publication removes destination and host publish requests', async () => {
+  const result = await simulate({mode: 'split', frames: 120, nativePublish: true});
+  assert.equal(result.frames, 120);
+  assert.ok(result.requestsPerFrame <= BUDGET.splitPublish);
+  assert.equal(result.byStage['split-input'].requests, 4);
+  assert.equal(result.byStage['split-output'].requests, 3);
+  assert.equal(result.byStage['split-queue'].requests, 1);
+  assert.equal(result.byStage.destination, undefined);
+  assert.equal(result.byStage.publish, undefined);
 });

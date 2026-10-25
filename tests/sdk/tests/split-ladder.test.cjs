@@ -119,6 +119,13 @@ test('dry run prints the probe commands without running or recording', async () 
   );
 });
 
+test('native publication passes the flag to each probe stage', async () => {
+  const {result, calls} = await ladder([...CLIP, '--native-publish']);
+  assert.equal(result.nativePublish, true);
+  assert.equal(calls.length, ALL.length);
+  assert.ok(calls.every(call => call.args.at(-1) === '--native-publish'));
+});
+
 test('argument validation rejects missing and malformed options', () => {
   assert.throws(() => parseArgs([]), /--clip/);
   assert.throws(() => parseArgs(['--clip']), /--clip needs a value/);
@@ -134,4 +141,5 @@ test('argument validation rejects missing and malformed options', () => {
   assert.equal(defaults.directory, null);
   assert.equal(defaults.output, null);
   assert.equal(defaults.dryRun, false);
+  assert.equal(defaults.nativePublish, false);
 });
