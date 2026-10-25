@@ -3,7 +3,25 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
-const {main, STAGES} = require('../tools/probe-persistent-first-job.cjs');
+const {main, STAGES, loggedRpc} = require('../tools/probe-persistent-first-job.cjs');
+
+test('journal marks a lost bridge before any cleanup request', async () => {
+  const rows = [];
+  const rpc = loggedRpc(
+    {
+      async callAddress() {
+        throw Error('Console disconnected');
+      }
+    },
+    {write: row => rows.push(row)}
+  );
+  await assert.rejects(rpc.callAddress(123, []), /Console disconnected/);
+  assert.equal(rpc.bridgeLost, true);
+  assert.deepEqual(
+    rows.map(row => row.phase),
+    ['before', 'error']
+  );
+});
 
 test('first-job probe journals each stage and closes the decoder', async () => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'hbl-first-job-'));

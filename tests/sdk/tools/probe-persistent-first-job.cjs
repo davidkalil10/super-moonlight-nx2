@@ -28,6 +28,7 @@ function journal(file) {
 
 function loggedRpc(rpc, record) {
   const wrapped = {...rpc};
+  wrapped.bridgeLost = false;
   for (const name of [
     'request',
     'call',
@@ -47,6 +48,12 @@ function loggedRpc(rpc, record) {
         record.write({phase: 'after', operation: name, target});
         return result;
       } catch (error) {
+        if (
+          /Console disconnected|timed out|ECONNREFUSED|ECONNRESET|EPIPE|socket hang up/i.test(
+            error.message
+          )
+        )
+          wrapped.bridgeLost = true;
         record.write({phase: 'error', operation: name, target, message: error.message});
         throw error;
       }
@@ -173,7 +180,7 @@ async function main(
     failure = error;
     entries.write({phase: 'error', step: 'probe', message: error.message});
   }
-  if (decoder) {
+  if (decoder && !rpc.bridgeLost) {
     try {
       entries.write({phase: 'before', step: 'decoder close'});
       await decoder.close();
@@ -182,6 +189,9 @@ async function main(
       failure ||= error;
       entries.write({phase: 'error', step: 'decoder close', message: error.message});
     }
+  } else if (decoder) {
+    record.retained = 'Bridge lost; no cleanup RPC sent. Restart SmileBASIC before another probe.';
+    entries.write({phase: 'retained', step: 'decoder close', reason: 'bridge lost'});
   }
   record.finished = new Date().toISOString();
   record.verdict = failure ? 'FAIL' : 'PASS';
