@@ -116,7 +116,28 @@ test('primes silence, paces one chunk per 40 ms and fills gaps with silence', as
   assert.equal(report.released, 5);
   assert.equal(report.overruns, 0);
   assert.equal(report.receivedBytes, 2 * CHUNK);
+  assert.equal(report.peak, 0x0202);
   assert.ok(f.sends.every(chunk => chunk.length === CHUNK));
+});
+
+test('tone mode sends a stereo 500 Hz tone and consumes Moonlight PCM', async () => {
+  const f = fakes();
+  const time = clock();
+  const source = await create({...f.options, tone: true, now: time.now, sleep: time.sleep});
+  const input = new PassThrough();
+  source.attach(input);
+  input.write(filled(1));
+  await flush();
+  await time.advance(40);
+  const chunk = f.sends[2];
+  assert.equal(chunk.readInt16LE(0), 0);
+  assert.equal(chunk.readInt16LE(24 * 4), 8000);
+  assert.equal(chunk.readInt16LE(24 * 4 + 2), 8000);
+  assert.ok(chunk.equals(f.sends[3]), 'whole periods per chunk');
+  const report = await source.close();
+  assert.equal(report.tone, true);
+  assert.equal(report.peak, 8000);
+  assert.equal(report.silenceChunks, 0);
 });
 
 test('a flood drops the oldest whole chunks and counts overruns', async () => {
