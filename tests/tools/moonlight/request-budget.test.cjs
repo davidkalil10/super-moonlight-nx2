@@ -212,3 +212,15 @@ test('budget reports the barrier matrix', async () => {
   for (const [name, entry] of Object.entries(staggeredBarrier))
     if (name.endsWith('retry0')) assert.ok(entry.requestsPerFrame <= BUDGET.staggered, name);
 });
+
+test('staggered late rereads cost less without the host pause', async () => {
+  const model = {...MODEL, sourceFps: 120};
+  const options = {mode: 'staggered', frames: 240, presentHz: 120, lag: 2, barrier: true};
+  for (const retryRate of [0.1, 0.3]) {
+    const paused = await simulate({...options, retryRate, model, paced: false});
+    const immediate = await simulate({...options, retryRate, retryWaitMs: 0, model, paced: false});
+    assert.equal(paused.retryWaitMs, 5);
+    assert.equal(immediate.requestsPerFrame, paused.requestsPerFrame);
+    assert.ok(immediate.fps > paused.fps, `${immediate.fps} against ${paused.fps} fps`);
+  }
+});

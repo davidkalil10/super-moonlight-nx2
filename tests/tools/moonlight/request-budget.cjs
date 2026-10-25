@@ -40,7 +40,8 @@ const MODEL = {
 };
 const PLAN_DECODE_MS = 13;
 const R3_DECODE_MS = 6.85;
-const STAGGERED = {retryWaitMs: 1, audioIntervalMs: 1000};
+// staggered-live.cjs pauses 5 ms before rereading a late status.
+const STAGGERED = {retryWaitMs: 5, audioIntervalMs: 1000};
 
 // Step 3a device baselines at 1080p30, revision 8805924 (R1B-CONCURRENCY-RESULTS.md).
 const BASELINE = {
@@ -495,6 +496,7 @@ async function simulateStaggered({
   retryRate = 0,
   lag = 1,
   barrier = false,
+  retryWaitMs = STAGGERED.retryWaitMs,
   model = MODEL
 }) {
   const timing = {...model, vsyncMs: 1000 / presentHz};
@@ -548,7 +550,7 @@ async function simulateStaggered({
       if (retryDebt >= 1) {
         retryDebt -= 1;
         await request();
-        await clock.sleep(STAGGERED.retryWaitMs);
+        await clock.sleep(retryWaitMs);
       }
       await request();
       await request();
@@ -571,6 +573,7 @@ async function simulateStaggered({
       retryRate,
       lag,
       barrier,
+      retryWaitMs,
       requestsPerFrame: perFrame(exchanges),
       bridgeMsPerFrame: perFrame(bridgeMs),
       msPerFrame: perFrame(elapsed),
@@ -591,10 +594,21 @@ async function simulate({
   retryRate,
   lag,
   barrier,
+  retryWaitMs,
   model = MODEL
 }) {
   if (mode === 'staggered')
-    return simulateStaggered({frames, warmup, paced, presentHz, retryRate, lag, barrier, model});
+    return simulateStaggered({
+      frames,
+      warmup,
+      paced,
+      presentHz,
+      retryRate,
+      lag,
+      barrier,
+      retryWaitMs,
+      model
+    });
   const paired = mode === 'paired';
   if (paired && (nativePublish || autoQueue || linkedGates))
     throw Error('The paired loop publishes from its own worker');
@@ -902,6 +916,26 @@ async function budget({frames = 120, model = MODEL} = {}) {
       }
     }
   }
+  const staggeredRetryWait = {};
+  for (const decodeMs of [model.decodeMs, R3_DECODE_MS]) {
+    for (const retryRate of [0.1, 0.3]) {
+      for (const retryWaitMs of [STAGGERED.retryWaitMs, 1, 0]) {
+        const options = {mode: 'staggered', frames, presentHz: 120, retryRate, lag: 2};
+        const rate = {...model, decodeMs, sourceFps: 120};
+        const free = await simulate({
+          ...options,
+          barrier: true,
+          retryWaitMs,
+          model: rate,
+          paced: false
+        });
+        staggeredRetryWait[`decode${decodeMs}-retry${retryRate * 100}-wait${retryWaitMs}`] = {
+          requestsPerFrame: free.requestsPerFrame,
+          predictedFps: free.fps
+        };
+      }
+    }
+  }
   return {
     frames,
     model,
@@ -914,6 +948,7 @@ async function budget({frames = 120, model = MODEL} = {}) {
     staggered,
     staggeredLag2,
     staggeredBarrier,
+    staggeredRetryWait,
     planDecodeMs: {decodeMs: PLAN_DECODE_MS, ...planDecode}
   };
 }
@@ -934,4 +969,4 @@ if (require.main === module) {
   );
 }
 
-module.exports = {MODEL, BASELINE, createClock, simulate, budget};
+module.exports = {MODEL, BASELINE, STAGGERED, createClock, simulate, budget};
