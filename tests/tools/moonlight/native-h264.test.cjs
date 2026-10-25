@@ -6,10 +6,51 @@ const os = require('node:os');
 const path = require('node:path');
 const {EventEmitter} = require('node:events');
 const {PassThrough} = require('node:stream');
-const {run} = require('./native-h264.cjs');
+const {run, createIdrRequester} = require('./native-h264.cjs');
 
 const accessUnit = Buffer.from('0000016742001eab00000168ce0100000165abcd', 'hex');
 const pcm = Buffer.from('0001020304050607', 'hex');
+
+test('backlog IDR requests recover within 100 ms and coalesce dropped frames', () => {
+  let time = 1000;
+  let nextTimer = 0;
+  const timers = new Map();
+  const sent = [];
+  const requester = createIdrRequester(() => sent.push(time), {
+    now: () => time,
+    schedule(callback, delay) {
+      const id = ++nextTimer;
+      timers.set(id, {at: time + delay, callback});
+      return id;
+    },
+    cancel: id => timers.delete(id)
+  });
+  function advance(to) {
+    for (;;) {
+      const next = [...timers].sort((a, b) => a[1].at - b[1].at)[0];
+      if (!next || next[1].at > to) break;
+      time = next[1].at;
+      timers.delete(next[0]);
+      next[1].callback();
+    }
+    time = to;
+  }
+  requester.request();
+  requester.request();
+  advance(1000);
+  assert.deepEqual(sent, [1000]);
+  advance(1020);
+  requester.request();
+  requester.request();
+  advance(1099);
+  assert.deepEqual(sent, [1000]);
+  advance(1100);
+  assert.deepEqual(sent, [1000, 1100]);
+  requester.request();
+  requester.close();
+  advance(2000);
+  assert.deepEqual(sent, [1000, 1100]);
+});
 
 async function fixture({
   audioFailure = false,
