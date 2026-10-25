@@ -6,6 +6,7 @@ const FRAME_BYTES = 4;
 const PRIMED = 2;
 const HEALTH_MS = 1000;
 const MAX_PENDING_CHUNKS = 4;
+const TONE_HZ = 500;
 const BRIDGE_LOST = /disconnected|timed out|ECONN|EPIPE|socket hang up/i;
 const RPC_METHODS = [
   'request',
@@ -17,6 +18,23 @@ const RPC_METHODS = [
   'query',
   'writeAndCall'
 ];
+
+function toneChunk(bytes) {
+  const chunk = Buffer.alloc(bytes);
+  for (let frame = 0; frame < bytes / FRAME_BYTES; frame++) {
+    const sample = Math.round(8000 * Math.sin((2 * Math.PI * TONE_HZ * frame) / SAMPLE_RATE));
+    chunk.writeInt16LE(sample, frame * FRAME_BYTES);
+    chunk.writeInt16LE(sample, frame * FRAME_BYTES + 2);
+  }
+  return chunk;
+}
+
+function peakOf(chunk) {
+  let peak = 0;
+  for (let i = 0; i + 1 < chunk.length; i += 2)
+    peak = Math.max(peak, Math.abs(chunk.readInt16LE(i)));
+  return peak;
+}
 
 function watched(rpc, state) {
   const device = {...rpc};
@@ -38,6 +56,7 @@ async function create({
   rpc,
   host = rpc.host,
   bufferBytes = 7680,
+  tone = false,
   maxPending = MAX_PENDING_CHUNKS * bufferBytes,
   healthMs = HEALTH_MS,
   createTransport = require('./native-tcp.cjs').create,
@@ -50,10 +69,13 @@ async function create({
 }) {
   const bufferMs = (bufferBytes / FRAME_BYTES / SAMPLE_RATE) * 1000;
   const silence = Buffer.alloc(bufferBytes);
+  const toned = tone ? toneChunk(bufferBytes) : null;
   const state = {bridgeLost: false};
   const device = watched(rpc, state);
   const stats = {
     bufferBytes,
+    tone,
+    peak: 0,
     sent: 0,
     underruns: 0,
     silenceChunks: 0,
@@ -158,7 +180,10 @@ async function create({
         due = now();
       }
       let chunk = silence;
-      if (queue.bytes >= bufferBytes) {
+      if (toned) {
+        chunk = toned;
+        if (queue.bytes >= bufferBytes) queue.pull(bufferBytes);
+      } else if (queue.bytes >= bufferBytes) {
         chunk = queue.pull(bufferBytes);
         underflowing = false;
       } else {
@@ -168,6 +193,7 @@ async function create({
       }
       await audio.send(chunk);
       stats.sent++;
+      stats.peak = Math.max(stats.peak, peakOf(chunk));
       due += bufferMs;
     }
   })().catch(fail);

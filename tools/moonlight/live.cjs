@@ -12,7 +12,7 @@
 //              [--refresh 2] [--threads N] [--resync 1000] (ms)
 //        h264: [--split-decoder] [--native-publish] [--auto-output-queue] [--linked-gates]
 //              [--duration S] [--warmup S] [--expect fps=30,dropped=0,idr=0] [--ab] [--queue 3] [--input-hz 60] [--audio-frames 960]
-//              [--socket-audio] (PCM over native TCP to a console worker; --audio-frames 1920)
+//              [--socket-audio | --socket-audio-tone] (PCM or a 500 Hz test tone over native TCP to a console worker)
 // --moonlight runs tools/moonlight/helper's hbmoonlight (path from $HBMOONLIGHT)
 //   and, unless --no-input / --no-audio, also feeds controller+touch into its
 //   stdin (input-feeder.cjs) and plays its audio on the console (audio-stream.cjs,

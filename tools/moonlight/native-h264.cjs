@@ -60,7 +60,8 @@ async function run({
     app = args[at + 2];
   if (at < 0 || !host || !app) throw Error('Native H.264 requires --moonlight HOST APP');
   const audio = !args.includes('--no-audio');
-  const socketAudio = args.includes('--socket-audio');
+  const socketTone = args.includes('--socket-audio-tone');
+  const socketAudio = socketTone || args.includes('--socket-audio');
   if (socketAudio && !audio) throw Error('--socket-audio cannot be combined with --no-audio');
   const workerMode = args.includes('--split-decoder') ? 'split' : 'persistent';
   const nativePublish = args.includes('--native-publish');
@@ -279,6 +280,7 @@ async function run({
         rpc,
         host: rpc.host,
         bufferBytes: audioFrames * 4,
+        tone: socketTone,
         onError: error => reader.fail(error)
       });
       soundSource.attach(helper.stdio[3]);
