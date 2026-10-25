@@ -225,6 +225,18 @@ test('access units split at each first slice and keep their parameter sets', () 
   assert.deepEqual([...units[1].data], nal([0x41, 0x9a]));
 });
 
+test('full-clip CLI leaves omitted --max-aus unset', () => {
+  const full = probe.parseOptions(['--clip', '/clips/ip1080.h264', '--window', '2']);
+  assert.equal(full.clip, '/clips/ip1080.h264');
+  assert.equal(full.window, 2);
+  assert.equal(full.maxAus, null);
+  assert.equal(probe.parseOptions(['--burst']).window, null);
+  assert.equal(
+    probe.parseOptions(['--clip', '/clips/ip1080.h264', '--window', '2', '--max-aus', '2']).maxAus,
+    2
+  );
+});
+
 test('frame comparison wants exact luma and a chroma PSNR floor', () => {
   const expected = Buffer.alloc(FRAME, 100);
   assert.equal(probe.compareFrame(Buffer.from(expected), expected, WIDTH, HEIGHT).match, true);

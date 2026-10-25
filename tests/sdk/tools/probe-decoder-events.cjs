@@ -225,6 +225,21 @@ function journal(file) {
   };
 }
 
+function parseOptions(args) {
+  const optionalNumber = name => (args.includes(name) ? Number(cli.option(args, name)) : null);
+  return {
+    clip: cli.option(args, '--clip') || undefined,
+    reference: cli.option(args, '--reference') || undefined,
+    watchInput: !args.includes('--no-input-watch'),
+    burst: args.includes('--burst'),
+    window: optionalNumber('--window'),
+    settleMs: cli.number(args, '--settle-ms', 250),
+    drainMs: cli.number(args, '--drain-ms', 1000),
+    maxAus: optionalNumber('--max-aus'),
+    output: cli.option(args, '--output') || undefined
+  };
+}
+
 async function main(
   directory,
   {
@@ -883,6 +898,7 @@ async function main(
 
 module.exports = {
   main,
+  parseOptions,
   accessUnits,
   compareFrame,
   packNv12,
@@ -897,19 +913,7 @@ module.exports = {
 };
 if (require.main === module) {
   const args = process.argv.slice(2);
-  main(require('../host/session.cjs').resolve(args[0]), {
-    clip: cli.option(args, '--clip') || undefined,
-    reference: cli.option(args, '--reference') || undefined,
-    watchInput: !args.includes('--no-input-watch'),
-    burst: args.includes('--burst'),
-    window:
-      cli.option(args, '--window') === undefined ? null : Number(cli.option(args, '--window')),
-    settleMs: cli.number(args, '--settle-ms', 250),
-    drainMs: cli.number(args, '--drain-ms', 1000),
-    maxAus:
-      cli.option(args, '--max-aus') === undefined ? null : Number(cli.option(args, '--max-aus')),
-    output: cli.option(args, '--output') || undefined
-  }).catch(e => {
+  main(require('../host/session.cjs').resolve(args[0]), parseOptions(args)).catch(e => {
     console.error(e);
     process.exitCode = 1;
   });
