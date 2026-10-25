@@ -408,6 +408,7 @@ async function create({
       splitInputJob = await split.stageInput({
         index,
         length: unit.data.length,
+        receiveLength: unit.receiveLength,
         pts: unit.pts,
         inputAddress: address,
         payload: unit.data

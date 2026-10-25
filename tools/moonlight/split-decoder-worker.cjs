@@ -252,7 +252,7 @@ async function create({
             args: [
               transport.fd,
               {u64: address(INPUT_JOB + 24)},
-              {u32: address(INPUT_JOB + 8)},
+              {u32: address(INPUT_JOB + 12)},
               0x40
             ]
           },
@@ -377,7 +377,7 @@ async function create({
       video.uncertain = false;
     },
 
-    async stageInput({index, length, pts, inputAddress, payload}) {
+    async stageInput({index, length, receiveLength = length, pts, inputAddress, payload}) {
       if (!input.thread || input.joined || activeInput)
         throw Error('Split input worker is not ready');
       if (
@@ -385,6 +385,9 @@ async function create({
         !payload.length ||
         payload.length !== length ||
         length > transport.maxAccessUnit ||
+        !Number.isInteger(receiveLength) ||
+        receiveLength < 1 ||
+        receiveLength > length ||
         !Number.isInteger(index) ||
         index < 0 ||
         !Number.isSafeInteger(inputAddress) ||
@@ -400,6 +403,7 @@ async function create({
       bytes.writeUInt32LE(sequence, 0);
       bytes.writeInt32LE(index, 4);
       bytes.writeUInt32LE(length, 8);
+      bytes.writeUInt32LE(receiveLength, 12);
       bytes.writeBigUInt64LE(BigInt(pts), 16);
       bytes.writeBigUInt64LE(BigInt(inputAddress), 24);
       activeInput = job;
