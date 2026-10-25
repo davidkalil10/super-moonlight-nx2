@@ -62,6 +62,7 @@ async function create({
   format,
   transport,
   publication = null,
+  autoQueue = false,
   cancelled = () => false,
   pollTimeoutMs = 5000,
   stopTimeoutMs = 5000
@@ -84,6 +85,7 @@ async function create({
       ![1, 2].includes(publication.color))
   )
     throw Error('Invalid split decoder publication target');
+  if (autoQueue && !publication) throw Error('Automatic output queue needs worker publication');
 
   const sdk = rpc.a.sdk;
   const sync = {};
@@ -451,9 +453,15 @@ async function create({
             ]
           : []),
         {function: copy, args: [address(FETCH_RESULTS + 24), address(OUTPUT_JOB), 4, 0]},
+        ...(autoQueue
+          ? [{function: copy, args: [address(OUTPUT_JOB), address(OUTPUT_JOB + 56), 4, 0]}]
+          : []),
         ...outputRestore,
         {function: sync.signalLightEvent, args: [address(OUTPUT_DONE), 0, 0, 0]},
-        {function: jump, args: [outputAt.gate, 1, 0, 0]}
+        {
+          function: jump,
+          args: [autoQueue ? {u64: address(OUTPUT_JOB + 64)} : outputAt.gate, 1, 0, 0]
+        }
       ];
       let fetch = frame(outputAt.second, fetchCalls, {
         0: FETCH_RESULTS,
@@ -613,7 +621,7 @@ async function create({
       return acquiredOutput(job);
     },
 
-    async finishOutput(job, destination, frame = null) {
+    async finishOutput(job, destination, frame = null, nextJob = null) {
       if (!job || activeOutput !== job || !video.thread || video.joined)
         throw Error('Split output job is not ready');
       if (
@@ -646,8 +654,16 @@ async function create({
           (frame.stride * frame.sliceHeight * 3) / 2 > ring.FRAME_BYTES)
       )
         throw Error('Invalid split decoder publication metadata');
+      if (
+        nextJob &&
+        (!autoQueue ||
+          !Number.isInteger(nextJob.sequence) ||
+          nextJob.sequence !== job.sequence + 1 ||
+          nextJob.sequence > 0xffffffff)
+      )
+        throw Error('Invalid next split output job');
       const acquired = await acquiredOutput(job);
-      const destinationBytes = Buffer.alloc(publication ? 48 : 16);
+      const destinationBytes = Buffer.alloc(autoQueue ? 64 : publication ? 48 : 16);
       destinationBytes.writeBigUInt64LE(BigInt(destination.address), 0);
       destinationBytes.writeBigUInt64LE(BigInt(destination.bytes), 8);
       if (publication) {
@@ -662,13 +678,19 @@ async function create({
         fields.push(ring.nativeChecksum(destination.sequence, fields), destination.sequence);
         fields.forEach((value, word) => destinationBytes.writeUInt32LE(value, 16 + word * 4));
       }
+      if (autoQueue) {
+        destinationBytes.writeUInt32LE(nextJob?.sequence ?? 0, 48);
+        destinationBytes.writeBigUInt64LE(
+          BigInt(nextJob ? outputAt.first : outputAt.gate),
+          56
+        );
+      }
       await rpc.writeAndCall(address(OUTPUT_JOB + 8), destinationBytes, sync.signalLightEvent, [
         address(FETCH_GATE)
       ]);
       const fetched = await waitStatus('fetch', job.sequence, 'output fetch');
       if (fetched.readUInt32LE(24) !== job.sequence)
         throw Error('Split decoder fetched the wrong access unit');
-      activeOutput = null;
       for (const [name, offset] of [
         ['getOutput', 8],
         ['releaseOutput', 16]
@@ -679,6 +701,7 @@ async function create({
             result: value
           });
       }
+      activeOutput = autoQueue ? nextJob : null;
       return {sequence: job.sequence, pts: acquired.pts};
     },
 

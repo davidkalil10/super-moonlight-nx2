@@ -61,8 +61,11 @@ async function run({
   const audio = !args.includes('--no-audio');
   const workerMode = args.includes('--split-decoder') ? 'split' : 'persistent';
   const nativePublish = args.includes('--native-publish');
+  const autoOutputQueue = args.includes('--auto-output-queue');
   if (nativePublish && workerMode !== 'split')
     throw Error('--native-publish requires --split-decoder');
+  if (autoOutputQueue && !nativePublish)
+    throw Error('--auto-output-queue requires --native-publish');
   const cli = require('../../sdk/cli.cjs');
   const scoring = require('./run-summary.cjs');
   const duration = cli.number(args, '--duration', null);
@@ -178,6 +181,7 @@ async function run({
           workerMode,
           transport,
           publication: nativePublish ? sink.workerPublication : null,
+          autoQueue: autoOutputQueue,
           log,
           cancelled
         });
@@ -361,7 +365,11 @@ async function run({
               ? await sink.workerDestination(current.presentation)
               : await sink.destination();
             enter('split-output');
-            const frame = await decoder.finishSplitOutput(pendingSplitOutput, destination);
+            const frame = await decoder.finishSplitOutput(
+              pendingSplitOutput,
+              destination,
+              autoOutputQueue ? current : null
+            );
             stats.decoded++;
             if (!nativePublish) {
               enter('publish');
@@ -370,7 +378,7 @@ async function run({
             stats.presented++;
           }
           enter('split-queue');
-          await decoder.queueSplitOutput(current);
+          if (!autoOutputQueue || !pendingSplitOutput) await decoder.queueSplitOutput(current);
           pendingSplitOutput = current;
           enter('read');
           continue;

@@ -10,7 +10,7 @@
 //        hbv1: [--workers 12]
 //        hbv2: [--budget 96] [--cap 256] (KiB) [--qp-min 4] [--qp-max 40]
 //              [--refresh 2] [--threads N] [--resync 1000] (ms)
-//        h264: [--split-decoder] [--native-publish] (staged workers, optional worker publication)
+//        h264: [--split-decoder] [--native-publish] [--auto-output-queue]
 //              [--duration S] [--warmup S] [--expect fps=30,dropped=0,idr=0] [--ab]
 // --moonlight runs tools/moonlight/helper's hbmoonlight (path from $HBMOONLIGHT)
 //   and, unless --no-input / --no-audio, also feeds controller+touch into its
@@ -286,7 +286,11 @@ async function main() {
     const runs = args.includes('--ab')
       ? [
           args.filter(
-            arg => arg !== '--ab' && arg !== '--split-decoder' && arg !== '--native-publish'
+            arg =>
+              arg !== '--ab' &&
+              arg !== '--split-decoder' &&
+              arg !== '--native-publish' &&
+              arg !== '--auto-output-queue'
           ),
           [...args, '--split-decoder']
         ]

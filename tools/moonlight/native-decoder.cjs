@@ -40,6 +40,7 @@ async function create({
   workerMode = 'host',
   transport = null,
   publication = null,
+  autoQueue = false,
   persistentWorkerFactory = require('./persistent-decoder-worker.cjs').create,
   splitWorkerFactory = null,
   log = () => {},
@@ -356,6 +357,7 @@ async function create({
           format: pointer('format'),
           transport,
           publication,
+          autoQueue,
           cancelled
         });
         await split.register();
@@ -446,7 +448,7 @@ async function create({
       return split.waitForAcquired(job);
     },
 
-    async finishSplitOutput(job, destination) {
+    async finishSplitOutput(job, destination, nextJob = null) {
       if (!splitStarted || closed || !running) throw Error('Split decoder is not running');
       const {bytes, alignment} = sizing;
       if (
@@ -458,7 +460,7 @@ async function create({
       )
         throw Error('Native output does not fit the aligned destination surface');
       step = 'split-fetch';
-      const completed = await split.finishOutput(job, destination, layout);
+      const completed = await split.finishOutput(job, destination, layout, nextJob);
       step = 'idle';
       return {...layout, bytes, pts: completed.pts.toString(), format: 'nv12'};
     },
