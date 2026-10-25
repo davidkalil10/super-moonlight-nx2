@@ -57,7 +57,8 @@ function plan({
   metadataSlots,
   destinations,
   frame,
-  base
+  base,
+  index
 }) {
   const validAcquired =
     Array.isArray(acquired) &&
@@ -83,13 +84,14 @@ function plan({
     !Array.isArray(destinations) ||
     destinations.length !== 2 ||
     destinations[0].index === destinations[1].index ||
-    destinations[1].sequence !== destinations[0].sequence + 1
+    destinations[1].sequence !== destinations[0].sequence + 1 ||
+    ![0, 1].includes(index)
   )
     throw Error('Paired output needs two checked acquisitions and distinct ordered surfaces');
   const metadataBytes = destinations.map(destination => metadata(destination, frame));
   const calls = [];
   const rows = [];
-  for (let index = 0; index < 2; index++) {
+  {
     const destination = destinations[index];
     if (destination.color !== publication.color) throw Error('Paired output color differs');
     if (destination.address !== publication.mapped + ring.frameOffset(destination.index))
