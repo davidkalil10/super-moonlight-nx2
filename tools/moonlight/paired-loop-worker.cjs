@@ -114,22 +114,24 @@ async function create({
   let joined = false;
   let retained = false;
   let closed = false;
+  let stopping = false;
   let active = null;
 
   async function pollSequence(offset, sequence, bytes) {
     const until = Date.now() + timeoutMs;
-    while (Date.now() < until) {
+    while (Date.now() < until && !stopping) {
       const value = await rpc.read(at(offset), bytes);
       if (value.readUInt32LE(bytes - 4) === sequence) return value;
       await pause(5);
     }
+    if (stopping) throw Error('Paired loop stopped while waiting for output');
     retained = true;
     throw Error('Paired loop worker timed out; restart SmileBASIC');
   }
 
   async function waitForPresentation(destination) {
     const until = Date.now() + timeoutMs;
-    while (Date.now() < until) {
+    while (Date.now() < until && !stopping) {
       const state = await rpc.read(publication.mapped + ring.CONTROL.current, 24);
       if (
         state.readUInt32LE(0) === destination.index &&
@@ -138,6 +140,7 @@ async function create({
         return;
       await pause(5);
     }
+    if (stopping) throw Error('Paired loop stopped while waiting for presentation');
     retained = true;
     throw Error('Paired loop publication was not applied; restart SmileBASIC');
   }
@@ -185,7 +188,7 @@ async function create({
 
   return {
     async start() {
-      if (thread || retained || closed)
+      if (thread || retained || closed || stopping)
         throw Error('Paired loop worker already started or retained');
       try {
         thread = await spawn(rpc, base, built.locations.gate, {
@@ -204,6 +207,7 @@ async function create({
         joined ||
         active ||
         retained ||
+        stopping ||
         !Number.isInteger(sequence) ||
         sequence < 1 ||
         sequence > 0xffffffff
@@ -327,6 +331,7 @@ async function create({
     async stop() {
       if (retained) throw Error('Paired loop native objects retained for safety');
       if (closed) return;
+      stopping = true;
       if (thread && !joined) {
         const redirects = Buffer.alloc(32);
         for (let index = 0; index < 4; index++)
