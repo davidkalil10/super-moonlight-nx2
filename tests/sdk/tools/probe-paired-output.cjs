@@ -19,7 +19,33 @@ const outputFrame = require('../../tools/moonlight/paired-output-frame.cjs');
 const ring = require('../../tools/moonlight/ring.cjs');
 
 const STAGES = ['two', 'stop-input', 'stop-output', 'short-recv'];
+const BUILD_ROOT = '/media/storage2/builds/HBLauncher/native-h264';
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+async function requireNewPairedSession(id, root = BUILD_ROOT) {
+  for (const name of await fsp.readdir(root)) {
+    if (!/-audio-|-r3-|-split-/.test(name)) continue;
+    const directory = path.join(root, name);
+    for (const file of [
+      'paired-output.json',
+      'audio-socket-loop.json',
+      'audio-event.json',
+      'decoder-throughput.json',
+      'result.json'
+    ]) {
+      try {
+        const record = JSON.parse(await fsp.readFile(path.join(directory, file), 'utf8'));
+        if (record.session === id)
+          throw Object.assign(Error('Start a new normal START session before paired output'), {
+            prior: path.join(directory, file)
+          });
+      } catch (error) {
+        if (error.prior) throw error;
+        if (error.code !== 'ENOENT' && error.code !== 'ENOTDIR') throw error;
+      }
+    }
+  }
+}
 
 function journal(file) {
   const descriptor = fs.openSync(file, 'wx', 0o600);
@@ -115,7 +141,7 @@ async function main(directory, {clip, stage, output, dryRun = false} = {}) {
     encoding: 'utf8'
   }).trim();
   output ||= path.join(
-    '/media/storage2/builds/HBLauncher/native-h264',
+    BUILD_ROOT,
     new Date().toISOString().replace(/[:.]/g, '-') +
       '-' +
       revision.slice(0, 8) +
@@ -158,6 +184,7 @@ async function main(directory, {clip, stage, output, dryRun = false} = {}) {
   };
   try {
     if (!rpc.host) throw Error('Paired output probe needs a normal START session');
+    await requireNewPairedSession(rpc.a.session);
     const storage = await step('Moonlight private storage', () => findPrivateStorage(directory));
     sink = await step('native sink create', () => createSink(rpc, storage));
     transport = await step('native TCP create', () => createTransport({rpc, host: rpc.host}));
@@ -319,7 +346,7 @@ async function main(directory, {clip, stage, output, dryRun = false} = {}) {
   return record;
 }
 
-module.exports = {main, STAGES};
+module.exports = {main, STAGES, requireNewPairedSession};
 if (require.main === module) {
   const args = process.argv.slice(2);
   main(session.resolve(args[0]), {
