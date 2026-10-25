@@ -86,14 +86,13 @@ recorded wired session), so the frame rate tracks exchanges per frame.
 worker against an in-process console that walks every worker frame through a
 gadget-level emulator, and counts each wire exchange.
 
-`--decoder-worker` selects the path. The default is the host-driven worker.
-`--decoder-worker persistent` keeps the decoder worker alive across frames and
-overlaps destination acquisition with decode. Add `--decoder-data tcp` to send
-access units through a second authenticated console connection. TCP mode needs
-a fresh launcher session created by this revision, because the session records
-the host address for that connection. The first frame still uses the host-driven
-path to establish the output layout. Check TCP with the staged first-job probe
-before a live stream.
+Live streams always use the persistent decoder worker, fed through a second
+authenticated console connection over TCP, with destination acquisition
+overlapped with decode. The first frame still uses the host-driven path to
+establish the output layout, then the worker takes over. TCP needs a launcher
+session created by this revision, because the session records the host address
+for that connection. The host-driven and RPC data paths remain only inside the
+decoder module, for the staged probes.
 
 ### Host-driven (default)
 
@@ -278,10 +277,8 @@ Test in this order; do not raise fps until the step before it is clean.
      --size 1920x1080 --fps 30 --bitrate 8000
    ```
 
-2. **Persistent at `--fps 30`**, then **persistent at `--fps 60`**, each adding
-   `--decoder-worker persistent`. For TCP data, first pass the staged fetch
-   probe in a fresh session, then add `--decoder-data tcp`. Raise the frame rate
-   only after the 30 fps run is stable.
+2. Raise `--fps` to 60 only after the 30 fps run is stable. Leave out `--bitrate`
+   to use Moonlight's default for the mode.
 
 Watch the per-second stats line (`{"codec":"h264",...}`):
 

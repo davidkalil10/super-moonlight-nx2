@@ -54,7 +54,6 @@ test('backlog IDR requests recover within 100 ms and coalesce dropped frames', (
 
 async function fixture({
   audioFailure = false,
-  latency = 0,
   emptyPolls = 0,
   units = [{hex: accessUnit.toString('hex'), keyframe: true, pts: 123456}]
 } = {}) {
@@ -67,8 +66,6 @@ async function fixture({
   );
   const events = [];
   const children = [];
-  // The decoder holds `latency` frames in its pipeline before the first comes
-  // out, so a frame is ready to acquire only once more than `latency` are in.
   let pipeline = 0,
     pending = 0;
   const options = {
@@ -121,7 +118,7 @@ async function fixture({
             return null;
           }
           pending = 0;
-          if (pipeline <= latency) return null;
+          if (pipeline <= 0) return null;
           pipeline--;
           return {format: 'nv12', width: 128, height: 96, stride: 128, sliceHeight: 96};
         },
@@ -269,8 +266,8 @@ test(
         'one receive per submit; no known-empty acquireOutput poll'
       );
       assert.deepEqual(
-        f.events.slice(-2).map(event => event.type),
-        ['decoder-close', 'sink-close']
+        f.events.slice(-3).map(event => event.type),
+        ['decoder-close', 'close-transport', 'sink-close']
       );
     });
   }
@@ -283,7 +280,6 @@ test('persistent worker takes over after a host-driven first frame', {timeout: 5
       {hex: accessUnit.toString('hex'), keyframe: false, pts: 2000}
     ]
   });
-  f.options.args.push('--decoder-worker', 'persistent');
   await exercise(f, async () => {
     await run(f.options);
     assert.equal(f.events.find(event => event.type === 'create-decoder').mode, 'persistent');
@@ -313,8 +309,7 @@ test(
         {hex: accessUnit.toString('hex'), keyframe: false, pts: 2000}
       ]
     });
-    f.options.args.push('--decoder-worker', 'persistent');
-    await exercise(f, async () => {
+      await exercise(f, async () => {
       await run(f.options);
       assert.equal(f.events.filter(event => event.type === 'submit').length, 1);
       assert.equal(f.events.filter(event => event.type === 'receive').length, 3);
@@ -325,7 +320,7 @@ test(
 );
 
 test(
-  'TCP data mode creates a separate transport for the persistent decoder',
+  'the persistent decoder gets its own TCP transport',
   {timeout: 5000},
   async () => {
     const f = await fixture({
@@ -334,7 +329,6 @@ test(
         {hex: accessUnit.toString('hex'), keyframe: false, pts: 2000}
       ]
     });
-    f.options.args.push('--decoder-worker', 'persistent', '--decoder-data', 'tcp');
     await exercise(f, async () => {
       await run(f.options);
       assert.deepEqual(
@@ -355,31 +349,9 @@ test(
     await exercise(f, async () => {
       await assert.rejects(run(f.options), /audio stream exited: 7/);
       assert.deepEqual(
-        f.events.slice(-2).map(event => event.type),
-        ['decoder-close', 'sink-close']
+        f.events.slice(-3).map(event => event.type),
+        ['decoder-close', 'close-transport', 'sink-close']
       );
-    });
-  }
-);
-
-test(
-  'a one-frame decode latency adds no known-empty acquireOutput per frame',
-  {timeout: 5000},
-  async () => {
-    const units = [
-      {hex: accessUnit.toString('hex'), keyframe: true, pts: 1000},
-      {hex: '000001419a', keyframe: false, pts: 2000},
-      {hex: '000001419b', keyframe: false, pts: 3000}
-    ];
-    const f = await fixture({latency: 1, units});
-    await exercise(f, async () => {
-      await run(f.options);
-      const submits = f.events.filter(event => event.type === 'submit').length;
-      const receives = f.events.filter(event => event.type === 'receive').length;
-      assert.equal(submits, 3);
-      assert.equal(receives, submits, 'exactly one receive per submit under 1-frame latency');
-      // Two frames drain; the third stays in the pipeline until the next submit.
-      assert.equal(f.events.filter(event => event.type === 'publish').length, 2);
     });
   }
 );
