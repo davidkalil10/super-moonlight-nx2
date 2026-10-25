@@ -13,7 +13,7 @@ function burst() {
   return e;
 }
 
-const {mockRpc} = require('../../../hbl-dev/sdk/tests/audio-out-mock.cjs');
+const {mockRpc} = require('../../../hbl-platform-dev/sdk/tests/audio-out-mock.cjs');
 const BUFFER_BYTES = 3840 * 4;
 
 function sine(buffers) {

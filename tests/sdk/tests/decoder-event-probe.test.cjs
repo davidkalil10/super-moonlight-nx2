@@ -339,7 +339,7 @@ test('shutdown wakes and joins both watchers, closes the decoder, then finalizes
   assert.equal(lines.filter(l => l.startsWith('callAddress os.finalizeEvent')).length, 2);
   assert.equal(fake.trace.filter(t => t === 'exit').length, 2);
   assert.ok([...fake.workers.values()].every(w => w.exited));
-  expectSequence('decoder-event-probe', lines);
+  expectSequence('decoder-event-probe', lines, path.join(__dirname, 'sequences'));
 });
 
 test('a stuck watcher keeps the decoder and the events alive', async () => {

@@ -12,7 +12,7 @@ Everything runs against the runtime code by relative path:
 <dir>/hbl-moonlight      the code under test
 <dir>/hbl-platform       bridge, sdk/host, sdk/native
 <dir>/hbl-platform-dev   sdk/tests/recording-rpc.cjs
-<dir>/hbl-dev            probe-job, audio-out-mock
+<dir>/hbl-platform-dev   probe-job, audio-out-mock
 ```
 
 ## Test
