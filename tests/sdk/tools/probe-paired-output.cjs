@@ -28,6 +28,7 @@ const STAGES = [
   'short-recv',
   'loop-two',
   'loop-four',
+  'loop-odd',
   'loop-stop-input',
   'loop-stop-output',
   'loop-stop-present',
@@ -112,13 +113,13 @@ async function createLoopAdapter(options) {
   let started = false;
   let nextSequence = 0;
   return {
-    async startAcquire() {
+    async startAcquire(count = 2) {
       if (!started) {
         await worker.start();
         started = true;
       }
       const sequence = ++nextSequence;
-      await worker.beginPair(sequence);
+      await worker.beginPair(sequence, count);
       return {sequence};
     },
     async finishAcquire(_plan, expectedPts) {
@@ -265,7 +266,11 @@ async function main(
       dryRun: true,
       stage,
       keyframes: keyframes.slice(0, 3),
-      pairs: scenario === 'four' ? [[1, 2], [3, 4]] : [[keyframes[1], keyframes[2]]],
+      pairs: scenario === 'four'
+        ? [[1, 2], [3, 4]]
+        : scenario === 'odd'
+          ? [[keyframes[1]]]
+          : [[keyframes[1], keyframes[2]]],
       looping,
       acquireCalls: acquire.program.proof.logicalCalls,
       acquireBytes: acquire.program.frame.length,
@@ -274,13 +279,13 @@ async function main(
       ...(loopPlan
         ? {
             loopCalls: Object.fromEntries(
-              ['gate', 'acquire', 'first', 'second'].map(name => [
+              ['gate', 'acquire', 'singleAcquire', 'first', 'second', 'singleFirst'].map(name => [
                 name,
                 loopPlan[name].proof.logicalCalls
               ])
             ),
             loopBytes: Object.fromEntries(
-              ['gate', 'acquire', 'first', 'second'].map(name => [
+              ['gate', 'acquire', 'singleAcquire', 'first', 'second', 'singleFirst'].map(name => [
                 name,
                 loopPlan[name].frame.length
               ])
@@ -414,25 +419,35 @@ async function main(
         await step('paired output worker stop', () => paired.stop());
         record.result = {outputWorker: 'joined before any decoder output'};
       } else {
-        const indices = scenario === 'four' ? [[1, 2], [3, 4]] : [[secondIndex, keyframes[2]]];
+        const indices = scenario === 'four'
+          ? [[1, 2], [3, 4]]
+          : scenario === 'odd'
+            ? [[secondIndex]]
+            : [[secondIndex, keyframes[2]]];
         const pairs = [];
-        for (const [pairIndex, [left, right]] of indices.entries()) {
+        for (const [pairIndex, frameIndices] of indices.entries()) {
+          const [left, right] = frameIndices;
           const plan = await step(`pair ${pairIndex} output worker wait`, () =>
-            paired.startAcquire()
+            paired.startAcquire(frameIndices.length)
           );
           const firstJob = await step(`pair ${pairIndex} first input receive and submit`, () =>
             decoder.submitSplit(unit(left))
           );
-          const secondJob = await step(`pair ${pairIndex} second input receive and submit`, () =>
-            decoder.submitSplit(unit(right))
+          const secondJob = right === undefined
+            ? null
+            : await step(`pair ${pairIndex} second input receive and submit`, () =>
+                decoder.submitSplit(unit(right))
+              );
+          const acquired = await step(`pair ${pairIndex} host checks acquisitions`, () =>
+            paired.finishAcquire(plan, frameIndices.map(index => BigInt(index)))
           );
-          const acquired = await step(`pair ${pairIndex} host checks two acquisitions`, () =>
-            paired.finishAcquire(plan, [BigInt(left), BigInt(right)])
-          );
-          const destinations = [
-            await step(`pair ${pairIndex} first reserved surface`, () => sink.workerDestination()),
-            await step(`pair ${pairIndex} second reserved surface`, () => sink.workerDestination())
-          ];
+          const destinations = [];
+          for (let index = 0; index < frameIndices.length; index++)
+            destinations.push(
+              await step(`pair ${pairIndex} reserved surface ${index}`, () =>
+                sink.workerDestination()
+              )
+            );
           if (scenario === 'stop-present') {
             record.result = await step('stop output during presentation wait', () =>
               paired.stopDuringPresentation(destinations, first)
@@ -441,7 +456,7 @@ async function main(
           }
           const outputs = [];
           const publications = [];
-          for (let index = 0; index < 2; index++) {
+          for (let index = 0; index < frameIndices.length; index++) {
             outputs.push(
               await step(`pair ${pairIndex} output ${index} fetch and presentation`, () =>
                 paired.fetch(index, destinations, first)
@@ -454,7 +469,9 @@ async function main(
             );
           }
           pairs.push({
-            inputSequences: [firstJob.sequence, secondJob.sequence],
+            inputSequences: secondJob
+              ? [firstJob.sequence, secondJob.sequence]
+              : [firstJob.sequence],
             acquired: acquired.map(item => ({index: item.index, pts: String(item.pts)})),
             outputs: outputs.map(item => ({...item, pts: String(item.pts)})),
             publications

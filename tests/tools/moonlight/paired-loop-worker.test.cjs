@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const {CODE} = require('../../sdk/native/thread.cjs');
 const SYNC = require('../../sdk/native/os-sync-functions.json');
 const ring = require('./ring.cjs');
-const {CONTROL} = require('./paired-loop-plan.cjs');
+const {CONTROL, locations} = require('./paired-loop-plan.cjs');
 const {create} = require('./paired-loop-worker.cjs');
 
 const SDK = 0x40000000;
@@ -240,5 +240,38 @@ test('paired loop stop cancels a host wait for renderer acknowledgment', async (
   await worker.stop();
   await assert.rejects(waiting, /stopped while waiting for presentation/);
   assert.equal(worker.diagnostics.joined, true);
+  assert.equal(worker.diagnostics.retained, false);
+});
+
+test('paired loop finishes one odd tail frame and accepts another pair', async () => {
+  const f = fixture();
+  const worker = await workerFor(f);
+  await worker.start();
+  await worker.beginPair(1, 1);
+  assert.equal(
+    f.read(f.control + CONTROL.dispatch[0], 8).readBigUInt64LE(),
+    BigInt(locations(0x60000000).singleAcquire)
+  );
+  f.acquire(1, [1]);
+  assert.deepEqual(await worker.acquire([1n]), [{index: 0, pts: 1n}]);
+  const destination = {
+    index: 1,
+    address: MAPPED + ring.frameOffset(1),
+    bytes: ring.FRAME_BYTES,
+    color: 1,
+    sequence: 1
+  };
+  const frame = {width: 1920, height: 1080, stride: 1920, sliceHeight: 1088};
+  await worker.openFetch([destination], frame);
+  f.fetched(CONTROL.firstResults, 1);
+  f.present(1, 1);
+  assert.deepEqual(await worker.finishFirst(), {pts: 1n, sequence: 1});
+  await assert.rejects(worker.finishSecond(), /unavailable/);
+  await worker.beginPair(2);
+  assert.equal(
+    f.read(f.control + CONTROL.dispatch[0], 8).readBigUInt64LE(),
+    BigInt(locations(0x60000000).acquire)
+  );
+  await worker.stop();
   assert.equal(worker.diagnostics.retained, false);
 });

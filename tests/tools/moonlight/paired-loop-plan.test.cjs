@@ -88,3 +88,25 @@ test('paired loop commits each surface after fetch and waits before the second',
   assert.equal(built.calls.second.at(-2).args[2], built.second.frame.length);
   assert.equal(built.calls.second.at(-1).function, SDK + CODE.longjmp.offset);
 });
+
+test('paired loop has a one-output path that returns directly to its gate', () => {
+  const built = fixture();
+  assert.deepEqual(
+    built.calls.singleAcquire.map(call => call.function),
+    [
+      SDK + SYNC.waitEvent.offset,
+      FUNCTIONS.acquireOutput,
+      SDK + IPC_COPY.offset,
+      SDK + SYNC.waitLightEvent.offset,
+      SDK + CODE.longjmp.offset
+    ]
+  );
+  assert.equal(built.calls.singleFirst[1].function, FUNCTIONS.getOutput);
+  assert.equal(
+    built.calls.singleFirst.some(call =>
+      call.function === SDK + SYNC.waitLightEvent.offset
+    ),
+    false
+  );
+  assert.equal(built.calls.singleFirst.at(-1).function, SDK + CODE.longjmp.offset);
+});
