@@ -10,10 +10,11 @@ const BUILD_ROOT = '/media/storage2/builds/HBLauncher/native-h264';
 const RUNS_FILE = '/media/storage/local/hbl-notes/RUNS.md';
 
 function parseArgs(args) {
-  const options = {directory: null, clip: null, stages: STAGES, dryRun: false};
+  const options = {directory: null, clip: null, stages: STAGES, dryRun: false, loop: false};
   for (let index = 0; index < args.length; index++) {
     const arg = args[index];
     if (arg === '--dry-run') options.dryRun = true;
+    else if (arg === '--loop') options.loop = true;
     else if (arg === '--clip' || arg === '--stages') {
       const value = args[++index];
       if (!value || value.startsWith('--')) throw Error(arg + ' needs a value');
@@ -31,14 +32,14 @@ function parseArgs(args) {
   return options;
 }
 
-function stageCommand(directory, clip, stage) {
+function stageCommand(directory, clip, stage, looping = false) {
   const script = path.join(
     __dirname,
     stage === 'one' ? 'probe-split-decoder.cjs' : 'probe-paired-output.cjs'
   );
   const args = [script];
   if (directory) args.push(path.resolve(directory));
-  args.push('--clip', path.resolve(clip), '--stage', stage);
+  args.push('--clip', path.resolve(clip), '--stage', looping && stage !== 'one' ? `loop-${stage}` : stage);
   if (stage === 'one') args.push('--native-publish');
   return [process.execPath, ...args];
 }
@@ -61,9 +62,12 @@ async function main(
     log = console.log
   } = {}
 ) {
-  const {clip, stages, dryRun} = options;
+  const {clip, stages, dryRun, loop: looping = false} = options;
   const directory = options.directory ? path.resolve(options.directory) : null;
-  const commands = stages.map(stage => ({stage, command: stageCommand(directory, clip, stage)}));
+  const commands = stages.map(stage => ({
+    stage,
+    command: stageCommand(directory, clip, stage, looping)
+  }));
   if (dryRun) {
     for (const item of commands) log(item.command.map(quote).join(' '));
     return {dryRun: true, commands};
@@ -81,11 +85,12 @@ async function main(
   const started = now();
   const output = path.join(
     builds,
-    started.toISOString().replace(/[:.]/g, '-') + '-' + revision.slice(0, 8) + '-r3-paired-ladder'
+    started.toISOString().replace(/[:.]/g, '-') + '-' + revision.slice(0, 8) +
+      (looping ? '-r3-paired-loop-ladder' : '-r3-paired-ladder')
   );
   await fs.mkdir(output, {recursive: true, mode: 0o700});
   const ladder = {
-    probe: 'paired-ladder',
+    probe: looping ? 'paired-loop-ladder' : 'paired-ladder',
     session: rpc.a.session,
     sourceRevision: revision,
     clip: path.resolve(clip),
@@ -94,7 +99,7 @@ async function main(
   };
   await fs.appendFile(
     runsFile,
-    `\n## ${started.toISOString().slice(0, 10)} — R3 paired-output ladder at \`${revision.slice(0, 8)}\` (${output})\n\n`
+    `\n## ${started.toISOString().slice(0, 10)} — R3 ${looping ? 'paired-loop' : 'paired-output'} ladder at \`${revision.slice(0, 8)}\` (${output})\n\n`
   );
   for (const {stage, command} of commands) {
     const stageOutput = path.join(output, stage);
@@ -109,7 +114,13 @@ async function main(
           output: stageOutput,
           nativePublish: true
         });
-      else await runPaired(current, {clip, stage, output: stageOutput, allowSameSession: true});
+      else
+        await runPaired(current, {
+          clip,
+          stage: looping ? `loop-${stage}` : stage,
+          output: stageOutput,
+          allowSameSession: true
+        });
     } catch (failure) {
       verdict = 'FAIL';
       error = failure.message;
@@ -137,7 +148,7 @@ async function main(
   await fs.writeFile(path.join(output, 'ladder.json'), JSON.stringify(ladder, null, 2) + '\n', {
     mode: 0o600
   });
-  log(`PAIRED LADDER ${ladder.verdict} (${output})`);
+  log(`PAIRED ${looping ? 'LOOP ' : ''}LADDER ${ladder.verdict} (${output})`);
   if (ladder.verdict === 'FAIL') log('Restart SmileBASIC before any further device run.');
   return {...ladder, output};
 }

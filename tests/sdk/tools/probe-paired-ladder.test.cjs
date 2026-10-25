@@ -9,8 +9,47 @@ test('paired ladder parses stages in safety order and rejects bad options', () =
   const parsed = parseArgs(['--clip', '/tmp/ip1080.h264', '--stages', 'short-recv,one,two']);
   assert.deepEqual(parsed.stages, ['one', 'two', 'short-recv']);
   assert.deepEqual(STAGES, ['one', 'two', 'stop-input', 'stop-output', 'short-recv']);
+  assert.equal(parseArgs(['--clip', '/tmp/ip1080.h264', '--loop']).loop, true);
   assert.throws(() => parseArgs(['--clip', '/tmp/ip1080.h264', '--stages', 'two,two']), /stages/);
   assert.throws(() => parseArgs(['--clip']), /needs a value/);
+});
+
+test('paired loop ladder maps only output stages to the persistent collector', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'paired-loop-ladder-'));
+  try {
+    const calls = [];
+    const result = await main(
+      {
+        directory: path.join(root, 'launcher-test'),
+        clip: '/tmp/ip1080.h264',
+        stages: ['one', 'two'],
+        loop: true
+      },
+      {
+        sourceRevision: '0123456789abcdef',
+        builds: root,
+        runsFile: path.join(root, 'RUNS.md'),
+        sessionRpc: () => ({host: '127.0.0.1', a: {session: 'launcher-test'}}),
+        ensureFresh: async () => {},
+        runSplit: async (_directory, options) => {
+          calls.push(options.stage);
+          await fs.mkdir(options.output, {recursive: true});
+          await fs.writeFile(path.join(options.output, 'result.json'), '{}');
+        },
+        runPaired: async (_directory, options) => {
+          calls.push(options.stage);
+          await fs.mkdir(options.output, {recursive: true});
+          await fs.writeFile(path.join(options.output, 'paired-output.json'), '{}');
+        },
+        log: () => {}
+      }
+    );
+    assert.deepEqual(calls, ['one', 'loop-two']);
+    assert.equal(result.verdict, 'PASS');
+    assert.match(result.output, /paired-loop-ladder$/);
+  } finally {
+    await fs.rm(root, {recursive: true, force: true});
+  }
 });
 
 test('paired ladder stops and records the first failing stage', async () => {

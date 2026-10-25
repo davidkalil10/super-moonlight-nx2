@@ -14,11 +14,24 @@ const {create: createTransport} = require('../../tools/moonlight/native-tcp.cjs'
 const {create: createSink} = require('../../tools/moonlight/native-sink.cjs');
 const {create: createSplit} = require('../../tools/moonlight/split-decoder-worker.cjs');
 const {create: createPairedOutput} = require('../../tools/moonlight/paired-output-worker.cjs');
+const {create: createPairedLoop} = require('../../tools/moonlight/paired-loop-worker.cjs');
 const acquireFrame = require('../../tools/moonlight/paired-acquire-frame.cjs');
 const outputFrame = require('../../tools/moonlight/paired-output-frame.cjs');
+const loopFrame = require('../../tools/moonlight/paired-loop-plan.cjs');
 const ring = require('../../tools/moonlight/ring.cjs');
 
-const STAGES = ['two', 'four', 'stop-input', 'stop-output', 'short-recv'];
+const STAGES = [
+  'two',
+  'four',
+  'stop-input',
+  'stop-output',
+  'short-recv',
+  'loop-two',
+  'loop-four',
+  'loop-stop-input',
+  'loop-stop-output',
+  'loop-short-recv'
+];
 const BUILD_ROOT = '/media/storage2/builds/HBLauncher/native-h264';
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -93,6 +106,36 @@ async function waitForNativeReady(rpc, storage, {timeoutMs = 30000, pollMs = 100
   throw Error(`Moonlight native video did not initialize (ABI 0x${last.toString(16)})`);
 }
 
+async function createLoopAdapter(options) {
+  const worker = await createPairedLoop(options);
+  let started = false;
+  let nextSequence = 0;
+  return {
+    async startAcquire() {
+      if (!started) {
+        await worker.start();
+        started = true;
+      }
+      const sequence = ++nextSequence;
+      await worker.beginPair(sequence);
+      return {sequence};
+    },
+    async finishAcquire(_plan, expectedPts) {
+      return (await worker.acquire(expectedPts)).map(item => ({...item, status: 0}));
+    },
+    async fetch(index, destinations, frame) {
+      if (index === 0) await worker.openFetch(destinations, frame);
+      const result = index === 0 ? await worker.finishFirst() : await worker.finishSecond();
+      return {index, ...result};
+    },
+    stop: () => worker.stop(),
+    snapshot: () => worker.snapshot(),
+    get diagnostics() {
+      return worker.diagnostics;
+    }
+  };
+}
+
 function journal(file) {
   const descriptor = fs.openSync(file, 'wx', 0o600);
   let sequence = 0;
@@ -115,6 +158,8 @@ async function main(
   {clip, stage, output, dryRun = false, allowSameSession = false} = {}
 ) {
   if (!STAGES.includes(stage)) throw Error('Use --stage ' + STAGES.join('|'));
+  const scenario = stage.replace(/^loop-/, '');
+  const looping = scenario !== stage;
   if (!clip) throw Error('Pass --clip with the ordered 1080p IP clip');
   directory = path.resolve(directory);
   clip = path.resolve(clip);
@@ -173,15 +218,45 @@ async function main(
       base: options.base
     });
     const fetch = [0, 1].map(index => outputFrame.plan({...options, index}));
+    const loopPlan = looping
+      ? loopFrame.plan({
+          sdk,
+          base: 0x52000000,
+          control: 0x53000000,
+          event: 0x51000300,
+          functions,
+          decoder,
+          output: options.output,
+          format: options.format,
+          publication: options.publication
+        })
+      : null;
     const result = {
       dryRun: true,
       stage,
       keyframes: keyframes.slice(0, 3),
-      pairs: stage === 'four' ? [[1, 2], [3, 4]] : [[keyframes[1], keyframes[2]]],
+      pairs: scenario === 'four' ? [[1, 2], [3, 4]] : [[keyframes[1], keyframes[2]]],
+      looping,
       acquireCalls: acquire.program.proof.logicalCalls,
       acquireBytes: acquire.program.frame.length,
       fetchCalls: fetch.map(item => item.program.proof.logicalCalls),
-      fetchBytes: fetch.map(item => item.program.frame.length)
+      fetchBytes: fetch.map(item => item.program.frame.length),
+      ...(loopPlan
+        ? {
+            loopCalls: Object.fromEntries(
+              ['gate', 'acquire', 'first', 'second'].map(name => [
+                name,
+                loopPlan[name].proof.logicalCalls
+              ])
+            ),
+            loopBytes: Object.fromEntries(
+              ['gate', 'acquire', 'first', 'second'].map(name => [
+                name,
+                loopPlan[name].frame.length
+              ])
+            )
+          }
+        : {})
     };
     console.log(JSON.stringify(result));
     return result;
@@ -250,7 +325,7 @@ async function main(
         publication: sink.workerPublication,
         splitWorkerFactory: async options => {
           const input = await createSplit({...options, inputOnly: true});
-          paired = await createPairedOutput({
+          paired = await (looping ? createLoopAdapter : createPairedOutput)({
             rpc,
             functions: options.functions,
             decoder: options.decoder,
@@ -281,12 +356,12 @@ async function main(
     await step('input-only split start', () => decoder.startSplit());
     const unit = index => ({data: units[index].data, pts: index});
     const secondIndex = keyframes[1];
-    if (stage === 'stop-input') {
+    if (scenario === 'stop-input') {
       await step('input worker enter TCP receive', () =>
         decoder.stageSplitInput(unit(secondIndex))
       );
       record.result = {inputWorker: 'waiting for TCP receive'};
-    } else if (stage === 'short-recv') {
+    } else if (scenario === 'short-recv') {
       const shortLength = Math.max(1, units[secondIndex].data.length >>> 1);
       await step('short input staged', () =>
         decoder.stageSplitInput({...unit(secondIndex), receiveLength: shortLength})
@@ -304,12 +379,12 @@ async function main(
         throw Error('Paired output short receive opened the decode gate');
       record.result = {expected, decodeGateSignals: 0};
     } else {
-      if (stage === 'stop-output') {
+      if (scenario === 'stop-output') {
         await step('paired output worker wait', () => paired.startAcquire());
         await step('paired output worker stop', () => paired.stop());
         record.result = {outputWorker: 'joined before any decoder output'};
       } else {
-        const indices = stage === 'four' ? [[1, 2], [3, 4]] : [[secondIndex, keyframes[2]]];
+        const indices = scenario === 'four' ? [[1, 2], [3, 4]] : [[secondIndex, keyframes[2]]];
         const pairs = [];
         for (const [pairIndex, [left, right]] of indices.entries()) {
           const plan = await step(`pair ${pairIndex} output worker wait`, () =>
@@ -349,7 +424,7 @@ async function main(
             publications
           });
         }
-        record.result = stage === 'four'
+        record.result = scenario === 'four'
           ? {pairs, decodeGateSignals: decoder.splitDiagnostics.decodeGateSignals}
           : {...pairs[0], decodeGateSignals: decoder.splitDiagnostics.decodeGateSignals};
       }
