@@ -275,16 +275,17 @@ async function run({
       stageAt = now;
       stage = name;
     };
+    const statsFile = path.join(output, 'stats.jsonl');
     printing = setInterval(() => {
-      console.log(
-        JSON.stringify({
-          codec: 'h264',
-          ...stats,
-          dropped: reader.dropped - dropped,
-          at: stage + '/' + (decoder?.step ?? '-'),
-          ms: Object.fromEntries(Object.entries(stageMs).map(([k, v]) => [k, Math.round(v)]))
-        })
-      );
+      const line = JSON.stringify({
+        codec: 'h264',
+        ...stats,
+        dropped: reader.dropped - dropped,
+        at: stage + '/' + (decoder?.step ?? '-'),
+        ms: Object.fromEntries(Object.entries(stageMs).map(([k, v]) => [k, Math.round(v)]))
+      });
+      console.log(line);
+      fs.appendFile(statsFile, line + '\n', {mode: 0o600}).catch(() => {});
       stageMs = {};
       dropped = reader.dropped;
       Object.keys(stats).forEach(key => {
