@@ -60,8 +60,14 @@ test('staggered input frames alternate receive and send while stamping checked s
     assert.ok(built.send[slot].frame.length < 0x70000);
     assert.equal(built.calls.receive[slot][0].args[1], addresses.scratch);
     assert.equal(built.calls.receive[slot][0].args[3], 0x40);
-    assert.equal(built.calls.receive[slot].at(-1).args[0], built.locations.send[slot]);
-    assert.equal(built.calls.send[slot].at(-1).args[0], built.locations.receive[1 - slot]);
+    assert.equal(
+      built.calls.receive[slot].at(-1).args[0].u64,
+      addresses.control + input.CONTROL.sendDispatch[slot]
+    );
+    assert.equal(
+      built.calls.send[slot].at(-1).args[0].u64,
+      addresses.control + input.CONTROL.receiveDispatch[slot]
+    );
     assert.equal(built.calls.send[slot][1].function, addresses.functions.sendInput);
     assert.equal(built.calls.send[slot][3].function, addresses.functions.acquireInput);
   }

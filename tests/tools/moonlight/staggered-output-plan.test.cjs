@@ -29,10 +29,16 @@ test('staggered output frames acquire before a host fetch gate and publish once'
     assert.ok(built.fetch[slot].frame.length < 0x70000);
     assert.equal(built.calls.acquire[slot][0].function, addresses.sdk + SYNC.waitEvent.offset);
     assert.equal(built.calls.acquire[slot][1].function, addresses.functions.acquireOutput);
-    assert.equal(built.calls.acquire[slot][4].args[0], built.locations.fetch[slot]);
+    assert.equal(
+      built.calls.acquire[slot][4].args[0].u64,
+      addresses.control + output.CONTROL.fetchDispatch[slot]
+    );
     assert.equal(built.calls.fetch[slot][1].function, addresses.functions.getOutput);
     assert.equal(built.calls.fetch[slot][2].function, addresses.functions.releaseOutput);
-    assert.equal(built.calls.fetch[slot].at(-1).args[0], built.locations.acquire[1 - slot]);
+    assert.equal(
+      built.calls.fetch[slot].at(-1).args[0].u64,
+      addresses.control + output.CONTROL.acquireDispatch[slot]
+    );
   }
   assert.equal(
     built.calls.acquire[0][1].args[1],
