@@ -88,8 +88,10 @@ async function create({
   const frames = [
     ['gate', 'gateSnapshot'],
     ['acquire', 'acquireSnapshot'],
+    ['singleAcquire', 'singleAcquireSnapshot'],
     ['first', 'firstSnapshot'],
-    ['second', 'secondSnapshot']
+    ['second', 'secondSnapshot'],
+    ['singleFirst', 'singleFirstSnapshot']
   ];
   for (const [name, snapshot] of frames) {
     await rpc.write(built.locations[name], built[name].frame);
@@ -115,6 +117,7 @@ async function create({
   let retained = false;
   let closed = false;
   let stopping = false;
+  let selectedCount = 2;
   let active = null;
 
   async function pollSequence(offset, sequence, bytes) {
@@ -162,7 +165,7 @@ async function create({
     if (!active) return;
     const slots = await rpc.read(at(c.acquired[0]), c.acquired[1] - c.acquired[0] + 32);
     const results = await rpc.read(at(c.acquireResults), 0x80);
-    for (let index = 0; index < 2; index++) {
+    for (let index = 0; index < active.count; index++) {
       const outputIndex = slots.readInt32LE(index * 0x40);
       const acquiredStatus = status(results.readBigUInt64LE(index * 8));
       const fetchOffset = (index ? c.secondResults : c.firstResults) - c.acquireResults;
@@ -201,13 +204,14 @@ async function create({
       }
     },
 
-    async beginPair(sequence) {
+    async beginPair(sequence, count = 2) {
       if (
         !thread ||
         joined ||
         active ||
         retained ||
         stopping ||
+        ![1, 2].includes(count) ||
         !Number.isInteger(sequence) ||
         sequence < 1 ||
         sequence > 0xffffffff
@@ -228,8 +232,21 @@ async function create({
       await rpc.write(at(c.acquired[0]), reset);
       const job = Buffer.alloc(4);
       job.writeUInt32LE(sequence);
-      active = {sequence, acquired: null, destinations: null, firstDone: false};
+      active = {sequence, count, acquired: null, destinations: null, firstDone: false};
       try {
+        if (count !== selectedCount) {
+          const selectors = Buffer.alloc(16);
+          selectors.writeBigUInt64LE(
+            BigInt(built.locations[count === 1 ? 'singleAcquire' : 'acquire']),
+            0
+          );
+          selectors.writeBigUInt64LE(
+            BigInt(built.locations[count === 1 ? 'singleFirst' : 'first']),
+            8
+          );
+          await rpc.write(at(c.dispatch[0]), selectors);
+          selectedCount = count;
+        }
         await rpc.writeAndCall(at(c.job), job, rpc.a.sdk + SYNC.signalLightEvent.offset, [
           at(c.startGate)
         ]);
@@ -243,17 +260,17 @@ async function create({
       if (!active || active.acquired || retained) throw Error('Paired loop acquire unavailable');
       if (
         !Array.isArray(expectedPts) ||
-        expectedPts.length !== 2 ||
+        expectedPts.length !== active.count ||
         expectedPts.some(pts => typeof pts !== 'bigint' || pts < 0n) ||
-        expectedPts[1] <= expectedPts[0]
+        (active.count === 2 && expectedPts[1] <= expectedPts[0])
       )
-        throw Error('Paired loop needs two ordered output PTS values');
+        throw Error('Paired loop needs ordered output PTS values');
       const offset = c.acquired[0];
       const bytes = c.acquireResults + 20 - offset;
       const state = await pollSequence(offset, active.sequence, bytes);
       const resultAt = c.acquireResults - offset;
       const acquired = [];
-      for (let index = 0; index < 2; index++) {
+      for (let index = 0; index < active.count; index++) {
         const slot = (c.acquired[index] - offset);
         const value = state.readBigUInt64LE(resultAt + index * 8);
         const outputIndex = state.readInt32LE(slot);
@@ -262,7 +279,7 @@ async function create({
           throw Error(`Paired loop output ${index} acquisition failed or PTS differs`);
         acquired.push({index: outputIndex, pts});
       }
-      if (acquired[0].index === acquired[1].index)
+      if (active.count === 2 && acquired[0].index === acquired[1].index)
         throw Error('Paired loop acquired the same output index twice');
       active.acquired = acquired;
       return acquired;
@@ -273,12 +290,15 @@ async function create({
         throw Error('Paired loop fetch gate is unavailable');
       if (
         !Array.isArray(destinations) ||
-        destinations.length !== 2 ||
-        destinations[0].index === destinations[1].index ||
-        destinations[1].sequence !== destinations[0].sequence + 1
+        destinations.length !== active.count ||
+        (active.count === 2 &&
+          (destinations[0].index === destinations[1].index ||
+            destinations[1].sequence !== destinations[0].sequence + 1))
       )
-        throw Error('Paired loop needs two distinct ordered surfaces');
-      const data = Buffer.alloc(c.destinations[1] - c.destinations[0] + 48);
+        throw Error('Paired loop needs distinct ordered surfaces');
+      const data = Buffer.alloc(
+        active.count === 2 ? c.destinations[1] - c.destinations[0] + 48 : 48
+      );
       destinations.forEach((destination, index) =>
         descriptor(destination, frame).copy(data, c.destinations[index] - c.destinations[0])
       );
@@ -305,12 +325,15 @@ async function create({
         throw Error('Paired loop first fetch or release failed');
       }
       await waitForPresentation(active.destinations[0]);
-      active.firstDone = true;
-      return {pts: active.acquired[0].pts, sequence: active.destinations[0].sequence};
+      const completed = {pts: active.acquired[0].pts, sequence: active.destinations[0].sequence};
+      if (active.count === 1) active = null;
+      else active.firstDone = true;
+      return completed;
     },
 
     async finishSecond() {
-      if (!active?.firstDone || retained) throw Error('Paired loop second output unavailable');
+      if (!active?.firstDone || active.count !== 2 || retained)
+        throw Error('Paired loop second output unavailable');
       try {
         await signal('secondGate');
       } catch (error) {
@@ -342,7 +365,7 @@ async function create({
         await signal('secondGate');
         if (active && !active.acquired) {
           const until = Date.now() + timeoutMs;
-          for (let index = 0; index < 2; index++) {
+          for (let index = 0; index < active.count; index++) {
             while (Date.now() < until) {
               const current = await rpc.read(at(c.acquireResults + index * 8), 8);
               if (current.readBigUInt64LE() !== SENTINEL) break;

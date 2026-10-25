@@ -20,12 +20,16 @@ function locations(base) {
   return {
     gate: base + 0x10000,
     gateSnapshot: base + 0x80000,
+    singleAcquire: base + 0x9a000,
     acquire: base + 0x110000,
     acquireSnapshot: base + 0x180000,
+    singleAcquireSnapshot: base + 0x1a0000,
     first: base + 0x210000,
     firstSnapshot: base + 0x280000,
+    singleFirst: base + 0x2a0000,
     second: base + 0x300000,
     secondSnapshot: base + 0x380000,
+    singleFirstSnapshot: base + 0x3a0000,
     exit: base + 0x3f0000
   };
 }
@@ -89,6 +93,25 @@ function plan({sdk, base, control, event, functions, decoder, output, format, pu
     1: CONTROL.acquireResults,
     3: CONTROL.acquireResults + 8
   });
+  const singleAcquireCalls = [
+    {function: sync('waitEvent'), args: [event, 0, 0, 0]},
+    {
+      function: functions.acquireOutput,
+      args: [
+        decoder,
+        at(CONTROL.acquired[0]),
+        at(CONTROL.acquired[0] + 8),
+        at(CONTROL.acquired[0] + 16),
+        at(CONTROL.acquired[0] + 20)
+      ]
+    },
+    {function: copy, args: [at(CONTROL.acquireResults + 16), at(CONTROL.job), 4, 0]},
+    {function: sync('waitLightEvent'), args: [at(CONTROL.fetchGate), 0, 0, 0]},
+    {function: jump, args: [{u64: at(CONTROL.dispatch[1])}, 1, 0, 0]}
+  ];
+  const singleAcquire = frame(loc.singleAcquire, singleAcquireCalls, {
+    1: CONTROL.acquireResults
+  });
   const fetchCalls = (index, resultOffset) => {
     const destination = CONTROL.destinations[index];
     const slot = CONTROL.acquired[index];
@@ -148,6 +171,37 @@ function plan({sdk, base, control, event, functions, decoder, output, format, pu
     1: CONTROL.secondResults + 8,
     2: CONTROL.secondResults + 16
   });
+  const singleRestores = [
+    [loc.gate, loc.gateSnapshot, gate.frame.length],
+    [loc.singleAcquire, loc.singleAcquireSnapshot, singleAcquire.frame.length],
+    [loc.singleFirst, loc.singleFirstSnapshot, 0]
+  ];
+  const singleFirstCalls = [
+    ...fetchCalls(0, CONTROL.firstResults),
+    ...singleRestores.map(([destination, source, bytes]) => ({
+      function: copy,
+      args: [destination, source, bytes, 0]
+    })),
+    {function: jump, args: [{u64: at(CONTROL.dispatch[3])}, 1, 0, 0]}
+  ];
+  let singleFirst = frame(loc.singleFirst, singleFirstCalls, {
+    0: CONTROL.firstResults,
+    1: CONTROL.firstResults + 8,
+    2: CONTROL.firstResults + 16
+  });
+  singleFirstCalls[singleFirstCalls.length - 2].args[2] = singleFirst.frame.length;
+  singleFirst = frame(loc.singleFirst, singleFirstCalls, {
+    0: CONTROL.firstResults,
+    1: CONTROL.firstResults + 8,
+    2: CONTROL.firstResults + 16
+  });
+  if (
+    loc.singleAcquire + singleAcquire.frame.length > loc.acquire ||
+    loc.singleAcquireSnapshot + singleAcquire.frame.length > loc.first ||
+    loc.singleFirst + singleFirst.frame.length > loc.second ||
+    loc.singleFirstSnapshot + singleFirst.frame.length > loc.exit
+  )
+    throw Error('Paired single-output frame exceeds its reserved region');
   const stop = Buffer.alloc(0xb0);
   stop.writeBigUInt64LE(BigInt(sdk + CODE.exit.offset), 0x58);
   stop.writeBigUInt64LE(BigInt(base + 0x370000), 0x68);
@@ -156,10 +210,19 @@ function plan({sdk, base, control, event, functions, decoder, output, format, pu
     locations: loc,
     gate,
     acquire,
+    singleAcquire,
     first,
     second,
+    singleFirst,
     stop,
-    calls: {gate: gateCalls, acquire: acquireCalls, first: firstCalls, second: secondCalls}
+    calls: {
+      gate: gateCalls,
+      acquire: acquireCalls,
+      singleAcquire: singleAcquireCalls,
+      first: firstCalls,
+      second: secondCalls,
+      singleFirst: singleFirstCalls
+    }
   };
 }
 
