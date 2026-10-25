@@ -68,7 +68,10 @@ function fixture({receiveBytes = 4096, outputIndex = 2} = {}) {
       if (address === SDK + CODE.tryWait.offset) return {result: 1n};
       return {result: 0n};
     },
-    read: async (address, length) => read(address, length),
+    read: async (address, length) => {
+      if (address === control + 0x180) calls.push({statusRead: true, length});
+      return read(address, length);
+    },
     write: async (address, bytes) => write(address, bytes),
     async pair(operations) {
       calls.push({address: operations[0].address, args: operations[0].args, paired: true});
@@ -177,10 +180,35 @@ test('split worker runs two input jobs before fetching the first output', async 
   assert.equal(output.pts, 30n);
   await worker.queueOutput(second);
   await worker.finishOutput(second, {address: 0x73000000, bytes: 0x400000});
+  assert.ok(f.calls.some(call => call.statusRead));
+  assert.ok(f.calls.filter(call => call.statusRead).every(call => call.length === 0x8c));
+  assert.equal(f.calls.filter(call => call.paired).length, 0);
   await worker.stop();
   await worker.finalize();
   assert.equal(f.calls.filter(call => call.address === SDK + CODE.join.offset).length, 2);
   assert.equal(f.calls.filter(call => call.address === SDK + sync.finalizeEvent.offset).length, 1);
+});
+
+test('one status scheduler reads input and output progress together', async () => {
+  const f = fixture();
+  const worker = await workerFor(f);
+  const job = await worker.stageInput({
+    index: 1,
+    length: 4096,
+    pts: 30,
+    inputAddress: 0x72000000,
+    payload: Buffer.alloc(4096)
+  });
+  await worker.queueOutput(job);
+  const [completed, acquired] = await Promise.all([
+    worker.completeInput(job),
+    worker.waitForAcquired(job)
+  ]);
+  assert.equal(completed.sequence, job.sequence);
+  assert.equal(acquired.index, 2);
+  assert.ok(f.calls.filter(call => call.statusRead).length <= 3);
+  await worker.stop();
+  await worker.finalize();
 });
 
 test('short receive cannot open the decode gate', async () => {
