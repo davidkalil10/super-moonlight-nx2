@@ -97,6 +97,9 @@ function createConsole() {
         return 1n;
       }
       case 'mediaSetInt':
+      case 'decoderDestroy':
+      case 'mediaDestroy':
+      case 'bufferDestroy':
       case 'configure':
       case 'start':
       case 'stop':
@@ -477,6 +480,61 @@ test('submit can stamp SendInput with an SDK call run just before it', async () 
     assert.equal(decoder.lastStamp, 0x123456789n);
     assert.deepEqual(decoder.lastInput, {status: 0, index: 0});
     assert.deepEqual(consoleMock.log, ['tick', 'sendInput', 'acquireInput']);
+  } finally {
+    await decoder.close().catch(() => {});
+    await fs.rm(directory, {recursive: true, force: true});
+  }
+});
+
+test('persistent mode starts after the first host frame and joins before decoder cleanup', async () => {
+  const directory = await fixture();
+  const consoleMock = createConsole();
+  const events = [];
+  const destination = {address: 0x70000000, bytes: (1920 * 1080 * 3) / 2 + 0x1000};
+  const decoder = await createDecoder({
+    rpc: consoleMock.rpc,
+    directory,
+    workerDirectory: path.join(directory, 'worker'),
+    workerMode: 'persistent',
+    async persistentWorkerFactory() {
+      return {
+        async register() {
+          events.push('register');
+        },
+        async start() {
+          events.push('start-worker');
+        },
+        async run(job) {
+          events.push(job);
+          return {pts: BigInt(job.pts), input: {status: 0, index: 0}};
+        },
+        async stop() {
+          events.push('stop-worker');
+        },
+        async finalize() {
+          events.push('finalize-events');
+        }
+      };
+    }
+  });
+  try {
+    await decoder.configure(sps, pps, 30);
+    assert.deepEqual(events, ['register']);
+    await assert.rejects(decoder.startPersistent(), /first frame/);
+    assert.ok(await frame(decoder, destination, 1000));
+    await decoder.startPersistent();
+    const result = await decoder.processPersistent(
+      {data: Buffer.alloc(4000, 7), pts: 2000},
+      destination
+    );
+    assert.equal(result.pts, '2000');
+    assert.equal(result.stride, 1920);
+    assert.equal(events[1], 'start-worker');
+    assert.equal(events[2].length, 4000);
+    assert.equal(events[2].destination, destination);
+    await decoder.close();
+    assert.deepEqual(events.slice(-2), ['stop-worker', 'finalize-events']);
+    assert.ok(consoleMock.log.indexOf('stop') >= 0);
   } finally {
     await decoder.close().catch(() => {});
     await fs.rm(directory, {recursive: true, force: true});

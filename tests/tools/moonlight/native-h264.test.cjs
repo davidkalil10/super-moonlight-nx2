@@ -1,8 +1,11 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
+const fsSync = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
-const {spawn} = require('node:child_process');
+const {EventEmitter} = require('node:events');
+const {PassThrough} = require('node:stream');
 const {run} = require('./native-h264.cjs');
 
 const accessUnit = Buffer.from('0000016742001eab00000168ce0100000165abcd', 'hex');
@@ -13,7 +16,7 @@ async function fixture({
   latency = 0,
   units = [{hex: accessUnit.toString('hex'), keyframe: true, pts: 123456}]
 } = {}) {
-  const root = '/media/storage2/builds/HBLauncher/native-h264-tests';
+  const root = process.env.HB_NATIVE_TEST_DIR || path.join(os.tmpdir(), 'hbl-native-h264-tests');
   await fs.mkdir(root, {recursive: true});
   const directory = await fs.mkdtemp(path.join(root, 'pipes-'));
   await fs.writeFile(
@@ -31,6 +34,7 @@ async function fixture({
     rpc: {a: {session: 'test-session', protocol: 3}},
     storage: {},
     helperPath: 'test-helper',
+    sourceRevision: '049e2efe32799194a16c2f2f871025c1961aaade',
     width: 128,
     height: 96,
     fps: 30,
@@ -48,7 +52,8 @@ async function fixture({
         }
       };
     },
-    async createDecoder() {
+    async createDecoder(config) {
+      events.push({type: 'create-decoder', mode: config.workerMode});
       return {
         async configure(sps, pps, fps) {
           events.push({type: 'configure', sps, pps, fps});
@@ -63,54 +68,91 @@ async function fixture({
           pipeline--;
           return {format: 'nv12', width: 128, height: 96, stride: 128, sliceHeight: 96};
         },
+        async startPersistent() {
+          events.push({type: 'start-persistent'});
+        },
+        async processPersistent(unit, destination) {
+          events.push({type: 'process-persistent', unit, destination});
+          return {format: 'nv12', width: 128, height: 96, stride: 128, sliceHeight: 96};
+        },
         async close() {
           events.push({type: 'decoder-close'});
         }
       };
     },
-    spawnProcess(command, args, options) {
-      let program;
+    spawnProcess(command, args, spawnOptions) {
+      const child = new EventEmitter();
+      child.exitCode = null;
+      child.signalCode = null;
+      child.stdio = [];
+      child.kill = signal => {
+        if (child.exitCode !== null || child.signalCode !== null) return true;
+        child.signalCode = signal;
+        setImmediate(() => child.emit('exit', 0, signal));
+        return true;
+      };
       if (command === 'test-helper') {
         assert.deepEqual(args.slice(-4), ['--raw-h264-fd', '4', '--audio-fd', '3']);
-        program = `
-          const fs = require('node:fs');
-          const readline = require('node:readline');
-          const lines = [];
-          readline.createInterface({input: process.stdin}).on('line', line => {
-            lines.push(JSON.parse(line));
-            if (lines.length !== 2) return;
-            fs.writeFileSync(${JSON.stringify(path.join(directory, 'input.json'))}, JSON.stringify(lines));
-            fs.writeSync(3, Buffer.from('${pcm.toString('hex')}', 'hex'));
-            fs.closeSync(3);
-            const units = ${JSON.stringify(units)};
-            for (const unit of units) fs.writeSync(4, Buffer.from(unit.hex, 'hex'));
-            fs.closeSync(4);
+        child.stdin = new PassThrough();
+        child.stderr = new PassThrough();
+        child.stdio = [child.stdin, null, child.stderr, new PassThrough(), new PassThrough()];
+        const lines = [];
+        let pending = '';
+        child.stdin.on('data', chunk => {
+          pending += chunk.toString();
+          for (;;) {
+            const end = pending.indexOf('\n');
+            if (end < 0) break;
+            lines.push(JSON.parse(pending.slice(0, end)));
+            pending = pending.slice(end + 1);
+            if (lines.length !== 2) continue;
+            fsSync.writeFileSync(path.join(directory, 'input.json'), JSON.stringify(lines));
+            child.stdio[3].end(pcm);
+            for (const unit of units) child.stdio[4].write(Buffer.from(unit.hex, 'hex'));
+            child.stdio[4].end();
             units.forEach((unit, seq) => {
-              const bytes = Buffer.from(unit.hex, 'hex').length;
-              console.error(JSON.stringify({type:'au',seq,frame:seq+1,bytes,pts:unit.pts,keyframe:unit.keyframe}));
+              child.stderr.write(
+                JSON.stringify({
+                  type: 'au',
+                  seq,
+                  frame: seq + 1,
+                  bytes: Buffer.from(unit.hex, 'hex').length,
+                  pts: unit.pts,
+                  keyframe: unit.keyframe
+                }) + '\n'
+              );
             });
-            setTimeout(() => process.exit(0), 100);
-          });
-          setTimeout(() => { console.error('Input channel did not arrive'); process.exit(1); }, 2000);
-        `;
+            child.stderr.end();
+            child.exitCode = 0;
+            setImmediate(() => child.emit('exit', 0, null));
+          }
+        });
       } else if (path.basename(args[0]) === 'input-feeder.cjs') {
-        program = `
-          console.log(JSON.stringify({type:'controller',buttonFlags:8192}));
-          console.log(JSON.stringify({type:'touch',events:[{id:7,action:'down',x:0.25,y:0.5,pressure:0}]}));
-          setInterval(() => {}, 1000);
-          process.on('SIGINT', () => process.exit(0));
-        `;
+        setImmediate(() => {
+          spawnOptions.stdio[1].write(
+            JSON.stringify({type: 'controller', buttonFlags: 8192}) + '\n'
+          );
+          spawnOptions.stdio[1].write(
+            JSON.stringify({
+              type: 'touch',
+              events: [{id: 7, action: 'down', x: 0.25, y: 0.5, pressure: 0}]
+            }) + '\n'
+          );
+        });
       } else if (path.basename(args[0]) === 'audio-stream.cjs') {
-        if (audioFailure) program = 'process.exit(7)';
-        else
-          program = `
-          const fs = require('node:fs');
+        if (audioFailure) {
+          child.exitCode = 7;
+          process.nextTick(() => child.emit('exit', 7, null));
+        } else {
           const chunks = [];
-          process.stdin.on('data', chunk => chunks.push(chunk));
-          process.stdin.on('end', () => fs.writeFileSync(${JSON.stringify(path.join(directory, 'audio.pcm'))}, Buffer.concat(chunks)));
-        `;
+          spawnOptions.stdio[0].on('data', chunk => chunks.push(chunk));
+          spawnOptions.stdio[0].on('end', () => {
+            fsSync.writeFileSync(path.join(directory, 'audio.pcm'), Buffer.concat(chunks));
+            child.exitCode = 0;
+            child.emit('exit', 0, null);
+          });
+        }
       } else throw Error('Unexpected child: ' + command);
-      const child = spawn(process.execPath, ['-e', program], options);
       children.push(child);
       return child;
     }
@@ -172,6 +214,25 @@ test(
     });
   }
 );
+
+test('persistent worker takes over after a host-driven first frame', {timeout: 5000}, async () => {
+  const f = await fixture({
+    units: [
+      {hex: accessUnit.toString('hex'), keyframe: true, pts: 1000},
+      {hex: accessUnit.toString('hex'), keyframe: false, pts: 2000}
+    ]
+  });
+  f.options.args.push('--decoder-worker', 'persistent');
+  await exercise(f, async () => {
+    await run(f.options);
+    assert.equal(f.events.find(event => event.type === 'create-decoder').mode, 'persistent');
+    assert.equal(f.events.filter(event => event.type === 'submit').length, 1);
+    assert.equal(f.events.filter(event => event.type === 'receive').length, 1);
+    assert.equal(f.events.filter(event => event.type === 'start-persistent').length, 1);
+    assert.equal(f.events.filter(event => event.type === 'process-persistent').length, 1);
+    assert.equal(f.events.filter(event => event.type === 'publish').length, 2);
+  });
+});
 
 test(
   'an audio process failure ends the native stream and releases decoder/display ownership',
