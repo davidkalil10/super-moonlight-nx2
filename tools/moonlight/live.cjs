@@ -5,7 +5,7 @@
 //         out in order, each in one write, and the console's last applied
 //         sequence is polled to resync with a keyframe when the chain breaks.
 // Usage: node tools/moonlight/live.cjs [runs/launcher-XXXX]
-//        [--moonlight HOST APP [--bitrate KBPS] | --screen | --input FILE]
+//        [--moonlight HOST APP [--bitrate KBPS|auto] | --screen | --input FILE]
 //        [--codec hbv1|hbv2|h264] [--size 1920x1080] [--fps 60] [--depth 2]
 //        hbv1: [--workers 12]
 //        hbv2: [--budget 96] [--cap 256] (KiB) [--qp-min 4] [--qp-max 40]
@@ -29,7 +29,7 @@ function moonlight(args, fps, width, height, directory) {
   const at = args.indexOf('--moonlight');
   const [host, app] = [args[at + 1], args[at + 2]];
   if (!host || !app) throw Error('Pass --moonlight HOST APP');
-  const bitrate = cli.option(args, '--bitrate', '20000');
+  const bitrate = require('./bitrate.cjs').bitrate(args, width, height, fps);
   const audio = !args.includes('--no-audio');
   const helper = spawn(
     HELPER,

@@ -57,7 +57,7 @@ async function run({
     app = args[at + 2];
   if (at < 0 || !host || !app) throw Error('Native H.264 requires --moonlight HOST APP');
   const audio = !args.includes('--no-audio');
-  const bitrate = args.includes('--bitrate') ? args[args.indexOf('--bitrate') + 1] : '20000';
+  const bitrate = require('./bitrate.cjs').bitrate(args, width, height, fps);
   const decoderWorker = args.includes('--decoder-worker')
     ? args[args.indexOf('--decoder-worker') + 1]
     : 'host';
