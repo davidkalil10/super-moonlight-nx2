@@ -68,6 +68,7 @@ async function create({
   publication = null,
   autoQueue = false,
   linkedGates = false,
+  inputOnly = false,
   cancelled = () => false,
   pollTimeoutMs = 5000,
   stopTimeoutMs = 5000
@@ -92,6 +93,8 @@ async function create({
     throw Error('Invalid split decoder publication target');
   if (autoQueue && !publication) throw Error('Automatic output queue needs worker publication');
   if (linkedGates && !autoQueue) throw Error('Linked gates need automatic output queue');
+  if (inputOnly && (autoQueue || linkedGates))
+    throw Error('Input-only split worker cannot queue output');
 
   const sdk = rpc.a.sdk;
   const sync = {};
@@ -289,7 +292,10 @@ async function create({
       [at.second, frames.second],
       [at.secondSnapshot, frames.second],
       ...(frames.third
-        ? [[at.third, frames.third], [at.thirdSnapshot, frames.third]]
+        ? [
+            [at.third, frames.third],
+            [at.thirdSnapshot, frames.third]
+          ]
         : []),
       [at.exit, stop]
     ])
@@ -489,6 +495,10 @@ async function create({
   }
 
   return {
+    get outputEvent() {
+      return address(OUTPUT_EVENT);
+    },
+
     async register() {
       const {result} = await rpc.callAddress(
         registerAddress,
@@ -643,11 +653,21 @@ async function create({
           ? [
               {
                 function: copy,
-                args: [publication.mapped + ring.CONTROL.nativeIndex, address(OUTPUT_JOB + 24), 28, 0]
+                args: [
+                  publication.mapped + ring.CONTROL.nativeIndex,
+                  address(OUTPUT_JOB + 24),
+                  28,
+                  0
+                ]
               },
               {
                 function: copy,
-                args: [publication.mapped + ring.CONTROL.nativeSequence, address(OUTPUT_JOB + 52), 4, 0]
+                args: [
+                  publication.mapped + ring.CONTROL.nativeSequence,
+                  address(OUTPUT_JOB + 52),
+                  4,
+                  0
+                ]
               }
             ]
           : []),
@@ -713,11 +733,13 @@ async function create({
         failed: 'Split input thread creation failed'
       });
       input.uncertain = false;
-      video.uncertain = true;
-      video.thread = await spawn(rpc, outputBase, outputAt.gate, {
-        failed: 'Split output thread creation failed'
-      });
-      video.uncertain = false;
+      if (!inputOnly) {
+        video.uncertain = true;
+        video.thread = await spawn(rpc, outputBase, outputAt.gate, {
+          failed: 'Split output thread creation failed'
+        });
+        video.uncertain = false;
+      }
     },
 
     async stageInput({
