@@ -4,7 +4,7 @@
 const fs = require('node:fs');
 const hbv = require('../../../hbl-moonlight/tools/moonlight/hbv.cjs');
 const {readFrames} = require('../../../hbl-moonlight/tools/moonlight/frames.cjs');
-const cli = require('../../../hbl-platform/sdk/cli.cjs');
+const cli = require('../../../hbl-platform/sdk/cli.js');
 
 async function main() {
   const args = process.argv.slice(2),

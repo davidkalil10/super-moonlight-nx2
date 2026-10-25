@@ -10,7 +10,7 @@
 const fs = require('node:fs/promises'),
   path = require('node:path');
 const {struct, latest, compat, job, report} = require('../../../hbl-platform-dev/sdk/tools/probe-job.cjs');
-const {allocate} = require('../../../hbl-platform/sdk/native/allocate.cjs');
+const {allocate} = require('../../../hbl-platform/sdk/native/allocate.js');
 const ring = require('../../../hbl-moonlight/tools/moonlight/ring.cjs');
 const hbv2 = require('../../../hbl-moonlight/tools/moonlight/hbv2.cjs');
 

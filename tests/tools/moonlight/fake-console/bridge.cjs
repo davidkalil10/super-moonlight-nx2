@@ -13,11 +13,11 @@
 // Usage: node tools/moonlight/fake-console/bridge.cjs DIR [--pad]
 const fs = require('node:fs');
 const path = require('node:path');
-const {serve} = require('../../../../hbl-platform/smilebasic/engine/lib/bridge.cjs');
+const {serve} = require('../../../../hbl-platform/smilebasic/engine/lib/bridge.js');
 const symbols = require('../../../../hbl-platform/sdk/native/audio-symbols.json');
-const sdkImage = require('../../../../hbl-platform/smilebasic/reference/sdk-checks.cjs');
+const sdkImage = require('../../../../hbl-platform/smilebasic/reference/sdk-checks.js');
 const fake = require('./shared/rpc.cjs');
-const {ALLOCATE} = require('../../../../hbl-platform/sdk/native/allocate.cjs');
+const {ALLOCATE} = require('../../../../hbl-platform/sdk/native/allocate.js');
 const report = require('./app-moonlight-1.json');
 
 const SCRATCH = 0x20000000,

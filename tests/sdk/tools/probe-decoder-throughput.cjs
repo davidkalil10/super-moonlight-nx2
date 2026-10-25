@@ -8,12 +8,12 @@ const path = require('node:path');
 const os = require('node:os');
 const crypto = require('node:crypto');
 const {execFileSync} = require('node:child_process');
-const cli = require('../../../hbl-platform/sdk/cli.cjs');
-const session = require('../../../hbl-platform/sdk/host/session.cjs');
-const {allocate} = require('../../../hbl-platform/sdk/native/allocate.cjs');
-const {create: createModule} = require('../../../hbl-platform/sdk/native/module.cjs');
-const {verify} = require('../../../hbl-platform/sdk/native/symbols.cjs');
-const {build, SENTINEL} = require('../../../hbl-platform/smilebasic/engine/shared/frames.cjs');
+const cli = require('../../../hbl-platform/sdk/cli.js');
+const session = require('../../../hbl-platform/sdk/host/session.js');
+const {allocate} = require('../../../hbl-platform/sdk/native/allocate.js');
+const {create: createModule} = require('../../../hbl-platform/sdk/native/module.js');
+const {verify} = require('../../../hbl-platform/sdk/native/symbols.js');
+const {build, SENTINEL} = require('../../../hbl-platform/smilebasic/engine/shared/frames.js');
 const {
   CODE,
   IPC_COPY,
@@ -23,7 +23,7 @@ const {
   spawn,
   wait,
   join
-} = require('../../../hbl-platform/sdk/native/thread.cjs');
+} = require('../../../hbl-platform/sdk/native/thread.js');
 const MOVIE = require('../../../hbl-moonlight/sdk/native/movie-functions.json');
 const EVENTS = require('../../../hbl-moonlight/sdk/native/movie-event-functions.json');
 const SYNC = require('../../../hbl-platform/sdk/native/os-sync-functions.json');

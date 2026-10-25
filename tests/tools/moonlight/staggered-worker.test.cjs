@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const definitions = require('../../../hbl-moonlight/sdk/native/movie-functions.json');
 const registration =
   require('../../../hbl-moonlight/sdk/native/movie-event-functions.json').registerClientEvents;
-const {CODE} = require('../../../hbl-platform/sdk/native/thread.cjs');
+const {CODE} = require('../../../hbl-platform/sdk/native/thread.js');
 const ring = require('../../../hbl-moonlight/tools/moonlight/ring.cjs');
 const status = require('../../../hbl-moonlight/tools/moonlight/staggered-status.cjs');
 const inputPlan = require('../../../hbl-moonlight/tools/moonlight/staggered-input-plan.cjs');

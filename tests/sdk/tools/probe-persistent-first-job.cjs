@@ -3,9 +3,9 @@ const fsp = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
 const {execFileSync} = require('node:child_process');
-const cli = require('../../../hbl-platform/sdk/cli.cjs');
-const session = require('../../../hbl-platform/sdk/host/session.cjs');
-const {allocate} = require('../../../hbl-platform/sdk/native/allocate.cjs');
+const cli = require('../../../hbl-platform/sdk/cli.js');
+const session = require('../../../hbl-platform/sdk/host/session.js');
+const {allocate} = require('../../../hbl-platform/sdk/native/allocate.js');
 const {accessUnits} = require('./probe-decoder-events.cjs');
 const {parameterSets} = require('../../../hbl-moonlight/tools/moonlight/h264-stream.cjs');
 const {

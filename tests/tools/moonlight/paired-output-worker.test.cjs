@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const {CODE} = require('../../../hbl-platform/sdk/native/thread.cjs');
+const {CODE} = require('../../../hbl-platform/sdk/native/thread.js');
 const SYNC = require('../../../hbl-platform/sdk/native/os-sync-functions.json');
 const ring = require('../../../hbl-moonlight/tools/moonlight/ring.cjs');
 const {create} = require('./paired-output-worker.cjs');

@@ -3,8 +3,8 @@ const fsp = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
 const {execFileSync} = require('node:child_process');
-const cli = require('../../../hbl-platform/sdk/cli.cjs');
-const session = require('../../../hbl-platform/sdk/host/session.cjs');
+const cli = require('../../../hbl-platform/sdk/cli.js');
+const session = require('../../../hbl-platform/sdk/host/session.js');
 const {accessUnits, clipFrameRate} = require('./probe-decoder-events.cjs');
 const {loggedRpc, verifyPublication} = require('./probe-split-decoder.cjs');
 const {parameterSets} = require('../../../hbl-moonlight/tools/moonlight/h264-stream.cjs');
@@ -25,7 +25,7 @@ const acquireFrame = require('../../tools/moonlight/paired-acquire-frame.cjs');
 const outputFrame = require('../../../hbl-moonlight/tools/moonlight/paired-output-frame.cjs');
 const loopFrame = require('../../../hbl-moonlight/tools/moonlight/paired-loop-plan.cjs');
 const ring = require('../../../hbl-moonlight/tools/moonlight/ring.cjs');
-const {SENTINEL} = require('../../../hbl-platform/smilebasic/engine/shared/frames.cjs');
+const {SENTINEL} = require('../../../hbl-platform/smilebasic/engine/shared/frames.js');
 
 const STAGES = [
   'two',

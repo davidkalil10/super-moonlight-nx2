@@ -15,7 +15,7 @@ const hbv = require('../../../hbl-moonlight/tools/moonlight/hbv.cjs');
 const hbv2 = require('../../../hbl-moonlight/tools/moonlight/hbv2.cjs');
 const {psnr} = require('../../../hbl-moonlight/tools/moonlight/reference.cjs');
 const {Encoder} = require('../../../hbl-moonlight/tools/moonlight/hbv2-encoder.cjs');
-const cli = require('../../../hbl-platform/sdk/cli.cjs');
+const cli = require('../../../hbl-platform/sdk/cli.js');
 
 const WIDTH = 1920,
   HEIGHT = 1080,

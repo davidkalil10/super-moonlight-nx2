@@ -3,7 +3,7 @@ const fsSync = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 const {execFileSync} = require('node:child_process');
-const session = require('../../../hbl-platform/sdk/host/session.cjs');
+const session = require('../../../hbl-platform/sdk/host/session.js');
 const {create: createTransport} = require('../../../hbl-moonlight/tools/moonlight/native-tcp.cjs');
 const {
   create: createAudio

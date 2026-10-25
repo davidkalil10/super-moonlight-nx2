@@ -1,5 +1,5 @@
-const {build} = require('../../../hbl-platform/smilebasic/engine/shared/frames.cjs');
-const {CODE} = require('../../../hbl-platform/sdk/native/thread.cjs');
+const {build} = require('../../../hbl-platform/smilebasic/engine/shared/frames.js');
+const {CODE} = require('../../../hbl-platform/sdk/native/thread.js');
 
 const MAX_ACCESS_UNIT = 0x100000;
 const MSG_WAITALL = 0x40;

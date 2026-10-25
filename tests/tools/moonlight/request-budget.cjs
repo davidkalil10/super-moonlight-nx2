@@ -10,7 +10,7 @@ const definitions = require('../../../hbl-moonlight/sdk/native/movie-functions.j
 const registration =
   require('../../../hbl-moonlight/sdk/native/movie-event-functions.json').registerClientEvents;
 const SYNC = require('../../../hbl-platform/sdk/native/os-sync-functions.json');
-const {CODE} = require('../../../hbl-platform/sdk/native/thread.cjs');
+const {CODE} = require('../../../hbl-platform/sdk/native/thread.js');
 const PAIRED = require('../../../hbl-moonlight/tools/moonlight/paired-loop-plan.cjs').CONTROL;
 const presentPacer = require('../../../hbl-moonlight/tools/moonlight/present-pacer.cjs');
 

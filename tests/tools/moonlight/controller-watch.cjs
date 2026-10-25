@@ -5,8 +5,8 @@
 // Usage: node tools/moonlight/controller-watch.cjs [runs/launcher-XXXX] [--hz 60]
 //        [--labels] [--sources]
 const path = require('node:path');
-const session = require('../../../hbl-platform/sdk/host/session.cjs');
-const cli = require('../../../hbl-platform/sdk/cli.cjs');
+const session = require('../../../hbl-platform/sdk/host/session.js');
+const cli = require('../../../hbl-platform/sdk/cli.js');
 const {
   NEUTRAL,
   toMoonlight,

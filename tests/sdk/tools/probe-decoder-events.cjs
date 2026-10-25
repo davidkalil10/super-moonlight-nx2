@@ -11,10 +11,10 @@ const fs = require('node:fs/promises'),
   path = require('node:path');
 const crypto = require('node:crypto');
 const {execFileSync} = require('node:child_process');
-const cli = require('../../../hbl-platform/sdk/cli.cjs');
-const {allocate} = require('../../../hbl-platform/sdk/native/allocate.cjs');
-const {verify} = require('../../../hbl-platform/sdk/native/symbols.cjs');
-const {prepare} = require('../../../hbl-platform/sdk/native/repeating.cjs');
+const cli = require('../../../hbl-platform/sdk/cli.js');
+const {allocate} = require('../../../hbl-platform/sdk/native/allocate.js');
+const {verify} = require('../../../hbl-platform/sdk/native/symbols.js');
+const {prepare} = require('../../../hbl-platform/sdk/native/repeating.js');
 const {
   CODE: code,
   verifyCode,
@@ -22,7 +22,7 @@ const {
   spawn,
   wait,
   join
-} = require('../../../hbl-platform/sdk/native/thread.cjs');
+} = require('../../../hbl-platform/sdk/native/thread.js');
 const {nals, parameterSets} = require('../../../hbl-moonlight/tools/moonlight/h264-stream.cjs');
 const SYNC = require('../../../hbl-platform/sdk/native/os-sync-functions.json');
 const MOVIE_EVENTS = require('../../../hbl-moonlight/sdk/native/movie-event-functions.json');
@@ -931,7 +931,7 @@ module.exports = {
 if (require.main === module) {
   const args = process.argv.slice(2);
   main(
-    require('../../../hbl-platform/sdk/host/session.cjs').resolve(args[0]),
+    require('../../../hbl-platform/sdk/host/session.js').resolve(args[0]),
     parseOptions(args)
   ).catch(e => {
     console.error(e);

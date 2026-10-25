@@ -1,6 +1,6 @@
-const {allocate} = require('../../../hbl-platform/sdk/native/allocate.cjs');
-const {verify} = require('../../../hbl-platform/sdk/native/symbols.cjs');
-const {SENTINEL} = require('../../../hbl-platform/smilebasic/engine/shared/frames.cjs');
+const {allocate} = require('../../../hbl-platform/sdk/native/allocate.js');
+const {verify} = require('../../../hbl-platform/sdk/native/symbols.js');
+const {SENTINEL} = require('../../../hbl-platform/smilebasic/engine/shared/frames.js');
 const {
   verifyCode,
   verifyCopy,
@@ -8,7 +8,7 @@ const {
   spawn,
   wait,
   join
-} = require('../../../hbl-platform/sdk/native/thread.cjs');
+} = require('../../../hbl-platform/sdk/native/thread.js');
 const SYNC = require('../../../hbl-platform/sdk/native/os-sync-functions.json');
 const acquireFrame = require('./paired-acquire-frame.cjs');
 const outputFrame = require('../../../hbl-moonlight/tools/moonlight/paired-output-frame.cjs');

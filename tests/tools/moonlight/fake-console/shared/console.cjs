@@ -15,7 +15,7 @@ const {
   DATA_LENGTH_OFFSET,
   MAX_DATA_BYTES,
   OUTPUT_BYTES
-} = require('../../../../../hbl-platform/smilebasic/engine/lib/native.cjs');
+} = require('../../../../../hbl-platform/smilebasic/engine/lib/native.js');
 
 const MAGIC = 0x31545344;
 const INPUT_OFFSET = 0x40000;

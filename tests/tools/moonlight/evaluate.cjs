@@ -11,7 +11,7 @@ const {
   changedFraction
 } = require('../../../hbl-moonlight/tools/moonlight/reference.cjs');
 const {readFrames} = require('../../../hbl-moonlight/tools/moonlight/frames.cjs');
-const cli = require('../../../hbl-platform/sdk/cli.cjs');
+const cli = require('../../../hbl-platform/sdk/cli.js');
 
 const EXCHANGE_MS = 13;
 const DISPLAY = [1280, 720];

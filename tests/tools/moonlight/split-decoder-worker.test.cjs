@@ -4,7 +4,7 @@ const definitions = require('../../../hbl-moonlight/sdk/native/movie-functions.j
 const registration =
   require('../../../hbl-moonlight/sdk/native/movie-event-functions.json').registerClientEvents;
 const sync = require('../../../hbl-platform/sdk/native/os-sync-functions.json');
-const {CODE} = require('../../../hbl-platform/sdk/native/thread.cjs');
+const {CODE} = require('../../../hbl-platform/sdk/native/thread.js');
 const ring = require('../../../hbl-moonlight/tools/moonlight/ring.cjs');
 const {create} = require('../../../hbl-moonlight/tools/moonlight/split-decoder-worker.cjs');
 
