@@ -1,13 +1,13 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
-const os = require('node:os');
 const path = require('node:path');
+const {temporary} = require('./recording-rpc.cjs');
 const ring = require('../../tools/moonlight/ring.cjs');
 const {main, verifyPublication} = require('../tools/probe-split-decoder.cjs');
 
 async function fixture(stage, {nativePublish = false, autoOutputQueue = false, linkedGates = false} = {}) {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'hbl-split-probe-'));
+  const directory = temporary('hbl-split-probe-');
   const clip = path.join(directory, 'idr.h264');
   const accessUnit = Buffer.from('0000016742001eab00000168ce0100000165abcd', 'hex');
   await fs.writeFile(clip, Buffer.concat([accessUnit, accessUnit, accessUnit]));

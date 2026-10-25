@@ -3,9 +3,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const os = require('node:os');
 const path = require('node:path');
-const {ADDRESS, runDirectory, expectSequence} = require('./recording-rpc.cjs');
+const {ADDRESS, runDirectory, expectSequence, temporary: tempDirectory} = require('./recording-rpc.cjs');
 const {gateConsole} = require('./gate-worker-mock.cjs');
 const probe = require('../tools/probe-decoder-events.cjs');
 const register = require('../native/movie-event-functions.json').registerClientEvents;
@@ -13,7 +12,7 @@ const register = require('../native/movie-event-functions.json').registerClientE
 const WIDTH = 16,
   HEIGHT = 8,
   FRAME = (WIDTH * HEIGHT * 3) / 2;
-const temporary = () => fs.mkdtempSync(path.join(os.tmpdir(), 'hb-decoder-events-'));
+const temporary = () => tempDirectory('hb-decoder-events-');
 
 async function quiet(action) {
   const log = console.log,

@@ -9,8 +9,16 @@ const menu = require('./menu.cjs');
 
 // --- host list load/save/seed -----------------------------------------
 
+const created = [];
+
+test.after(() => {
+  for (const directory of created) fs.rmSync(directory, {recursive: true, force: true});
+});
+
 function tempFile() {
-  return path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'hbmenu-')), 'hosts.json');
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'hbmenu-'));
+  created.push(directory);
+  return path.join(directory, 'hosts.json');
 }
 
 test('loadHosts returns [] for a missing or corrupt file', () => {
