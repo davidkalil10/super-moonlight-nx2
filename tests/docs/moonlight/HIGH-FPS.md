@@ -207,13 +207,13 @@ capture command buffer for screenshots:
 +      await barrier(2, 1000001002, 0x400, 0x100, 0, 0);
 ```
 
-`launcher.cjs` gets the same change, keeping the copy only in the first-present
+`launcher.js` gets the same change, keeping the copy only in the first-present
 command buffer.
 
 ### 3. Present mode and image count (proposal, gated)
 
 ```diff
---- homebrew-launcher/vulkan-copy.cjs (238-258)
+--- homebrew-launcher/vulkan-copy.js (238-258)
 -            32: report.surface.minImages,
 +            32: Math.min(3, report.surface.maxImages || 3),
  ...
@@ -297,7 +297,7 @@ Use one fence per swapchain image, and one acquire semaphore per frame in
 flight. In the loop, replace `vkQueueWaitIdle` with `vkWaitForFences` on the
 image about to be reused, then `vkResetFences`; the program must stay
 4-argument calls. The repeating frame needs a per-frame slot index, so this
-fits the coming refactor of `launcher-loop.cjs` better than a patch to it now.
+fits the coming refactor of `launcher-loop.js` better than a patch to it now.
 
 ## 6. Probes for the owner
 

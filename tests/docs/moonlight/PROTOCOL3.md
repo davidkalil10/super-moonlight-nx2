@@ -131,7 +131,7 @@ on the first large write; the first measurement run reveals this immediately.
 Reuse the DESIGN.md §1 method: the launcher's startup write of ~14.7 MB right
 after `vkMapMemory2` is a clean throughput probe — the gap in
 `runs/<session>/launcher-auto-operations.jsonl` between that `vkMapMemory2` and
-the next `vkCreateBuffer` is the write time. `start.sh` and `start-launcher.cjs`
+the next `vkCreateBuffer` is the write time. `start.sh` and `start-launcher.js`
 inherit the environment into `hbl-platform/smilebasic/host.js` (which owns the
 `NativeClient`), so `HB_WRITE_CHUNK` reaches the write path:
 

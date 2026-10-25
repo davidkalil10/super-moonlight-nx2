@@ -41,7 +41,7 @@ This matches the launcher shader, which reads `c.touch[2]` as the count and
 The shader scales raw touch by **1.5** onto the 1920x1080 screen
 (`launcher.comp`: `vec2 p=vec2(c.touch[8],c.touch[9])*1.5`). `1280*1.5 = 1920`
 and `720*1.5 = 1080`, so the panel reports **1280x720** coordinates.
-`launcher-check.cjs` corroborates it: its tap at `[1107,119]` lands on the
+`launcher-check.js` corroborates it: its tap at `[1107,119]` lands on the
 refresh button the shader places at `(1660,179)` (`[1107,119]*1.5 ≈ (1660,179)`).
 
 `LiSendTouchEvent` wants normalized device coordinates (0.0 top-left to 1.0

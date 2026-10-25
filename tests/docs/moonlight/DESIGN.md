@@ -38,7 +38,7 @@ host change, and a live test to see whether the console side accepts
 back-to-back requests.
 
 Stage programs write the GPU-visible storage while the render worker is
-running. `sdk/host/ftp-service.cjs` updates its status block in the mapped
+running. `sdk/host/ftp-service.js` updates its status block in the mapped
 binding-0 buffer every 150 ms during rendering, so mid-loop writes are
 established practice. `gpu-app.cjs` keeps the app's private storage
 (binding 1) mapped as well (`privateStorage.mapped`).
@@ -233,8 +233,8 @@ Switch 2: apps/moonlight
 - **Service wiring**: apps cannot ship host JavaScript (README: host service
   extensions are not supported). The stream service becomes an SDK background
   service like FTP:
-  - add `"moonlight"` to the `sdk.services` whitelist in `sdk/host/runtime.cjs`;
-  - start a stage next to `ftp-service.cjs` in `start-launcher.cjs`;
+  - add `"moonlight"` to the `sdk.services` whitelist in `sdk/host/runtime.js`;
+  - start a stage next to `ftp-service.js` in `start-launcher.js`;
   - give the service the app's `privateStorage.mapped` address.
 
 ### Console side (`apps/moonlight`)

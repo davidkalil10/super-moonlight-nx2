@@ -180,7 +180,7 @@ test('reports a hint when OpenDefaultAudioOut fails', async () => {
     now: () => mock.clock.t
   });
   input.end(sine(1));
-  await assert.rejects(session.done, /game-audio\.cjs/);
+  await assert.rejects(session.done, /game-audio\.js/);
 });
 
 test('ByteQueue pulls and drops in FIFO order', () => {

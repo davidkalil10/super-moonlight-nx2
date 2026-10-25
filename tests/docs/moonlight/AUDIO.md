@@ -3,18 +3,18 @@
 `tools/moonlight/audio-stream.cjs` plays the Moonlight helper's audio on the
 console. It is the audio counterpart of `live.cjs` (video) and lives beside it
 in `tools/moonlight/` as a manual tool driven against a session dir, not a
-`start-launcher.cjs` stage. See `DESIGN.md` section 4 item 5 for the live check
+`start-launcher.js` stage. See `DESIGN.md` section 4 item 5 for the live check
 this feeds.
 
 ## What it does
 
-It reuses `game-audio.cjs`'s console path exactly: the same sound-memory
+It reuses `game-audio.js`'s console path exactly: the same sound-memory
 allocation call (`rpc.call(5732112, ...)`), the same function resolution
 (`audio-symbols.json` + `hbl-platform/smilebasic/reference/sdk-checks.js` `verify-function`),
 and the same AudioOut sequence (InitializeAudioOutParameter at 48000 Hz / 2 ch,
 OpenDefaultAudioOut, Start/Stop, SetAudioOutBufferInfo, AppendAudioOutBuffer,
 GetReleasedAudioOutBuffer, FlushAudioOutBuffers, GetAudioOutBufferCount,
-CloseAudioOut). Unlike `game-audio.cjs`, which plays short pre-uploaded effects
+CloseAudioOut). Unlike `game-audio.js`, which plays short pre-uploaded effects
 triggered by a shader counter, this keeps a ring of AudioOut buffers
 continuously fed from a byte stream.
 
@@ -91,11 +91,11 @@ node tools/moonlight/audio-stream.cjs runs/launcher-XXXX < /tmp/hbaudio
 
 ## Not yet tested on a live console
 
-- AudioOut ownership. `game-audio.cjs` opens AudioOut on the first effect and
+- AudioOut ownership. `game-audio.js` opens AudioOut on the first effect and
   closes it when the running package has none, so with Moonlight in front this
   module should be the only owner. Whether the console allows two concurrently
   is still unverified (DESIGN.md section 4 item 1). On a non-zero
-  OpenDefaultAudioOut the module prints a hint naming `game-audio.cjs`.
+  OpenDefaultAudioOut the module prints a hint naming `game-audio.js`.
 - Underrun/latency with real Wi-Fi jitter and the real helper's drop behaviour
   (DESIGN.md section 4 item 5), sharing the exchange budget with video. The
   `underruns` counter is a host-side proxy (in-flight hitting 0 at poll time)

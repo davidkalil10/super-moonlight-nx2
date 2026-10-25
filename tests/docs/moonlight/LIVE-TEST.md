@@ -53,7 +53,7 @@ Minus together for one second to return to the launcher.
 ```
 node tools/moonlight/live.cjs --moonlight 192.168.8.245 Desktop --codec hbv2 --budget 96
 ```
-Sound should play. `game-audio.cjs` opens AudioOut only for a package with
+Sound should play. `game-audio.js` opens AudioOut only for a package with
 effects and closes it otherwise, so the stream owns the device while Moonlight
 runs. If `OpenDefaultAudioOut` still fails, the audio-stream process prints a
 hint and exits but video+input keep running.

@@ -7,7 +7,7 @@ bridge; no console CPU code). Target stream: 1080p120, HEVC/H.264, Sunshine on L
 Scope note that governs everything below: HBLauncher runs no arbitrary CPU on the
 console. The host (Node) drives qualified native functions over the Wi-Fi RPC
 bridge, and per-frame work is a *fixed, branchless* repeating native call chain
-(`hbl-platform/sdk/native/repeating.js`, `homebrew-launcher/launcher-loop.cjs`). Any decode
+(`hbl-platform/sdk/native/repeating.js`, `homebrew-launcher/launcher-loop.js`). Any decode
 path therefore has to be expressed as constant native calls with host-prepared
 arguments, not as a decoder running on the console. All Switch-1 facts cited are
 documented for Switch 1 firmware and are only hypotheses for T239 / 23.0.1.
@@ -77,7 +77,7 @@ are the only way to confirm the mask, node set and class on this build.
 - libnx/VI selects a layer/display; present interval and refresh come from the
   swapchain / the `vi`+`nvdisp` layer config, historically 1080p60 on Switch 1.
 - Decisive constraint from this repo: HBLauncher does **not** create its swapchain.
-  `launcher-loop.cjs` reuses SmileBASIC's existing `device/queue/swapchain` objects
+  `launcher-loop.js` reuses SmileBASIC's existing `device/queue/swapchain` objects
   (`prepared.resources`) and the repeating frame calls `vkAcquireNextImage2KHR →
   vkQueueSubmit → vkQueuePresentKHR → vkQueueWaitIdle` over a fixed 60-call cycle.
   Present mode / refresh is whatever SmileBASIC chose at swapchain creation (very
@@ -188,7 +188,7 @@ Moonlight-Switch is a Switch-1 homebrew client (devkitA64/libnx). Mapping onto H
 - **Audio**: Opus decoded on-console (libopus) → libnx audout/audren. *Does not map*:
   no CPU on console means no on-console Opus decode. Alternative that **does** map:
   decode Opus → PCM on the PC and stream PCM to the console's existing
-  `nn::audio` AudioOut path. `homebrew-launcher/game-audio.cjs` already proves this
+  `nn::audio` AudioOut path. `homebrew-launcher/game-audio.js` already proves this
   path works — it opens `OpenDefaultAudioOut` (48 kHz, stereo, int16), uploads PCM
   buffers from host files, and uses `AppendAudioOutBuffer`/`GetReleasedAudioOutBuffer`.
   Today it's built for short effects (8 descriptors, 50 ms polling), not continuous
@@ -236,5 +236,5 @@ If probe 1 fails, stop: no on-console decode is possible under this model.
 - Limelight.h (callbacks/stream config): https://github.com/moonlight-stream/moonlight-common-c/blob/master/src/Limelight.h
 - Moonlight-Switch (XITRIX): https://github.com/XITRIX/Moonlight-Switch
 - libnx HID/NV references: https://github.com/switchbrew/libnx
-- Repo (read-only): `homebrew-launcher/launcher-loop.cjs`, `hbl-platform/sdk/native/repeating.js`,
-  `hbl-platform/sdk/native/ipc.js`, `sdk/native/service-functions.json`, `homebrew-launcher/game-audio.cjs`
+- Repo (read-only): `homebrew-launcher/launcher-loop.js`, `hbl-platform/sdk/native/repeating.js`,
+  `hbl-platform/sdk/native/ipc.js`, `sdk/native/service-functions.json`, `homebrew-launcher/game-audio.js`
