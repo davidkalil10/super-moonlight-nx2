@@ -1,6 +1,6 @@
-const {allocate} = require('../../sdk/native/allocate.cjs');
-const {verify} = require('../../sdk/native/symbols.cjs');
-const {SENTINEL} = require('../../smilebasic/engine/shared/frames.cjs');
+const {allocate} = require('../../../hbl-platform/sdk/native/allocate.cjs');
+const {verify} = require('../../../hbl-platform/sdk/native/symbols.cjs');
+const {SENTINEL} = require('../../../hbl-platform/smilebasic/engine/shared/frames.cjs');
 const {
   CODE,
   verifyCode,
@@ -9,8 +9,8 @@ const {
   spawn,
   wait,
   join
-} = require('../../sdk/native/thread.cjs');
-const SYNC = require('../../sdk/native/os-sync-functions.json');
+} = require('../../../hbl-platform/sdk/native/thread.cjs');
+const SYNC = require('../../../hbl-platform/sdk/native/os-sync-functions.json');
 const {metadata} = require('./paired-output-frame.cjs');
 const loop = require('./paired-loop-plan.cjs');
 const ring = require('./ring.cjs');

@@ -10,9 +10,9 @@
 // acknowledgement, so a stop wake never reaches SendInput. A descriptor the worker can reach
 // before its checked gate write always names the ignored fetch gate (start and every gate write
 // fill the next descriptor that way), so a stop wake cannot open a fetch either.
-const {build} = require('../../smilebasic/engine/shared/frames.cjs');
-const {CODE, IPC_COPY} = require('../../sdk/native/thread.cjs');
-const SYNC = require('../../sdk/native/os-sync-functions.json');
+const {build} = require('../../../hbl-platform/smilebasic/engine/shared/frames.cjs');
+const {CODE, IPC_COPY} = require('../../../hbl-platform/sdk/native/thread.cjs');
+const SYNC = require('../../../hbl-platform/sdk/native/os-sync-functions.json');
 const status = require('./staggered-status.cjs');
 
 const CONTROL = {

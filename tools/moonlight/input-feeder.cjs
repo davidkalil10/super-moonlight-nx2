@@ -10,9 +10,9 @@
 // supported here; the extra pad sources live far outside that window.
 //
 // Usage: node tools/moonlight/input-feeder.cjs [runs/launcher-XXXX] [--hz 60] [--labels]
-const session = require('../../sdk/host/session.cjs');
-const cli = require('../../sdk/cli.cjs');
-const {STATE} = require('../../sdk/host/state-layout.cjs');
+const session = require('../../../hbl-platform/sdk/host/session.cjs');
+const cli = require('../../../hbl-platform/sdk/cli.cjs');
+const {STATE} = require('../../../hbl-platform/sdk/host/state-layout.cjs');
 const {NEUTRAL, decode, toMoonlight, same, NPAD_BYTES} = require('./controller.cjs');
 const {TOUCH_BYTES, parseTouch, createTracker, step, flush, touchLine} = require('./touch.cjs');
 

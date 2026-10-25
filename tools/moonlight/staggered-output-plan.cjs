@@ -4,9 +4,9 @@
 // The acknowledgement comes only after the stamps, so the input worker's next SendInput can
 // never race the host-visible acquire status. The fetch frame copies the held output into the
 // descriptor's ring surface, releases it and stamps the fetch status.
-const {build} = require('../../smilebasic/engine/shared/frames.cjs');
-const {CODE, IPC_COPY} = require('../../sdk/native/thread.cjs');
-const SYNC = require('../../sdk/native/os-sync-functions.json');
+const {build} = require('../../../hbl-platform/smilebasic/engine/shared/frames.cjs');
+const {CODE, IPC_COPY} = require('../../../hbl-platform/sdk/native/thread.cjs');
+const SYNC = require('../../../hbl-platform/sdk/native/os-sync-functions.json');
 const {metadata} = require('./paired-output-frame.cjs');
 const status = require('./staggered-status.cjs');
 const ring = require('./ring.cjs');

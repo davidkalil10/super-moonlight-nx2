@@ -27,8 +27,8 @@ const FLAG = {
   x: 0x4000,
   y: 0x8000
 };
-const {NPAD, NPAD_BYTES, readPad} = require('../../sdk/host/npad.cjs');
-const {OFFSET, FIELD} = require('../../sdk/host/layout.cjs');
+const {NPAD, NPAD_BYTES, readPad} = require('../../../hbl-platform/sdk/host/npad.cjs');
+const {OFFSET, FIELD} = require('../../../hbl-platform/sdk/host/layout.cjs');
 const PAD_SOURCES = {offset: OFFSET + FIELD.padSources, count: 5, stride: 64};
 
 const FACE = {

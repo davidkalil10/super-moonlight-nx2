@@ -4,18 +4,8 @@
 const fs = require('node:fs/promises'),
   path = require('node:path');
 const {execFileSync} = require('node:child_process');
-const ring = require(path.join(root(), 'tools/moonlight/ring.cjs'));
-const {STATE} = require(path.join(root(), 'sdk/host/state-layout.cjs'));
-
-function root() {
-  let directory = __dirname;
-  while (!require('node:fs').existsSync(path.join(directory, 'sdk/build.cjs'))) {
-    const up = path.dirname(directory);
-    if (up === directory) throw Error('HBLauncher root not found');
-    directory = up;
-  }
-  return directory;
-}
+const ring = require('../../tools/moonlight/ring.cjs');
+const {STATE} = require('../../../hbl-platform/sdk/host/state-layout.cjs');
 
 function testCard(width, height) {
   const bars = [
@@ -54,8 +44,8 @@ function initialMemory(hbv2) {
 }
 
 async function main() {
-  const hbv = require(path.join(root(), 'tools/moonlight/hbv.cjs'));
-  const hbv2 = require(path.join(root(), 'tools/moonlight/hbv2.cjs'));
+  const hbv = require('../../tools/moonlight/hbv.cjs');
+  const hbv2 = require('../../tools/moonlight/hbv2.cjs');
   const state = Buffer.alloc(1024);
   state.writeFloatLE(1, STATE.fade);
   await fs.writeFile(path.join(__dirname, 'assets/state.bin'), state);
@@ -64,7 +54,7 @@ async function main() {
   await fs.writeFile(path.join(__dirname, 'shaders/ring.glsl'), ring.glsl());
   await fs.writeFile(path.join(__dirname, 'assets/memory.bin'), initialMemory(hbv2));
   execFileSync('python3', [path.join(__dirname, 'assets.py')], {stdio: 'inherit'});
-  await require(path.join(root(), 'sdk/build.cjs')).buildApp(__dirname);
+  await require('../../../hbl-platform/sdk/build.cjs').buildApp(__dirname);
 }
 
 if (require.main === module)

@@ -7,14 +7,14 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const ring = require('../ring.cjs');
-const {STATE} = require('../../../sdk/host/state-layout.cjs');
+const {STATE} = require('../../../../hbl-platform/sdk/host/state-layout.cjs');
 const {NPAD_BYTES} = require('../controller.cjs');
 const {TOUCH_BYTES, PANEL, MAX_POINTS} = require('../touch.cjs');
-const symbols = require('../../../sdk/native/audio-symbols.json');
-const sdkImage = require('../../../smilebasic/reference/sdk-checks.cjs');
+const symbols = require('../../../../hbl-platform/sdk/native/audio-symbols.json');
+const sdkImage = require('../../../../hbl-platform/smilebasic/reference/sdk-checks.cjs');
 
 const OUTPUT = path.join(__dirname, 'src/console-layout.h');
-const {ALLOCATE: SDK_ALLOCATE} = require('../../../sdk/native/allocate.cjs');
+const {ALLOCATE: SDK_ALLOCATE} = require('../../../../hbl-platform/sdk/native/allocate.cjs');
 const AUDIO = [
   ['AUDIO_INITIALIZE_PARAMETER', 'InitializeAudioOutParameter'],
   ['AUDIO_OPEN_DEFAULT', 'OpenDefaultAudioOutEPNS0_8AudioOutER'],

@@ -1,5 +1,5 @@
-const {build} = require('../../smilebasic/engine/shared/frames.cjs');
-const {CODE, IPC_COPY} = require('../../sdk/native/thread.cjs');
+const {build} = require('../../../hbl-platform/smilebasic/engine/shared/frames.cjs');
+const {CODE, IPC_COPY} = require('../../../hbl-platform/sdk/native/thread.cjs');
 const ring = require('./ring.cjs');
 
 const MAX_FRAME_BYTES = 0x300000;

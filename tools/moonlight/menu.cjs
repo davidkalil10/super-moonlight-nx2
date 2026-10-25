@@ -27,12 +27,12 @@ const {spawn} = require('node:child_process');
 const ring = require('./ring.cjs');
 const hbv2 = require('./hbv2.cjs');
 const {findPrivateStorage, nextSequence} = require('./feed.cjs');
-const {STATE} = require('../../sdk/host/state-layout.cjs');
+const {STATE} = require('../../../hbl-platform/sdk/host/state-layout.cjs');
 const {NPAD, NPAD_BYTES, decode} = require('./controller.cjs');
 const {TOUCH_BYTES, parseTouch, createTracker, step} = require('./touch.cjs');
 const {HELPER} = require('./helper.cjs');
-const session = require('../../sdk/host/session.cjs');
-const cli = require('../../sdk/cli.cjs');
+const session = require('../../../hbl-platform/sdk/host/session.cjs');
+const cli = require('../../../hbl-platform/sdk/cli.cjs');
 
 const WIDTH = 1920;
 const HEIGHT = 1080;

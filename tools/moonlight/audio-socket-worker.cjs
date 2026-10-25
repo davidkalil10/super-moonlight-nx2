@@ -1,9 +1,16 @@
-const {allocate} = require('../../sdk/native/allocate.cjs');
-const {sdkResolver, verify} = require('../../sdk/native/symbols.cjs');
-const {create: createFinite} = require('../../sdk/native/finite.cjs');
-const repeating = require('../../sdk/native/repeating.cjs');
-const {CODE, verifyCode, verifyCopy, spawn, wait, join} = require('../../sdk/native/thread.cjs');
-const SYNC = require('../../sdk/native/os-sync-functions.json');
+const {allocate} = require('../../../hbl-platform/sdk/native/allocate.cjs');
+const {sdkResolver, verify} = require('../../../hbl-platform/sdk/native/symbols.cjs');
+const {create: createFinite} = require('../../../hbl-platform/sdk/native/finite.cjs');
+const repeating = require('../../../hbl-platform/sdk/native/repeating.cjs');
+const {
+  CODE,
+  verifyCode,
+  verifyCopy,
+  spawn,
+  wait,
+  join
+} = require('../../../hbl-platform/sdk/native/thread.cjs');
+const SYNC = require('../../../hbl-platform/sdk/native/os-sync-functions.json');
 const audioSocket = require('./audio-socket-plan.cjs');
 
 const AUDIO_BYTES = 0x20000;
