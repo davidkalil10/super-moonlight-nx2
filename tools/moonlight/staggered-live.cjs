@@ -8,8 +8,13 @@ const checked = require('./staggered-status.cjs');
 const RESTART = 'Staggered worker native objects retained; restart SmileBASIC';
 const PENDING_INPUT = [0x100en, 0x1011n];
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+const immediate = () => new Promise(resolve => setImmediate(resolve));
 
-async function waitChecked(worker, expected, {timeoutMs = 5000, pause = delay} = {}) {
+async function waitChecked(
+  worker,
+  expected,
+  {timeoutMs = 5000, pause = delay, onReread = () => {}} = {}
+) {
   const until = Date.now() + timeoutMs;
   let nextInputRetry = 0;
   while (Date.now() < until) {
@@ -32,6 +37,7 @@ async function waitChecked(worker, expected, {timeoutMs = 5000, pause = delay} =
         nextInputRetry = Date.now() + 20;
       }
     }
+    onReread();
     await pause(5);
   }
   throw Error('Staggered checked status timed out');
@@ -86,8 +92,11 @@ function create({
   let held = null;
   const units = new Map();
   const destinations = new Map();
-  const counts = {submitted: 0, decoded: 0, presented: 0, tailDrained: 0};
+  const counts = {submitted: 0, decoded: 0, presented: 0, tailDrained: 0, rereads: 0};
   const waits = {timeoutMs, pause};
+  // A late gate status is reread back to back: a pause costs the frame its vsync slot
+  // (request-budget.cjs staggeredRetryWait). The deadline still bounds the wait.
+  const rereads = {timeoutMs, pause: immediate, onReread: () => counts.rereads++};
 
   function remember(sequence, unit) {
     units.set(sequence, unit);
@@ -98,7 +107,7 @@ function create({
   async function gate(sequence, current, next, {sink, enter = () => {}, onDecoded, onPresented}) {
     enter('staggered-status');
     const expected = expectedFor(sequence, units, destinations);
-    const snapshot = await waitChecked(worker, expected, waits);
+    const snapshot = await waitChecked(worker, expected, rereads);
     if (expected.acquire) {
       counts.decoded++;
       onDecoded?.(1);
