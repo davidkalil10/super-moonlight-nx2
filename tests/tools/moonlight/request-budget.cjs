@@ -212,6 +212,8 @@ function createConsole(clock, mode, model) {
     const sequence = job.readUInt32LE(0);
     const pts = job.readBigUInt64LE(16);
     if (offset === layout.inputGate) {
+      if (mode === 'split' && receive?.sent === undefined)
+        throw Error('Modeled split input gate opened before the TCP payload was sent');
       receive = {...receive, posted: true, sequence, length: job.readUInt32LE(8)};
       finishReceive();
     } else if (offset === layout.decodeGate && mode === 'persistent') {
@@ -426,7 +428,9 @@ async function simulate({mode, frames = 120, warmup = 4, paced = true, model = M
       };
       if (mode === 'split') {
         stage = 'split-input';
-        const current = await worker.completeInput(await worker.stageInput(unit));
+        const current = await worker.completeInput(
+          await worker.stageInput({...unit, sendFirst: true})
+        );
         if (pending) {
           stage = 'destination';
           const destination = await sink.destination();
@@ -503,7 +507,7 @@ async function budget({frames = 120, model = MODEL} = {}) {
     model,
     assumptions: [
       'Requests, bridge-ms and byStage are at the paced source rate; predictedFps is the same loop with every access unit already waiting.',
-      'The loop mirrors native-h264.cjs steady state; native-decoder.cjs adds no request while the tail AcquireInput returns an index.'
+      'The loop mirrors native-h264.cjs steady state, including the split send-before-gate path; native-decoder.cjs adds no request while the tail AcquireInput returns an index.'
     ],
     modes,
     planDecodeMs: {decodeMs: PLAN_DECODE_MS, ...planDecode}
