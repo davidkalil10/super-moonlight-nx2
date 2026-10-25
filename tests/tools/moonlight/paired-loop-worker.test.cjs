@@ -217,3 +217,28 @@ test('paired loop stop retries a coalesced second output wake', async () => {
     3
   );
 });
+
+test('paired loop stop cancels a host wait for renderer acknowledgment', async () => {
+  const f = fixture();
+  const worker = await workerFor(f);
+  await worker.start();
+  await worker.beginPair(1);
+  f.acquire(1, [1, 2]);
+  await worker.acquire([1n, 2n]);
+  const frame = {width: 1920, height: 1080, stride: 1920, sliceHeight: 1088};
+  const destinations = [1, 2].map((index, slot) => ({
+    index,
+    address: MAPPED + ring.frameOffset(index),
+    bytes: ring.FRAME_BYTES,
+    color: 1,
+    sequence: slot + 1
+  }));
+  await worker.openFetch(destinations, frame);
+  f.fetched(CONTROL.firstResults, 1);
+  f.present(0, 0);
+  const waiting = worker.finishFirst();
+  await worker.stop();
+  await assert.rejects(waiting, /stopped while waiting for presentation/);
+  assert.equal(worker.diagnostics.joined, true);
+  assert.equal(worker.diagnostics.retained, false);
+});

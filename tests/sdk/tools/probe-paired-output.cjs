@@ -30,6 +30,7 @@ const STAGES = [
   'loop-four',
   'loop-stop-input',
   'loop-stop-output',
+  'loop-stop-present',
   'loop-short-recv'
 ];
 const BUILD_ROOT = '/media/storage2/builds/HBLauncher/native-h264';
@@ -127,6 +128,35 @@ async function createLoopAdapter(options) {
       if (index === 0) await worker.openFetch(destinations, frame);
       const result = index === 0 ? await worker.finishFirst() : await worker.finishSecond();
       return {index, ...result};
+    },
+    async stopDuringPresentation(destinations, frame) {
+      await worker.openFetch(destinations, frame);
+      const until = Date.now() + 2000;
+      let published = false;
+      while (Date.now() < until) {
+        const snapshot = await worker.snapshot();
+        const results = Buffer.from(snapshot.results, 'hex');
+        const firstSequenceOffset =
+          loopFrame.CONTROL.firstResults - loopFrame.CONTROL.acquireResults + 24;
+        if (results.readUInt32LE(firstSequenceOffset) === nextSequence) {
+          published = true;
+          break;
+        }
+        await pause(5);
+      }
+      if (!published) throw Error('First output was not published before stop-present');
+      const actualSequence = destinations[0].sequence;
+      destinations[0].sequence += 10000;
+      const waiting = worker.finishFirst().then(
+        () => null,
+        error => error.message
+      );
+      await pause(25);
+      await worker.stop();
+      const message = await waiting;
+      if (!/stopped while waiting for presentation/.test(message ?? ''))
+        throw Error('Stopping the presentation wait did not cancel it promptly');
+      return {actualSequence, cancelledWait: message, joined: worker.diagnostics.joined};
     },
     stop: () => worker.stop(),
     snapshot: () => worker.snapshot(),
@@ -403,6 +433,12 @@ async function main(
             await step(`pair ${pairIndex} first reserved surface`, () => sink.workerDestination()),
             await step(`pair ${pairIndex} second reserved surface`, () => sink.workerDestination())
           ];
+          if (scenario === 'stop-present') {
+            record.result = await step('stop output during presentation wait', () =>
+              paired.stopDuringPresentation(destinations, first)
+            );
+            break;
+          }
           const outputs = [];
           const publications = [];
           for (let index = 0; index < 2; index++) {
@@ -424,9 +460,10 @@ async function main(
             publications
           });
         }
-        record.result = scenario === 'four'
-          ? {pairs, decodeGateSignals: decoder.splitDiagnostics.decodeGateSignals}
-          : {...pairs[0], decodeGateSignals: decoder.splitDiagnostics.decodeGateSignals};
+        if (scenario !== 'stop-present')
+          record.result = scenario === 'four'
+            ? {pairs, decodeGateSignals: decoder.splitDiagnostics.decodeGateSignals}
+            : {...pairs[0], decodeGateSignals: decoder.splitDiagnostics.decodeGateSignals};
       }
     }
   } catch (error) {
