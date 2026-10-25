@@ -10,6 +10,8 @@ const {AccessUnits, parameterSets} = require('./h264-stream.cjs');
 const {instrument} = require('./bridge-counter.cjs');
 
 const IDR_COOLDOWN_MS = 100;
+// A staggered host runs at present pace, so it needs room for a source burst (batch C2).
+const STAGGERED_QUEUE = 8;
 
 function createIdrRequester(
   send,
@@ -96,7 +98,7 @@ async function run({
   const scoring = require('./run-summary.cjs');
   const duration = cli.number(args, '--duration', null);
   const warmup = cli.number(args, '--warmup', 3);
-  const queue = cli.number(args, '--queue', 3);
+  const queue = cli.number(args, '--queue', staggered ? STAGGERED_QUEUE : 3);
   const inputHz = cli.number(args, '--input-hz', 60);
   const audioFrames = cli.number(
     args,
