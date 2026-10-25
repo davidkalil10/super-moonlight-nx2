@@ -812,6 +812,19 @@ test('the default path never creates the staggered scheduler', {timeout: 5000}, 
 });
 
 test(
+  '--staggered queues 8 units by default so a source burst is not dropped',
+  {timeout: 5000},
+  async () => {
+    const f = await fixture({units: pairedUnits(6)});
+    f.options.createStaggered = staggeredFake(f.events);
+    f.options.args.push('--staggered');
+    await exercise(f, async () => {
+      assert.equal((await run(f.options)).queue, 8);
+    });
+  }
+);
+
+test(
   '--staggered feeds units after the host IDR, drains the tail, then stops before the decoder',
   {timeout: 5000},
   async () => {
