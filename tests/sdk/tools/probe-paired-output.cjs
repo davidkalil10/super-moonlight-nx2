@@ -40,6 +40,14 @@ const STAGES = [
 const BUILD_ROOT = '/media/storage2/builds/HBLauncher/native-h264';
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 
+// Clips without a recorded rate predate make-decoder-clips.sh writing one; they ran at 30.
+function clipFrameRate(sidecar) {
+  const fps = sidecar.fps ?? 30;
+  if (!Number.isInteger(fps) || fps < 1 || fps > 120)
+    throw Error('Clip frame rate must be 1 to 120');
+  return fps;
+}
+
 function pairIndices(scenario, keyframes) {
   const idr = keyframes[1];
   if (scenario === 'four' || scenario === 'overlap') return [[1, 2], [3, 4]];
@@ -263,6 +271,7 @@ async function main(
     sidecar.display.some((shown, index) => shown !== index)
   )
     throw Error('Paired output probe needs an ordered 1080p clip');
+  const fps = clipFrameRate(sidecar);
   const keyframes = units.flatMap((unit, index) => (unit.keyframe ? [index] : []));
   if (keyframes.length < 3) throw Error('Paired output probe needs three independent keyframes');
   const {sps, pps} = parameterSets(stream);
@@ -324,6 +333,7 @@ async function main(
     const result = {
       dryRun: true,
       stage,
+      fps,
       keyframes: keyframes.slice(0, 3),
       pairs: pairIndices(scenario, keyframes),
       looping,
@@ -378,6 +388,7 @@ async function main(
     targetArchitecture: 'aarch64',
     command: process.argv,
     clip,
+    fps,
     started: new Date().toISOString()
   };
   const report = path.join(output, 'paired-output.json');
@@ -428,7 +439,7 @@ async function main(
         }
       })
     );
-    record.dimensions = await step('configure', () => decoder.configure(sps, pps, 30));
+    record.dimensions = await step('configure', () => decoder.configure(sps, pps, fps));
     const firstIndex = keyframes[0];
     const firstDestination = await step('first native destination', () => sink.destination());
     await step('host first submit', () =>
@@ -617,6 +628,7 @@ async function main(
 module.exports = {
   main,
   STAGES,
+  clipFrameRate,
   pairIndices,
   stageOverlappedInput,
   requireNewPairedSession,

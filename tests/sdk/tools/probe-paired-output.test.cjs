@@ -5,6 +5,7 @@ const os = require('node:os');
 const path = require('node:path');
 const ring = require('../../tools/moonlight/ring.cjs');
 const {
+  clipFrameRate,
   pairIndices,
   stageOverlappedInput,
   requireNewPairedSession,
@@ -137,4 +138,11 @@ test('paired output waits for Moonlight to initialize native video', async () =>
   };
   await waitForNativeReady(rpc, {mapped: 0x70000000}, {timeoutMs: 1000, pollMs: 0});
   assert.equal(values.length, 0);
+});
+
+test('paired output configures the decoder at the clip frame rate', () => {
+  assert.equal(clipFrameRate({fps: 120}), 120);
+  assert.equal(clipFrameRate({}), 30);
+  for (const fps of [0, 121, 59.94, '120'])
+    assert.throws(() => clipFrameRate({fps}), /frame rate must be 1 to 120/);
 });
