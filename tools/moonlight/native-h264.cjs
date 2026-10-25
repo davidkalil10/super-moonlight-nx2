@@ -285,10 +285,12 @@ async function run({
       }
       try {
         if (persistentStarted) {
+          enter('persistent');
+          await decoder.beginPersistent(unit);
           enter('destination');
           const destination = await sink.destination();
           enter('persistent');
-          const frame = await decoder.processPersistent(unit, destination);
+          const frame = await decoder.finishPersistent(destination);
           stats.submitted++;
           stats.decoded++;
           enter('publish');

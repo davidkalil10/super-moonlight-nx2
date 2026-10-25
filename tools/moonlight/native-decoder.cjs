@@ -91,6 +91,7 @@ async function create({
   let lastStamp = null;
   let persistent = null;
   let persistentStarted = false;
+  let persistentJob = null;
 
   async function call(name, args) {
     const value = await api.call(name, args);
@@ -345,9 +346,10 @@ async function create({
       persistentStarted = true;
     },
 
-    async processPersistent(unit, destination) {
+    async beginPersistent(unit) {
       if (!persistentStarted || closed || !running)
         throw Error('Persistent decoder is not running');
+      if (persistentJob) throw Error('Persistent decoder job is already in flight');
       if (
         !Buffer.isBuffer(unit.data) ||
         !unit.data.length ||
@@ -355,15 +357,6 @@ async function create({
         unit.pts < 0
       )
         throw Error('Invalid decoder access unit');
-      const {bytes, alignment} = sizing;
-      if (
-        !Number.isSafeInteger(destination.address) ||
-        !Number.isSafeInteger(destination.bytes) ||
-        destination.bytes < bytes ||
-        !alignment ||
-        destination.address % alignment
-      )
-        throw Error('Native output does not fit the aligned destination surface');
       step = 'acquireInput';
       if (pendingInput === null) pendingInput = await acquireInput();
       const index = pendingInput;
@@ -374,13 +367,30 @@ async function create({
         throw Error('H.264 access unit exceeds the native input buffer');
       step = 'writeUnit';
       await rpc.write(address, unit.data);
-      step = 'persistent';
-      const completed = await persistent.run({
+      step = 'persistent-start';
+      persistentJob = await persistent.begin({
         index,
         length: unit.data.length,
-        pts: unit.pts,
-        destination
+        pts: unit.pts
       });
+      step = 'persistent-output';
+    },
+
+    async finishPersistent(destination) {
+      if (!persistentJob || closed || !running)
+        throw Error('Persistent decoder has no submitted access unit');
+      const {bytes, alignment} = sizing;
+      if (
+        !Number.isSafeInteger(destination.address) ||
+        !Number.isSafeInteger(destination.bytes) ||
+        destination.bytes < bytes ||
+        !alignment ||
+        destination.address % alignment
+      )
+        throw Error('Native output does not fit the aligned destination surface');
+      step = 'persistent-fetch';
+      const completed = await persistent.finish(persistentJob, destination);
+      persistentJob = null;
       pendingInput = completed.input.index >= 0 ? completed.input.index : null;
       lastInput = completed.input;
       step = 'idle';
@@ -391,6 +401,11 @@ async function create({
         format: 'nv12',
         ...(completed.probe ? {probe: completed.probe} : {})
       };
+    },
+
+    async processPersistent(unit, destination) {
+      await this.beginPersistent(unit);
+      return this.finishPersistent(destination);
     },
 
     async submit(unit, {acquireOutput: withOutput = true, stamp = null} = {}) {

@@ -302,7 +302,7 @@ async function create({
       uncertainStart = false;
     },
 
-    async run({index, length, pts, destination}) {
+    async begin({index, length, pts}) {
       if (thread === null || joined || active)
         throw Error('Persistent decoder worker is not ready');
       sequence = (sequence + 1) >>> 0 || 1;
@@ -313,10 +313,16 @@ async function create({
       job.writeUInt32LE(length, 8);
       job.writeBigUInt64LE(BigInt(pts), 16);
       await rpc.writeAndCall(event(JOB), job, sync.signalLightEvent, [event(GATE)]);
+      return {sequence, pts: BigInt(pts)};
+    },
+
+    async finish(job, destination) {
+      if (thread === null || joined || !job || job.sequence !== active)
+        throw Error('Persistent decoder job is not ready to finish');
       if (DECODE_PROBES.has(probeStage)) {
         const result = await poll(PROBE_DONE, DECODE_RESULTS, 'probe ' + probeStage);
         return {
-          pts: BigInt(pts),
+          pts: job.pts,
           input: {status: 0, index: -1},
           probe: {
             stage: probeStage,
@@ -331,7 +337,7 @@ async function create({
       const sent = status(acquired.readBigUInt64LE(0));
       const acquiredStatus = status(acquired.readBigUInt64LE(8));
       const outputIndex = acquired.readInt32LE(16);
-      if (acquired.readUInt32LE(40) !== sequence)
+      if (acquired.readUInt32LE(40) !== job.sequence)
         throw Error('Persistent decoder acquired the wrong access unit');
       if (sent || acquiredStatus || outputIndex < 0) {
         const value = sent || acquiredStatus || 0x100e;
@@ -365,7 +371,7 @@ async function create({
         };
       }
       const fetched = await poll(DONE, FETCH_RESULTS, 'output fetch');
-      if (fetched.readUInt32LE(40) !== sequence)
+      if (fetched.readUInt32LE(40) !== job.sequence)
         throw Error('Persistent decoder completed the wrong access unit');
       active = 0;
       for (const [name, offset] of [
@@ -388,6 +394,11 @@ async function create({
         pts: acquired.readBigUInt64LE(24),
         input: {status: inputStatus, index: nextIndex}
       };
+    },
+
+    async run({index, length, pts, destination}) {
+      const job = await this.begin({index, length, pts});
+      return this.finish(job, destination);
     },
 
     async stop() {
