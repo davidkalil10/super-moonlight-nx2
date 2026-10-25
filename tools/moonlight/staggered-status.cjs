@@ -46,14 +46,15 @@ function parse(bytes) {
   };
 }
 
-function gateError(message, retryable = false) {
-  return Object.assign(Error(message), {retryable});
+function gateError(message, retryable = false, pending = null) {
+  return Object.assign(Error(message), {retryable, pending});
 }
 
 function checkSequence(actual, expected, name) {
   if (!Number.isInteger(expected) || expected < 1 || expected > 0xffffffff)
     throw Error(`Invalid expected ${name} sequence`);
-  if (actual < expected) throw gateError(`${name} ${expected} is pending`, true);
+  if (actual < expected)
+    throw gateError(`${name} ${expected} is pending`, true, name.toLowerCase());
   if (actual !== expected) throw gateError(`${name} sequence ${actual}/${expected} differs`);
 }
 
@@ -79,7 +80,8 @@ function checkOutput(snapshot, expected) {
 
   if (expected.ack) {
     const delta = (snapshot.nativeApplied - expected.ack.sequence) >>> 0;
-    if (delta >= 0x80000000) throw gateError('Previous publication is not applied', true);
+    if (delta >= 0x80000000)
+      throw gateError('Previous publication is not applied', true, 'applied');
     if (snapshot.current !== expected.ack.index)
       throw gateError('Applied publication surface differs');
   }
@@ -102,7 +104,7 @@ function check(snapshot, expected) {
     checkSequence(snapshot.input.sequence, expected.input.sequence, 'Input');
     if (snapshot.input.sendStatus !== 0n) throw gateError('Decoder input submit failed');
     if (snapshot.input.nextIndex < 0 && [0x100en, 0x1011n].includes(snapshot.input.nextSlotStatus))
-      throw gateError('Decoder has no checked next input slot', true);
+      throw gateError('Decoder has no checked next input slot', true, 'slot');
     if (snapshot.input.nextSlotStatus !== 0n || snapshot.input.nextIndex < 0)
       throw gateError('Decoder next-slot acquire failed');
   }

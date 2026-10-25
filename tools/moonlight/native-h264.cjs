@@ -39,6 +39,14 @@ function createIdrRequester(
   };
 }
 
+function countsSince(now, before) {
+  return Object.fromEntries(
+    Object.entries(now)
+      .map(([key, count]) => [key, count - (before[key] || 0)])
+      .filter(([, count]) => count)
+  );
+}
+
 async function run({
   args,
   directory,
@@ -364,6 +372,8 @@ async function run({
       }
     }, 500);
     let dropped = 0;
+    let queued = 0;
+    let waited = {};
     stage = 'read';
     let stageAt = performance.now(),
       stageMs = {};
@@ -379,6 +389,8 @@ async function run({
         codec: 'h264',
         ...stats,
         dropped: reader.dropped - dropped,
+        queued,
+        ...(staggeredLive ? {waiting: countsSince(staggeredLive.counts.waiting, waited)} : {}),
         ...bridge.take(),
         at: stage + '/' + (decoder?.step ?? '-'),
         ms: Object.fromEntries(Object.entries(stageMs).map(([k, v]) => [k, Math.round(v)]))
@@ -389,6 +401,8 @@ async function run({
       fs.appendFile(statsFile, line + '\n', {mode: 0o600}).catch(() => {});
       stageMs = {};
       dropped = reader.dropped;
+      queued = 0;
+      waited = staggeredLive?.counts.waiting ?? {};
       Object.keys(stats).forEach(key => {
         stats[key] = 0;
       });
@@ -396,6 +410,7 @@ async function run({
     if (duration !== null) ending = setTimeout(() => stop('duration'), duration * 1000);
     for await (const unit of reader) {
       enter('unit');
+      queued = Math.max(queued, reader.ready.length);
       if (stopping) break;
       stats.received++;
       stats.bytes += unit.data.length;
@@ -754,4 +769,4 @@ async function run({
   return summary;
 }
 
-module.exports = {run, createIdrRequester};
+module.exports = {run, createIdrRequester, countsSince};

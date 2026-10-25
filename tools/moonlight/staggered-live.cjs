@@ -36,8 +36,8 @@ async function waitChecked(
         await worker.retryInputSlot(expected.input.sequence);
         nextInputRetry = Date.now() + 20;
       }
+      onReread(error.pending);
     }
-    onReread();
     await pause(5);
   }
   throw Error('Staggered checked status timed out');
@@ -93,10 +93,18 @@ function create({
   const units = new Map();
   const destinations = new Map();
   const counts = {submitted: 0, decoded: 0, presented: 0, tailDrained: 0, rereads: 0};
+  const waiting = {};
   const waits = {timeoutMs, pause};
   // A late gate status is reread back to back: a pause costs the frame its vsync slot
   // (request-budget.cjs staggeredRetryWait). The deadline still bounds the wait.
-  const rereads = {timeoutMs, pause: immediate, onReread: () => counts.rereads++};
+  const rereads = {
+    timeoutMs,
+    pause: immediate,
+    onReread: pending => {
+      counts.rereads++;
+      waiting[pending] = (waiting[pending] || 0) + 1;
+    }
+  };
 
   function remember(sequence, unit) {
     units.set(sequence, unit);
@@ -272,7 +280,7 @@ function create({
     },
 
     get counts() {
-      return {...counts};
+      return {...counts, waiting: {...waiting}};
     },
 
     get retained() {
