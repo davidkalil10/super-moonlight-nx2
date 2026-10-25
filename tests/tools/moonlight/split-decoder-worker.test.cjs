@@ -21,6 +21,7 @@ function fixture({receiveBytes = 4096, outputIndex = 2} = {}) {
     aborted: false,
     async send(bytes) {
       this.sent.push(bytes);
+      calls.push({transportSend: true});
     },
     abort() {
       this.aborted = true;
@@ -207,6 +208,47 @@ test('one status scheduler reads input and output progress together', async () =
   assert.equal(completed.sequence, job.sequence);
   assert.equal(acquired.index, 2);
   assert.ok(f.calls.filter(call => call.statusRead).length <= 3);
+  await worker.stop();
+  await worker.finalize();
+});
+
+test('live input sends TCP bytes before opening the input gate', async () => {
+  const f = fixture();
+  const worker = await workerFor(f);
+  const job = await worker.stageInput({
+    index: 1,
+    length: 4096,
+    pts: 30,
+    inputAddress: 0x72000000,
+    payload: Buffer.alloc(4096),
+    sendFirst: true
+  });
+  await worker.completeInput(job);
+  const sent = f.calls.findIndex(call => call.transportSend);
+  const opened = f.calls.findIndex(
+    call => call.combined && call.args[0] === f.control
+  );
+  assert.ok(sent >= 0 && opened > sent);
+  assert.equal(f.transport.sent.length, 1);
+  await worker.stop();
+  await worker.finalize();
+});
+
+test('the first acquire status read waits for the expected decode time', async () => {
+  const f = fixture();
+  const worker = await workerFor(f);
+  const job = await worker.input({
+    index: 1,
+    length: 4096,
+    pts: 30,
+    inputAddress: 0x72000000,
+    payload: Buffer.alloc(4096)
+  });
+  await worker.queueOutput(job);
+  const previousReads = f.calls.filter(call => call.statusRead).length;
+  const acquired = worker.waitForAcquired(job);
+  assert.equal(f.calls.filter(call => call.statusRead).length, previousReads);
+  assert.equal((await acquired).index, 2);
   await worker.stop();
   await worker.finalize();
 });
