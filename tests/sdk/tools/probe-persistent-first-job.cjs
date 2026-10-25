@@ -10,7 +10,19 @@ const {accessUnits} = require('./probe-decoder-events.cjs');
 const {parameterSets} = require('../../tools/moonlight/h264-stream.cjs');
 const {create: createDecoder} = require('../../tools/moonlight/native-decoder.cjs');
 
-const STAGES = ['gate', 'dispatch', 'send', 'wait', 'acquire', 'fetch'];
+const STAGES = [
+  'gate',
+  'dispatch',
+  'send',
+  'wait',
+  'acquire',
+  'setData',
+  'getOutput',
+  'release',
+  'input',
+  'done',
+  'fetch'
+];
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 function journal(file) {
@@ -29,6 +41,7 @@ function journal(file) {
 function loggedRpc(rpc, record) {
   const wrapped = {...rpc};
   wrapped.bridgeLost = false;
+  let hostSurface = null;
   for (const name of [
     'request',
     'call',
@@ -42,10 +55,36 @@ function loggedRpc(rpc, record) {
     wrapped[name] = async (...args) => {
       const target = name === 'request' ? args[0]?.command : args[0];
       const bytes = name === 'write' || name === 'writeAndCall' ? args[1]?.length : undefined;
-      record.write({phase: 'before', operation: name, target, ...(bytes ? {bytes} : {})});
+      const payload = bytes === 16 ? {dataHex: args[1].toString('hex')} : {};
+      if (name === 'pair' && args[0]?.length === 2 && args[0][0]?.address && args[0][1]?.address)
+        hostSurface = {address: args[0][0].args[1], bytes: args[0][0].args[2]};
+      const fetchJob =
+        name === 'writeAndCall' && bytes === 16
+          ? {address: Number(args[1].readBigUInt64LE(0)), bytes: Number(args[1].readBigUInt64LE(8))}
+          : null;
+      const surfaceMatch =
+        fetchJob && hostSurface
+          ? fetchJob.address === hostSurface.address && fetchJob.bytes === hostSurface.bytes
+          : undefined;
+      record.write({
+        phase: 'before',
+        operation: name,
+        target,
+        ...(bytes ? {bytes} : {}),
+        ...payload,
+        ...(hostSurface && (name === 'pair' || fetchJob) ? {hostSurface} : {}),
+        ...(fetchJob ? {fetchJob, surfaceMatch} : {})
+      });
       try {
+        if (surfaceMatch === false)
+          throw Error('Persistent decoder fetch job differs from the host-driven output surface');
         const result = await rpc[name](...args);
-        record.write({phase: 'after', operation: name, target});
+        record.write({
+          phase: 'after',
+          operation: name,
+          target,
+          ...(name === 'read' && args[1] === 16 ? {dataHex: result.toString('hex')} : {})
+        });
         return result;
       } catch (error) {
         if (
@@ -147,7 +186,7 @@ async function main(
     const until = Date.now() + 1000;
     let first = null;
     while (Date.now() < until && !first) {
-      entries.write({phase: 'before', step: 'host first receive'});
+      entries.write({phase: 'before', step: 'host first receive', destination});
       first = await decoder.receive(destination);
       entries.write({phase: 'after', step: 'host first receive', ready: !!first});
       if (!first) await sleep(5);
@@ -156,7 +195,7 @@ async function main(
     entries.write({phase: 'before', step: 'worker start', stage});
     await decoder.startPersistent({stage: stage === 'fetch' ? null : stage});
     entries.write({phase: 'after', step: 'worker start', stage});
-    entries.write({phase: 'before', step: 'worker first job', stage, unit: nextIndex});
+    entries.write({phase: 'before', step: 'worker first job', stage, unit: nextIndex, destination});
     const result = await decoder.processPersistent(
       {data: units[nextIndex].data, pts: nextIndex},
       destination
@@ -172,6 +211,18 @@ async function main(
         throw Error('Probe SendInput returned 0x' + result.probe.sendStatus.toString(16));
       if (stage === 'acquire' && (result.probe.acquireStatus !== 0 || result.probe.outputIndex < 0))
         throw Error('Probe AcquireOutput did not return a frame');
+      if (['getOutput', 'release', 'input', 'done'].includes(stage) && result.probe.getStatus !== 0)
+        throw Error('Probe GetOutput returned 0x' + result.probe.getStatus.toString(16));
+      if (['release', 'input', 'done'].includes(stage) && result.probe.releaseStatus !== 0)
+        throw Error('Probe ReleaseOutput returned 0x' + result.probe.releaseStatus.toString(16));
+      if (
+        ['input', 'done'].includes(stage) &&
+        result.probe.inputStatus !== 0 &&
+        !(result.probe.nextIndex < 0 && [0x100e, 0x1011].includes(result.probe.inputStatus))
+      )
+        throw Error('Probe AcquireInput returned 0x' + result.probe.inputStatus.toString(16));
+      if (stage === 'done' && result.probe.completedSequence !== 1)
+        throw Error('Probe completed the wrong access unit');
     } else if (result.pts !== String(nextIndex)) {
       throw Error('Probe fetch returned the wrong presentation timestamp');
     }

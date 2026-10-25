@@ -16,6 +16,7 @@ const format = decoder + 0x180;
 function fixture({
   invalidOutput = false,
   noAcquired = false,
+  noFetchCompleted = false,
   threadStuck = false,
   spawnFails = false
 } = {}) {
@@ -97,7 +98,7 @@ function fixture({
       } else if (args[0] === control + 0x20) {
         const result = Buffer.alloc(44);
         result.writeInt32LE(1, 32);
-        result.writeUInt32LE(read(control + 0x1a0, 4).readUInt32LE(), 40);
+        result.writeUInt32LE(noFetchCompleted ? 0 : read(control + 0x1a0, 4).readUInt32LE(), 40);
         write(control + 0x160, result);
       } else assert.fail('unexpected gate');
       calls.push({address: target, args, combined: true});
@@ -428,4 +429,93 @@ test('first full gated job carries the acquired index into output fetch', async 
   assert.equal(seen.find(call => call.target === f.functions.releaseOutput).args[1], 2);
   await worker.stop();
   await worker.finalize();
+});
+
+test('fetch probe stages stop after the selected native call', async () => {
+  const fetchNames = ['bufferSetData', 'getOutput', 'releaseOutput', 'acquireInput'];
+  const stages = [
+    ['setData', ['bufferSetData']],
+    ['getOutput', ['bufferSetData', 'getOutput']],
+    ['release', ['bufferSetData', 'getOutput', 'releaseOutput']],
+    ['input', ['bufferSetData', 'getOutput', 'releaseOutput', 'acquireInput']],
+    ['done', ['bufferSetData', 'getOutput', 'releaseOutput', 'acquireInput']]
+  ];
+  for (const [stage, expected] of stages) {
+    const f = fixture();
+    const worker = await create({
+      rpc: f.rpc,
+      module: f.module,
+      functions: f.functions,
+      decoder,
+      output,
+      format
+    });
+    await worker.register();
+    await worker.start({stage});
+    const job = Buffer.alloc(24);
+    job.writeUInt32LE(1, 0);
+    job.writeInt32LE(3, 4);
+    job.writeUInt32LE(4096, 8);
+    job.writeBigUInt64LE(90000n, 16);
+    f.write(f.control + 0x1a0, job);
+    const destination = Buffer.alloc(16);
+    destination.writeBigUInt64LE(0x72000000n, 0);
+    destination.writeBigUInt64LE(0x400000n, 8);
+    f.write(f.control + 0x1c0, destination);
+    const seen = [];
+    const done = Error('probe done');
+    assert.throws(
+      () =>
+        emulate(f, 0x60000000 + 0x10000, (target, args) => {
+          if (target === f.functions.acquireOutput) {
+            const index = Buffer.alloc(4);
+            index.writeInt32LE(2);
+            f.write(args[1], index);
+          }
+          if (target === SDK + sync.signalLightEvent.offset && args[0] === f.control + 0x1d0)
+            throw done;
+          seen.push(target);
+          return 0;
+        }),
+      error => error === done
+    );
+    assert.deepEqual(
+      seen.filter(target => fetchNames.some(name => target === f.functions[name])),
+      expected.map(name => f.functions[name]),
+      stage
+    );
+    await worker.stop();
+    await worker.finalize();
+  }
+});
+
+test('fetch probes release an acquired output only when their body did not', async () => {
+  for (const stage of ['setData', 'getOutput', 'release', 'input', 'done']) {
+    const f = fixture({noFetchCompleted: true});
+    const worker = await create({
+      rpc: f.rpc,
+      module: f.module,
+      functions: f.functions,
+      decoder,
+      output,
+      format
+    });
+    await worker.register();
+    await worker.start({stage});
+    const result = await worker.run({
+      index: 1,
+      length: 4096,
+      pts: 90000,
+      destination: {address: 0x72000000, bytes: 0x400000}
+    });
+    assert.equal(result.probe.stage, stage);
+    assert.equal(f.read(f.control + 0x1c0, 16).readBigUInt64LE(), 0x72000000n);
+    await worker.stop();
+    assert.equal(
+      f.calls.filter(call => call.address === f.functions.releaseOutput).length,
+      ['setData', 'getOutput'].includes(stage) ? 1 : 0,
+      stage
+    );
+    await worker.finalize();
+  }
 });

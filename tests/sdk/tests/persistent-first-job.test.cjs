@@ -23,6 +23,36 @@ test('journal marks a lost bridge before any cleanup request', async () => {
   );
 });
 
+test('fetch job matches the surface passed to host-driven GetOutput', async () => {
+  const rows = [];
+  let signalled = false;
+  const rpc = loggedRpc(
+    {
+      async pair() {
+        return {results: [0n, 0n]};
+      },
+      async writeAndCall() {
+        signalled = true;
+      }
+    },
+    {write: row => rows.push(row)}
+  );
+  await rpc.pair([
+    {address: 1, args: [10, 0x72000000, 0x400000, 0]},
+    {address: 2, args: [20, 0, 10, 30]}
+  ]);
+  const job = Buffer.alloc(16);
+  job.writeBigUInt64LE(0x72000000n);
+  job.writeBigUInt64LE(0x400000n, 8);
+  await rpc.writeAndCall(100, job, 3, [4]);
+  assert.equal(signalled, true);
+  assert.equal(rows.find(row => row.fetchJob)?.surfaceMatch, true);
+  job.writeBigUInt64LE(0x71000000n);
+  await assert.rejects(rpc.writeAndCall(100, job, 3, [4]), /fetch job differs/);
+  assert.equal(signalled, true);
+  assert.equal(rows.filter(row => row.surfaceMatch === false).length, 1);
+});
+
 test('first-job probe journals each stage and closes the decoder', async () => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'hbl-first-job-'));
   const clip = path.join(directory, 'two-idr.h264');
@@ -93,7 +123,19 @@ test('first-job probe journals each stage and closes the decoder', async () => {
       ['before', 'after']
     );
     assert.equal(journal.at(-1).step, 'decoder close');
-    assert.deepEqual(STAGES, ['gate', 'dispatch', 'send', 'wait', 'acquire', 'fetch']);
+    assert.deepEqual(STAGES, [
+      'gate',
+      'dispatch',
+      'send',
+      'wait',
+      'acquire',
+      'setData',
+      'getOutput',
+      'release',
+      'input',
+      'done',
+      'fetch'
+    ]);
   } finally {
     await fs.rm(directory, {recursive: true, force: true});
   }
