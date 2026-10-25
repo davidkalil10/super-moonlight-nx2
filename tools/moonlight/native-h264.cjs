@@ -54,6 +54,7 @@ async function run({
   createSink = require('./native-sink.cjs').create,
   createSocketAudio = require('./socket-audio-source.cjs').create,
   createPaired = require('./paired-live.cjs').create,
+  createStaggered = require('./staggered-live.cjs').create,
   spawnProcess = spawn
 }) {
   const at = args.indexOf('--moonlight');
@@ -65,10 +66,16 @@ async function run({
   const socketAudio = socketTone || args.includes('--socket-audio');
   if (socketAudio && !audio) throw Error('--socket-audio cannot be combined with --no-audio');
   const pairedLoop = args.includes('--paired-loop');
-  const workerMode = pairedLoop || args.includes('--split-decoder') ? 'split' : 'persistent';
+  const staggered = args.includes('--staggered');
+  const workerMode =
+    pairedLoop || staggered || args.includes('--split-decoder') ? 'split' : 'persistent';
   const nativePublish = args.includes('--native-publish');
   const autoOutputQueue = args.includes('--auto-output-queue');
   const linkedGates = args.includes('--linked-gates');
+  if (staggered && (pairedLoop || nativePublish || autoOutputQueue || linkedGates))
+    throw Error(
+      '--staggered drives its own input and output workers; drop the paired and split worker flags'
+    );
   if (pairedLoop && (nativePublish || autoOutputQueue || linkedGates))
     throw Error('--paired-loop publishes from its own worker; drop the split worker flags');
   if (nativePublish && workerMode !== 'split')
@@ -134,12 +141,14 @@ async function run({
   );
   let stage = 'setup';
   const bridge = instrument(rpc, () => stage);
-  rpc = pairedLoop ? require('./paired-live.cjs').watchBridge(bridge.rpc) : bridge.rpc;
+  rpc = pairedLoop || staggered ? require('./paired-live.cjs').watchBridge(bridge.rpc) : bridge.rpc;
   let stopping = false;
   let pairing = false;
   let decoder = null;
   let transport = null;
   let paired = null;
+  let staggeredLive = null;
+  let tail = null;
   let unpaired = 0;
   let sink = null;
   let soundSource = null;
@@ -207,6 +216,7 @@ async function run({
     const makeDecoder = async () => {
       transport = await createTransport({rpc, host: rpc.host});
       if (pairedLoop) paired = createPaired({rpc, publication: sink.workerPublication});
+      if (staggered) staggeredLive = createStaggered();
       try {
         return await createDecoder({
           rpc,
@@ -214,10 +224,11 @@ async function run({
           workerDirectory: path.join(output, 'decoder-' + generation),
           workerMode,
           transport,
-          publication: nativePublish || pairedLoop ? sink.workerPublication : null,
+          publication: nativePublish || pairedLoop || staggered ? sink.workerPublication : null,
           autoQueue: autoOutputQueue,
           linkedGates,
           ...(pairedLoop ? {splitWorkerFactory: paired.factory} : {}),
+          ...(staggered ? {splitWorkerFactory: staggeredLive.factory} : {}),
           log,
           cancelled
         });
@@ -329,7 +340,7 @@ async function run({
       heldUnit = null,
       outstanding = 0;
     async function resync(error) {
-      if ((nativePublish && workerStarted) || paired?.exists) throw error;
+      if ((nativePublish && workerStarted) || paired?.exists || staggeredLive?.exists) throw error;
       resets = resets.filter(time => Date.now() - time < 30000);
       if (resets.length >= 3) throw error;
       resets.push(Date.now());
@@ -403,6 +414,26 @@ async function run({
         configured = true;
       }
       try {
+        if (workerStarted && staggered) {
+          pairing = true;
+          try {
+            await staggeredLive.push(unit, {
+              sink,
+              enter,
+              onDecoded: count => {
+                stats.decoded += count;
+              },
+              onPresented: count => {
+                stats.presented += count;
+              }
+            });
+          } finally {
+            pairing = false;
+          }
+          stats.submitted++;
+          enter('read');
+          continue;
+        }
         if (workerStarted && pairedLoop) {
           if (!heldUnit) {
             heldUnit = unit;
@@ -521,14 +552,20 @@ async function run({
           stats.presented++;
           firstFrame ||= frame;
           if (outstanding === 0 && !workerStarted) {
-            if (pairedLoop) {
+            if (staggered) {
+              await sink.wait();
+              staggeredLive.start({input: decoder.lastInput, frame: firstFrame});
+            } else if (pairedLoop) {
               await sink.wait();
               await decoder.startSplit();
               await paired.start();
             } else if (workerMode === 'split') await decoder.startSplit();
             else await decoder.startPersistent();
             workerStarted = true;
-            log({event: (pairedLoop ? 'paired' : workerMode) + '-worker', started: true});
+            log({
+              event: (staggered ? 'staggered' : pairedLoop ? 'paired' : workerMode) + '-worker',
+              started: true
+            });
           }
         }
       } catch (error) {
@@ -541,6 +578,26 @@ async function run({
       unpaired++;
       heldUnit = null;
       log({event: 'paired-unpaired', count: unpaired});
+    }
+    if (staggeredLive?.pending) {
+      if (!stopping || stopReason === 'duration') {
+        pairing = true;
+        try {
+          tail = await staggeredLive.finish({
+            sink,
+            enter,
+            onDecoded: count => {
+              stats.decoded += count;
+            },
+            onPresented: count => {
+              stats.presented += count;
+            }
+          });
+        } finally {
+          pairing = false;
+        }
+      } else tail = {drained: 0, skipped: stopReason};
+      log({event: 'staggered-tail', ...tail});
     }
     if (workerMode === 'split' && pendingSplitOutput && !stopping) {
       enter('destination');
@@ -563,7 +620,14 @@ async function run({
         event: 'paired-snapshot',
         snapshot: await paired.snapshot().catch(snapshotError => ({error: snapshotError.message}))
       });
-    if (!stopping || pairedLoop)
+    if (staggeredLive?.exists && !rpc.bridgeLost)
+      log({
+        event: 'staggered-snapshot',
+        snapshot: await staggeredLive
+          .snapshot()
+          .catch(snapshotError => ({error: snapshotError.message}))
+      });
+    if (!stopping || pairedLoop || staggered)
       log({
         event: 'native-error',
         message: error.message,
@@ -608,10 +672,21 @@ async function run({
         retained = true;
       }
     }
+    if (staggeredLive && !retained) {
+      try {
+        await staggeredLive.stop();
+      } catch (error) {
+        errors.push(error);
+        retained = true;
+      }
+    }
     if (retained) {
       transport?.abort?.();
       errors.push(Error('Native objects retained for safety; restart SmileBASIC'));
-      log({event: 'native-retained', reason: 'paired loop or bridge state is uncertain'});
+      log({
+        event: 'native-retained',
+        reason: (staggered ? 'staggered worker' : 'paired loop') + ' or bridge state is uncertain'
+      });
     } else {
       try {
         await decoder?.close();
@@ -630,7 +705,13 @@ async function run({
   }
   const steadyRows = rows.slice(warmup);
   const summary = {
-    workerMode: pairedLoop ? 'paired' : workerMode,
+    workerMode: pairedLoop ? 'paired' : staggered ? 'staggered' : workerMode,
+    ...(staggered
+      ? {
+          decoded: steadyRows.reduce((sum, row) => sum + row.decoded, 0),
+          staggered: {...(staggeredLive?.counts ?? {}), tail}
+        }
+      : {}),
     ...(pairedLoop
       ? {
           decoded: steadyRows.reduce((sum, row) => sum + row.decoded, 0),
