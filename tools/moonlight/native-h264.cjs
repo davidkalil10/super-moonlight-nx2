@@ -7,26 +7,34 @@ const {execFileSync} = require('node:child_process');
 const os = require('node:os');
 const {AccessUnits, parameterSets} = require('./h264-stream.cjs');
 
+// A lone backlog recovers within 100 ms; repeated backlogs double the wait up to a second,
+// so sustained overload does not turn every frame into a keyframe.
 const IDR_COOLDOWN_MS = 100;
+const IDR_MAX_COOLDOWN_MS = 1000;
+const IDR_QUIET_MS = 2000;
 
 function createIdrRequester(
   send,
   {now = Date.now, schedule = setTimeout, cancel = clearTimeout} = {}
 ) {
   let lastSent = -Infinity;
+  let cooldown = IDR_COOLDOWN_MS;
   let timer = null;
   let closed = false;
   return {
     request() {
       if (closed || timer !== null) return;
+      const at = now();
+      if (at - lastSent > IDR_QUIET_MS) cooldown = IDR_COOLDOWN_MS;
       timer = schedule(
         () => {
           timer = null;
           if (closed) return;
           lastSent = now();
           send();
+          cooldown = Math.min(cooldown * 2, IDR_MAX_COOLDOWN_MS);
         },
-        Math.max(0, lastSent + IDR_COOLDOWN_MS - now())
+        Math.max(0, lastSent + cooldown - at)
       );
     },
     close() {
