@@ -1,3 +1,15 @@
+// Input worker frames for the staggered lag-2 path. Per access unit N the receive frame reads
+// N over native TCP and parks on the decode gate. Once the host's checked gate write opens it,
+// the frame signals the descriptor's fetch gate (held output N-2, or the ignored gate before
+// N=3), then waits for the output worker's acquisition acknowledgement of N-1, and only then
+// jumps through sendDispatch to the send frame that submits N. Each submit therefore follows
+// the acquisition of every earlier output, so the auto-clear decoder event never carries two
+// unacquired outputs. Releasing N-2 before that wait is what lets the output worker reach N-1.
+// The acknowledgement event starts signalled for N=1, standing in for the host-decoded IDR.
+// Stop rewrites the dispatches to the exit frame before it signals the gate and the
+// acknowledgement, so a stop wake never reaches SendInput. A descriptor the worker can reach
+// before its checked gate write always names the ignored fetch gate (start and every gate write
+// fill the next descriptor that way), so a stop wake cannot open a fetch either.
 const {build} = require('../../smilebasic/engine/shared/frames.cjs');
 const {CODE, IPC_COPY} = require('../../sdk/native/thread.cjs');
 const SYNC = require('../../sdk/native/os-sync-functions.json');
@@ -81,8 +93,19 @@ function gateWrite({snapshot, expected, input, current, next, fetchGate, ignored
   return descriptors;
 }
 
-function plan({sdk, base, control, mapped, scratch, fd, recvFunction, functions, decoder}) {
-  const addresses = [sdk, base, control, mapped, scratch, recvFunction, decoder];
+function plan({
+  sdk,
+  base,
+  control,
+  mapped,
+  scratch,
+  fd,
+  recvFunction,
+  functions,
+  decoder,
+  acquireAck
+}) {
+  const addresses = [sdk, base, control, mapped, scratch, recvFunction, decoder, acquireAck];
   if (
     addresses.some(value => !Number.isSafeInteger(value) || value <= 0) ||
     !Number.isInteger(fd) ||
@@ -126,6 +149,11 @@ function plan({sdk, base, control, mapped, scratch, fd, recvFunction, functions,
         args: [ringAt(status.STATUS.receive + 8), descriptor + DESCRIPTOR.sequence, 4, 0]
       },
       {function: sync('waitLightEvent'), args: [at(CONTROL.decodeGate), 0, 0, 0]},
+      {
+        function: sync('signalLightEvent'),
+        args: [{u64: descriptor + DESCRIPTOR.fetchGate}, 0, 0, 0]
+      },
+      {function: sync('waitLightEvent'), args: [acquireAck, 0, 0, 0]},
       {function: jump, args: [{u64: at(CONTROL.sendDispatch[slot])}, 1, 0, 0]}
     ];
     receive.push(
@@ -167,10 +195,6 @@ function plan({sdk, base, control, mapped, scratch, fd, recvFunction, functions,
         ]
       },
       {
-        function: sync('signalLightEvent'),
-        args: [{u64: descriptor + DESCRIPTOR.fetchGate}, 0, 0, 0]
-      },
-      {
         function: functions.acquireInput,
         args: [
           decoder,
@@ -193,12 +217,12 @@ function plan({sdk, base, control, mapped, scratch, fd, recvFunction, functions,
     ];
     let built = frame(loc.send[slot], sendCalls, {
       1: status.STATUS.input,
-      3: status.STATUS.input + 8
+      2: status.STATUS.input + 8
     });
     restore[1].args[2] = built.frame.length;
     built = frame(loc.send[slot], sendCalls, {
       1: status.STATUS.input,
-      3: status.STATUS.input + 8
+      2: status.STATUS.input + 8
     });
     send.push(built);
     calls.send.push(sendCalls);

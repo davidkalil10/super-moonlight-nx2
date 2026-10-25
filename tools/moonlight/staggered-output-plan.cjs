@@ -1,3 +1,9 @@
+// Output worker frames for the staggered lag-2 path. The acquire frame waits once on the
+// auto-clear decoder output event, acquires one output, stamps its status and sequence, then
+// signals the input worker's acquisition acknowledgement before it parks on the fetch gate.
+// The acknowledgement comes only after the stamps, so the input worker's next SendInput can
+// never race the host-visible acquire status. The fetch frame copies the held output into the
+// descriptor's ring surface, releases it and stamps the fetch status.
 const {build} = require('../../smilebasic/engine/shared/frames.cjs');
 const {CODE, IPC_COPY} = require('../../sdk/native/thread.cjs');
 const SYNC = require('../../sdk/native/os-sync-functions.json');
@@ -57,8 +63,8 @@ function placeholderDescriptor(auSequence) {
   return bytes;
 }
 
-function plan({sdk, base, control, mapped, event, functions, decoder, output, format}) {
-  const addresses = [sdk, base, control, mapped, event, decoder, output, format];
+function plan({sdk, base, control, mapped, event, acquireAck, functions, decoder, output, format}) {
+  const addresses = [sdk, base, control, mapped, event, acquireAck, decoder, output, format];
   if (
     addresses.some(value => !Number.isSafeInteger(value) || value <= 0) ||
     ['acquireOutput', 'bufferSetData', 'getOutput', 'releaseOutput'].some(
@@ -106,6 +112,7 @@ function plan({sdk, base, control, mapped, event, functions, decoder, output, fo
         function: copy,
         args: [ringAt(status.STATUS.acquire + 24), descriptor + DESCRIPTOR.sequence, 4, 0]
       },
+      {function: sync('signalLightEvent'), args: [acquireAck, 0, 0, 0]},
       {function: sync('waitLightEvent'), args: [at(CONTROL.fetchGate), 0, 0, 0]},
       {function: jump, args: [{u64: at(CONTROL.fetchDispatch[slot])}, 1, 0, 0]}
     ];

@@ -1,3 +1,12 @@
+// Lifecycle of the staggered input and output workers. The control page holds the light events
+// (decode gate 0x00, ignored fetch gate 0x10, fetch gate 0x20, acquisition acknowledgement 0x30),
+// the dispatch words 0x40-0x7f, the descriptors 0x100-0x2ff, the decoder output event 0x400 and
+// its registration 0x440. The acknowledgement is auto-clear and starts signalled for AU 1; the
+// output worker signals it once per acquired output (see staggered-input-plan.cjs for the order).
+// A drain also stamps the next output's placeholder, so the last tail output acquires under its
+// own sequence instead of the one its slot held two AUs earlier.
+// Stopping the input worker points its dispatches at the exit frame first, then wakes the decode
+// gate and the acknowledgement, so a worker parked on either exits without another SendInput.
 const {allocate} = require('../../sdk/native/allocate.cjs');
 const {verify} = require('../../sdk/native/symbols.cjs');
 const {CODE, verifyCode, verifyCopy, verifyPreamble, spawn, wait, join} = require('../../sdk/native/thread.cjs');
@@ -9,6 +18,7 @@ const gates = require('./staggered-gate.cjs');
 const status = require('./staggered-status.cjs');
 
 const CONTROL_BYTES = 0x1000;
+const ACQUIRE_ACK = 0x30;
 const OUTPUT_EVENT = 0x400;
 const DECODER_EVENTS = 0x440;
 const INPUT_BUFFER = 0x500;
@@ -92,12 +102,13 @@ async function create({
   initialControl.writeBigUInt64LE(BigInt(at(OUTPUT_EVENT)), DECODER_EVENTS + 8);
   await rpc.write(control, initialControl);
   const initialized = [];
-  for (const offset of [
-    inputPlan.CONTROL.decodeGate,
-    inputPlan.CONTROL.ignoredFetchGate,
-    outputPlan.CONTROL.fetchGate
+  for (const [offset, signalled] of [
+    [inputPlan.CONTROL.decodeGate, 0],
+    [inputPlan.CONTROL.ignoredFetchGate, 0],
+    [outputPlan.CONTROL.fetchGate, 0],
+    [ACQUIRE_ACK, 1]
   ]) {
-    await rpc.callAddress(sync.initializeLightEvent, [at(offset), 0, AUTO_CLEAR, 0], SHORT);
+    await rpc.callAddress(sync.initializeLightEvent, [at(offset), signalled, AUTO_CLEAR, 0], SHORT);
     initialized.push({offset, finalize: sync.finalizeLightEvent});
   }
   await rpc.callAddress(sync.initializeEvent, [at(OUTPUT_EVENT), 0, AUTO_CLEAR, 0], SHORT);
@@ -112,7 +123,8 @@ async function create({
     fd: transport.fd,
     recvFunction: transport.recvFunction,
     functions,
-    decoder
+    decoder,
+    acquireAck: at(ACQUIRE_ACK)
   });
   const video = outputPlan.plan({
     sdk,
@@ -120,6 +132,7 @@ async function create({
     control,
     mapped: publication.mapped,
     event: at(OUTPUT_EVENT),
+    acquireAck: at(ACQUIRE_ACK),
     functions,
     decoder,
     output,
@@ -206,6 +219,7 @@ async function create({
       if (worker === workers[0]) {
         transport.abort();
         await rpc.callAddress(sync.signalLightEvent, [at(inputPlan.CONTROL.decodeGate)], SHORT);
+        await rpc.callAddress(sync.signalLightEvent, [at(ACQUIRE_ACK)], SHORT);
       } else {
         await rpc.callAddress(sync.signalEvent, [at(OUTPUT_EVENT)], SHORT);
         await rpc.callAddress(sync.signalLightEvent, [at(outputPlan.CONTROL.fetchGate)], SHORT);
@@ -267,7 +281,11 @@ async function create({
       descriptors.writeUInt32LE(initial.sequence, 0);
       descriptors.writeUInt32LE(initial.length, 4);
       descriptors.writeBigUInt64LE(initial.pts, 8);
-      descriptors.writeBigUInt64LE(BigInt(at(inputPlan.CONTROL.ignoredFetchGate)), 32);
+      for (const slot of inputPlan.CONTROL.descriptors)
+        descriptors.writeBigUInt64LE(
+          BigInt(at(inputPlan.CONTROL.ignoredFetchGate)),
+          slot - gates.WRITE_OFFSET + inputPlan.DESCRIPTOR.fetchGate
+        );
       for (const sequence of [1, 2]) {
         const descriptor = outputPlan.placeholderDescriptor(sequence);
         descriptor.copy(
@@ -304,12 +322,14 @@ async function create({
       );
       return status.parse(bytes);
     },
-    async openGates(options) {
+    async openGates({holdFetch = false, ...options}) {
       if (!started || closed || retained || workers.some(worker => worker.joined))
         throw Error('Staggered gates are unavailable');
       const encoded = gates.gateWrite({
         ...options,
-        fetchGate: at(outputPlan.CONTROL.fetchGate),
+        fetchGate: at(
+          holdFetch ? inputPlan.CONTROL.ignoredFetchGate : outputPlan.CONTROL.fetchGate
+        ),
         ignoredFetchGate: at(inputPlan.CONTROL.ignoredFetchGate),
         publication
       });
@@ -335,10 +355,15 @@ async function create({
         publication
       });
       const slot = (sequence - 1) % 2;
+      const bytes = Buffer.alloc(2 * outputPlan.DESCRIPTOR.size);
+      descriptor.copy(bytes, slot * outputPlan.DESCRIPTOR.size);
+      outputPlan
+        .placeholderDescriptor(sequence + 1)
+        .copy(bytes, (1 - slot) * outputPlan.DESCRIPTOR.size);
       try {
         await rpc.writeAndCall(
-          at(outputPlan.CONTROL.descriptors[slot]),
-          descriptor,
+          at(outputPlan.CONTROL.descriptors[0]),
+          bytes,
           sync.signalLightEvent,
           [at(outputPlan.CONTROL.fetchGate)]
         );
@@ -466,4 +491,4 @@ async function create({
   };
 }
 
-module.exports = {create};
+module.exports = {ACQUIRE_ACK, create};
