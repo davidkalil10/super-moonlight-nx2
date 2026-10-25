@@ -23,8 +23,8 @@ const destinations = [1, 2].map((index, offset) => ({
   color: 1
 }));
 
-test('paired output fetches and releases both surfaces before publishing each sequence', () => {
-  const result = plan({
+test('paired output publishes one checked surface at a time', () => {
+  const options = {
     sdk,
     functions,
     decoder,
@@ -40,20 +40,22 @@ test('paired output fetches and releases both surfaces before publishing each se
     destinations,
     frame,
     base
-  });
-  assert.equal(result.program.proof.logicalCalls, 10);
-  assert.ok(result.program.frame.length < 0x300000);
-  for (const row of result.rows) {
+  };
+  const first = plan({...options, index: 0});
+  const second = plan({...options, index: 1});
+  for (const result of [first, second]) {
+    assert.equal(result.program.proof.logicalCalls, 5);
+    assert.ok(result.program.frame.length < 0x300000);
+    const row = result.rows[0];
     assert.ok(row.set < row.fetch && row.fetch < row.release);
     assert.ok(row.release < row.metadata && row.metadata < row.commit);
   }
-  assert.ok(result.rows[0].commit < result.rows[1].set);
-  assert.equal(result.metadataBytes[0].readUInt32LE(0), 1);
-  assert.equal(result.metadataBytes[1].readUInt32LE(0), 2);
-  assert.equal(result.metadataBytes[0].readUInt32LE(28), 10);
-  assert.equal(result.metadataBytes[1].readUInt32LE(28), 11);
+  assert.equal(first.metadataBytes[0].readUInt32LE(0), 1);
+  assert.equal(second.metadataBytes[1].readUInt32LE(0), 2);
+  assert.equal(first.metadataBytes[0].readUInt32LE(28), 10);
+  assert.equal(second.metadataBytes[1].readUInt32LE(28), 11);
   assert.equal(
-    result.metadataBytes[0].readUInt32LE(24),
+    first.metadataBytes[0].readUInt32LE(24),
     ring.nativeChecksum(10, [1, 1920, 1080, 1920, 1088, 1])
   );
 });
@@ -74,8 +76,10 @@ test('paired output rejects reuse of a surface and oversized decoded layout', ()
     metadataSlots: [0x70000100, 0x70000140],
     destinations,
     frame,
-    base
+    base,
+    index: 0
   };
+  assert.throws(() => plan({...options, index: undefined}), /distinct ordered surfaces/);
   assert.throws(
     () => plan({...options, destinations: [destinations[0], destinations[0]]}),
     /distinct ordered surfaces/
