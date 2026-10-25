@@ -22,6 +22,38 @@ const STAGES = ['two', 'four', 'stop-input', 'stop-output', 'short-recv'];
 const BUILD_ROOT = '/media/storage2/builds/HBLauncher/native-h264';
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 
+async function retryableStartup(record, directory, file) {
+  if (
+    file !== 'paired-output.json' ||
+    record.probe !== 'paired-output' ||
+    record.verdict !== 'FAIL' ||
+    record.retainedForSafety !== false
+  )
+    return false;
+  let entries;
+  try {
+    const journal = await fsp.readFile(path.join(directory, 'paired-output.jsonl'), 'utf8');
+    entries = journal.trim() ? journal.trim().split('\n').map(line => JSON.parse(line)) : [];
+  } catch {
+    return false;
+  }
+  if (record.error === 'Start a new normal START session before paired output')
+    return entries.length === 0;
+  if (
+    record.error !== 'Relaunch Moonlight after rebuilding its native-video shaders' &&
+    !/^Moonlight native video did not initialize/.test(record.error)
+  )
+    return false;
+  const reads = entries.filter(entry => entry.operation === 'read');
+  return (
+    reads.length > 0 &&
+    entries.every(entry => entry.operation === undefined || entry.operation === 'read') &&
+    reads.every(entry => entry.phase === 'before' || entry.phase === 'after') &&
+    reads.filter(entry => entry.phase === 'before').length ===
+      reads.filter(entry => entry.phase === 'after').length
+  );
+}
+
 async function requireNewPairedSession(id, root = BUILD_ROOT) {
   for (const name of await fsp.readdir(root)) {
     if (!/-audio-|-r3-|-split-/.test(name)) continue;
@@ -37,15 +69,7 @@ async function requireNewPairedSession(id, root = BUILD_ROOT) {
       try {
         const record = JSON.parse(await fsp.readFile(path.join(directory, file), 'utf8'));
         if (record.session === id) {
-          const unusedPreflight =
-            file === 'paired-output.json' &&
-            record.verdict === 'FAIL' &&
-            record.error === 'Start a new normal START session before paired output' &&
-            (await fsp.stat(path.join(directory, 'paired-output.jsonl')).then(
-              entry => entry.size === 0,
-              () => false
-            ));
-          if (unusedPreflight) continue;
+          if (await retryableStartup(record, directory, file)) continue;
           throw Object.assign(Error('Start a new normal START session before paired output'), {
             prior: path.join(directory, file)
           });
@@ -56,6 +80,17 @@ async function requireNewPairedSession(id, root = BUILD_ROOT) {
       }
     }
   }
+}
+
+async function waitForNativeReady(rpc, storage, {timeoutMs = 30000, pollMs = 100} = {}) {
+  const until = Date.now() + timeoutMs;
+  let last = 0;
+  while (Date.now() < until) {
+    last = (await rpc.read(storage.mapped + ring.CONTROL.nativeReady, 4)).readUInt32LE();
+    if (last === ring.NATIVE_ABI) return;
+    await pause(pollMs);
+  }
+  throw Error(`Moonlight native video did not initialize (ABI 0x${last.toString(16)})`);
 }
 
 function journal(file) {
@@ -202,6 +237,7 @@ async function main(
   };
   try {
     const storage = await step('Moonlight private storage', () => findPrivateStorage(directory));
+    await step('Moonlight native video ready', () => waitForNativeReady(rpc, storage));
     sink = await step('native sink create', () => createSink(rpc, storage));
     transport = await step('native TCP create', () => createTransport({rpc, host: rpc.host}));
     decoder = await step('decoder create', () =>
@@ -370,7 +406,7 @@ async function main(
   return record;
 }
 
-module.exports = {main, STAGES, requireNewPairedSession};
+module.exports = {main, STAGES, requireNewPairedSession, waitForNativeReady};
 if (require.main === module) {
   const args = process.argv.slice(2);
   main(session.resolve(args[0]), {
