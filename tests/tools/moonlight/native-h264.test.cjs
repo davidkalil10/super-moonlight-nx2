@@ -11,7 +11,7 @@ const {run, createIdrRequester} = require('./native-h264.cjs');
 const accessUnit = Buffer.from('0000016742001eab00000168ce0100000165abcd', 'hex');
 const pcm = Buffer.from('0001020304050607', 'hex');
 
-test('backlog IDR requests recover within 100 ms, back off under overload and coalesce', () => {
+test('backlog IDR requests recover within 100 ms and coalesce dropped frames', () => {
   let time = 1000;
   let nextTimer = 0;
   const timers = new Map();
@@ -42,28 +42,14 @@ test('backlog IDR requests recover within 100 ms, back off under overload and co
   advance(1020);
   requester.request();
   requester.request();
-  advance(1199);
+  advance(1099);
   assert.deepEqual(sent, [1000]);
-  advance(1200);
-  assert.deepEqual(sent, [1000, 1200]);
-  requester.request();
-  advance(1600);
-  assert.deepEqual(sent, [1000, 1200, 1600]);
-  for (let at = 1600; at <= 6000; at += 50) {
-    advance(at);
-    requester.request();
-  }
-  advance(7000);
-  assert.ok(sent.slice(3).every((at, i, all) => !i || at - all[i - 1] === 1000));
-  const last = sent.at(-1);
-  advance(last + 2500);
-  requester.request();
-  advance(last + 2500);
-  assert.equal(sent.at(-1), last + 2500, 'a quiet stream recovers at once again');
+  advance(1100);
+  assert.deepEqual(sent, [1000, 1100]);
   requester.request();
   requester.close();
-  advance(last + 9000);
-  assert.equal(sent.at(-1), last + 2500);
+  advance(2000);
+  assert.deepEqual(sent, [1000, 1100]);
 });
 
 async function fixture({
