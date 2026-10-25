@@ -548,3 +548,68 @@ test(
     });
   }
 );
+
+test('--socket-audio cannot run without audio', {timeout: 5000}, async () => {
+  const f = await fixture();
+  await exercise(f, async () => {
+    f.options.args.push('--socket-audio', '--no-audio');
+    await assert.rejects(run(f.options), /--socket-audio cannot be combined with --no-audio/);
+  });
+});
+
+test(
+  '--socket-audio sends helper PCM to the socket source instead of audio-stream',
+  {timeout: 5000},
+  async () => {
+    const f = await fixture();
+    await exercise(f, async () => {
+      const spawned = [];
+      const spawnProcess = f.options.spawnProcess;
+      f.options.spawnProcess = (command, args, options) => {
+        spawned.push(command === 'test-helper' ? command : path.basename(args[0]));
+        return spawnProcess(command, args, options);
+      };
+      const received = [];
+      f.options.createSocketAudio = async config => {
+        f.events.push({type: 'socket-audio', host: config.host, bufferBytes: config.bufferBytes});
+        return {
+          attach(stream) {
+            stream.on('data', chunk => received.push(chunk));
+          },
+          halt() {
+            f.events.push({type: 'socket-audio-halt'});
+          },
+          async close() {
+            f.events.push({type: 'socket-audio-close'});
+            return {sent: 4, underruns: 0, overruns: 0, droppedBytes: 0, error: null};
+          }
+        };
+      };
+      f.options.args.push('--socket-audio');
+      const summary = await run(f.options);
+      assert.deepEqual(spawned, ['test-helper', 'input-feeder.cjs']);
+      assert.deepEqual(Buffer.concat(received), pcm);
+      assert.deepEqual(
+        f.events.find(event => event.type === 'socket-audio'),
+        {
+          type: 'socket-audio',
+          host: '192.0.2.10',
+          bufferBytes: 7680
+        }
+      );
+      assert.deepEqual(
+        f.events.slice(-4).map(event => event.type),
+        ['socket-audio-close', 'decoder-close', 'close-transport', 'sink-close']
+      );
+      assert.equal(summary.audioFrames, 1920);
+      assert.equal(summary.socketAudio.sent, 4);
+      const saved = (await fs.readdir(f.directory)).filter(name =>
+        name.startsWith('moonlight-audio-')
+      );
+      assert.equal(saved.length, 1);
+      const record = JSON.parse(await fs.readFile(path.join(f.directory, saved[0]), 'utf8'));
+      assert.equal(record.mode, 'socket');
+      assert.equal(record.session, 'test-session');
+    });
+  }
+);
