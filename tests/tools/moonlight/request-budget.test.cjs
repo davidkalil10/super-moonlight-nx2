@@ -5,7 +5,14 @@ const {BASELINE, MODEL, simulate} = require('./request-budget.cjs');
 // Modeled steady-state requests per presented frame at 1080p30. Bump these down
 // (never up) when a scheduler change lowers them, and record before/after in the
 // commit message.
-const BUDGET = {persistent: 10.05, split: 11.05, splitPublish: 8, splitPublishAuto: 7, splitLinked: 4};
+const BUDGET = {
+  persistent: 10.05,
+  split: 11.05,
+  splitPublish: 8,
+  splitPublishAuto: 7,
+  splitLinked: 4,
+  paired: 11.25
+};
 const REQUEST_TOLERANCE = 1;
 const BRIDGE_MS_TOLERANCE = 3;
 
@@ -102,4 +109,36 @@ test('linked status reads remain shared at a modeled 60 fps source', async () =>
   });
   assert.ok(result.requestsPerFrame <= BUDGET.splitLinked);
   assert.equal(result.frames, 120);
+});
+
+for (const sourceFps of [30, 60, 120]) {
+  test(`paired loop keeps its host gates within budget at a ${sourceFps} fps source`, async () => {
+    const model = {...MODEL, sourceFps};
+    const result = await simulate({mode: 'paired', frames: 120, model});
+    assert.equal(result.frames, 120);
+    assert.equal(result.paired, true);
+    assert.ok(
+      result.requestsPerFrame <= BUDGET.paired,
+      `${result.requestsPerFrame} requests/frame exceeds the ${BUDGET.paired} budget`
+    );
+    assert.deepEqual(Object.keys(result.byStage).sort(), [
+      'destination',
+      'paired-acquire',
+      'paired-begin',
+      'paired-fetch',
+      'paired-input'
+    ]);
+    assert.equal(result.byStage['paired-begin'].requests, 1);
+    assert.equal(result.byStage['paired-input'].requests, 4);
+    const stages = Object.values(result.byStage).reduce((sum, row) => sum + row.requests, 0);
+    assert.ok(Math.abs(stages - result.requestsPerFrame) < 0.05, 'stages sum to the total');
+    if (sourceFps === 30) assert.ok(result.fps >= 29.5, `paired loop holds ${result.fps} fps`);
+  });
+}
+
+test('paired loop rejects the split worker publication flags', async () => {
+  await assert.rejects(
+    simulate({mode: 'paired', nativePublish: true}),
+    /publishes from its own worker/
+  );
 });

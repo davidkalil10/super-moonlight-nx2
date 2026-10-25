@@ -7,6 +7,7 @@ const definitions = require('../../sdk/native/movie-functions.json');
 const registration = require('../../sdk/native/movie-event-functions.json').registerClientEvents;
 const SYNC = require('../../sdk/native/os-sync-functions.json');
 const {CODE} = require('../../sdk/native/thread.cjs');
+const PAIRED = require('./paired-loop-plan.cjs').CONTROL;
 
 const SDK = 0x40000000;
 const MODULE = 0x50000000;
@@ -140,11 +141,20 @@ function createClock() {
 // A healthy console: one bridge exchange at a time, worker threads that answer the
 // host's gates after modeled latencies, and a presenter that applies each published
 // frame on the next vsync.
-function createConsole(clock, mode, model, nativePublish = false, autoQueue = false, linkedGates = false) {
+function createConsole(
+  clock,
+  mode,
+  model,
+  nativePublish = false,
+  autoQueue = false,
+  linkedGates = false,
+  paired = false
+) {
   const layout = LAYOUT[mode];
   const regions = [];
   const signaled = new Set();
   const decodes = new Map();
+  const loop = {control: 0, waiting: false, outputs: []};
   let heap = 0x60000000;
   let control = 0;
   let busyUntil = 0;
@@ -195,6 +205,55 @@ function createConsole(clock, mode, model, nativePublish = false, autoQueue = fa
     return done;
   }
 
+  function loopResults(offset, fields) {
+    for (const [at, write, value] of fields) {
+      const bytes = Buffer.alloc(8);
+      bytes[write](value);
+      poke(loop.control + offset + at, bytes.subarray(0, write.includes('Big') ? 8 : 4));
+    }
+  }
+
+  function acquirePair() {
+    if (!loop.waiting || loop.outputs.length < 2) return;
+    loop.waiting = false;
+    const outputs = loop.outputs.splice(0, 2);
+    const sequence = peek(loop.control + PAIRED.job, 4).readUInt32LE();
+    at(Math.max(clock.now(), outputs[1].done), () => {
+      outputs.forEach((output, index) =>
+        loopResults(PAIRED.acquired[index], [
+          [0, 'writeInt32LE', index],
+          [8, 'writeBigUInt64LE', output.pts]
+        ])
+      );
+      loopResults(PAIRED.acquireResults, [
+        [0, 'writeBigUInt64LE', 0n],
+        [8, 'writeBigUInt64LE', 0n],
+        [16, 'writeUInt32LE', sequence]
+      ]);
+    });
+  }
+
+  function pairedGate(offset) {
+    if (offset === PAIRED.startGate) {
+      loop.waiting = true;
+      acquirePair();
+      return;
+    }
+    const index = offset === PAIRED.fetchGate ? 0 : 1;
+    const results = index ? PAIRED.secondResults : PAIRED.firstResults;
+    at(clock.now() + model.fetchMs, () => {
+      const destination = peek(loop.control + PAIRED.destinations[index], 48);
+      poke(MAPPED + ring.CONTROL.nativeIndex, destination.subarray(16, 44));
+      poke(MAPPED + ring.CONTROL.nativeSequence, destination.subarray(44, 48));
+      loopResults(results, [
+        [0, 'writeBigUInt64LE', 0n],
+        [8, 'writeBigUInt64LE', 0n],
+        [16, 'writeBigUInt64LE', 0n],
+        [24, 'writeUInt32LE', peek(loop.control + PAIRED.job, 4).readUInt32LE()]
+      ]);
+    });
+  }
+
   function finishReceive() {
     if (!receive?.posted || receive.sent === undefined) return;
     const {sequence, length} = receive;
@@ -235,7 +294,11 @@ function createConsole(clock, mode, model, nativePublish = false, autoQueue = fa
         )
       );
     } else if (offset === layout.decodeGate) {
-      decode(sequence, pts);
+      const done = decode(sequence, pts);
+      if (paired) {
+        loop.outputs.push({done, pts});
+        acquirePair();
+      }
       at(clock.now() + model.submitMs, () => {
         if (nativePublish) {
           const presentation = Buffer.alloc(8);
@@ -329,6 +392,13 @@ function createConsole(clock, mode, model, nativePublish = false, autoQueue = fa
       poke(Number(args[0]), thread);
     }
     if (address === SDK + CODE.tryWait.offset) return 1n;
+    if (address === SDK + SYNC.signalLightEvent.offset && loop.control) {
+      const offset = Number(args[0]) - loop.control;
+      if (offset >= 0 && offset < 0x1000) {
+        pairedGate(offset);
+        return 0n;
+      }
+    }
     if (address === SDK + SYNC.signalLightEvent.offset && control) gate(Number(args[0]) - control);
     return 0n;
   }
@@ -353,7 +423,8 @@ function createConsole(clock, mode, model, nativePublish = false, autoQueue = fa
       exchange(1, () => {
         const base = add(heap, args[2]);
         heap += Math.ceil(args[2] / 0x100000) * 0x100000;
-        if (args[2] === 0x1000) control = base;
+        if (args[2] === 0x1000 && paired && control) loop.control = base;
+        else if (args[2] === 0x1000) control = base;
         const output = Buffer.alloc(8);
         output.writeBigUInt64LE(BigInt(base));
         return {result: 0n, output};
@@ -418,19 +489,36 @@ async function simulate({
   linkedGates = false,
   model = MODEL
 }) {
+  const paired = mode === 'paired';
+  if (paired && (nativePublish || autoQueue || linkedGates))
+    throw Error('The paired loop publishes from its own worker');
+  if (paired) mode = 'split';
   if (!LAYOUT[mode]) throw Error('Unknown request budget mode ' + mode);
   if (nativePublish && mode !== 'split') throw Error('Native worker publication needs split mode');
   if (autoQueue && !nativePublish) throw Error('Automatic output queue needs worker publication');
   if (linkedGates && !autoQueue) throw Error('Linked gates need automatic output queue');
+  if (paired && warmup % 2) throw Error('The paired loop warms up in whole pairs');
   const clock = createClock();
   return clock.run(async () => {
-    const machine = createConsole(clock, mode, model, nativePublish, autoQueue, linkedGates);
+    const machine = createConsole(
+      clock,
+      mode,
+      model,
+      nativePublish || paired,
+      autoQueue,
+      linkedGates,
+      paired
+    );
     let stage = 'setup';
     const bridge = instrument(machine.rpc, () => stage, clock.now);
     const rpc = bridge.rpc;
-    const create = require(
-      mode === 'split' ? './split-decoder-worker.cjs' : './persistent-decoder-worker.cjs'
-    ).create;
+    const pairedLive = paired
+      ? require('./paired-live.cjs').create({rpc, publication: {mapped: MAPPED, color: 1}})
+      : null;
+    const create = paired
+      ? pairedLive.factory
+      : require(mode === 'split' ? './split-decoder-worker.cjs' : './persistent-decoder-worker.cjs')
+          .create;
     const worker = await create({
       rpc,
       module: {
@@ -451,12 +539,13 @@ async function simulate({
       output: DECODER + 0x300,
       format: DECODER + 0x180,
       transport: machine.transport,
-      publication: nativePublish ? {mapped: MAPPED, color: 1} : null,
+      publication: nativePublish || paired ? {mapped: MAPPED, color: 1} : null,
       autoQueue,
       linkedGates
     });
     await worker.register();
     await worker.start();
+    if (paired) await pairedLive.start();
     const sink = await require('./native-sink.cjs').create(rpc, machine.storage);
     const payload = Buffer.alloc(ACCESS_UNIT_BYTES, 1);
     const interval = 1000 / model.sourceFps;
@@ -464,7 +553,39 @@ async function simulate({
     let pending = null;
     let started = 0;
     let presented = 0;
-    for (let frame = 0; frame < warmup + frames; frame++) {
+    const modeled = frame => ({
+      index: 1,
+      length: payload.length,
+      pts: (frame + 1) * 3000,
+      inputAddress: INPUT_ADDRESS,
+      payload
+    });
+    const decoder = {
+      submitSplit: async unit =>
+        worker.completeInput(await worker.stageInput({...unit, sendFirst: true}))
+    };
+    for (let frame = 0; paired && frame < warmup + frames; frame += 2) {
+      stage = 'read';
+      if (frame === warmup) {
+        bridge.take();
+        started = clock.now();
+        presented = 0;
+      }
+      if (paced) await clock.sleep(origin + (frame + 1) * interval - clock.now());
+      await pairedLive.pair({
+        decoder,
+        sink,
+        units: [modeled(frame), modeled(frame + 1)],
+        layout: DECODED,
+        enter: name => {
+          stage = name;
+        },
+        onPresented: count => {
+          presented += count;
+        }
+      });
+    }
+    for (let frame = 0; !paired && frame < warmup + frames; frame++) {
       stage = 'read';
       if (frame === warmup) {
         bridge.take();
@@ -537,6 +658,7 @@ async function simulate({
     return {
       frames: presented,
       paced,
+      paired,
       nativePublish,
       autoQueue,
       linkedGates,
@@ -591,6 +713,26 @@ async function budget({frames = 120, model = MODEL} = {}) {
       predictedFps: (await simulate({...options, paced: false})).fps
     };
   }
+  const paired = {};
+  for (const sourceFps of [30, 60, 120]) {
+    const rate = {...model, sourceFps};
+    const paced = await simulate({mode: 'paired', frames, model: rate});
+    const free = await simulate({mode: 'paired', frames, model: rate, paced: false});
+    const fastPresent = await simulate({
+      mode: 'paired',
+      frames,
+      model: {...rate, vsyncMs: 1000 / 120},
+      paced: false
+    });
+    paired[sourceFps + 'fps'] = {
+      requestsPerFrame: paced.requestsPerFrame,
+      bridgeMsPerFrame: paced.bridgeMsPerFrame,
+      fps: paced.fps,
+      predictedFps: free.fps,
+      predictedFpsAt120HzPresent: fastPresent.fps,
+      byStage: paced.byStage
+    };
+  }
   return {
     frames,
     model,
@@ -599,6 +741,7 @@ async function budget({frames = 120, model = MODEL} = {}) {
       'The loop mirrors native-h264.cjs steady state, including the split send-before-gate path; native-decoder.cjs adds no request while the tail AcquireInput returns an index.'
     ],
     modes,
+    paired,
     planDecodeMs: {decodeMs: PLAN_DECODE_MS, ...planDecode}
   };
 }

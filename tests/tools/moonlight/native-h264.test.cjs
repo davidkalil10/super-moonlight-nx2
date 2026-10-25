@@ -119,7 +119,8 @@ async function fixture({
         mode: config.workerMode,
         publication: config.publication,
         autoQueue: config.autoQueue,
-        linkedGates: config.linkedGates
+        linkedGates: config.linkedGates,
+        splitWorkerFactory: config.splitWorkerFactory
       });
       let splitSequence = 0;
       return {
@@ -610,6 +611,125 @@ test(
       const record = JSON.parse(await fs.readFile(path.join(f.directory, saved[0]), 'utf8'));
       assert.equal(record.mode, 'socket');
       assert.equal(record.session, 'test-session');
+    });
+  }
+);
+
+function pairedFake(events, {stopFails = false} = {}) {
+  return config => {
+    let exists = false;
+    let retained = false;
+    events.push({type: 'paired-create', publication: config.publication});
+    return {
+      async factory() {
+        exists = true;
+      },
+      async start() {
+        events.push({type: 'paired-start'});
+      },
+      async pair({decoder, sink, units, layout, onDecoded, onPresented}) {
+        events.push({type: 'paired-pair', pts: units.map(item => item.pts), layout});
+        for (const item of units) await decoder.submitSplit(item);
+        onDecoded(2);
+        await sink.workerDestination();
+        await sink.workerDestination();
+        onPresented(1);
+        onPresented(1);
+      },
+      async snapshot() {
+        return {};
+      },
+      async stop() {
+        events.push({type: 'paired-stop'});
+        if (stopFails) {
+          retained = true;
+          throw Error('Paired loop worker did not stop; restart SmileBASIC');
+        }
+        exists = false;
+      },
+      get exists() {
+        return exists;
+      },
+      get retained() {
+        return retained;
+      }
+    };
+  };
+}
+
+const pairedUnits = count =>
+  Array.from({length: count}, (_, index) => ({
+    hex: accessUnit.toString('hex'),
+    keyframe: index === 0,
+    pts: (index + 1) * 1000
+  }));
+
+test('--paired-loop rejects the other split worker flags', {timeout: 5000}, async () => {
+  const f = await fixture();
+  await exercise(f, async () => {
+    f.options.args.push('--paired-loop', '--linked-gates');
+    await assert.rejects(run(f.options), /--paired-loop publishes from its own worker/);
+  });
+});
+
+test(
+  '--paired-loop pairs units after the host IDR and stops the loop before the decoder',
+  {timeout: 5000},
+  async () => {
+    const f = await fixture({units: pairedUnits(6)});
+    f.options.createPaired = pairedFake(f.events);
+    f.options.args.push('--paired-loop', '--queue', '16');
+    await exercise(f, async () => {
+      const summary = await run(f.options);
+      const created = f.events.find(event => event.type === 'create-decoder');
+      assert.equal(created.mode, 'split');
+      assert.deepEqual(created.publication, {mapped: 0x1000000, color: 1});
+      assert.equal(typeof created.splitWorkerFactory, 'function');
+      const names = f.events.map(event => event.type);
+      assert.ok(names.indexOf('publish') < names.indexOf('start-split'));
+      assert.ok(names.indexOf('start-split') < names.indexOf('paired-start'));
+      assert.deepEqual(
+        f.events.filter(event => event.type === 'paired-pair').map(event => event.pts),
+        [
+          [2000, 3000],
+          [4000, 5000]
+        ]
+      );
+      assert.equal(f.events.find(event => event.type === 'paired-pair').layout.width, 128);
+      assert.deepEqual(names.slice(-4), [
+        'paired-stop',
+        'decoder-close',
+        'close-transport',
+        'sink-close'
+      ]);
+      assert.equal(summary.workerMode, 'paired');
+      assert.equal(summary.unpaired, 1);
+    });
+  }
+);
+
+test(
+  'an uncertain paired loop stop leaves decoder and sink retained',
+  {timeout: 5000},
+  async () => {
+    const f = await fixture({units: pairedUnits(3)});
+    f.options.createPaired = pairedFake(f.events, {stopFails: true});
+    const createTransport = f.options.createTransport;
+    f.options.createTransport = async config => ({
+      ...(await createTransport(config)),
+      abort() {
+        f.events.push({type: 'abort-transport'});
+      }
+    });
+    f.options.args.push('--paired-loop');
+    await exercise(f, async () => {
+      await assert.rejects(run(f.options), error =>
+        error.errors.some(item => /restart SmileBASIC/.test(item.message))
+      );
+      const names = f.events.map(event => event.type);
+      assert.deepEqual(names.slice(-2), ['paired-stop', 'abort-transport']);
+      assert.equal(names.includes('decoder-close'), false);
+      assert.equal(names.includes('sink-close'), false);
     });
   }
 );
