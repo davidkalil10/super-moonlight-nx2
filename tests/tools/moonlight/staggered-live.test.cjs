@@ -18,7 +18,9 @@ const unitAt = sequence => ({data: Buffer.alloc(100 + sequence), pts: sequence *
 // A console stand-in for the real staggered worker: TCP sends land in the receive status,
 // the combined gate write decodes the gated unit and fetches the descriptor's output, and the
 // output worker holds one decoded unit back until the input worker stops.
-function simulatedDevice({late = new Set()} = {}) {
+// With clock set, a fetched frame is applied on the next vsync of clock.vsyncMs and every
+// bridge read takes clock.readMs, like the renderer and bridge on the console.
+function simulatedDevice({late = new Set(), clock = null} = {}) {
   const sdk = 0x40000000;
   const moduleBase = 0x50000000;
   const mapped = 0x80000000;
@@ -31,6 +33,7 @@ function simulatedDevice({late = new Set()} = {}) {
   let fetched = 0;
   let applied = 0;
   let staleReceive = null;
+  const presents = [];
   const regionAt = address =>
     regions.find(region => address >= region.base && address < region.base + region.bytes.length);
   const read = (address, length) => {
@@ -85,8 +88,13 @@ function simulatedDevice({late = new Set()} = {}) {
     fetched = descriptor.readUInt32LE(outputPlan.DESCRIPTOR.sequence);
     ringWord(status.STATUS.fetch + 24, 4, fetched);
     const index = [0, 1, 2].find(item => mapped + ring.frameOffset(item) === address);
-    ringWord(ring.CONTROL.current, 4, index);
-    ringWord(ring.CONTROL.nativeApplied, 4, ++applied);
+    const present = (value => () => {
+      ringWord(ring.CONTROL.current, 4, index);
+      ringWord(ring.CONTROL.nativeApplied, 4, value);
+    })(++applied);
+    if (!clock) return present();
+    const vsync = Math.floor(clock.now / clock.vsyncMs + 1) * clock.vsyncMs;
+    presents.push({at: Math.max(vsync, (presents.at(-1)?.at ?? 0) + clock.vsyncMs), present});
   }
   const rpc = {
     a: {sdk},
@@ -115,6 +123,10 @@ function simulatedDevice({late = new Set()} = {}) {
     },
     async read(address, length) {
       requests.push('read');
+      if (clock) {
+        clock.now += clock.readMs;
+        while (presents.length && presents[0].at <= clock.now) presents.shift().present();
+      }
       const bytes = read(address, length);
       if (staleReceive && address === mapped + status.READ_START) {
         setReceive(...staleReceive);
@@ -177,8 +189,12 @@ function simulatedDevice({late = new Set()} = {}) {
   return {rpc, transport, module, functions, publication, sink, requests, pts};
 }
 
-async function liveOn(device, pause = noPause) {
-  const live = create({createWorker, pause});
+async function liveOn(device, pause = noPause, clock = null) {
+  const live = create({
+    createWorker,
+    pause,
+    ...(clock ? {now: () => clock.now, presentHz: 1000 / clock.vsyncMs} : {})
+  });
   const worker = await live.factory({
     rpc: device.rpc,
     module: device.module,
@@ -374,4 +390,26 @@ test('the scheduler refuses access units without increasing PTS', async () => {
   await live.push(unitAt(2), {sink: {}});
   await assert.rejects(live.push(unitAt(1), {sink: {}}), /increasing access-unit PTS/);
   assert.deepEqual(events, ['start-1', 'send-102']);
+});
+
+test('a gate waiting for present sleeps to the vsync instead of polling', async () => {
+  const clock = {now: 0, vsyncMs: 1000 / 60, readMs: 2.24};
+  const device = simulatedDevice({clock});
+  const live = await liveOn(
+    device,
+    async ms => {
+      clock.now += ms;
+    },
+    clock
+  );
+  const reads = [];
+  await stream(device, live, 60, (sequence, requests) => {
+    if (sequence > 10) reads.push(requests.filter(item => item === 'read').length);
+  });
+  const perFrame = reads.reduce((sum, value) => sum + value, 0) / reads.length;
+  assert.ok(perFrame <= 1.2, `${perFrame} status reads per frame`);
+  assert.ok(live.counts.waiting.applied > 0, 'the stream waited for present');
+  assert.ok((clock.now / 1000) * 60 <= 62, `${clock.now} ms for 60 frames`);
+  await live.finish({sink: device.sink});
+  await live.stop();
 });

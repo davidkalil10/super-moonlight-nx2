@@ -213,6 +213,22 @@ test('budget reports the barrier matrix', async () => {
     if (name.endsWith('retry0')) assert.ok(entry.requestsPerFrame <= BUDGET.staggered, name);
 });
 
+test('the present pacer reads the status about once per frame at 60 Hz', async () => {
+  const {staggeredHostWait} = await budget({frames: 600});
+  assert.ok(staggeredHostWait['60Hz-unpaced-poll'].rereadsPerFrame >= 5);
+  for (const pacing of ['paced', 'unpaced']) {
+    const entry = staggeredHostWait[`60Hz-${pacing}-pacer`];
+    assert.ok(entry.requestsPerFrame <= 2.3, `${pacing}: ${entry.requestsPerFrame}`);
+    assert.ok(entry.fps >= 59.9, `${pacing}: ${entry.fps} fps`);
+  }
+});
+
+test('host waits reject a host-side retry', async () => {
+  const options = {mode: 'staggered', frames: 10, presentHz: 60, lag: 2, barrier: true};
+  await assert.rejects(simulate({...options, hostWait: 'sleep'}), /host wait/);
+  await assert.rejects(simulate({...options, hostWait: 'pacer', retryRate: 0.1}), /host wait/);
+});
+
 test('staggered late rereads cost less without the host pause', async () => {
   const model = {...MODEL, sourceFps: 120};
   const options = {mode: 'staggered', frames: 240, presentHz: 120, lag: 2, barrier: true};

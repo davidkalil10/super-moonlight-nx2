@@ -8,6 +8,7 @@ const registration = require('../../sdk/native/movie-event-functions.json').regi
 const SYNC = require('../../sdk/native/os-sync-functions.json');
 const {CODE} = require('../../sdk/native/thread.cjs');
 const PAIRED = require('./paired-loop-plan.cjs').CONTROL;
+const presentPacer = require('./present-pacer.cjs');
 
 const SDK = 0x40000000;
 const MODULE = 0x50000000;
@@ -488,6 +489,10 @@ function createConsole(
 // With barrier set the console orders each submit as in cb183ad: gate N releases the
 // held output first (fetchMs), then N is submitted once output N-1 is acquired. The
 // host side is unchanged.
+// With hostWait set the host reads the status the way staggered-live.cjs does instead
+// of waking exactly when the frame is ready: back to back while receive or decode is
+// pending, and for a pending present either back to back ('poll') or through the
+// present pacer ('pacer').
 async function simulateStaggered({
   frames = 120,
   warmup = 4,
@@ -497,8 +502,12 @@ async function simulateStaggered({
   lag = 1,
   barrier = false,
   retryWaitMs = STAGGERED.retryWaitMs,
+  hostWait = null,
   model = MODEL
 }) {
+  if (hostWait && !['poll', 'pacer'].includes(hostWait))
+    throw Error('Unknown staggered host wait ' + hostWait);
+  if (hostWait && retryRate) throw Error('A modeled host wait makes its own rereads');
   const timing = {...model, vsyncMs: 1000 / presentHz};
   const clock = createClock();
   return clock.run(async () => {
@@ -514,6 +523,13 @@ async function simulateStaggered({
     let presented = 0;
     let retryDebt = 0;
     let nextAudio = origin;
+    let rereads = 0;
+    let fetchOpened = null;
+    const pacer = presentPacer.create({
+      periodMs: timing.vsyncMs,
+      now: clock.now,
+      sleep: clock.sleep
+    });
     const request = async () => {
       busyUntil = Math.max(clock.now(), busyUntil) + timing.requestMs;
       exchanges++;
@@ -531,16 +547,14 @@ async function simulateStaggered({
         bridgeMs = 0;
         presented = 0;
         retryDebt = 0;
+        rereads = 0;
         started = clock.now();
         nextAudio = started;
       }
       const arrival = paced ? origin + frame * interval : origin;
-      const ready = Math.max(
-        arrival,
-        sent + timing.receiveMs,
-        frame >= lag ? decoded[frame - lag] : 0,
-        frame > lag ? applied[frame - lag - 1] : 0
-      );
+      const inputReady = Math.max(sent + timing.receiveMs, frame >= lag ? decoded[frame - lag] : 0);
+      const presentReady = frame > lag ? applied[frame - lag - 1] : 0;
+      const ready = hostWait ? arrival : Math.max(arrival, inputReady, presentReady);
       if (ready > clock.now()) await clock.sleep(ready - clock.now());
       if (clock.now() >= nextAudio) {
         nextAudio += STAGGERED.audioIntervalMs;
@@ -552,8 +566,20 @@ async function simulateStaggered({
         await request();
         await clock.sleep(retryWaitMs);
       }
+      if (hostWait) {
+        if (hostWait === 'pacer' && frame > lag) await pacer.beforeRead(fetchOpened);
+        for (;;) {
+          const startedAt = clock.now();
+          await request();
+          const at = clock.now();
+          if (frame > lag) pacer.observe(startedAt, presentReady <= at);
+          if (inputReady <= at && presentReady <= at) break;
+          rereads++;
+          if (inputReady <= at && hostWait === 'pacer') await pacer.pending();
+        }
+      } else await request();
       await request();
-      await request();
+      if (frame >= lag) fetchOpened = clock.now();
       let submit = clock.now();
       if (barrier && frame)
         submit = Math.max(submit + (frame >= lag ? timing.fetchMs : 0), decoded[frame - 1]);
@@ -574,6 +600,8 @@ async function simulateStaggered({
       lag,
       barrier,
       retryWaitMs,
+      hostWait,
+      rereadsPerFrame: perFrame(rereads),
       requestsPerFrame: perFrame(exchanges),
       bridgeMsPerFrame: perFrame(bridgeMs),
       msPerFrame: perFrame(elapsed),
@@ -595,6 +623,7 @@ async function simulate({
   lag,
   barrier,
   retryWaitMs,
+  hostWait,
   model = MODEL
 }) {
   if (mode === 'staggered')
@@ -607,6 +636,7 @@ async function simulate({
       lag,
       barrier,
       retryWaitMs,
+      hostWait,
       model
     });
   const paired = mode === 'paired';
@@ -936,6 +966,28 @@ async function budget({frames = 120, model = MODEL} = {}) {
       }
     }
   }
+  const staggeredHostWait = {};
+  for (const presentHz of [60, 120]) {
+    for (const paced of [true, false]) {
+      for (const hostWait of ['poll', 'pacer']) {
+        const result = await simulate({
+          mode: 'staggered',
+          frames,
+          presentHz,
+          lag: 2,
+          barrier: true,
+          hostWait,
+          paced,
+          model: {...model, sourceFps: presentHz}
+        });
+        staggeredHostWait[`${presentHz}Hz-${paced ? 'paced' : 'unpaced'}-${hostWait}`] = {
+          requestsPerFrame: result.requestsPerFrame,
+          rereadsPerFrame: result.rereadsPerFrame,
+          fps: result.fps
+        };
+      }
+    }
+  }
   return {
     frames,
     model,
@@ -949,6 +1001,7 @@ async function budget({frames = 120, model = MODEL} = {}) {
     staggeredLag2,
     staggeredBarrier,
     staggeredRetryWait,
+    staggeredHostWait,
     planDecodeMs: {decodeMs: PLAN_DECODE_MS, ...planDecode}
   };
 }
