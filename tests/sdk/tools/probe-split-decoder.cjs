@@ -6,7 +6,7 @@ const {execFileSync} = require('node:child_process');
 const cli = require('../cli.cjs');
 const session = require('../host/session.cjs');
 const {allocate} = require('../native/allocate.cjs');
-const {accessUnits} = require('./probe-decoder-events.cjs');
+const {accessUnits, clipFrameRate} = require('./probe-decoder-events.cjs');
 const {parameterSets} = require('../../tools/moonlight/h264-stream.cjs');
 const {create: createDecoder} = require('../../tools/moonlight/native-decoder.cjs');
 const {create: createTransport} = require('../../tools/moonlight/native-tcp.cjs');
@@ -99,6 +99,16 @@ function loggedRpc(rpc, entries) {
   return wrapped;
 }
 
+// The split probe never required a sidecar; clips without one keep the old 30 fps configure.
+async function clipSidecar(clip) {
+  try {
+    return JSON.parse(await fsp.readFile(clip.replace(/\.h264$/, '.json'), 'utf8'));
+  } catch (error) {
+    if (error.code === 'ENOENT') return {};
+    throw error;
+  }
+}
+
 async function main(
   directory,
   {
@@ -139,6 +149,7 @@ async function main(
     throw Error('Probe clip needs independent keyframes for this stage');
   const {sps, pps} = parameterSets(stream);
   if (!sps || !pps) throw Error('Probe clip needs SPS and PPS');
+  const fps = clipFrameRate(await clipSidecar(clip));
   const mode = linkedGates
     ? 'split-linked'
     : autoOutputQueue
@@ -165,6 +176,7 @@ async function main(
     targetArchitecture: 'aarch64',
     command: process.argv,
     clip,
+    fps,
     nativePublish,
     autoOutputQueue,
     linkedGates,
@@ -236,7 +248,7 @@ async function main(
         linkedGates
       })
     );
-    const dimensions = await step('configure', () => decoder.configure(sps, pps, 30));
+    const dimensions = await step('configure', () => decoder.configure(sps, pps, fps));
     record.dimensions = dimensions;
     const surfaceBytes = 0x400000;
     const destination = {
@@ -408,7 +420,7 @@ async function main(
   return record;
 }
 
-module.exports = {main, STAGES, loggedRpc, verifyPublication};
+module.exports = {main, STAGES, loggedRpc, verifyPublication, clipSidecar};
 if (require.main === module) {
   const args = process.argv.slice(2);
   main(session.resolve(args[0]), {

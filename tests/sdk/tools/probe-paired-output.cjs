@@ -5,7 +5,7 @@ const path = require('node:path');
 const {execFileSync} = require('node:child_process');
 const cli = require('../cli.cjs');
 const session = require('../host/session.cjs');
-const {accessUnits} = require('./probe-decoder-events.cjs');
+const {accessUnits, clipFrameRate} = require('./probe-decoder-events.cjs');
 const {loggedRpc, verifyPublication} = require('./probe-split-decoder.cjs');
 const {parameterSets} = require('../../tools/moonlight/h264-stream.cjs');
 const {findPrivateStorage} = require('../../tools/moonlight/feed.cjs');
@@ -39,14 +39,6 @@ const STAGES = [
 ];
 const BUILD_ROOT = '/media/storage2/builds/HBLauncher/native-h264';
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
-
-// Clips without a recorded rate predate make-decoder-clips.sh writing one; they ran at 30.
-function clipFrameRate(sidecar) {
-  const fps = sidecar.fps ?? 30;
-  if (!Number.isInteger(fps) || fps < 1 || fps > 120)
-    throw Error('Clip frame rate must be 1 to 120');
-  return fps;
-}
 
 function pairIndices(scenario, keyframes) {
   const idr = keyframes[1];

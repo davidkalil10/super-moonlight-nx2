@@ -79,6 +79,14 @@ function accessUnits(bytes) {
 }
 
 // Device luma must match the reference exactly; chroma differs slightly on console.
+// Clips without a recorded rate predate make-decoder-clips.sh writing one; they ran at 30.
+function clipFrameRate(sidecar) {
+  const fps = sidecar.fps ?? 30;
+  if (!Number.isInteger(fps) || fps < 1 || fps > 120)
+    throw Error('Clip frame rate must be 1 to 120');
+  return fps;
+}
+
 function compareFrame(actual, expected, width, height) {
   const luma = width * height;
   let lumaMax = 0,
@@ -898,6 +906,7 @@ module.exports = {
   main,
   parseOptions,
   accessUnits,
+  clipFrameRate,
   compareFrame,
   packNv12,
   summarize,

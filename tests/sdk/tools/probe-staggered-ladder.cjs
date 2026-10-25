@@ -5,7 +5,7 @@ const path = require('node:path');
 const {execFileSync} = require('node:child_process');
 const cli = require('../cli.cjs');
 const session = require('../host/session.cjs');
-const {accessUnits} = require('./probe-decoder-events.cjs');
+const {accessUnits, clipFrameRate} = require('./probe-decoder-events.cjs');
 const {loggedRpc, verifyPublication} = require('./probe-split-decoder.cjs');
 const {requireNewPairedSession, waitForNativeReady} = require('./probe-paired-output.cjs');
 const {parameterSets} = require('../../tools/moonlight/h264-stream.cjs');
@@ -126,7 +126,7 @@ async function requireFresh(sessionId, root = BUILD_ROOT) {
   }
 }
 
-async function runScenario({rpc, directory, storage, units, sps, pps, indices, mode, step}) {
+async function runScenario({rpc, directory, storage, units, sps, pps, fps, indices, mode, step}) {
   let transport = null;
   let decoder = null;
   let sink = null;
@@ -150,7 +150,7 @@ async function runScenario({rpc, directory, storage, units, sps, pps, indices, m
         }
       })
     );
-    await step(`${mode} configure`, () => decoder.configure(sps, pps, 30));
+    await step(`${mode} configure`, () => decoder.configure(sps, pps, fps));
     const firstDestination = await step(`${mode} first destination`, () => sink.destination());
     await step(`${mode} host IDR submit`, () => decoder.submit({data: units[0].data, pts: 0}));
     let first = null;
@@ -393,6 +393,7 @@ async function main(directory, {clip, dryRun = false, output} = {}) {
     sidecar.display.some((display, index) => display !== index)
   )
     throw Error('Staggered ladder needs an ordered 1080p clip');
+  const fps = clipFrameRate(sidecar);
   const indices = clipIndices(units);
   const {sps, pps} = parameterSets(stream);
   if (!sps || !pps) throw Error('Staggered ladder clip lacks SPS/PPS');
@@ -423,6 +424,7 @@ async function main(directory, {clip, dryRun = false, output} = {}) {
     const video = outputPlan.plan({...addresses, base: 0x55000000});
     const result = {
       dryRun: true,
+      fps,
       indices,
       pts: indices,
       stages: [
@@ -465,6 +467,7 @@ async function main(directory, {clip, dryRun = false, output} = {}) {
     targetArchitecture: 'aarch64',
     command: process.argv,
     clip,
+    fps,
     indices,
     started: new Date().toISOString(),
     scenarios: []
@@ -497,6 +500,7 @@ async function main(directory, {clip, dryRun = false, output} = {}) {
         units,
         sps,
         pps,
+        fps,
         indices,
         mode,
         step
