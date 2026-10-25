@@ -7,6 +7,8 @@ const ring = require('./ring.cjs');
 
 const CONTROL = {
   fetchGate: 0x20,
+  fetchDispatch: [0x60, 0x68],
+  acquireDispatch: [0x70, 0x78],
   descriptors: [0x200, 0x280]
 };
 
@@ -105,7 +107,7 @@ function plan({sdk, base, control, mapped, event, functions, decoder, output, fo
         args: [ringAt(status.STATUS.acquire + 24), descriptor + DESCRIPTOR.sequence, 4, 0]
       },
       {function: sync('waitLightEvent'), args: [at(CONTROL.fetchGate), 0, 0, 0]},
-      {function: jump, args: [loc.fetch[slot], 1, 0, 0]}
+      {function: jump, args: [{u64: at(CONTROL.fetchDispatch[slot])}, 1, 0, 0]}
     ];
     acquire.push(frame(loc.acquire[slot], acquireCalls, {1: status.STATUS.acquire}));
     calls.acquire.push(acquireCalls);
@@ -148,7 +150,7 @@ function plan({sdk, base, control, mapped, event, functions, decoder, output, fo
         args: [ringAt(status.STATUS.fetch + 24), descriptor + DESCRIPTOR.sequence, 4, 0]
       },
       ...restore,
-      {function: jump, args: [loc.acquire[1 - slot], 1, 0, 0]}
+      {function: jump, args: [{u64: at(CONTROL.acquireDispatch[slot])}, 1, 0, 0]}
     ];
     let built = frame(loc.fetch[slot], fetchCalls, {
       0: status.STATUS.fetch,

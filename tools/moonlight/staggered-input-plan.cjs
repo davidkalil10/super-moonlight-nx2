@@ -6,6 +6,8 @@ const status = require('./staggered-status.cjs');
 const CONTROL = {
   decodeGate: 0x00,
   ignoredFetchGate: 0x10,
+  sendDispatch: [0x40, 0x48],
+  receiveDispatch: [0x50, 0x58],
   descriptors: [0x100, 0x180]
 };
 
@@ -124,7 +126,7 @@ function plan({sdk, base, control, mapped, scratch, fd, recvFunction, functions,
         args: [ringAt(status.STATUS.receive + 8), descriptor + DESCRIPTOR.sequence, 4, 0]
       },
       {function: sync('waitLightEvent'), args: [at(CONTROL.decodeGate), 0, 0, 0]},
-      {function: jump, args: [loc.send[slot], 1, 0, 0]}
+      {function: jump, args: [{u64: at(CONTROL.sendDispatch[slot])}, 1, 0, 0]}
     ];
     receive.push(
       frame(loc.receive[slot], receiveCalls, {0: status.STATUS.receive})
@@ -187,7 +189,7 @@ function plan({sdk, base, control, mapped, scratch, fd, recvFunction, functions,
         ]
       },
       ...restore,
-      {function: jump, args: [loc.receive[1 - slot], 1, 0, 0]}
+      {function: jump, args: [{u64: at(CONTROL.receiveDispatch[slot])}, 1, 0, 0]}
     ];
     let built = frame(loc.send[slot], sendCalls, {
       1: status.STATUS.input,
