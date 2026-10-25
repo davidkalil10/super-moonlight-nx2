@@ -3,10 +3,15 @@
 // frame costs one checked status read and one combined gate write. Every gate goes through
 // the worker's checked writes (staggered-gate / staggered-status); call order, the odd tail
 // drain and stop follow sdk/tools/probe-staggered-ladder.cjs.
+// With more than SKIP_BACKLOG units queued on the host, an output is still fetched and
+// released but copied to a free surface behind a replay of the last applied publication,
+// so the shader keeps it off screen and the next gate does not wait for a present.
 const checked = require('./staggered-status.cjs');
 const presentPacer = require('./present-pacer.cjs');
 
 const RESTART = 'Staggered worker native objects retained; restart SmileBASIC';
+const SKIP_BACKLOG = 2;
+const MAX_SKIPS = 4;
 const PENDING_INPUT = [0x100en, 0x1011n];
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 const immediate = () => new Promise(resolve => setImmediate(resolve));
@@ -71,7 +76,7 @@ function expectedFor(sequence, units, destinations) {
     const destination = destinations.get(sequence - 3);
     if (!destination) throw Error('Missing prior staggered output destination');
     value.fetch = {sequence: sequence - 3};
-    value.ack = {sequence: destination.sequence, index: destination.index};
+    if (!destination.skip) value.ack = {sequence: destination.sequence, index: destination.index};
   }
   return value;
 }
@@ -99,7 +104,16 @@ function create({
   let held = null;
   const units = new Map();
   const destinations = new Map();
-  const counts = {submitted: 0, decoded: 0, presented: 0, tailDrained: 0, rereads: 0};
+  const counts = {
+    submitted: 0,
+    decoded: 0,
+    presented: 0,
+    skipped: 0,
+    tailDrained: 0,
+    rereads: 0
+  };
+  let published = null;
+  let skips = 0;
   const waiting = {};
   const waits = {timeoutMs, pause};
   // A gate late on receive, acquire or fetch rereads back to back: a pause costs the
@@ -131,7 +145,36 @@ function create({
     destinations.delete(sequence - 4);
   }
 
-  async function gate(sequence, current, next, {sink, enter = () => {}, onDecoded, onPresented}) {
+  function shown(expected, onPresented, onSkipped) {
+    if (expected.ack) {
+      counts.presented++;
+      onPresented?.(1);
+    } else if (expected.fetch) {
+      counts.skipped++;
+      onSkipped?.(1);
+    }
+  }
+
+  async function target(sink, snapshot, backlog) {
+    const presentation = {current: snapshot.current, applied: snapshot.nativeApplied};
+    if (published && backlog > SKIP_BACKLOG && skips < MAX_SKIPS) {
+      const discard = await sink.discardDestination(presentation);
+      if (discard) {
+        skips++;
+        return discard;
+      }
+    }
+    skips = 0;
+    published = await sink.workerDestination(presentation);
+    return published;
+  }
+
+  async function gate(
+    sequence,
+    current,
+    next,
+    {sink, enter = () => {}, onDecoded, onPresented, onSkipped, backlog = 0}
+  ) {
     enter('staggered-status');
     const expected = expectedFor(sequence, units, destinations);
     if (expected.ack) await pacer.beforeRead(fetchOpened);
@@ -140,10 +183,7 @@ function create({
       counts.decoded++;
       onDecoded?.(1);
     }
-    if (expected.ack) {
-      counts.presented++;
-      onPresented?.(1);
-    }
+    shown(expected, onPresented, onSkipped);
     enter('staggered-input');
     const inputSlot = await worker.inputSlot(
       sequence === 1 ? firstInput.index : snapshot.input.nextIndex
@@ -151,10 +191,7 @@ function create({
     let destination = null;
     if (sequence >= 3) {
       enter('destination');
-      destination = await sink.workerDestination({
-        current: snapshot.current,
-        applied: snapshot.nativeApplied
-      });
+      destination = await target(sink, snapshot, backlog);
       destinations.set(sequence - 2, destination);
     }
     enter('staggered-gate');
@@ -165,6 +202,7 @@ function create({
       current: {sequence, length: current.length, pts: current.pts},
       next: {sequence: sequence + 1, length: next.length, pts: next.pts},
       destination,
+      published,
       frame: layout
     });
     if (destination) fetchOpened = now();
@@ -225,9 +263,9 @@ function create({
     async finish(hooks = {}) {
       if (!held || finished || retained) return {drained: 0};
       finished = true;
-      const {sink, enter = () => {}, onDecoded, onPresented} = hooks;
+      const {sink, enter = () => {}, onDecoded, onPresented, onSkipped} = hooks;
       const last = held.sequence;
-      await gate(last, held, {length: 1, pts: held.pts + 1n}, hooks);
+      await gate(last, held, {length: 1, pts: held.pts + 1n}, {...hooks, backlog: 0});
       held = null;
       enter('staggered-tail');
       await waitFinalInput(last);
@@ -237,20 +275,14 @@ function create({
         const expected = {acquire: {sequence, pts: units.get(sequence).pts}};
         if (prior) {
           expected.fetch = {sequence: sequence - 1};
-          expected.ack = {sequence: prior.sequence, index: prior.index};
+          if (!prior.skip) expected.ack = {sequence: prior.sequence, index: prior.index};
         }
         const snapshot = await waitOutput(worker, expected, waits);
         counts.decoded++;
         onDecoded?.(1);
-        if (prior) {
-          counts.presented++;
-          onPresented?.(1);
-        }
+        shown(expected, onPresented, onSkipped);
         enter('destination');
-        const destination = await sink.workerDestination({
-          current: snapshot.current,
-          applied: snapshot.nativeApplied
-        });
+        const destination = await target(sink, snapshot, 0);
         enter('staggered-tail');
         await worker.drainOutput({snapshot, expected, destination, frame: layout});
         destinations.set(sequence, destination);

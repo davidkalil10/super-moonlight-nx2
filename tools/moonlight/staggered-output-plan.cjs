@@ -36,22 +36,25 @@ function locations(base) {
   };
 }
 
-function outputDescriptor({auSequence, destination, frame, publication}) {
+function outputDescriptor({auSequence, destination, frame, publication, published = destination}) {
+  const target = surface =>
+    surface &&
+    surface.address === publication.mapped + ring.frameOffset(surface.index) &&
+    surface.color === publication.color;
   if (
     !Number.isInteger(auSequence) ||
     auSequence < 1 ||
     auSequence > 0xffffffff ||
     !Number.isSafeInteger(publication?.mapped) ||
-    !destination ||
-    destination.address !== publication.mapped + ring.frameOffset(destination.index) ||
-    destination.color !== publication.color
+    !target(destination) ||
+    !target(published)
   )
     throw Error('Invalid staggered output publication target');
   const bytes = Buffer.alloc(DESCRIPTOR.size);
   bytes.writeUInt32LE(auSequence, DESCRIPTOR.sequence);
   bytes.writeBigUInt64LE(BigInt(destination.address), DESCRIPTOR.address);
   bytes.writeBigUInt64LE(BigInt(destination.bytes), DESCRIPTOR.bytes);
-  metadata(destination, frame).copy(bytes, DESCRIPTOR.metadata);
+  metadata(published, frame).copy(bytes, DESCRIPTOR.metadata);
   return bytes;
 }
 

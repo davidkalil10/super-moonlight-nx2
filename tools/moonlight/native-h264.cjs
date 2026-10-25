@@ -178,6 +178,7 @@ async function run({
     submitted: 0,
     decoded: 0,
     presented: 0,
+    skipped: 0,
     bytes: 0,
     keyframes: 0,
     resyncs: 0,
@@ -437,6 +438,10 @@ async function run({
             await staggeredLive.push(unit, {
               sink,
               enter,
+              backlog: reader.ready.length,
+              onSkipped: count => {
+                stats.skipped += count;
+              },
               onDecoded: count => {
                 stats.decoded += count;
               },
@@ -608,6 +613,9 @@ async function run({
             },
             onPresented: count => {
               stats.presented += count;
+            },
+            onSkipped: count => {
+              stats.skipped += count;
             }
           });
         } finally {

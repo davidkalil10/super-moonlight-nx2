@@ -14,6 +14,7 @@ function gateWrite({
   ignoredFetchGate,
   publication,
   destination,
+  published,
   frame
 }) {
   const inputBytes = input.gateWrite({
@@ -33,7 +34,13 @@ function gateWrite({
   if (!expected.acquire && current.sequence > 2)
     throw Error('Staggered output acquisition is missing');
   const first = expected.acquire
-    ? output.outputDescriptor({auSequence: outputSequence, destination, frame, publication})
+    ? output.outputDescriptor({
+        auSequence: outputSequence,
+        destination,
+        frame,
+        publication,
+        published
+      })
     : output.placeholderDescriptor(outputSequence);
   const second = output.placeholderDescriptor(outputSequence + 1);
   for (const descriptor of [first, second]) {

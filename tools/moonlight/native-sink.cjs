@@ -113,6 +113,12 @@ async function create(rpc, storage, {cancelled = () => false, color = 1} = {}) {
       index = target;
       return {...destination, sequence, color};
     },
+    async discardDestination(presentation) {
+      if (!workerStarted) throw Error('No worker publication to skip behind');
+      const target = availableSurface(presentation);
+      if (target === null) return null;
+      return {...(await writable(target, Infinity)), color, skip: true};
+    },
     async publish(destination, frame) {
       if (pending || ![0, 1].includes(destination.index))
         throw Error('Native frame publication is out of order');
