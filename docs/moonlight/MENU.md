@@ -84,7 +84,7 @@ Two exits exist, by design:
 
 The **Exit to HBLauncher** row writes `1` to `STATE.exitRequest` (byte 1016 of
 the binding-0 state buffer) over the bridge, then stops. Verified against
-`homebrew-launcher/app-runtime.cjs`: `afterAppBatch` reads byte 1016 each batch
+`hbl-platform/homebrew-launcher/app-runtime.js`: `afterAppBatch` reads byte 1016 each batch
 boundary and, when non-zero, calls `returnToMenu()`, which tears the app down.
 The app shader only ever writes that byte via `hbExit()` on a held +/-
 (`apps/moonlight/shaders/app.comp` → `hb.glsl`), so a host write of `1` is never

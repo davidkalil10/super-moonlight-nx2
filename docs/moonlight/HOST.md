@@ -3,7 +3,7 @@
 `hbmoonlight-host` does the work of `live.cjs --moonlight` in a single native process. That
 command used five processes: `hbmoonlight` for stream and decode, `hbv2enc` for encode,
 `live.cjs` for the ring writes, `input-feeder.cjs` and `audio-stream.cjs`. The host talks to
-the console only through the launcher bridge (`smilebasic/engine/lib/bridge.cjs`), exactly as
+the console only through the launcher bridge (`hbl-platform/smilebasic/engine/lib/bridge.js`), exactly as
 those scripts do. `live.cjs` stays as the fallback.
 
 ```

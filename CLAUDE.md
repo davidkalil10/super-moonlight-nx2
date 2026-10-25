@@ -19,7 +19,7 @@ Code outside this repo is required by relative path from sibling checkouts:
 
 ```
 <dir>/hbl-moonlight
-<dir>/hbl-platform     bridge, sdk/host, sdk/native, sdk/build.cjs
+<dir>/hbl-platform     bridge, sdk/host, sdk/native, sdk/build.js
 ```
 
 The paths become package imports with the ESM switch in Phase 2.
