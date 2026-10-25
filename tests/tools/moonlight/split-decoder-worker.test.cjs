@@ -11,7 +11,12 @@ const SDK = 0x40000000;
 const MODULE = 0x50000000;
 const decoder = 0x70000000;
 
-function fixture({receiveBytes = 4096, outputIndex = 2, autoQueue = false, linkedGates = false} = {}) {
+function fixture({
+  receiveBytes = 4096,
+  outputIndex = 2,
+  autoQueue = false,
+  linkedGates = false
+} = {}) {
   const regions = [];
   const calls = [];
   const transport = {
@@ -216,6 +221,24 @@ test('split worker runs two input jobs before fetching the first output', async 
   assert.equal(f.calls.filter(call => call.address === SDK + sync.finalizeEvent.offset).length, 1);
 });
 
+test('input-only split worker leaves the decoder output event for a paired collector', async () => {
+  const f = fixture();
+  const worker = await workerFor(f, {inputOnly: true});
+  assert.equal(worker.outputEvent, f.control + 0x80);
+  const first = await worker.input({
+    index: 1,
+    length: 4096,
+    pts: 30,
+    inputAddress: 0x72000000,
+    payload: Buffer.alloc(4096)
+  });
+  assert.equal(first.sequence, 1);
+  assert.equal(f.calls.filter(call => call.address === SDK + CODE.create.offset).length, 1);
+  await worker.stop();
+  await worker.finalize();
+  assert.equal(f.calls.filter(call => call.address === SDK + CODE.join.offset).length, 1);
+});
+
 test('one status scheduler reads input and output progress together', async () => {
   const f = fixture();
   const worker = await workerFor(f);
@@ -251,9 +274,7 @@ test('live input sends TCP bytes before opening the input gate', async () => {
   });
   await worker.completeInput(job);
   const sent = f.calls.findIndex(call => call.transportSend);
-  const opened = f.calls.findIndex(
-    call => call.combined && call.args[0] === f.control
-  );
+  const opened = f.calls.findIndex(call => call.combined && call.args[0] === f.control);
   assert.ok(sent >= 0 && opened > sent);
   assert.equal(f.transport.sent.length, 1);
   await worker.stop();
@@ -397,8 +418,10 @@ test('linked gates open decode only after the host checks receive and acquire', 
   assert.equal(worker.diagnostics.decodeGateSignals, 2);
   assert.equal(f.read(f.control + 0x348, 8).readBigUInt64LE(), 0x61300000n);
   assert.equal(
-    f.calls.filter(call => call.address === SDK + sync.signalLightEvent.offset &&
-      call.args?.[0] === f.control + 0x20).length,
+    f.calls.filter(
+      call =>
+        call.address === SDK + sync.signalLightEvent.offset && call.args?.[0] === f.control + 0x20
+    ).length,
     1
   );
   await worker.finishOutput(second, destination(2), frame);
@@ -437,8 +460,8 @@ test('stop releases an automatically acquired successor even before host fetch c
   await worker.openOutputFetch(first, destination, frame, second);
   await worker.stop();
   assert.ok(
-    f.calls.some(call =>
-      call.address === MODULE + definitions.releaseOutput.offset && call.args?.[1] === 2
+    f.calls.some(
+      call => call.address === MODULE + definitions.releaseOutput.offset && call.args?.[1] === 2
     )
   );
   await worker.finalize();
@@ -492,7 +515,10 @@ test('linked gates leave a short receive closed', async () => {
   });
   await assert.rejects(worker.verifyReceived(job, Buffer.alloc(2048)), /returned 2048\/4096/);
   assert.equal(worker.diagnostics.decodeGateSignals, 0);
-  assert.equal(f.calls.filter(call => call.combined && call.args?.[0] === f.control + 0x60).length, 0);
+  assert.equal(
+    f.calls.filter(call => call.combined && call.args?.[0] === f.control + 0x60).length,
+    0
+  );
   await worker.stop();
   await worker.finalize();
 });
@@ -543,7 +569,10 @@ test('linked gates refuse an invalid acquire before opening the next decode gate
   await worker.verifyReceived(second);
   await assert.rejects(worker.waitForAcquired(first), /acquire returned/);
   assert.equal(worker.diagnostics.decodeGateSignals, 1);
-  assert.equal(f.calls.filter(call => call.combined && call.args?.[0] === f.control + 0x60).length, 0);
+  assert.equal(
+    f.calls.filter(call => call.combined && call.args?.[0] === f.control + 0x60).length,
+    0
+  );
   await worker.stop();
   await worker.finalize();
 });
