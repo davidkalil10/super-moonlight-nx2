@@ -1,0 +1,343 @@
+const {build} = require('../../smilebasic/engine/shared/frames.cjs');
+const {allocate} = require('../../sdk/native/allocate.cjs');
+const {verify} = require('../../sdk/native/symbols.cjs');
+const {
+  CODE,
+  IPC_COPY,
+  verifyCode,
+  verifyCopy,
+  verifyPreamble,
+  spawn,
+  wait,
+  join
+} = require('../../sdk/native/thread.cjs');
+const SYNC = require('../../sdk/native/os-sync-functions.json');
+const MOVIE_EVENTS = require('../../sdk/native/movie-event-functions.json');
+
+const CONTROL_BYTES = 0x1000;
+const GATE = 0;
+const ACQUIRED = 0x10;
+const FETCH_GATE = 0x20;
+const DONE = 0x30;
+const OUTPUT_EVENT = 0x40;
+const DECODER_EVENTS = 0x80;
+const DISPATCH = 0xc0;
+const FETCH_DISPATCH = 0xc8;
+const DECODE_RESULTS = 0x120;
+const FETCH_RESULTS = 0x160;
+const JOB = 0x1a0;
+const FETCH_JOB = 0x1c0;
+const SHORT = 2;
+const AUTO_CLEAR = 1;
+const READ = 0x586fb0;
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+const status = value => Number(BigInt.asUintN(32, value));
+
+async function create({
+  rpc,
+  module,
+  functions,
+  decoder,
+  output,
+  format,
+  cancelled = () => false,
+  pollTimeoutMs = 5000,
+  stopTimeoutMs = 5000
+}) {
+  const sdk = rpc.a.sdk;
+  const sync = {};
+  await verifyCode(rpc);
+  await verifyCopy(rpc);
+  await verifyPreamble(rpc);
+  for (const name of [
+    'initializeLightEvent',
+    'waitLightEvent',
+    'signalLightEvent',
+    'tryWaitLightEvent',
+    'finalizeLightEvent',
+    'initializeEvent',
+    'waitEvent',
+    'signalEvent',
+    'clearEvent',
+    'finalizeEvent'
+  ]) {
+    await verify(rpc, sdk + SYNC[name].offset, SYNC[name].hex);
+    sync[name] = sdk + SYNC[name].offset;
+  }
+  const registration = MOVIE_EVENTS.registerClientEvents;
+  if (
+    !module.symbols.some(
+      symbol =>
+        symbol.name === registration.symbol &&
+        symbol.section &&
+        symbol.offset === registration.offset &&
+        symbol.size === registration.size
+    )
+  )
+    throw Error('The loaded movie module has no matching RegisterClientEvents');
+  const registerAddress = module.base + registration.offset;
+  await verify(rpc, registerAddress, registration.hex);
+
+  const base = await allocate(rpc, 0x400000, {
+    failed: 'Persistent decoder worker allocation failed',
+    invalid: 'Invalid persistent decoder worker allocation'
+  });
+  const control = await allocate(rpc, CONTROL_BYTES, {
+    failed: 'Persistent decoder control allocation failed',
+    invalid: 'Invalid persistent decoder control allocation'
+  });
+  const event = offset => control + offset;
+  const data = Buffer.alloc(CONTROL_BYTES);
+  data.writeBigUInt64LE(BigInt(event(OUTPUT_EVENT)), DECODER_EVENTS + 8);
+  await rpc.write(control, data);
+  const initialized = [];
+  for (const offset of [GATE, ACQUIRED, FETCH_GATE, DONE]) {
+    await rpc.callAddress(sync.initializeLightEvent, [event(offset), 0, AUTO_CLEAR, 0], SHORT);
+    initialized.push({offset, finalize: sync.finalizeLightEvent});
+  }
+  await rpc.callAddress(sync.initializeEvent, [event(OUTPUT_EVENT), 0, AUTO_CLEAR, 0], SHORT);
+  initialized.push({offset: OUTPUT_EVENT, finalize: sync.finalizeEvent});
+
+  let thread = null;
+  let sequence = 0;
+  let active = 0;
+  let joined = false;
+  let uncertainStart = false;
+  const gateFrame = base + 0x10000;
+  const decodeFrame = base + 0x110000;
+  const fetchFrame = base + 0x210000;
+  const exitFrame = base + 0x350000;
+
+  function frame(address, calls, results = {}) {
+    const program = build(address, sdk, calls, CODE, false, new Set(Object.values(functions)));
+    if (program.frame.length > 0x100000) throw Error('Persistent decoder frame exceeds its region');
+    for (const [call, destination] of Object.entries(results)) {
+      const index = program.proof.logicalResultIndices[Number(call)];
+      program.frame.writeBigUInt64LE(
+        BigInt(event(destination)),
+        program.proof.stackOffsets[index] + 0x118
+      );
+    }
+    return program.frame;
+  }
+
+  async function poll(offset, resultOffset, label) {
+    const until = Date.now() + pollTimeoutMs;
+    while (Date.now() < until && !cancelled()) {
+      const reply = await rpc.pair(
+        [
+          {address: sync.tryWaitLightEvent, args: [event(offset), 0, 0, 0]},
+          {offset: READ, args: [rpc.output, event(resultOffset), 44, 0]}
+        ],
+        44
+      );
+      if ((reply.results[0] & 0xffn) === 1n) {
+        if (reply.results[1] !== BigInt(rpc.output))
+          throw Error('Persistent decoder result read failed');
+        return reply.output;
+      }
+      await sleep(2);
+    }
+    throw Error(
+      cancelled() ? 'Native decoding cancelled' : `Persistent decoder ${label} timed out`
+    );
+  }
+
+  return {
+    async register() {
+      const {result} = await rpc.callAddress(
+        registerAddress,
+        [decoder, event(DECODER_EVENTS)],
+        SHORT
+      );
+      if (status(result) !== 0)
+        throw Error('RegisterClientEvents returned 0x' + status(result).toString(16));
+    },
+
+    async start() {
+      if (thread !== null) throw Error('Persistent decoder worker already started');
+      await rpc.callAddress(sync.clearEvent, [event(OUTPUT_EVENT)], SHORT);
+      const jump = sdk + CODE.longjmp.offset;
+      const copy = sdk + IPC_COPY.offset;
+      const gate = frame(gateFrame, [
+        {function: sync.waitLightEvent, args: [event(GATE), 0, 0, 0]},
+        {function: jump, args: [{u64: event(DISPATCH)}, 1, 0, 0]}
+      ]);
+      const decode = frame(
+        decodeFrame,
+        [
+          {
+            function: functions.sendInput,
+            args: [
+              decoder,
+              {u32: event(JOB + 4)},
+              0,
+              {u32: event(JOB + 8)},
+              {u64: event(JOB + 16)},
+              0
+            ]
+          },
+          {function: sync.waitEvent, args: [event(OUTPUT_EVENT), 0, 0, 0]},
+          {
+            function: functions.acquireOutput,
+            args: [
+              decoder,
+              event(DECODE_RESULTS + 16),
+              event(DECODE_RESULTS + 24),
+              event(DECODE_RESULTS + 32),
+              event(DECODE_RESULTS + 36)
+            ]
+          },
+          {function: copy, args: [event(DECODE_RESULTS + 40), event(JOB), 4, 0]},
+          {function: sync.signalLightEvent, args: [event(ACQUIRED), 0, 0, 0]},
+          {function: sync.waitLightEvent, args: [event(FETCH_GATE), 0, 0, 0]},
+          {function: jump, args: [{u64: event(FETCH_DISPATCH)}, 1, 0, 0]}
+        ],
+        {0: DECODE_RESULTS, 2: DECODE_RESULTS + 8}
+      );
+      const fetch = frame(
+        fetchFrame,
+        [
+          {
+            function: functions.bufferSetData,
+            args: [output, {u64: event(FETCH_JOB)}, {u64: event(FETCH_JOB + 8)}, 0]
+          },
+          {
+            function: functions.getOutput,
+            args: [decoder, {u32: event(DECODE_RESULTS + 16)}, output, format]
+          },
+          {
+            function: functions.releaseOutput,
+            args: [decoder, {u32: event(DECODE_RESULTS + 16)}, 0, 0]
+          },
+          {
+            function: functions.acquireInput,
+            args: [decoder, event(FETCH_RESULTS + 32), event(FETCH_RESULTS + 36), 0]
+          },
+          {function: copy, args: [event(FETCH_RESULTS + 40), event(JOB), 4, 0]},
+          {function: sync.signalLightEvent, args: [event(DONE), 0, 0, 0]},
+          {function: jump, args: [gateFrame, 1, 0, 0]}
+        ],
+        {0: FETCH_RESULTS, 1: FETCH_RESULTS + 8, 2: FETCH_RESULTS + 16, 3: FETCH_RESULTS + 24}
+      );
+      const stop = Buffer.alloc(0xb0);
+      stop.writeBigUInt64LE(BigInt(sdk + CODE.exit.offset), 0x58);
+      stop.writeBigUInt64LE(BigInt(base + 0x370000), 0x68);
+      await rpc.write(gateFrame, gate);
+      await rpc.write(decodeFrame, decode);
+      await rpc.write(fetchFrame, fetch);
+      await rpc.write(exitFrame, stop);
+      const selectors = Buffer.alloc(16);
+      selectors.writeBigUInt64LE(BigInt(decodeFrame), 0);
+      selectors.writeBigUInt64LE(BigInt(fetchFrame), 8);
+      await rpc.write(event(DISPATCH), selectors);
+      uncertainStart = true;
+      thread = await spawn(rpc, base, gateFrame, {
+        failed: 'Persistent decoder thread creation failed'
+      });
+      uncertainStart = false;
+    },
+
+    async run({index, length, pts, destination}) {
+      if (thread === null || joined || active)
+        throw Error('Persistent decoder worker is not ready');
+      sequence = (sequence + 1) >>> 0 || 1;
+      active = sequence;
+      const job = Buffer.alloc(24);
+      job.writeUInt32LE(sequence, 0);
+      job.writeInt32LE(index, 4);
+      job.writeUInt32LE(length, 8);
+      job.writeBigUInt64LE(BigInt(pts), 16);
+      await rpc.writeAndCall(event(JOB), job, sync.signalLightEvent, [event(GATE)]);
+      const acquired = await poll(ACQUIRED, DECODE_RESULTS, 'output acquire');
+      const sent = status(acquired.readBigUInt64LE(0));
+      const acquiredStatus = status(acquired.readBigUInt64LE(8));
+      const outputIndex = acquired.readInt32LE(16);
+      if (acquired.readUInt32LE(40) !== sequence)
+        throw Error('Persistent decoder acquired the wrong access unit');
+      if (sent || acquiredStatus || outputIndex < 0) {
+        const value = sent || acquiredStatus || 0x100e;
+        throw Object.assign(Error('Persistent decoder acquire returned 0x' + value.toString(16)), {
+          result: value
+        });
+      }
+      const target = Buffer.alloc(16);
+      target.writeBigUInt64LE(BigInt(destination.address), 0);
+      target.writeBigUInt64LE(BigInt(destination.bytes), 8);
+      await rpc.writeAndCall(event(FETCH_JOB), target, sync.signalLightEvent, [event(FETCH_GATE)]);
+      const fetched = await poll(DONE, FETCH_RESULTS, 'output fetch');
+      if (fetched.readUInt32LE(40) !== sequence)
+        throw Error('Persistent decoder completed the wrong access unit');
+      active = 0;
+      for (const [name, offset] of [
+        ['getOutput', 8],
+        ['releaseOutput', 16]
+      ]) {
+        const value = status(fetched.readBigUInt64LE(offset));
+        if (value)
+          throw Object.assign(Error('movie::' + name + ' returned 0x' + value.toString(16)), {
+            result: value
+          });
+      }
+      const inputStatus = status(fetched.readBigUInt64LE(24));
+      const nextIndex = fetched.readInt32LE(32);
+      if (inputStatus && !(nextIndex < 0 && [0x100e, 0x1011].includes(inputStatus)))
+        throw Object.assign(Error('Decoder input queue returned 0x' + inputStatus.toString(16)), {
+          result: inputStatus
+        });
+      return {
+        pts: acquired.readBigUInt64LE(24),
+        input: {status: inputStatus, index: nextIndex}
+      };
+    },
+
+    async stop() {
+      if (uncertainStart)
+        throw Error('Persistent decoder thread creation is uncertain; decoder and events retained');
+      if (thread === null || joined) return;
+      const selectors = Buffer.alloc(16);
+      selectors.writeBigUInt64LE(BigInt(exitFrame), 0);
+      selectors.writeBigUInt64LE(BigInt(exitFrame), 8);
+      await rpc.write(event(DISPATCH), selectors);
+      await rpc.callAddress(sync.signalLightEvent, [event(GATE)], SHORT);
+      await rpc.callAddress(sync.signalLightEvent, [event(FETCH_GATE)], SHORT);
+      await rpc.callAddress(sync.signalEvent, [event(OUTPUT_EVENT)], SHORT);
+      if (
+        !(await wait(rpc, thread, {
+          timeoutMs: stopTimeoutMs,
+          pollMs: 5,
+          invalid: 'Persistent decoder thread state invalid',
+          outputBytes: SHORT
+        }))
+      )
+        throw Error('Persistent decoder worker did not stop; decoder and events retained');
+      await join(rpc, thread, base + 8, {failed: 'Persistent decoder thread join failed'});
+      joined = true;
+      if (active) {
+        const acquired = await rpc.read(event(DECODE_RESULTS), 44);
+        const completed = await rpc.read(event(FETCH_RESULTS + 40), 4);
+        if (
+          acquired.readUInt32LE(40) === active &&
+          completed.readUInt32LE() !== active &&
+          status(acquired.readBigUInt64LE(8)) === 0 &&
+          acquired.readInt32LE(16) >= 0
+        )
+          await rpc.callAddress(
+            functions.releaseOutput,
+            [decoder, acquired.readInt32LE(16)],
+            SHORT
+          );
+        active = 0;
+      }
+    },
+
+    async finalize() {
+      if (uncertainStart || (thread !== null && !joined))
+        throw Error('Persistent decoder events retained while the worker is running');
+      for (const {offset, finalize} of initialized.reverse())
+        await rpc.callAddress(finalize, [event(offset)], SHORT);
+    }
+  };
+}
+
+module.exports = {create};

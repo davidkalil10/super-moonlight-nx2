@@ -16,6 +16,7 @@ async function run({
   width,
   height,
   fps,
+  sourceRevision,
   createDecoder = require('./native-decoder.cjs').create,
   createSink = require('./native-sink.cjs').create,
   spawnProcess = spawn
@@ -26,10 +27,17 @@ async function run({
   if (at < 0 || !host || !app) throw Error('Native H.264 requires --moonlight HOST APP');
   const audio = !args.includes('--no-audio');
   const bitrate = args.includes('--bitrate') ? args[args.indexOf('--bitrate') + 1] : '20000';
-  const revision = execFileSync('git', ['rev-parse', 'HEAD'], {
-    cwd: path.resolve(__dirname, '../..'),
-    encoding: 'utf8'
-  }).trim();
+  const decoderWorker = args.includes('--decoder-worker')
+    ? args[args.indexOf('--decoder-worker') + 1]
+    : 'host';
+  if (!['host', 'persistent'].includes(decoderWorker))
+    throw Error('--decoder-worker is host or persistent');
+  const revision =
+    sourceRevision ||
+    execFileSync('git', ['rev-parse', 'HEAD'], {
+      cwd: path.resolve(__dirname, '../..'),
+      encoding: 'utf8'
+    }).trim();
   const output =
     process.env.HB_NATIVE_LOG_DIR ||
     path.join(
@@ -116,6 +124,7 @@ async function run({
         rpc,
         directory,
         workerDirectory: path.join(output, 'decoder-' + generation),
+        workerMode: decoderWorker,
         log,
         cancelled
       });
@@ -205,6 +214,7 @@ async function run({
     let sps,
       pps,
       configured = false,
+      persistentStarted = false,
       outstanding = 0;
     async function resync(error) {
       resets = resets.filter(time => Date.now() - time < 30000);
@@ -216,6 +226,7 @@ async function run({
       generation++;
       decoder = await makeDecoder();
       configured = false;
+      persistentStarted = false;
       outstanding = 0;
       requestIdr();
     }
@@ -263,6 +274,19 @@ async function run({
         configured = true;
       }
       try {
+        if (persistentStarted) {
+          stage = 'destination';
+          const destination = await sink.destination();
+          stage = 'persistent';
+          const frame = await decoder.processPersistent(unit, destination);
+          stats.submitted++;
+          stats.decoded++;
+          stage = 'publish';
+          await sink.publish(destination, frame);
+          stats.presented++;
+          stage = 'read';
+          continue;
+        }
         stage = 'submit';
         await decoder.submit(unit);
         stats.submitted++;
@@ -283,6 +307,10 @@ async function run({
           stage = 'publish';
           await sink.publish(destination, frame);
           stats.presented++;
+          if (decoderWorker === 'persistent' && outstanding === 0 && !persistentStarted) {
+            await decoder.startPersistent();
+            persistentStarted = true;
+          }
         }
       } catch (error) {
         if (stopping || error.result === undefined) throw error;

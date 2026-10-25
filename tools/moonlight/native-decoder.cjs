@@ -33,7 +33,16 @@ const MEMORY = {
 const result = value => Number(BigInt.asUintN(32, value));
 const sleep = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
 
-async function create({rpc, directory, workerDirectory, log = () => {}, cancelled = () => false}) {
+async function create({
+  rpc,
+  directory,
+  workerDirectory,
+  workerMode = 'host',
+  persistentWorkerFactory = require('./persistent-decoder-worker.cjs').create,
+  log = () => {},
+  cancelled = () => false
+}) {
+  if (!['host', 'persistent'].includes(workerMode)) throw Error('Unknown decoder worker mode');
   const module = JSON.parse(await fs.readFile(path.join(directory, 'compatibility-module.json')));
   for (const definition of Object.values(definitions)) {
     if (
@@ -80,6 +89,8 @@ async function create({rpc, directory, workerDirectory, log = () => {}, cancelle
   let lastInput = null;
   // The raw result of a caller's SDK call run just before SendInput, such as a tick.
   let lastStamp = null;
+  let persistent = null;
+  let persistentStarted = false;
 
   async function call(name, args) {
     const value = await api.call(name, args);
@@ -204,6 +215,7 @@ async function create({rpc, directory, workerDirectory, log = () => {}, cancelle
 
   async function close() {
     if (closed) return;
+    if (persistent) await persistent.stop();
     closed = true;
     const errors = [];
     try {
@@ -222,6 +234,13 @@ async function create({rpc, directory, workerDirectory, log = () => {}, cancelle
     for (const [destroy, address] of owned.reverse()) {
       try {
         await api.call(destroy, [address]);
+      } catch (error) {
+        errors.push(error);
+      }
+    }
+    if (!errors.length && persistent) {
+      try {
+        await persistent.finalize();
       } catch (error) {
         errors.push(error);
       }
@@ -290,6 +309,18 @@ async function create({rpc, directory, workerDirectory, log = () => {}, cancelle
       await api.write(MEMORY.key, Buffer.from('frame-rate\0'));
       await api.call('mediaSetInt', [pointer('configuration'), pointer('key'), fps]);
       await success('configure', [pointer('decoder'), pointer('configuration')]);
+      if (workerMode === 'persistent') {
+        persistent = await persistentWorkerFactory({
+          rpc,
+          module,
+          functions: fn,
+          decoder: pointer('decoder'),
+          output: pointer('output'),
+          format: pointer('format'),
+          cancelled
+        });
+        await persistent.register();
+      }
       await beforeStart?.(pointer('decoder'));
       await success('start', [pointer('decoder')]);
       configured = running = true;
@@ -304,6 +335,56 @@ async function create({rpc, directory, workerDirectory, log = () => {}, cancelle
 
     get lastStamp() {
       return lastStamp;
+    },
+
+    async startPersistent() {
+      if (workerMode !== 'persistent' || !running || closed || !sizing || !layout)
+        throw Error('Persistent decoder needs a completed host-driven first frame');
+      if (outputIndex >= 0 || pendingOutput) throw Error('Decoder output is still owned');
+      await persistent.start();
+      persistentStarted = true;
+    },
+
+    async processPersistent(unit, destination) {
+      if (!persistentStarted || closed || !running)
+        throw Error('Persistent decoder is not running');
+      if (
+        !Buffer.isBuffer(unit.data) ||
+        !unit.data.length ||
+        !Number.isSafeInteger(unit.pts) ||
+        unit.pts < 0
+      )
+        throw Error('Invalid decoder access unit');
+      const {bytes, alignment} = sizing;
+      if (
+        !Number.isSafeInteger(destination.address) ||
+        !Number.isSafeInteger(destination.bytes) ||
+        destination.bytes < bytes ||
+        !alignment ||
+        destination.address % alignment
+      )
+        throw Error('Native output does not fit the aligned destination surface');
+      step = 'acquireInput';
+      if (pendingInput === null) pendingInput = await acquireInput();
+      const index = pendingInput;
+      step = 'cacheInput';
+      await cacheInput(index);
+      const {address, capacity} = inputs.get(index);
+      if (!Number.isSafeInteger(address) || address <= 0 || unit.data.length > capacity)
+        throw Error('H.264 access unit exceeds the native input buffer');
+      step = 'writeUnit';
+      await rpc.write(address, unit.data);
+      step = 'persistent';
+      const completed = await persistent.run({
+        index,
+        length: unit.data.length,
+        pts: unit.pts,
+        destination
+      });
+      pendingInput = completed.input.index >= 0 ? completed.input.index : null;
+      lastInput = completed.input;
+      step = 'idle';
+      return {...layout, bytes, pts: completed.pts.toString(), format: 'nv12'};
     },
 
     async submit(unit, {acquireOutput: withOutput = true, stamp = null} = {}) {
