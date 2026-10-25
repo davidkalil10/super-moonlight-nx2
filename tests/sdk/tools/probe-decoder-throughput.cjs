@@ -185,6 +185,25 @@ function logicalResult(program, bytes, index) {
   );
 }
 
+function pendingStep(program, rows, results) {
+  const native = Array.from({length: results.length / 8}, (_, index) => index).find(
+    index => results.readBigUInt64LE(index * 8) === SENTINEL
+  );
+  if (native === undefined) return null;
+  const logical = program.proof.logicalResultIndices.findIndex(index => index >= native);
+  const row = rows.find(item =>
+    Object.entries(item).some(
+      ([name, index]) => name !== 'index' && name !== 'slot' && index === logical
+    )
+  );
+  const step =
+    row &&
+    Object.entries(row).find(
+      ([name, index]) => name !== 'index' && name !== 'slot' && index === logical
+    )?.[0];
+  return {native, logical, au: row?.index ?? null, step: step ?? null};
+}
+
 function summarize(plan, inputResults, outputResults, outputSlots, frequency, window) {
   const sends = [];
   const outputs = [];
@@ -585,19 +604,26 @@ async function main(directory, {clip, window, maxAus = 120, output, dryRun = fal
       outputBytes: SHORT
     });
     if (!inputStopped || !outputStopped) {
-      const pending = async (base, program) => {
+      const partial = async (name, base, program, rows) => {
         const results = await rpc.read(
           base + FRAME_OFFSET + program.proof.resultOffsets[0],
           program.proof.resultOffsets.length * 8
         );
-        for (let index = 0; index < results.length / 8; index++)
-          if (results.readBigUInt64LE(index * 8) === SENTINEL) return index;
-        return null;
+        await fs.writeFile(path.join(output, `${name}-results.bin`), results, {mode: 0o600});
+        return pendingStep(program, rows, results);
       };
       record.pendingCalls = {
-        input: await pending(inputBase, programs.input).catch(() => null),
-        output: await pending(outputBase, programs.output).catch(() => null)
+        input: await partial('input', inputBase, programs.input, programs.inputRows).catch(
+          () => null
+        ),
+        output: await partial('output', outputBase, programs.output, programs.outputRows).catch(
+          () => null
+        )
       };
+      await rpc
+        .read(control + OUTPUT_SLOTS, units.length * 32)
+        .then(bytes => fs.writeFile(path.join(output, 'output-slots.bin'), bytes, {mode: 0o600}))
+        .catch(() => {});
       throw Error('R3 worker timed out; decoder and events retained, restart SmileBASIC');
     }
     await join(rpc, inputThread, inputBase + 8, {
@@ -694,7 +720,7 @@ async function main(directory, {clip, window, maxAus = 120, output, dryRun = fal
   return record;
 }
 
-module.exports = {main, plan, summarize};
+module.exports = {main, plan, summarize, pendingStep};
 if (require.main === module) {
   const args = process.argv.slice(2);
   const get = name => cli.option(args, name);

@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const {plan, summarize} = require('./probe-decoder-throughput.cjs');
+const {plan, summarize, pendingStep} = require('./probe-decoder-throughput.cjs');
 
 const sdk = 0x10000000;
 const fn = {
@@ -94,4 +94,18 @@ test('R3 scores console output cadence and rejects reordered PTS', () => {
   assert.equal(measured.target120Met, null);
   slots.writeBigUInt64LE(99n, 3 * 32 + 8);
   assert.throws(() => summarize(planned, input, output, slots, 10000, 3), /Output PTS/);
+});
+
+test('R3 maps the window-three stalled call to the final output event wait', () => {
+  const planned = fixture(3, 120);
+  const output = results(planned.output);
+  const wait = planned.output.proof.logicalResultIndices[planned.outputRows[119].wait];
+  output.writeBigUInt64LE(0xfedcba9876543210n, wait * 8);
+  assert.equal(wait, 714);
+  assert.deepEqual(pendingStep(planned.output, planned.outputRows, output), {
+    native: 714,
+    logical: planned.outputRows[119].wait,
+    au: 119,
+    step: 'wait'
+  });
 });
