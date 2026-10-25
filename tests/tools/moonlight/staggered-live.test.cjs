@@ -239,7 +239,8 @@ test('a short stream drains its lag-2 tail and stops both workers before finaliz
     decoded: 5,
     presented: 5,
     tailDrained: 2,
-    rereads: 0
+    rereads: 0,
+    waiting: {}
   });
   await live.stop();
   assert.equal(live.retained, false);
@@ -279,6 +280,7 @@ test('a late receive costs the one reread the request budget models', async () =
     `scheduler ${measured} vs model ${reference} requests/frame`
   );
   assert.equal(live.counts.rereads, late.size);
+  assert.deepEqual(live.counts.waiting, {receive: late.size});
   assert.deepEqual(pauses, [], 'late gate statuses are reread without a pause');
   await live.finish({sink: device.sink});
   await live.stop();

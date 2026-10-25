@@ -6,10 +6,16 @@ const os = require('node:os');
 const path = require('node:path');
 const {EventEmitter} = require('node:events');
 const {PassThrough} = require('node:stream');
-const {run, createIdrRequester} = require('./native-h264.cjs');
+const {run, createIdrRequester, countsSince} = require('./native-h264.cjs');
 
 const accessUnit = Buffer.from('0000016742001eab00000168ce0100000165abcd', 'hex');
 const pcm = Buffer.from('0001020304050607', 'hex');
+
+test('stats rows report staggered waits since the previous row', () => {
+  assert.deepEqual(countsSince({receive: 7, applied: 2}, {receive: 4, applied: 2}), {receive: 3});
+  assert.deepEqual(countsSince({slot: 1}, {}), {slot: 1});
+  assert.deepEqual(countsSince({}, {}), {});
+});
 
 test('backlog IDR requests recover within 100 ms and coalesce dropped frames', () => {
   let time = 1000;
@@ -773,7 +779,7 @@ function staggeredFake(events, {pushFails = null, stopFails = false} = {}) {
         return pending;
       },
       get counts() {
-        return {submitted: 5, decoded: 5, presented: 5, tailDrained: 2};
+        return {submitted: 5, decoded: 5, presented: 5, tailDrained: 2, waiting: {}};
       }
     };
   };

@@ -47,7 +47,7 @@ test('staggered host gate accepts one complete checked status snapshot', () => {
 test('staggered host gate keeps decode and fetch closed on incomplete or wrong results', () => {
   const bytes = snapshot();
   bytes.writeUInt32LE(8, STATUS.receive + 8 - READ_START);
-  assert.throws(() => check(parse(bytes), expected), {retryable: true});
+  assert.throws(() => check(parse(bytes), expected), {retryable: true, pending: 'receive'});
   bytes.writeUInt32LE(9, STATUS.receive + 8 - READ_START);
   bytes.writeBigInt64LE(39999n, STATUS.receive - READ_START);
   assert.throws(() => check(parse(bytes), expected), /Short receive/);
@@ -56,14 +56,14 @@ test('staggered host gate keeps decode and fetch closed on incomplete or wrong r
   assert.throws(() => check(parse(bytes), expected), /output status/);
   bytes.writeBigUInt64LE(0n, STATUS.acquire - READ_START);
   bytes.writeUInt32LE(13, ring.CONTROL.nativeApplied - READ_START);
-  assert.throws(() => check(parse(bytes), expected), {retryable: true});
+  assert.throws(() => check(parse(bytes), expected), {retryable: true, pending: 'applied'});
 });
 
 test('staggered gate treats temporary lack of an input slot as retryable', () => {
   const bytes = snapshot();
   bytes.writeBigUInt64LE(0x100en, STATUS.input + 8 - READ_START);
   bytes.writeInt32LE(-1, STATUS.input + 16 - READ_START);
-  assert.throws(() => check(parse(bytes), expected), {retryable: true});
+  assert.throws(() => check(parse(bytes), expected), {retryable: true, pending: 'slot'});
 });
 
 test('tail output check requires acquisition and prior publication without a new receive', () => {
