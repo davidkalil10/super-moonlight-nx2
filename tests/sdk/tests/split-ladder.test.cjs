@@ -127,6 +127,15 @@ test('native publication passes the flag to each probe stage', async t => {
   assert.ok(calls.every(call => call.args.at(-1) === '--native-publish'));
 });
 
+test('automatic output queue passes both required flags to each probe stage', async t => {
+  const {result, calls} = await ladder(t, [...CLIP, '--native-publish', '--auto-output-queue']);
+  assert.equal(result.autoOutputQueue, true);
+  assert.equal(calls.length, ALL.length);
+  for (const call of calls)
+    assert.deepEqual(call.args.slice(-2), ['--native-publish', '--auto-output-queue']);
+  assert.match(result.output, /-split-auto-ladder$/);
+});
+
 test('refuses a known exhausted session before running a probe', async () => {
   const options = parseArgs([
     '/runs/launcher-old',
@@ -150,6 +159,7 @@ test('argument validation rejects missing and malformed options', () => {
   assert.throws(() => parseArgs([...CLIP, '--stages', 'one,0']), /Unknown stage "0"/);
   assert.throws(() => parseArgs([...CLIP, '--stages', 'one,one']), /Repeated/);
   assert.throws(() => parseArgs([...CLIP, '--stage', 'one']), /Unknown option --stage/);
+  assert.throws(() => parseArgs([...CLIP, '--auto-output-queue']), /requires --native-publish/);
   assert.throws(() => parseArgs([...CLIP, 'extra']), /Unexpected argument/);
   const defaults = parseArgs(CLIP);
   assert.deepEqual(defaults.stages, ALL);
@@ -157,5 +167,6 @@ test('argument validation rejects missing and malformed options', () => {
   assert.equal(defaults.output, null);
   assert.equal(defaults.dryRun, false);
   assert.equal(defaults.nativePublish, false);
+  assert.equal(defaults.autoOutputQueue, false);
   assert.equal(defaults.rejectSession, null);
 });

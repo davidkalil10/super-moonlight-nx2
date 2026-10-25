@@ -11,7 +11,7 @@ const SDK = 0x40000000;
 const MODULE = 0x50000000;
 const decoder = 0x70000000;
 
-function fixture({receiveBytes = 4096, outputIndex = 2} = {}) {
+function fixture({receiveBytes = 4096, outputIndex = 2, autoQueue = false} = {}) {
   const regions = [];
   const calls = [];
   const transport = {
@@ -104,6 +104,19 @@ function fixture({receiveBytes = 4096, outputIndex = 2} = {}) {
         const fetched = Buffer.alloc(28);
         fetched.writeUInt32LE(read(control + 0x300, 4).readUInt32LE(), 24);
         write(control + 0x1f0, fetched);
+        if (autoQueue) {
+          const next = read(control + 0x338, 4).readUInt32LE();
+          if (next) {
+            const sequence = Buffer.alloc(4);
+            sequence.writeUInt32LE(next);
+            write(control + 0x300, sequence);
+            const acquired = Buffer.alloc(36);
+            acquired.writeInt32LE(outputIndex, 8);
+            acquired.writeBigUInt64LE(timestamps.get(next), 16);
+            acquired.writeUInt32LE(next, 32);
+            write(control + 0x1c0, acquired);
+          }
+        }
       } else assert.fail('unexpected split worker gate');
       return {result: 0n};
     }
@@ -283,6 +296,46 @@ test('output publication stages bounded metadata and sequence behind the fetch g
   assert.deepEqual(
     Array.from({length: 8}, (_, word) => staged.readUInt32LE(16 + word * 4)),
     [2, 1920, 1080, 1920, 1088, 1, ring.nativeChecksum(7, [2, 1920, 1080, 1920, 1088, 1]), 7]
+  );
+  await worker.stop();
+  await worker.finalize();
+});
+
+test('automatic output queue hands the next sequence to the output worker', async () => {
+  const f = fixture({autoQueue: true});
+  const mapped = 0x30000000;
+  const worker = await workerFor(f, {publication: {mapped, color: 1}, autoQueue: true});
+  const input = pts => ({
+    index: 1,
+    length: 4096,
+    pts,
+    inputAddress: 0x72000000,
+    payload: Buffer.alloc(4096)
+  });
+  const first = await worker.input(input(30));
+  await worker.queueOutput(first);
+  const second = await worker.input(input(60));
+  const frame = {width: 1920, height: 1080, stride: 1920, sliceHeight: 1088};
+  const destination = sequence => ({
+    index: sequence % 3,
+    address: mapped + ring.frameOffset(sequence % 3),
+    bytes: ring.FRAME_BYTES,
+    sequence,
+    color: 1
+  });
+  await worker.finishOutput(first, destination(7), frame, second);
+  const handoff = f.read(f.control + 0x308, 64);
+  assert.equal(handoff.readUInt32LE(48), second.sequence);
+  assert.equal(handoff.readBigUInt64LE(56), 0x61110000n);
+  assert.equal(worker.diagnostics.activeOutput, second.sequence);
+  await worker.finishOutput(second, destination(8), frame);
+  const parked = f.read(f.control + 0x308, 64);
+  assert.equal(parked.readUInt32LE(48), 0);
+  assert.equal(parked.readBigUInt64LE(56), 0x61010000n);
+  assert.equal(worker.diagnostics.activeOutput, undefined);
+  assert.equal(
+    f.calls.filter(call => call.combined && call.args?.[0] === f.control + 0x40).length,
+    1
   );
   await worker.stop();
   await worker.finalize();

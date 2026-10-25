@@ -107,6 +107,7 @@ async function main(
     output,
     sourceRevision,
     nativePublish = false,
+    autoOutputQueue = false,
     create = createDecoder,
     createNativeSink = createSink,
     openTransport = createTransport,
@@ -116,6 +117,8 @@ async function main(
 ) {
   if (!STAGES.includes(stage)) throw Error('Use --stage ' + STAGES.join('|'));
   if (!clip) throw Error('Pass --clip with an H.264 probe clip');
+  if (autoOutputQueue && !nativePublish)
+    throw Error('--auto-output-queue requires --native-publish');
   directory = path.resolve(directory);
   clip = path.resolve(clip);
   const revision =
@@ -138,7 +141,7 @@ async function main(
     new Date().toISOString().replace(/[:.]/g, '-') +
       '-' +
       revision.slice(0, 8) +
-      (nativePublish ? '-split-publish-' : '-split-') +
+      (autoOutputQueue ? '-split-auto-' : nativePublish ? '-split-publish-' : '-split-') +
       stage
   );
   await fsp.mkdir(output, {recursive: true, mode: 0o700});
@@ -154,6 +157,7 @@ async function main(
     command: process.argv,
     clip,
     nativePublish,
+    autoOutputQueue,
     started: new Date().toISOString()
   };
   await fsp.writeFile(path.join(output, 'manifest.json'), JSON.stringify(record, null, 2) + '\n', {
@@ -217,7 +221,8 @@ async function main(
         workerDirectory: path.join(output, 'decoder'),
         workerMode: 'split',
         transport,
-        publication: sink?.workerPublication
+        publication: sink?.workerPublication,
+        autoQueue: autoOutputQueue
       })
     );
     const dimensions = await step('configure', () => decoder.configure(sps, pps, 30));
@@ -291,7 +296,7 @@ async function main(
             )
           : destination;
         const firstOutput = await step('output job 1 fetch', () =>
-          decoder.finishSplitOutput(firstJob, firstDestination)
+          decoder.finishSplitOutput(firstJob, firstDestination, autoOutputQueue ? secondJob : null)
         );
         if (firstOutput.pts !== String(nextIndex)) throw Error('Output job 1 PTS differs');
         const outputs = [firstOutput];
@@ -303,7 +308,8 @@ async function main(
             )
           );
         if (secondJob) {
-          await step('output job 2 queued', () => decoder.queueSplitOutput(secondJob));
+          if (!autoOutputQueue)
+            await step('output job 2 queued', () => decoder.queueSplitOutput(secondJob));
           const secondDestination = nativePublish
             ? await step('native destination 2', () =>
                 sink.workerDestination(secondJob.presentation)
@@ -376,7 +382,8 @@ if (require.main === module) {
     clip: cli.option(args, '--clip'),
     stage: cli.option(args, '--stage'),
     output: cli.option(args, '--output') || undefined,
-    nativePublish: args.includes('--native-publish')
+    nativePublish: args.includes('--native-publish'),
+    autoOutputQueue: args.includes('--auto-output-queue')
   }).catch(error => {
     console.error(error);
     process.exitCode = 1;

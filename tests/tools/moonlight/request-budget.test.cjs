@@ -5,7 +5,7 @@ const {BASELINE, MODEL, simulate} = require('./request-budget.cjs');
 // Modeled steady-state requests per presented frame at 1080p30. Bump these down
 // (never up) when a scheduler change lowers them, and record before/after in the
 // commit message.
-const BUDGET = {persistent: 10.05, split: 11.05, splitPublish: 8};
+const BUDGET = {persistent: 10.05, split: 11.05, splitPublish: 8, splitPublishAuto: 7};
 const REQUEST_TOLERANCE = 1;
 const BRIDGE_MS_TOLERANCE = 3;
 
@@ -65,4 +65,13 @@ test('native worker publication removes destination and host publish requests', 
   assert.equal(result.byStage['split-queue'].requests, 1);
   assert.equal(result.byStage.destination, undefined);
   assert.equal(result.byStage.publish, undefined);
+});
+
+test('automatic output queue removes one host request per split frame', async () => {
+  const result = await simulate({mode: 'split', frames: 120, nativePublish: true, autoQueue: true});
+  assert.equal(result.frames, 120);
+  assert.ok(result.requestsPerFrame <= BUDGET.splitPublishAuto);
+  assert.equal(result.byStage['split-queue'], undefined);
+  assert.equal(result.byStage['split-input'].requests, 4);
+  assert.equal(result.byStage['split-output'].requests, 3);
 });

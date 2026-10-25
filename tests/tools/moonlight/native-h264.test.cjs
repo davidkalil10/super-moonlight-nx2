@@ -114,7 +114,12 @@ async function fixture({
       };
     },
     async createDecoder(config) {
-      events.push({type: 'create-decoder', mode: config.workerMode, publication: config.publication});
+      events.push({
+        type: 'create-decoder',
+        mode: config.workerMode,
+        publication: config.publication,
+        autoQueue: config.autoQueue
+      });
       let splitSequence = 0;
       return {
         async configure(sps, pps, fps) {
@@ -155,8 +160,8 @@ async function fixture({
         async queueSplitOutput(job) {
           events.push({type: 'queue-split', job});
         },
-        async finishSplitOutput(job, destination) {
-          events.push({type: 'finish-split', job, destination});
+        async finishSplitOutput(job, destination, nextJob) {
+          events.push({type: 'finish-split', job, destination, nextJob});
           return {
             format: 'nv12',
             width: 128,
@@ -387,6 +392,27 @@ test('native split publication leaves frame commits to the output worker', {time
       f.events.filter(event => event.type === 'worker-destination').map(event => event.presentation),
       [{current: 0, applied: 0}, null]
     );
+  });
+});
+
+test('automatic output queue passes the next job without a second host queue call', {timeout: 5000}, async () => {
+  const f = await fixture({
+    units: [
+      {hex: accessUnit.toString('hex'), keyframe: true, pts: 1000},
+      {hex: accessUnit.toString('hex'), keyframe: false, pts: 2000},
+      {hex: accessUnit.toString('hex'), keyframe: false, pts: 3000}
+    ]
+  });
+  f.options.args.push('--split-decoder', '--native-publish', '--auto-output-queue');
+  await exercise(f, async () => {
+    await run(f.options);
+    assert.equal(f.events.find(event => event.type === 'create-decoder').autoQueue, true);
+    assert.equal(f.events.filter(event => event.type === 'queue-split').length, 1);
+    assert.deepEqual(
+      f.events.filter(event => event.type === 'finish-split').map(event => [event.job.pts, event.nextJob?.pts]),
+      [[2000, 3000], [3000, undefined]]
+    );
+    assert.equal(f.events.filter(event => event.type === 'worker-destination').length, 2);
   });
 });
 

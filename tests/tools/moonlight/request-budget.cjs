@@ -140,7 +140,7 @@ function createClock() {
 // A healthy console: one bridge exchange at a time, worker threads that answer the
 // host's gates after modeled latencies, and a presenter that applies each published
 // frame on the next vsync.
-function createConsole(clock, mode, model, nativePublish = false) {
+function createConsole(clock, mode, model, nativePublish = false, autoQueue = false) {
   const layout = LAYOUT[mode];
   const regions = [];
   const signaled = new Set();
@@ -297,7 +297,16 @@ function createConsole(clock, mode, model, nativePublish = false) {
           poke(MAPPED + ring.CONTROL.nativeIndex, publish.subarray(0, 28));
           poke(MAPPED + ring.CONTROL.nativeSequence, publish.subarray(28));
         }
-        complete(layout.fetchResults, fields, layout.fetchDone)
+        complete(layout.fetchResults, fields, layout.fetchDone);
+        if (autoQueue) {
+          const next = peek(control + layout.outputJob + 56, 4).readUInt32LE();
+          if (next) {
+            const sequence = Buffer.alloc(4);
+            sequence.writeUInt32LE(next);
+            poke(control + layout.outputJob, sequence);
+            gate(layout.outputGate);
+          }
+        }
       });
     }
   }
@@ -394,13 +403,15 @@ async function simulate({
   warmup = 4,
   paced = true,
   nativePublish = false,
+  autoQueue = false,
   model = MODEL
 }) {
   if (!LAYOUT[mode]) throw Error('Unknown request budget mode ' + mode);
   if (nativePublish && mode !== 'split') throw Error('Native worker publication needs split mode');
+  if (autoQueue && !nativePublish) throw Error('Automatic output queue needs worker publication');
   const clock = createClock();
   return clock.run(async () => {
-    const machine = createConsole(clock, mode, model, nativePublish);
+    const machine = createConsole(clock, mode, model, nativePublish, autoQueue);
     let stage = 'setup';
     const bridge = instrument(machine.rpc, () => stage, clock.now);
     const rpc = bridge.rpc;
@@ -427,7 +438,8 @@ async function simulate({
       output: DECODER + 0x300,
       format: DECODER + 0x180,
       transport: machine.transport,
-      publication: nativePublish ? {mapped: MAPPED, color: 1} : null
+      publication: nativePublish ? {mapped: MAPPED, color: 1} : null,
+      autoQueue
     });
     await worker.register();
     await worker.start();
@@ -464,7 +476,7 @@ async function simulate({
             ? await sink.workerDestination(current.presentation)
             : await sink.destination();
           stage = 'split-output';
-          await worker.finishOutput(pending, destination, DECODED);
+          await worker.finishOutput(pending, destination, DECODED, autoQueue ? current : null);
           if (!nativePublish) {
             stage = 'publish';
             await sink.publish(destination, DECODED);
@@ -472,7 +484,7 @@ async function simulate({
           presented++;
         }
         stage = 'split-queue';
-        await worker.queueOutput(current);
+        if (!autoQueue || !pending) await worker.queueOutput(current);
         pending = current;
       } else {
         stage = 'persistent';
@@ -494,6 +506,7 @@ async function simulate({
       frames: presented,
       paced,
       nativePublish,
+      autoQueue,
       requestsPerFrame: perFrame(counted.exchanges),
       bridgeMsPerFrame: perFrame(counted.bridgeMs),
       msPerFrame: perFrame(elapsed),
@@ -510,11 +523,12 @@ async function simulate({
 
 async function budget({frames = 120, model = MODEL} = {}) {
   const modes = {};
-  for (const name of ['persistent', 'split', 'splitPublish']) {
-    const mode = name === 'splitPublish' ? 'split' : name;
-    const nativePublish = name === 'splitPublish';
-    const paced = await simulate({mode, frames, model, nativePublish});
-    const free = await simulate({mode, frames, model, nativePublish, paced: false});
+  for (const name of ['persistent', 'split', 'splitPublish', 'splitPublishAuto']) {
+    const mode = name.startsWith('splitPublish') ? 'split' : name;
+    const nativePublish = name.startsWith('splitPublish');
+    const autoQueue = name === 'splitPublishAuto';
+    const paced = await simulate({mode, frames, model, nativePublish, autoQueue});
+    const free = await simulate({mode, frames, model, nativePublish, autoQueue, paced: false});
     modes[name] = {
       requestsPerFrame: paced.requestsPerFrame,
       bridgeMsPerFrame: paced.bridgeMsPerFrame,
@@ -529,10 +543,11 @@ async function budget({frames = 120, model = MODEL} = {}) {
     };
   }
   const planDecode = {};
-  for (const name of ['persistent', 'split', 'splitPublish']) {
+  for (const name of ['persistent', 'split', 'splitPublish', 'splitPublishAuto']) {
     const options = {
-      mode: name === 'splitPublish' ? 'split' : name,
-      nativePublish: name === 'splitPublish',
+      mode: name.startsWith('splitPublish') ? 'split' : name,
+      nativePublish: name.startsWith('splitPublish'),
+      autoQueue: name === 'splitPublishAuto',
       frames,
       model: {...model, decodeMs: PLAN_DECODE_MS}
     };

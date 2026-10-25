@@ -6,7 +6,7 @@ const path = require('node:path');
 const ring = require('../../tools/moonlight/ring.cjs');
 const {main, verifyPublication} = require('../tools/probe-split-decoder.cjs');
 
-async function fixture(stage) {
+async function fixture(stage, {nativePublish = false, autoOutputQueue = false} = {}) {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'hbl-split-probe-'));
   const clip = path.join(directory, 'idr.h264');
   const accessUnit = Buffer.from('0000016742001eab00000168ce0100000165abcd', 'hex');
@@ -14,13 +14,42 @@ async function fixture(stage) {
   const calls = [];
   let sequence = 0;
   let receiveLength = 0;
+  let publicationSequence = 0;
+  const mapped = 0x73000000;
+  const published = Buffer.alloc(32);
   const result = await main(directory, {
     clip,
     stage,
+    nativePublish,
+    autoOutputQueue,
     output: path.join(directory, 'record'),
     sourceRevision: 'test-revision',
-    sessionRpc: {a: {session: 'test-session'}, host: '127.0.0.1'},
-    allocateSurface: async () => 0x73000000,
+    sessionRpc: {
+      a: {session: 'test-session'},
+      host: '127.0.0.1',
+      read: async address => {
+        assert.equal(address, mapped + ring.CONTROL.nativeSequence);
+        return published;
+      },
+      write: async () => {}
+    },
+    allocateSurface: async () => mapped,
+    createNativeSink: async () => ({
+      workerPublication: {mapped, color: 1},
+      async workerDestination() {
+        const next = ++publicationSequence;
+        return {
+          address: mapped + ring.frameOffset(next),
+          bytes: ring.FRAME_BYTES,
+          index: next,
+          sequence: next,
+          color: 1
+        };
+      },
+      async close() {
+        calls.push('sink-close');
+      }
+    }),
     openTransport: async () => ({
       fd: 12,
       maxAccessUnit: 0x100000,
@@ -35,8 +64,9 @@ async function fixture(stage) {
         calls.push('transport-close');
       }
     }),
-    async create({workerMode, transport}) {
+    async create({workerMode, transport, autoQueue}) {
       assert.equal(workerMode, 'split');
+      assert.equal(autoQueue, autoOutputQueue);
       return {
         splitDiagnostics: {decodeGateSignals: 0},
         async configure() {
@@ -70,9 +100,30 @@ async function fixture(stage) {
         async queueSplitOutput(job) {
           calls.push('queue:' + job.sequence);
         },
-        async finishSplitOutput(job) {
+        async finishSplitOutput(job, destination, nextJob) {
           calls.push('fetch:' + job.sequence);
-          return {pts: job.pts.toString()};
+          if (nextJob) calls.push('handoff:' + job.sequence + '->' + nextJob.sequence);
+          const frame = {
+            pts: job.pts.toString(),
+            width: 1920,
+            height: 1080,
+            stride: 1920,
+            sliceHeight: 1088
+          };
+          if (nativePublish) {
+            const values = [
+              destination.sequence,
+              destination.index,
+              frame.width,
+              frame.height,
+              frame.stride,
+              frame.sliceHeight,
+              destination.color
+            ];
+            values.push(ring.nativeChecksum(values[0], values.slice(1)));
+            values.forEach((value, index) => published.writeUInt32LE(value, index * 4));
+          }
+          return frame;
         },
         async close() {
           calls.push('close');
@@ -105,6 +156,18 @@ test('short receive probe accepts only a closed decode gate', async () => {
   assert.ok(calls.some(call => call.startsWith('send:')));
   assert.equal(calls.includes('abort'), false);
   assert.equal(calls.at(-2), 'close');
+});
+
+test('two-job auto queue probe hands off without a second host queue', async () => {
+  const {result, calls} = await fixture('two', {
+    nativePublish: true,
+    autoOutputQueue: true
+  });
+  assert.equal(result.verdict, 'PASS');
+  assert.deepEqual(calls.filter(call => call.startsWith('queue:')), ['queue:1']);
+  assert.deepEqual(calls.filter(call => call.startsWith('handoff:')), ['handoff:1->2']);
+  assert.deepEqual(result.result.publications.map(item => item.sequence), [1, 2]);
+  assert.equal(calls.at(-1), 'sink-close');
 });
 
 test('publication readback requires matching metadata and sequence', async () => {
