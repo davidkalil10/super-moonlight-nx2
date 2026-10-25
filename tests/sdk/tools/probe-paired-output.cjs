@@ -36,10 +36,20 @@ async function requireNewPairedSession(id, root = BUILD_ROOT) {
     ]) {
       try {
         const record = JSON.parse(await fsp.readFile(path.join(directory, file), 'utf8'));
-        if (record.session === id)
+        if (record.session === id) {
+          const unusedPreflight =
+            file === 'paired-output.json' &&
+            record.verdict === 'FAIL' &&
+            record.error === 'Start a new normal START session before paired output' &&
+            (await fsp.stat(path.join(directory, 'paired-output.jsonl')).then(
+              entry => entry.size === 0,
+              () => false
+            ));
+          if (unusedPreflight) continue;
           throw Object.assign(Error('Start a new normal START session before paired output'), {
             prior: path.join(directory, file)
           });
+        }
       } catch (error) {
         if (error.prior) throw error;
         if (error.code !== 'ENOENT' && error.code !== 'ENOTDIR') throw error;
@@ -153,9 +163,12 @@ async function main(
       '-r3-paired-' +
       stage
   );
+  const rawRpc = session.rpc(directory);
+  if (!rawRpc.host) throw Error('Paired output probe needs a normal START session');
+  if (!allowSameSession) await requireNewPairedSession(rawRpc.a.session);
   await fsp.mkdir(output, {recursive: true, mode: 0o700});
   const entries = journal(path.join(output, 'paired-output.jsonl'));
-  const rpc = loggedRpc(session.rpc(directory), entries);
+  const rpc = loggedRpc(rawRpc, entries);
   const record = {
     probe: 'paired-output',
     stage,
@@ -188,8 +201,6 @@ async function main(
     }
   };
   try {
-    if (!rpc.host) throw Error('Paired output probe needs a normal START session');
-    if (!allowSameSession) await requireNewPairedSession(rpc.a.session);
     const storage = await step('Moonlight private storage', () => findPrivateStorage(directory));
     sink = await step('native sink create', () => createSink(rpc, storage));
     transport = await step('native TCP create', () => createTransport({rpc, host: rpc.host}));
