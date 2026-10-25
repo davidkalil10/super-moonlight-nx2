@@ -356,6 +356,32 @@ test(
 );
 
 test(
+  'a queued unit lets the previous frame publish during the next decode',
+  {timeout: 5000},
+  async () => {
+    const f = await fixture({
+      units: [
+        {hex: accessUnit.toString('hex'), keyframe: true, pts: 1000},
+        {hex: '000001419a', keyframe: false, pts: 2000},
+        {hex: '000001419b', keyframe: false, pts: 3000}
+      ]
+    });
+    await exercise(f, async () => {
+      await run(f.options);
+      const kinds = f.events
+        .filter(event => ['begin-persistent', 'finish-persistent', 'publish'].includes(event.type))
+        .map(event => event.type);
+      assert.equal(kinds.filter(kind => kind === 'finish-persistent').length, 2);
+      assert.equal(kinds.filter(kind => kind === 'publish').length, 3, 'every frame is shown');
+      assert.ok(
+        kinds.join().includes('finish-persistent,begin-persistent,publish'),
+        'a frame waits for the next begin when a unit is queued'
+      );
+    });
+  }
+);
+
+test(
   'an audio process failure ends the native stream and releases decoder/display ownership',
   {timeout: 5000},
   async () => {
