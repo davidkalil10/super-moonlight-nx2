@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const {BASELINE, MODEL, simulate} = require('./request-budget.cjs');
+const {BASELINE, MODEL, simulate, budget} = require('./request-budget.cjs');
 
 // Modeled steady-state requests per presented frame at 1080p30. Bump these down
 // (never up) when a scheduler change lowers them, and record before/after in the
@@ -11,7 +11,8 @@ const BUDGET = {
   splitPublish: 8,
   splitPublishAuto: 7,
   splitLinked: 4,
-  paired: 11.25
+  paired: 11.25,
+  staggered: 2.05
 };
 const REQUEST_TOLERANCE = 1;
 const BRIDGE_MS_TOLERANCE = 3;
@@ -141,4 +142,38 @@ test('paired loop rejects the split worker publication flags', async () => {
     simulate({mode: 'paired', nativePublish: true}),
     /publishes from its own worker/
   );
+});
+
+test('staggered layout costs two requests per frame plus the audio read', async () => {
+  const result = await simulate({mode: 'staggered', frames: 120});
+  assert.equal(result.frames, 120);
+  assert.ok(result.requestsPerFrame >= 2);
+  assert.ok(result.requestsPerFrame <= BUDGET.staggered);
+  assert.ok(result.fps >= 29.5, `staggered loop holds ${result.fps} fps`);
+});
+
+test('staggered rereads add one request per late frame', async () => {
+  const base = await simulate({mode: 'staggered', frames: 120});
+  for (const retryRate of [0.1, 0.3]) {
+    const result = await simulate({mode: 'staggered', frames: 120, retryRate});
+    assert.ok(
+      Math.abs(result.requestsPerFrame - base.requestsPerFrame - retryRate) < 0.02,
+      `${retryRate} retry rate gave ${result.requestsPerFrame} requests/frame`
+    );
+  }
+});
+
+test('staggered 120 fps needs a 120 Hz present', async () => {
+  const model = {...MODEL, sourceFps: 120};
+  const slow = await simulate({mode: 'staggered', frames: 240, presentHz: 60, model});
+  const fast = await simulate({mode: 'staggered', frames: 240, presentHz: 120, model});
+  assert.ok(slow.fps < 61, `60 Hz present gave ${slow.fps} fps`);
+  assert.ok(fast.fps > slow.fps * 1.2, `120 Hz present gave ${fast.fps} fps`);
+  assert.ok(fast.fps < 120, "one decode in flight caps the loop below 120 fps");
+});
+
+test('budget reports the staggered matrix', async () => {
+  const {staggered} = await budget({frames: 60});
+  assert.equal(Object.keys(staggered).length, 12);
+  assert.equal(staggered['60fps-60Hz-retry0'].requestsPerFrame <= BUDGET.staggered, true);
 });
