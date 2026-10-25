@@ -337,11 +337,11 @@ async function create({
       return lastStamp;
     },
 
-    async startPersistent() {
+    async startPersistent({stage = null} = {}) {
       if (workerMode !== 'persistent' || !running || closed || !sizing || !layout)
         throw Error('Persistent decoder needs a completed host-driven first frame');
       if (outputIndex >= 0 || pendingOutput) throw Error('Decoder output is still owned');
-      await persistent.start();
+      await persistent.start({stage});
       persistentStarted = true;
     },
 
@@ -384,7 +384,13 @@ async function create({
       pendingInput = completed.input.index >= 0 ? completed.input.index : null;
       lastInput = completed.input;
       step = 'idle';
-      return {...layout, bytes, pts: completed.pts.toString(), format: 'nv12'};
+      return {
+        ...layout,
+        bytes,
+        pts: completed.pts.toString(),
+        format: 'nv12',
+        ...(completed.probe ? {probe: completed.probe} : {})
+      };
     },
 
     async submit(unit, {acquireOutput: withOutput = true, stamp = null} = {}) {

@@ -27,6 +27,7 @@ const DECODE_RESULTS = 0x120;
 const FETCH_RESULTS = 0x160;
 const JOB = 0x1a0;
 const FETCH_JOB = 0x1c0;
+const PROBE_DONE = 0x1d0;
 const SHORT = 2;
 const AUTO_CLEAR = 1;
 const READ = 0x586fb0;
@@ -91,7 +92,7 @@ async function create({
   data.writeBigUInt64LE(BigInt(event(OUTPUT_EVENT)), DECODER_EVENTS + 8);
   await rpc.write(control, data);
   const initialized = [];
-  for (const offset of [GATE, ACQUIRED, FETCH_GATE, DONE]) {
+  for (const offset of [GATE, ACQUIRED, FETCH_GATE, DONE, PROBE_DONE]) {
     await rpc.callAddress(sync.initializeLightEvent, [event(offset), 0, AUTO_CLEAR, 0], SHORT);
     initialized.push({offset, finalize: sync.finalizeLightEvent});
   }
@@ -103,6 +104,7 @@ async function create({
   let active = 0;
   let joined = false;
   let uncertainStart = false;
+  let probeStage = null;
   const gateFrame = base + 0x10000;
   const decodeFrame = base + 0x110000;
   const fetchFrame = base + 0x210000;
@@ -154,47 +156,62 @@ async function create({
         throw Error('RegisterClientEvents returned 0x' + status(result).toString(16));
     },
 
-    async start() {
+    async start({stage = null} = {}) {
       if (thread !== null) throw Error('Persistent decoder worker already started');
+      if (stage !== null && !['gate', 'dispatch', 'send', 'wait', 'acquire'].includes(stage))
+        throw Error('Invalid persistent decoder probe stage');
+      probeStage = stage;
       await rpc.callAddress(sync.clearEvent, [event(OUTPUT_EVENT)], SHORT);
       const jump = sdk + CODE.longjmp.offset;
       const copy = sdk + IPC_COPY.offset;
       const gate = frame(gateFrame, [
         {function: sync.waitLightEvent, args: [event(GATE), 0, 0, 0]},
-        {function: jump, args: [{u64: event(DISPATCH)}, 1, 0, 0]}
+        stage === 'gate'
+          ? {function: sync.signalLightEvent, args: [event(PROBE_DONE), 0, 0, 0]}
+          : {function: jump, args: [{u64: event(DISPATCH)}, 1, 0, 0]}
       ]);
-      const decode = frame(
-        decodeFrame,
-        [
-          {
-            function: functions.sendInput,
-            args: [
-              decoder,
-              {u32: event(JOB + 4)},
-              0,
-              {u32: event(JOB + 8)},
-              {u64: event(JOB + 16)},
-              0
-            ]
-          },
-          {function: sync.waitEvent, args: [event(OUTPUT_EVENT), 0, 0, 0]},
-          {
-            function: functions.acquireOutput,
-            args: [
-              decoder,
-              event(DECODE_RESULTS + 16),
-              event(DECODE_RESULTS + 24),
-              event(DECODE_RESULTS + 32),
-              event(DECODE_RESULTS + 36)
-            ]
-          },
-          {function: copy, args: [event(DECODE_RESULTS + 40), event(JOB), 4, 0]},
-          {function: sync.signalLightEvent, args: [event(ACQUIRED), 0, 0, 0]},
-          {function: sync.waitLightEvent, args: [event(FETCH_GATE), 0, 0, 0]},
-          {function: jump, args: [{u64: event(FETCH_DISPATCH)}, 1, 0, 0]}
-        ],
-        {0: DECODE_RESULTS, 2: DECODE_RESULTS + 8}
-      );
+      const send = {
+        function: functions.sendInput,
+        args: [decoder, {u32: event(JOB + 4)}, 0, {u32: event(JOB + 8)}, {u64: event(JOB + 16)}, 0]
+      };
+      const waitOutput = {function: sync.waitEvent, args: [event(OUTPUT_EVENT), 0, 0, 0]};
+      const acquireOutput = {
+        function: functions.acquireOutput,
+        args: [
+          decoder,
+          event(DECODE_RESULTS + 16),
+          event(DECODE_RESULTS + 24),
+          event(DECODE_RESULTS + 32),
+          event(DECODE_RESULTS + 36)
+        ]
+      };
+      const decodeCalls =
+        stage === 'dispatch'
+          ? [{function: sync.signalLightEvent, args: [event(PROBE_DONE), 0, 0, 0]}]
+          : [
+              send,
+              ...(stage === 'send' ? [] : [waitOutput]),
+              ...(stage === 'send' || stage === 'wait'
+                ? []
+                : [
+                    acquireOutput,
+                    {function: copy, args: [event(DECODE_RESULTS + 40), event(JOB), 4, 0]}
+                  ]),
+              ...(stage
+                ? [{function: sync.signalLightEvent, args: [event(PROBE_DONE), 0, 0, 0]}]
+                : [
+                    {function: sync.signalLightEvent, args: [event(ACQUIRED), 0, 0, 0]},
+                    {function: sync.waitLightEvent, args: [event(FETCH_GATE), 0, 0, 0]},
+                    {function: jump, args: [{u64: event(FETCH_DISPATCH)}, 1, 0, 0]}
+                  ])
+            ];
+      const decodeResults =
+        stage === 'dispatch'
+          ? {}
+          : stage === 'send' || stage === 'wait'
+            ? {0: DECODE_RESULTS}
+            : {0: DECODE_RESULTS, 2: DECODE_RESULTS + 8};
+      const decode = frame(decodeFrame, decodeCalls, decodeResults);
       const fetch = frame(
         fetchFrame,
         [
@@ -249,6 +266,20 @@ async function create({
       job.writeUInt32LE(length, 8);
       job.writeBigUInt64LE(BigInt(pts), 16);
       await rpc.writeAndCall(event(JOB), job, sync.signalLightEvent, [event(GATE)]);
+      if (probeStage) {
+        const result = await poll(PROBE_DONE, DECODE_RESULTS, 'probe ' + probeStage);
+        return {
+          pts: BigInt(pts),
+          input: {status: 0, index: -1},
+          probe: {
+            stage: probeStage,
+            sendStatus: status(result.readBigUInt64LE(0)),
+            acquireStatus: status(result.readBigUInt64LE(8)),
+            outputIndex: result.readInt32LE(16),
+            completedSequence: result.readUInt32LE(40)
+          }
+        };
+      }
       const acquired = await poll(ACQUIRED, DECODE_RESULTS, 'output acquire');
       const sent = status(acquired.readBigUInt64LE(0));
       const acquiredStatus = status(acquired.readBigUInt64LE(8));
