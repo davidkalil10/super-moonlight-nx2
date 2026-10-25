@@ -107,6 +107,7 @@ async function main(
   {
     clip,
     stage,
+    jobs = 1,
     output,
     sourceRevision,
     create = createDecoder,
@@ -116,6 +117,8 @@ async function main(
 ) {
   if (!STAGES.includes(stage)) throw Error('Use --stage ' + STAGES.join('|'));
   if (!clip) throw Error('Pass --clip with an H.264 probe clip');
+  if (!Number.isInteger(jobs) || jobs < 1 || jobs > 3 || (jobs > 1 && stage !== 'fetch'))
+    throw Error('--jobs must be 1 to 3 and requires --stage fetch above 1');
   directory = path.resolve(directory);
   clip = path.resolve(clip);
   const revision =
@@ -138,14 +141,16 @@ async function main(
   const rpc = loggedRpc(raw, entries);
   const bytes = await fsp.readFile(clip);
   const units = accessUnits(bytes);
-  const firstIndex = units.findIndex(unit => unit.keyframe);
-  const nextIndex = units.findIndex((unit, index) => index > firstIndex && unit.keyframe);
-  if (firstIndex < 0 || nextIndex < 0) throw Error('Probe clip needs two independent keyframes');
+  const keyframes = units.flatMap((unit, index) => (unit.keyframe ? [index] : []));
+  if (keyframes.length < jobs + 1)
+    throw Error('Probe clip needs ' + (jobs + 1) + ' independent keyframes');
+  const [firstIndex, nextIndex] = keyframes;
   const {sps, pps} = parameterSets(bytes);
   if (!sps || !pps) throw Error('Probe clip needs SPS and PPS');
   const record = {
     probe: 'persistent-first-job',
     stage,
+    jobs,
     session: raw.a.session,
     sourceRevision: revision,
     builder: os.hostname(),
@@ -196,44 +201,52 @@ async function main(
     entries.write({phase: 'before', step: 'worker start', stage});
     await decoder.startPersistent({stage: stage === 'fetch' ? null : stage});
     entries.write({phase: 'after', step: 'worker start', stage});
-    entries.write({phase: 'before', step: 'worker first job', stage, unit: nextIndex, destination});
-    const result = await decoder.processPersistent(
-      {data: units[nextIndex].data, pts: nextIndex},
-      destination
-    );
-    entries.write({
-      phase: 'after',
-      step: 'worker first job',
-      stage,
-      result: result.probe || result
-    });
-    if (result.probe) {
-      if (['send', 'wait', 'acquire'].includes(stage) && result.probe.sendStatus !== 0)
-        throw Error('Probe SendInput returned 0x' + result.probe.sendStatus.toString(16));
-      if (stage === 'acquire' && (result.probe.acquireStatus !== 0 || result.probe.outputIndex < 0))
-        throw Error('Probe AcquireOutput did not return a frame');
-      if (
-        ['getOutput', 'release', 'input', 'done', 'restore'].includes(stage) &&
-        result.probe.getStatus !== 0
-      )
-        throw Error('Probe GetOutput returned 0x' + result.probe.getStatus.toString(16));
-      if (
-        ['release', 'input', 'done', 'restore'].includes(stage) &&
-        result.probe.releaseStatus !== 0
-      )
-        throw Error('Probe ReleaseOutput returned 0x' + result.probe.releaseStatus.toString(16));
-      if (
-        ['input', 'done', 'restore'].includes(stage) &&
-        result.probe.inputStatus !== 0 &&
-        !(result.probe.nextIndex < 0 && [0x100e, 0x1011].includes(result.probe.inputStatus))
-      )
-        throw Error('Probe AcquireInput returned 0x' + result.probe.inputStatus.toString(16));
-      if (['done', 'restore'].includes(stage) && result.probe.completedSequence !== 1)
-        throw Error('Probe completed the wrong access unit');
-    } else if (result.pts !== String(nextIndex)) {
-      throw Error('Probe fetch returned the wrong presentation timestamp');
+    const results = [];
+    for (const unitIndex of keyframes.slice(1, jobs + 1)) {
+      entries.write({phase: 'before', step: 'worker job', stage, unit: unitIndex, destination});
+      const result = await decoder.processPersistent(
+        {data: units[unitIndex].data, pts: unitIndex},
+        destination
+      );
+      entries.write({
+        phase: 'after',
+        step: 'worker job',
+        stage,
+        unit: unitIndex,
+        result: result.probe || result
+      });
+      if (result.probe) {
+        if (['send', 'wait', 'acquire'].includes(stage) && result.probe.sendStatus !== 0)
+          throw Error('Probe SendInput returned 0x' + result.probe.sendStatus.toString(16));
+        if (
+          stage === 'acquire' &&
+          (result.probe.acquireStatus !== 0 || result.probe.outputIndex < 0)
+        )
+          throw Error('Probe AcquireOutput did not return a frame');
+        if (
+          ['getOutput', 'release', 'input', 'done', 'restore'].includes(stage) &&
+          result.probe.getStatus !== 0
+        )
+          throw Error('Probe GetOutput returned 0x' + result.probe.getStatus.toString(16));
+        if (
+          ['release', 'input', 'done', 'restore'].includes(stage) &&
+          result.probe.releaseStatus !== 0
+        )
+          throw Error('Probe ReleaseOutput returned 0x' + result.probe.releaseStatus.toString(16));
+        if (
+          ['input', 'done', 'restore'].includes(stage) &&
+          result.probe.inputStatus !== 0 &&
+          !(result.probe.nextIndex < 0 && [0x100e, 0x1011].includes(result.probe.inputStatus))
+        )
+          throw Error('Probe AcquireInput returned 0x' + result.probe.inputStatus.toString(16));
+        if (['done', 'restore'].includes(stage) && result.probe.completedSequence !== 1)
+          throw Error('Probe completed the wrong access unit');
+      } else if (result.pts !== String(unitIndex)) {
+        throw Error('Probe fetch returned the wrong presentation timestamp');
+      }
+      results.push(result.probe || result);
     }
-    record.result = result.probe || result;
+    record.result = jobs === 1 ? results[0] : results;
   } catch (error) {
     failure = error;
     entries.write({phase: 'error', step: 'probe', message: error.message});
@@ -269,6 +282,7 @@ if (require.main === module) {
   main(session.resolve(args[0]), {
     clip: cli.option(args, '--clip'),
     stage: cli.option(args, '--stage'),
+    jobs: Number(cli.option(args, '--jobs') || 1),
     output: cli.option(args, '--output') || undefined
   }).catch(error => {
     console.error(error);

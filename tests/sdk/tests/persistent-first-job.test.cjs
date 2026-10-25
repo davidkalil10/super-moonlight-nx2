@@ -119,7 +119,7 @@ test('first-job probe journals each stage and closes the decoder', async () => {
       .split('\n')
       .map(JSON.parse);
     assert.deepEqual(
-      journal.filter(row => row.step === 'worker first job').map(row => row.phase),
+      journal.filter(row => row.step === 'worker job').map(row => row.phase),
       ['before', 'after']
     );
     assert.equal(journal.at(-1).step, 'decoder close');
@@ -137,6 +137,49 @@ test('first-job probe journals each stage and closes the decoder', async () => {
       'restore',
       'fetch'
     ]);
+  } finally {
+    await fs.rm(directory, {recursive: true, force: true});
+  }
+});
+
+test('fetch probe checks two jobs on one worker', async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'hbl-two-jobs-'));
+  const clip = path.join(directory, 'three-idr.h264');
+  const unit = Buffer.from('0000016742001eab00000168ce0100000165abcd', 'hex');
+  await fs.writeFile(clip, Buffer.concat([unit, unit, unit]));
+  const calls = [];
+  try {
+    const record = await main(directory, {
+      clip,
+      stage: 'fetch',
+      jobs: 2,
+      output: path.join(directory, 'output'),
+      sourceRevision: 'test-revision',
+      sessionRpc: {a: {session: 'test-session'}},
+      allocateSurface: async () => 0x70000000,
+      async create() {
+        return {
+          async configure() {
+            return {width: 128, height: 96};
+          },
+          async submit() {},
+          async receive() {
+            return {pts: '0'};
+          },
+          async startPersistent({stage}) {
+            assert.equal(stage, null);
+          },
+          async processPersistent(unit) {
+            calls.push(unit.pts);
+            return {pts: String(unit.pts)};
+          },
+          async close() {}
+        };
+      }
+    });
+    assert.equal(record.verdict, 'PASS');
+    assert.deepEqual(calls, [1, 2]);
+    assert.deepEqual(record.result, [{pts: '1'}, {pts: '2'}]);
   } finally {
     await fs.rm(directory, {recursive: true, force: true});
   }
