@@ -137,7 +137,9 @@ function simulatedDevice({late = new Set()} = {}) {
         ringWord(status.STATUS.input + 20, 4, decoded);
         const slot = outputPlan.CONTROL.descriptors[(Math.max(1, decoded - 2) - 1) % 2];
         fetch(bytes.subarray(slot - gates.WRITE_OFFSET, slot - gates.WRITE_OFFSET + 0x80));
-      } else fetch(bytes);
+      } else
+        for (let offset = 0; offset < bytes.length; offset += outputPlan.DESCRIPTOR.size)
+          fetch(bytes.subarray(offset, offset + outputPlan.DESCRIPTOR.size));
       acquireNext();
       return {result: 0n};
     }

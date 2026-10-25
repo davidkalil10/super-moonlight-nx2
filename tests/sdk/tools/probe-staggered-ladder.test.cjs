@@ -1,6 +1,28 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const {clipIndices, expectedFor, waitChecked, waitOutput} = require('./probe-staggered-ladder.cjs');
+const {
+  clipIndices,
+  expectedFor,
+  proveHeld,
+  proveRelease,
+  waitChecked,
+  waitOutput
+} = require('./probe-staggered-ladder.cjs');
+
+const noWait = async () => {};
+const statusSequence = list => {
+  let index = 0;
+  return {
+    async readStatus() {
+      const [input, acquire, fetch = acquire - 1] = list[Math.min(index++, list.length - 1)];
+      return {
+        input: {sequence: input, sendStatus: 0n},
+        acquire: {sequence: acquire},
+        fetch: {sequence: fetch}
+      };
+    }
+  };
+};
 
 test('staggered ladder selects overlap, keyframe recovery and odd tail in one clip', () => {
   const units = Array.from({length: 70}, (_, index) => ({keyframe: index % 30 === 0}));
@@ -49,4 +71,68 @@ test('tail wait accepts output without a new receive', async () => {
     ack: {sequence: 14, index: 2}
   });
   assert.equal(snapshot.acquire.index, 1);
+});
+
+test('a held fetch must keep decode N unsubmitted for the whole window', async () => {
+  assert.deepEqual(await proveHeld(statusSequence([[3, 2]]), 4, {polls: 5, wait: noWait}), {
+    polls: 5,
+    input: 3,
+    acquire: 2
+  });
+  await assert.rejects(
+    () =>
+      proveHeld(
+        statusSequence([
+          [3, 2],
+          [3, 2],
+          [4, 2]
+        ]),
+        4,
+        {wait: noWait}
+      ),
+    /Decode 4 opened while output 2 was held/
+  );
+  await assert.rejects(
+    () =>
+      proveHeld(
+        statusSequence([
+          [3, 2],
+          [3, 3]
+        ]),
+        4,
+        {wait: noWait}
+      ),
+    /opened while output 2 was held/
+  );
+});
+
+test('a released fetch must show N-1 acquired before decode N is submitted', async () => {
+  assert.deepEqual(
+    await proveRelease(
+      statusSequence([
+        [3, 2, 1],
+        [3, 3, 2],
+        [4, 3, 2]
+      ]),
+      4,
+      {wait: noWait}
+    ),
+    {polls: 3, acquire: 3}
+  );
+  await assert.rejects(
+    () =>
+      proveRelease(
+        statusSequence([
+          [3, 2, 1],
+          [4, 2, 2]
+        ]),
+        4,
+        {wait: noWait}
+      ),
+    /Decode 4 was submitted before output 3 was acquired/
+  );
+  await assert.rejects(
+    () => proveRelease(statusSequence([[3, 2, 1]]), 4, {timeoutMs: 20, wait: noWait}),
+    /did not open/
+  );
 });

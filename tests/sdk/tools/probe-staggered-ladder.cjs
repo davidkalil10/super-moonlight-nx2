@@ -20,7 +20,43 @@ const outputPlan = require('../../tools/moonlight/staggered-output-plan.cjs');
 const checked = require('../../tools/moonlight/staggered-status.cjs');
 
 const BUILD_ROOT = '/media/storage2/builds/HBLauncher/native-h264';
+const HELD_AU = 4;
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+// Decode N was gated with the fetch of output N-2 held back: for the whole window the input
+// worker must stay parked on the N-1 acquisition acknowledgement, so N stays unsubmitted and
+// output N-2 stays the acquired one.
+async function proveHeld(worker, sequence, {polls = 40, wait = pause} = {}) {
+  let snapshot = null;
+  for (let poll = 0; poll < polls; poll++) {
+    snapshot = await worker.readStatus();
+    if (snapshot.input.sequence !== sequence - 1 || snapshot.acquire.sequence !== sequence - 2)
+      throw Error(`Decode ${sequence} opened while output ${sequence - 2} was held`);
+    await wait(5);
+  }
+  return {polls, input: snapshot.input.sequence, acquire: snapshot.acquire.sequence};
+}
+
+// After the held fetch opens, every snapshot that shows decode N submitted must already show
+// output N-1 acquired.
+async function proveRelease(worker, sequence, {timeoutMs = 5000, wait = pause} = {}) {
+  const until = Date.now() + timeoutMs;
+  let polls = 0;
+  while (Date.now() < until) {
+    const snapshot = await worker.readStatus();
+    polls++;
+    if (snapshot.input.sequence >= sequence && snapshot.acquire.sequence < sequence - 1)
+      throw Error(`Decode ${sequence} was submitted before output ${sequence - 1} was acquired`);
+    if (snapshot.input.sequence === sequence) {
+      if (snapshot.input.sendStatus !== 0n) throw Error(`Decode ${sequence} submit failed`);
+      if (snapshot.fetch.sequence !== sequence - 2)
+        throw Error(`Output ${sequence - 2} fetch is missing after release`);
+      return {polls, acquire: snapshot.acquire.sequence};
+    }
+    await wait(5);
+  }
+  throw Error(`Decode ${sequence} did not open after output ${sequence - 2} was fetched`);
+}
 
 function clipIndices(units) {
   const keyframes = units.flatMap((unit, index) => (unit.keyframe ? [index] : []));
@@ -198,8 +234,10 @@ async function runScenario({rpc, directory, storage, units, sps, pps, indices, m
           data: Buffer.alloc(1),
           pts: current.pts + 1
         };
+        const held = ['delayed-fetch', 'stop-ack'].includes(mode) && sequence === HELD_AU;
         await step(`AU ${sequence} guarded decode/fetch`, () =>
           worker.openGates({
+            holdFetch: held,
             snapshot,
             expected,
             inputSlot,
@@ -217,59 +255,89 @@ async function runScenario({rpc, directory, storage, units, sps, pps, indices, m
             frame: first
           })
         );
+        if (held) {
+          result.held = await step(`AU ${sequence} decode closed while ${sequence - 2} held`, () =>
+            proveHeld(worker, sequence)
+          );
+          result.held.decodeGateSignals = worker.diagnostics.decodeGateSignals;
+          if (mode === 'stop-ack') {
+            await step('stop input on acquisition acknowledgement', () => worker.stopInput());
+            const after = await worker.readStatus();
+            if (after.input.sequence !== sequence - 1)
+              throw Error('Stopping the parked input worker submitted an unchecked AU');
+            result.stoppedOnAck = {input: after.input.sequence, acquire: after.acquire.sequence};
+            break;
+          }
+          const releaseSnapshot = await worker.readStatus();
+          await step(`AU ${sequence - 2} delayed fetch`, () =>
+            worker.drainOutput({
+              snapshot: releaseSnapshot,
+              expected,
+              destination,
+              frame: first
+            })
+          );
+          result.released = await step(`AU ${sequence} decode after ${sequence - 1} acquired`, () =>
+            proveRelease(worker, sequence)
+          );
+        }
         if (sequence < selected.length)
           await step(`AU ${sequence + 1} TCP payload`, () => transport.send(next.data));
         if (sequence >= 3) outputs.push(sequence - 2);
         result.steps.push({sequence, pts: current.pts, fetched: sequence >= 3 ? sequence - 2 : null});
       }
-      const lastSequence = selected.length;
-      const until = Date.now() + 5000;
-      while (Date.now() < until) {
-        const snapshot = await worker.readStatus();
-        if (snapshot.input.sequence === lastSequence) {
-          if (snapshot.input.sendStatus !== 0n)
-            throw Error('Final staggered decoder submit failed');
-          break;
+      if (!result.stoppedOnAck) {
+        const lastSequence = selected.length;
+        const until = Date.now() + 5000;
+        while (Date.now() < until) {
+          const snapshot = await worker.readStatus();
+          if (snapshot.input.sequence === lastSequence) {
+            if (snapshot.input.sendStatus !== 0n)
+              throw Error('Final staggered decoder submit failed');
+            break;
+          }
+          await pause(5);
         }
-        await pause(5);
+        if ((await worker.readStatus()).input.sequence !== lastSequence)
+          throw Error('Final staggered input submit timed out');
+        await step('stop input in next TCP receive', () => worker.stopInput());
+        for (let sequence = lastSequence - 1; sequence <= lastSequence; sequence++) {
+          const prior = destinations.get(sequence - 1);
+          const expected = {
+            acquire: {sequence, pts: BigInt(selected[sequence - 1].pts)},
+            fetch: {sequence: sequence - 1},
+            ack: {sequence: prior.sequence, index: prior.index}
+          };
+          const snapshot = await step(`tail ${sequence} checked output`, () =>
+            waitOutput(worker, expected)
+          );
+          await step(`tail ${sequence - 1} publication`, () =>
+            verifyPublication(rpc, storage.mapped, prior, first)
+          );
+          const destination = await step(`tail ${sequence} surface`, () =>
+            sink.workerDestination({current: snapshot.current, applied: snapshot.nativeApplied})
+          );
+          await step(`tail ${sequence} checked fetch`, () =>
+            worker.drainOutput({snapshot, expected, destination, frame: first})
+          );
+          destinations.set(sequence, destination);
+          outputs.push(sequence);
+        }
+        const finalDestination = destinations.get(lastSequence);
+        await step('last publication acknowledged', () =>
+          waitOutput(worker, {
+            acquire: {sequence: lastSequence, pts: BigInt(selected.at(-1).pts)},
+            fetch: {sequence: lastSequence},
+            ack: {sequence: finalDestination.sequence, index: finalDestination.index}
+          })
+        );
+        await step('last publication readback', () =>
+          verifyPublication(rpc, storage.mapped, finalDestination, first)
+        );
+        await step('stop output in decoder event wait', () => worker.stopOutput());
+        result.outputs = outputs;
+        result.pts = selected.map(item => item.pts);
       }
-      if ((await worker.readStatus()).input.sequence !== lastSequence)
-        throw Error('Final staggered input submit timed out');
-      await step('stop input in next TCP receive', () => worker.stopInput());
-      for (let sequence = lastSequence - 1; sequence <= lastSequence; sequence++) {
-        const prior = destinations.get(sequence - 1);
-        const expected = {
-          acquire: {sequence, pts: BigInt(selected[sequence - 1].pts)},
-          fetch: {sequence: sequence - 1},
-          ack: {sequence: prior.sequence, index: prior.index}
-        };
-        const snapshot = await step(`tail ${sequence} checked output`, () =>
-          waitOutput(worker, expected)
-        );
-        await step(`tail ${sequence - 1} publication`, () =>
-          verifyPublication(rpc, storage.mapped, prior, first)
-        );
-        const destination = await step(`tail ${sequence} surface`, () =>
-          sink.workerDestination({current: snapshot.current, applied: snapshot.nativeApplied})
-        );
-        await step(`tail ${sequence} checked fetch`, () =>
-          worker.drainOutput({snapshot, expected, destination, frame: first})
-        );
-        destinations.set(sequence, destination);
-        outputs.push(sequence);
-      }
-      const finalDestination = destinations.get(lastSequence);
-      await step('last publication acknowledged', () => waitOutput(worker, {
-        acquire: {sequence: lastSequence, pts: BigInt(selected.at(-1).pts)},
-        fetch: {sequence: lastSequence},
-        ack: {sequence: finalDestination.sequence, index: finalDestination.index}
-      }));
-      await step('last publication readback', () =>
-        verifyPublication(rpc, storage.mapped, finalDestination, first)
-      );
-      await step('stop output in decoder event wait', () => worker.stopOutput());
-      result.outputs = outputs;
-      result.pts = selected.map(item => item.pts);
       result.decodeGateSignals = worker.diagnostics.decodeGateSignals;
     }
   } catch (error) {
@@ -348,7 +416,8 @@ async function main(directory, {clip, dryRun = false, output} = {}) {
       decoder: 0x71000000,
       output: 0x71000300,
       format: 0x71000180,
-      event: 0x53000400
+      event: 0x53000400,
+      acquireAck: 0x53000030
     };
     const input = inputPlan.plan(addresses);
     const video = outputPlan.plan({...addresses, base: 0x55000000});
@@ -356,7 +425,16 @@ async function main(directory, {clip, dryRun = false, output} = {}) {
       dryRun: true,
       indices,
       pts: indices,
-      stages: ['overlap', 'keyframe', 'odd-tail', 'stop-input', 'stop-output', 'short-recv'],
+      stages: [
+        'overlap',
+        'keyframe',
+        'odd-tail',
+        'stop-input',
+        'stop-output',
+        'delayed-fetch',
+        'stop-ack',
+        'short-recv'
+      ],
       steadyRequestsPerFrame: 2,
       inputFrameBytes: input.receive.concat(input.send).map(item => item.frame.length),
       outputFrameBytes: video.acquire.concat(video.fetch).map(item => item.frame.length)
@@ -411,7 +489,7 @@ async function main(directory, {clip, dryRun = false, output} = {}) {
       findPrivateStorage(directory || session.resolve())
     );
     await step('Moonlight native video ready', () => waitForNativeReady(rpc, storage));
-    for (const mode of ['normal', 'short-recv']) {
+    for (const mode of ['normal', 'delayed-fetch', 'stop-ack', 'short-recv']) {
       const scenario = await runScenario({
         rpc,
         directory: directory || session.resolve(),
@@ -441,7 +519,7 @@ async function main(directory, {clip, dryRun = false, output} = {}) {
   return record;
 }
 
-module.exports = {main, clipIndices, expectedFor, waitChecked, waitOutput};
+module.exports = {main, clipIndices, expectedFor, proveHeld, proveRelease, waitChecked, waitOutput};
 if (require.main === module) {
   const args = process.argv.slice(2);
   main(args[0]?.startsWith('--') ? null : args[0], {

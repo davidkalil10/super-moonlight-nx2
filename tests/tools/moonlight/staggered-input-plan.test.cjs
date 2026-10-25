@@ -3,6 +3,8 @@ const assert = require('node:assert/strict');
 const input = require('./staggered-input-plan.cjs');
 const status = require('./staggered-status.cjs');
 const ring = require('./ring.cjs');
+const SYNC = require('../../sdk/native/os-sync-functions.json');
+const {CODE} = require('../../sdk/native/thread.cjs');
 
 const addresses = {
   sdk: 0x7100000000,
@@ -13,7 +15,8 @@ const addresses = {
   fd: 4,
   recvFunction: 0x7600000000,
   functions: {sendInput: 0x7700000000, acquireInput: 0x7700001000},
-  decoder: 0x7800000000
+  decoder: 0x7800000000,
+  acquireAck: 0x7300000030
 };
 
 function checkedSnapshot() {
@@ -69,9 +72,39 @@ test('staggered input frames alternate receive and send while stamping checked s
       addresses.control + input.CONTROL.receiveDispatch[slot]
     );
     assert.equal(built.calls.send[slot][1].function, addresses.functions.sendInput);
-    assert.equal(built.calls.send[slot][3].function, addresses.functions.acquireInput);
+    assert.equal(built.calls.send[slot][2].function, addresses.functions.acquireInput);
   }
-  assert.equal(built.calls.send[0][2].args[0].u64, addresses.control + 0x120);
+  assert.equal(built.calls.receive[0][3].args[0].u64, addresses.control + 0x120);
+  assert.equal(built.calls.receive[1][3].args[0].u64, addresses.control + 0x1a0);
+});
+
+test('the input worker releases N-2, waits for the N-1 acquisition, then submits N', () => {
+  const built = input.plan(addresses);
+  const sync = name => addresses.sdk + SYNC[name].offset;
+  for (let slot = 0; slot < 2; slot++) {
+    const descriptor = addresses.control + input.CONTROL.descriptors[slot];
+    const [, , gate, fetch, ack, dispatch] = built.calls.receive[slot];
+    assert.equal(built.calls.receive[slot].length, 6);
+    assert.deepEqual(gate, {
+      function: sync('waitLightEvent'),
+      args: [addresses.control + input.CONTROL.decodeGate, 0, 0, 0]
+    });
+    assert.deepEqual(fetch, {
+      function: sync('signalLightEvent'),
+      args: [{u64: descriptor + input.DESCRIPTOR.fetchGate}, 0, 0, 0]
+    });
+    assert.deepEqual(ack, {
+      function: sync('waitLightEvent'),
+      args: [addresses.acquireAck, 0, 0, 0]
+    });
+    assert.equal(dispatch.function, addresses.sdk + CODE.longjmp.offset);
+    assert.deepEqual(dispatch.args[0], {u64: addresses.control + input.CONTROL.sendDispatch[slot]});
+    const send = built.calls.send[slot].map(call => call.function);
+    assert.equal(send.indexOf(addresses.functions.sendInput), 1);
+    assert.ok(!send.includes(sync('signalLightEvent')));
+    assert.ok(!send.includes(sync('waitLightEvent')));
+  }
+  assert.throws(() => input.plan({...addresses, acquireAck: 0}), /addresses/);
 });
 
 test('one gate write carries checked current input and next receive descriptor', () => {

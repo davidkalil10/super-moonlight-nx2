@@ -19,7 +19,8 @@ const addresses = {
   },
   decoder: 0x7700000000,
   output: 0x7700001000,
-  format: 0x7700002000
+  format: 0x7700002000,
+  acquireAck: 0x7300000030
 };
 
 test('staggered output frames acquire before a host fetch gate and publish once', () => {
@@ -30,7 +31,7 @@ test('staggered output frames acquire before a host fetch gate and publish once'
     assert.equal(built.calls.acquire[slot][0].function, addresses.sdk + SYNC.waitEvent.offset);
     assert.equal(built.calls.acquire[slot][1].function, addresses.functions.acquireOutput);
     assert.equal(
-      built.calls.acquire[slot][4].args[0].u64,
+      built.calls.acquire[slot][5].args[0].u64,
       addresses.control + output.CONTROL.fetchDispatch[slot]
     );
     assert.equal(built.calls.fetch[slot][1].function, addresses.functions.getOutput);
@@ -48,6 +49,30 @@ test('staggered output frames acquire before a host fetch gate and publish once'
     built.calls.fetch[0][4].args[0],
     addresses.mapped + ring.CONTROL.nativeSequence
   );
+});
+
+test('the output worker acknowledges an acquisition only after stamping it', () => {
+  const built = output.plan(addresses);
+  for (let slot = 0; slot < 2; slot++) {
+    const descriptor = addresses.control + output.CONTROL.descriptors[slot];
+    const [wait, acquire, stamp, ack, fetch] = built.calls.acquire[slot];
+    assert.equal(wait.function, addresses.sdk + SYNC.waitEvent.offset);
+    assert.equal(acquire.function, addresses.functions.acquireOutput);
+    assert.deepEqual(stamp.args.slice(0, 3), [
+      addresses.mapped + status.STATUS.acquire + 24,
+      descriptor + output.DESCRIPTOR.sequence,
+      4
+    ]);
+    assert.deepEqual(ack, {
+      function: addresses.sdk + SYNC.signalLightEvent.offset,
+      args: [addresses.acquireAck, 0, 0, 0]
+    });
+    assert.deepEqual(fetch, {
+      function: addresses.sdk + SYNC.waitLightEvent.offset,
+      args: [addresses.control + output.CONTROL.fetchGate, 0, 0, 0]
+    });
+  }
+  assert.throws(() => output.plan({...addresses, acquireAck: 0}), /addresses/);
 });
 
 test('staggered output descriptor checks ring surface and commits matching metadata', () => {
