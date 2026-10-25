@@ -5,6 +5,7 @@
 // watcher also reads the console tick on each wake and SendInput is stamped the same way, so
 // decoder latency is measured on the console clock, apart from the host's round trips.
 // --burst keeps the input side full instead of waiting for each AU's output.
+const fsSync = require('node:fs');
 const fs = require('node:fs/promises'),
   os = require('node:os'),
   path = require('node:path');
@@ -207,6 +208,23 @@ function summarizeBurst({sends, samples, frames, held, eventCount, base = 0, ms}
   };
 }
 
+function journal(file) {
+  const descriptor = fsSync.openSync(file, 'wx', 0o600);
+  let sequence = 0;
+  return {
+    write(value) {
+      fsSync.writeSync(
+        descriptor,
+        JSON.stringify({sequence: ++sequence, at: new Date().toISOString(), ...value}) + '\n'
+      );
+      fsSync.fsyncSync(descriptor);
+    },
+    close() {
+      fsSync.closeSync(descriptor);
+    }
+  };
+}
+
 async function main(
   directory,
   {
@@ -218,14 +236,20 @@ async function main(
     drainMs = 1000,
     stopTimeoutMs = 5000,
     burst = false,
+    window = null,
+    maxAus = null,
     output = process.env.HB_NATIVE_LOG_DIR,
     createDecoder = require('../../tools/moonlight/native-decoder.cjs').create
   } = {}
 ) {
   if (!clip) throw Error('Expected --clip <file.h264>');
+  if (window !== null && (![2, 3].includes(window) || burst))
+    throw Error('--window must be 2 or 3 and cannot be combined with --burst');
+  if (maxAus !== null && (!Number.isInteger(maxAus) || maxAus < 1))
+    throw Error('--max-aus must be a positive integer');
   directory = path.resolve(directory);
-  const rpc = require(path.join(directory, 'shared/rpc.cjs')),
-    sdk = rpc.a.sdk;
+  const raw = require(path.join(directory, 'shared/rpc.cjs'));
+  const pipelined = burst || window !== null;
   const revision = execFileSync('git', ['rev-parse', 'HEAD'], {
     cwd: path.resolve(__dirname, '../..'),
     encoding: 'utf8'
@@ -237,24 +261,37 @@ async function main(
   await fs.mkdir(output, {recursive: true, mode: 0o700});
 
   const bytes = await fs.readFile(clip);
-  const units = accessUnits(bytes);
+  const allUnits = accessUnits(bytes);
+  if (maxAus !== null && maxAus > allUnits.length)
+    throw Error('--max-aus exceeds the number of clip access units');
+  if (window !== null && maxAus !== null && maxAus < window)
+    throw Error('--max-aus must cover a full concurrency window');
+  const units = maxAus === null ? allUnits : allUnits.slice(0, maxAus);
   const sidecar = clip.replace(/\.h264$/, '.json');
   const timing = await fs.readFile(sidecar, 'utf8').then(JSON.parse, () => null);
-  const display = timing?.display ?? units.map((_, i) => i);
-  if (display.length !== units.length) throw Error('Clip timing does not match its AUs');
+  const allDisplay = timing?.display ?? allUnits.map((_, i) => i);
+  if (allDisplay.length !== allUnits.length) throw Error('Clip timing does not match its AUs');
+  const display = allDisplay.slice(0, units.length);
+  if (window !== null && display.some((shown, index) => shown !== index))
+    throw Error('--window requires an IP-only clip in display order');
   reference ??= await fs.access(clip.replace(/\.h264$/, '-reference.nv12')).then(
     () => clip.replace(/\.h264$/, '-reference.nv12'),
     () => null
   );
   const references = reference ? await fs.readFile(reference) : null;
   // A large clip's reference holds only some frames, listed by display index in the sidecar.
-  const listed = timing?.references ?? display.map((_, i) => i);
+  const listed = timing?.references ?? allDisplay.map((_, i) => i);
   const referenceAt = new Map(listed.map((shown, i) => [shown, i]));
+  if (window !== null && (!references || !display.some(shown => referenceAt.has(shown))))
+    throw Error('--window requires a reference for at least one submitted frame');
   const {sps, pps} = parameterSets(bytes);
   if (!sps || !pps) throw Error('Clip has no SPS/PPS');
+  const entries = window === null ? null : journal(path.join(output, 'decoder-concurrency.jsonl'));
+  const rpc = entries ? require('./probe-persistent-first-job.cjs').loggedRpc(raw, entries) : raw;
+  const sdk = rpc.a.sdk;
 
   const record = {
-    probe: 'decoder-events',
+    probe: window === null ? 'decoder-events' : 'decoder-concurrency',
     session: rpc.a.session,
     protocol: rpc.a.protocol,
     sourceRevision: revision,
@@ -274,6 +311,8 @@ async function main(
       drainMs,
       stopTimeoutMs,
       burst,
+      window,
+      maxAus,
       referenceFrames: reference ? referenceAt.size : 0
     }
   };
@@ -294,11 +333,11 @@ async function main(
   const ms = ticks => (Number(ticks) * 1000) / frequency;
   // Kept for a run that fails part way, so the AUs that did run still answer.
   function conclude() {
-    const fed = new Set((burst ? sends : rows).map(row => row.display));
+    const fed = new Set((pipelined ? sends : rows).map(row => row.display));
     const held = [...expected].filter(shown => fed.has(shown)).sort((a, b) => a - b);
     record.loop = {
       totalMs: round(performance.now() - started),
-      ...(burst
+      ...(pipelined
         ? summarizeBurst({
             sends,
             samples,
@@ -500,7 +539,7 @@ async function main(
     const stamp = {acquireOutput: false, stamp: fn.tick};
 
     started = performance.now();
-    for (let au = 0; au < units.length && !burst; au++) {
+    for (let au = 0; au < units.length && !pipelined; au++) {
       const before = await counters();
       exchanges.counterRead++;
       const at = performance.now();
@@ -571,30 +610,103 @@ async function main(
       }
       while ((await note()).count > frames.length && (await take(units.length - 1)));
     }
+    if (window !== null) {
+      record.sends = sends;
+      record.samples = samples;
+      record.windows = [];
+      for (let au = 0; au < units.length; au++) {
+        const queued = sends.length - frames.length;
+        if (queued && decoder.lastInput.index < 0)
+          throw Error(`Input slot unavailable with ${queued} output(s) still unacquired`);
+        const at = performance.now();
+        entries.write({phase: 'before', step: 'submit', au, display: display[au]});
+        await decoder.submit({data: units[au].data, pts: display[au]}, stamp);
+        entries.write({phase: 'after', step: 'submit', au, input: decoder.lastInput});
+        exchanges.submit++;
+        sends.push({
+          au,
+          display: display[au],
+          hostAt: round(at - started),
+          hostMs: round(performance.now() - at),
+          sendTick: String(decoder.lastStamp),
+          input: decoder.lastInput
+        });
+        const sampled = await sample();
+        samples.push({
+          ...sampled,
+          tick: String(sampled.tick),
+          sent: sends.length,
+          received: frames.length
+        });
+        if (sends.length - frames.length < window && au + 1 < units.length) continue;
+        const firstAu = frames.length;
+        const submittedBeforeAcquire = sends.length - frames.length;
+        const until = performance.now() + settleMs;
+        while (frames.length < sends.length && performance.now() < until) {
+          entries.write({phase: 'before', step: 'acquire', afterAu: au});
+          const frame = await take(au);
+          entries.write({phase: 'after', step: 'acquire', afterAu: au, display: frame?.display});
+          if (!frame) await sleep(pollMs);
+        }
+        record.windows.push({
+          firstAu,
+          lastAu: au,
+          submittedBeforeAcquire,
+          received: frames.length - firstAu
+        });
+        if (frames.length !== sends.length)
+          throw Error(`Window ${firstAu}-${au} did not drain before another input`);
+      }
+      const sampled = await sample();
+      samples.push({
+        ...sampled,
+        tick: String(sampled.tick),
+        sent: sends.length,
+        received: frames.length
+      });
+    }
     // Whatever is still inside the decoder after the last AU, given time but no more input.
     const drainStarted = performance.now();
     while (expected.size && performance.now() - drainStarted < drainMs) {
-      if (!(await take(burst ? units.length - 1 : null))) await sleep(pollMs * 4);
+      if (!(await take(pipelined ? units.length - 1 : null))) await sleep(pollMs * 4);
     }
     const drained = await counters();
     eventCount = drained.output;
-    if (burst) {
+    if (pipelined && window === null) {
       const last = await sample();
       samples.push({...last, tick: String(last.tick), sent: sends.length, received: frames.length});
     }
     record.drain = {...drained, ms: round(performance.now() - drainStarted)};
     const compared = conclude();
+    if (window !== null) {
+      record.loop.window = {
+        requested: window,
+        full: record.windows.filter(w => w.submittedBeforeAcquire === window).length,
+        maxSubmittedBeforeAcquire: Math.max(
+          0,
+          ...record.windows.map(w => w.submittedBeforeAcquire)
+        ),
+        completeInOrder: record.loop.received === units.length && record.loop.displayOrder,
+        throughputConclusive:
+          record.loop.console.oneEventPerOutput &&
+          record.loop.console.eventsTimed >= 30 &&
+          record.loop.console.inputFps >= 120 &&
+          record.loop.console.outputFps !== null
+      };
+      if (!record.loop.window.full || !record.loop.window.completeInOrder)
+        throw Error('Decoder concurrency window did not complete in order');
+    }
     if (compared.length !== compared.filter(f => f.match).length)
       throw Error('Decoded frames differ from the reference');
     if (references && !compared.length && frames.length) throw Error('No frame was compared');
   } catch (error) {
     failure = error;
-    if ((burst ? sends : rows).length && !record.loop) conclude();
+    if ((pipelined ? sends : rows).length && !record.loop) conclude();
   }
 
   // A watcher blocked in WaitEvent only sees the stop selector after a wake, and the decoder's
   // own thread may signal the same events, so extra bodies are expected and not judged.
-  if (watchers.length) {
+  if (watchers.length && !rpc.bridgeLost) {
     try {
       for (const w of watchers) {
         if (w.thread === null) continue;
@@ -625,7 +737,7 @@ async function main(
   // The decoder keeps a pointer to DecoderEvents and there is no unregister, so it is closed
   // before the events are finalized.
   let closed = decoder === null;
-  if (decoder && settled) {
+  if (decoder && settled && !rpc.bridgeLost) {
     try {
       await decoder.close();
       closed = true;
@@ -634,7 +746,7 @@ async function main(
       failure ||= error;
     }
   }
-  if (events.length && settled && closed) {
+  if (events.length && settled && closed && !rpc.bridgeLost) {
     try {
       for (const event of events) await rpc.callAddress(fn.finalizeEvent, [event], SHORT);
       record.finalized = true;
@@ -653,8 +765,11 @@ async function main(
         joined: w.joined,
         selector: w.program.selector
       })),
-      counters: control ? await counters().catch(e => 'unread: ' + e.message) : null,
-      note: 'A watcher or the decoder may still use these; nothing was finalized or destroyed'
+      counters:
+        control && !rpc.bridgeLost ? await counters().catch(e => 'unread: ' + e.message) : null,
+      note: rpc.bridgeLost
+        ? 'Bridge lost; no cleanup RPC sent. Restart SmileBASIC before another probe.'
+        : 'A watcher or the decoder may still use these; nothing was finalized or destroyed'
     };
     console.error('Decoder event probe retained resources', record.retained);
   }
@@ -663,11 +778,12 @@ async function main(
   record.verdict = failure ? 'FAIL' : 'PASS';
   if (failure) record.error = failure.message;
   await save();
+  entries?.close();
   const loop = record.loop;
-  if (loop && burst) {
+  if (loop && pipelined) {
     const {host, console: device} = loop;
     console.log(
-      'burst:',
+      window === null ? 'burst:' : 'concurrency:',
       loop.submitted,
       'AUs,',
       loop.received,
@@ -698,6 +814,13 @@ async function main(
       ', max in flight',
       device.maxInFlight
     );
+    if (window !== null)
+      console.log(
+        'window:',
+        JSON.stringify(loop.window),
+        ', groups',
+        JSON.stringify(record.windows)
+      );
   } else if (loop) {
     console.log(
       'decoder events:',
@@ -778,8 +901,12 @@ if (require.main === module) {
     reference: cli.option(args, '--reference') || undefined,
     watchInput: !args.includes('--no-input-watch'),
     burst: args.includes('--burst'),
+    window:
+      cli.option(args, '--window') === undefined ? null : Number(cli.option(args, '--window')),
     settleMs: cli.number(args, '--settle-ms', 250),
     drainMs: cli.number(args, '--drain-ms', 1000),
+    maxAus:
+      cli.option(args, '--max-aus') === undefined ? null : Number(cli.option(args, '--max-aus')),
     output: cli.option(args, '--output') || undefined
   }).catch(e => {
     console.error(e);

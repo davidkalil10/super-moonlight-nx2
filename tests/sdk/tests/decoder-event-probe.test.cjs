@@ -64,13 +64,21 @@ function fakeDecoder(
     width = WIDTH,
     height = HEIGHT,
     coded = null,
-    startOutput = false
+    startOutput = false,
+    disconnectOnSubmit = false
   } = {}
 ) {
   const reported = coded ?? {height, stride: width};
   const bytes = (reported.stride * reported.height * 3) / 2;
   const {memory, rpc} = fake;
-  const state = {struct: null, inside: [], ready: [], closed: false, configured: null};
+  const state = {
+    struct: null,
+    inside: [],
+    ready: [],
+    closed: false,
+    configured: null,
+    activity: []
+  };
   const signal = offset => {
     const event = memory.read64(state.struct + offset);
     if (event) fake.signal(event);
@@ -92,6 +100,7 @@ function fakeDecoder(
       return {width, height: reported.height};
     },
     async submit(unit, {acquireOutput, stamp}) {
+      state.activity.push('submit:' + unit.pts);
       assert.equal(acquireOutput, false);
       assert.equal(fake.rpc.names.get(stamp), 'timing.tick');
       this.lastStamp = fake.clock();
@@ -106,8 +115,13 @@ function fakeDecoder(
         status: 0,
         index: state.inside.length + state.ready.length < slots ? 1 : -1
       };
+      if (disconnectOnSubmit)
+        rpc.read = async () => {
+          throw Error('Console disconnected');
+        };
     },
     async receive(destination) {
+      state.activity.push('receive');
       if (!state.ready.length) return null;
       const shown = state.ready.shift();
       memory.write(destination.address, Buffer.alloc(bytes, corrupt && shown === 1 ? 9 : shown));
@@ -164,7 +178,7 @@ async function run(
     error => ({error})
   );
   const record = JSON.parse(fs.readFileSync(path.join(output, 'decoder-event-probe.json'), 'utf8'));
-  return {...outcome, record, fake, movie};
+  return {...outcome, record, fake, movie, output};
 }
 
 const position = (lines, pattern, from = 0) => {
@@ -394,6 +408,72 @@ test('burst drains when the input side fills and reports what stayed inside', as
   assert.ok(report.sends.filter(s => s.blocked).every(s => s.au > 0));
   assert.ok(loop.console.maxInFlight >= 2);
   assert.equal(report.finalized, true);
+});
+
+test('a two-AU window submits both inputs before the first output acquire', async () => {
+  const {report, error, movie} = await run([0, 1, 2, 3], {window: 2, maxAus: 2});
+  assert.equal(error, undefined);
+  assert.equal(report.verdict, 'PASS');
+  assert.deepEqual(movie.state.activity.slice(0, 3), ['submit:0', 'submit:1', 'receive']);
+  assert.equal(report.loop.window.full, 1);
+  assert.equal(report.loop.window.maxSubmittedBeforeAcquire, 2);
+  assert.equal(report.loop.window.completeInOrder, true);
+  assert.equal(report.correctness.matched, 2);
+  assert.equal(report.inputs.units, 2);
+  assert.ok(report.loop.console.outputFps > 0);
+});
+
+test('a three-AU window records each RPC and drains all outputs before another input', async () => {
+  const {report, error, movie, record, output} = await run([0, 1, 2, 3, 4, 5], {window: 3});
+  assert.equal(error, undefined);
+  assert.deepEqual(movie.state.activity.slice(0, 4), [
+    'submit:0',
+    'submit:1',
+    'submit:2',
+    'receive'
+  ]);
+  assert.equal(report.loop.window.full, 2);
+  assert.deepEqual(
+    record.windows.map(w => w.received),
+    [3, 3]
+  );
+  const lines = fs
+    .readFileSync(path.join(output, 'decoder-concurrency.jsonl'), 'utf8')
+    .trim()
+    .split('\n')
+    .map(JSON.parse);
+  const submit = lines.filter(row => row.step === 'submit');
+  assert.deepEqual(
+    submit.slice(0, 6).map(row => row.phase),
+    ['before', 'after', 'before', 'after', 'before', 'after']
+  );
+  assert.ok(lines.some(row => row.operation === 'callAddress' && row.phase === 'before'));
+  assert.ok(lines.some(row => row.operation === 'callAddress' && row.phase === 'after'));
+});
+
+test('a full input queue stops the window before it acquires an output', async () => {
+  const {error, record, movie} = await run([0, 1, 2], {
+    window: 2,
+    decoder: {slots: 1}
+  });
+  assert.match(error.message, /Input slot unavailable with 1 output\(s\) still unacquired/);
+  assert.equal(record.verdict, 'FAIL');
+  assert.equal(record.loop.submitted, 1);
+  assert.equal(movie.state.closed, true);
+  assert.equal(record.finalized, true);
+});
+
+test('a lost bridge leaves the decoder and events untouched for a fresh session', async () => {
+  const {error, record, movie, fake} = await run([0, 1], {
+    window: 2,
+    decoder: {disconnectOnSubmit: true}
+  });
+  assert.match(error.message, /Console disconnected/);
+  assert.equal(record.verdict, 'FAIL');
+  assert.match(record.retained.note, /Restart SmileBASIC/);
+  assert.equal(movie.state.closed, false);
+  assert.equal(record.finalized, undefined);
+  assert.ok(!fake.rpc.lines.some(line => /^callAddress os\.finalizeEvent/.test(line)));
 });
 
 test('burst shuts down in the same order as the per-AU run', async () => {
