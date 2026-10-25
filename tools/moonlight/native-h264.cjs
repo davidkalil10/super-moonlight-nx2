@@ -7,6 +7,36 @@ const {execFileSync} = require('node:child_process');
 const os = require('node:os');
 const {AccessUnits, parameterSets} = require('./h264-stream.cjs');
 
+const IDR_COOLDOWN_MS = 100;
+
+function createIdrRequester(
+  send,
+  {now = Date.now, schedule = setTimeout, cancel = clearTimeout} = {}
+) {
+  let lastSent = -Infinity;
+  let timer = null;
+  let closed = false;
+  return {
+    request() {
+      if (closed || timer !== null) return;
+      timer = schedule(
+        () => {
+          timer = null;
+          if (closed) return;
+          lastSent = now();
+          send();
+        },
+        Math.max(0, lastSent + IDR_COOLDOWN_MS - now())
+      );
+    },
+    close() {
+      closed = true;
+      if (timer !== null) cancel(timer);
+      timer = null;
+    }
+  };
+}
+
 async function run({
   args,
   directory,
@@ -70,12 +100,6 @@ async function run({
   let monitor = null;
   let printing = null;
   let stopped = false;
-  let idrTimer;
-  let lastIdr = 0;
-  // Minimum spacing between IDR requests. Each IDR is an order of magnitude
-  // larger than a P frame, so spacing them keeps a transient backlog from
-  // spiralling into a flood of keyframes that saturates the link.
-  const IDR_COOLDOWN_MS = 1000;
   const children = [];
   const stats = {
     received: 0,
@@ -89,11 +113,16 @@ async function run({
   };
   const log = value => console.error(JSON.stringify(value));
   const cancelled = () => stopping;
+  const idrRequester = createIdrRequester(() => {
+    if (stopping) return;
+    stats.idr++;
+    helper.stdin.write(JSON.stringify({type: 'request-idr'}) + '\n');
+  });
 
   function stop() {
     if (stopped) return;
     stopped = stopping = true;
-    clearTimeout(idrTimer);
+    idrRequester.close();
     for (const child of children) child.kill('SIGINT');
     reader?.close();
     helper?.stdin.end();
@@ -103,17 +132,7 @@ async function run({
   process.on('SIGINT', stop);
   process.on('SIGTERM', stop);
   function requestIdr() {
-    if (stopping || idrTimer) return;
-    idrTimer = setTimeout(
-      () => {
-        idrTimer = null;
-        if (stopping) return;
-        lastIdr = Date.now();
-        stats.idr++;
-        helper.stdin.write(JSON.stringify({type: 'request-idr'}) + '\n');
-      },
-      Math.max(0, lastIdr + IDR_COOLDOWN_MS - Date.now())
-    );
+    if (!stopping) idrRequester.request();
   }
   try {
     sink = await createSink(rpc, storage, {cancelled});
@@ -371,4 +390,4 @@ async function run({
   }
 }
 
-module.exports = {run};
+module.exports = {run, createIdrRequester};
