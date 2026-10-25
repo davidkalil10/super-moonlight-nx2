@@ -240,8 +240,7 @@ async function run({
       pps,
       configured = false,
       persistentStarted = false,
-      outstanding = 0,
-      unshown = null;
+      outstanding = 0;
     async function resync(error) {
       resets = resets.filter(time => Date.now() - time < 30000);
       if (resets.length >= 3) throw error;
@@ -254,7 +253,6 @@ async function run({
       configured = false;
       persistentStarted = false;
       outstanding = 0;
-      unshown = null;
       requestIdr();
     }
     monitor = setInterval(async () => {
@@ -313,25 +311,17 @@ async function run({
       }
       try {
         if (persistentStarted) {
-          // With the next unit already queued, the previous frame is published while
-          // the console decodes this one; an idle stream publishes at once.
-          const publish = async () => {
-            enter('publish');
-            await sink.publish(unshown.destination, unshown.frame);
-            unshown = null;
-            stats.presented++;
-          };
           enter('persistent');
           await decoder.beginPersistent(unit);
-          if (unshown) await publish();
           enter('destination');
           const destination = await sink.destination();
           enter('persistent');
           const frame = await decoder.finishPersistent(destination);
           stats.submitted++;
           stats.decoded++;
-          unshown = {destination, frame};
-          if (!reader.ready.length) await publish();
+          enter('publish');
+          await sink.publish(destination, frame);
+          stats.presented++;
           enter('read');
           continue;
         }
