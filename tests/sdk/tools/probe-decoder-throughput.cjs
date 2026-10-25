@@ -1,7 +1,7 @@
 // Console-paced H.264 throughput: preload the clip, then feed and drain it on two
 // bounded console workers. A semaphore limits submitted but unacquired frames.
 // Usage: probe-decoder-throughput.cjs [RUN_DIR] --clip ip1080.h264 --window 2|3
-//        [--max-aus 2..120] [--dry-run]
+//        [--max-aus 2..120] [--hold-outputs] [--dry-run]
 const fs = require('node:fs/promises');
 const fsSync = require('node:fs');
 const path = require('node:path');
@@ -92,7 +92,20 @@ function loggedRpc(raw, entries) {
   return rpc;
 }
 
-function plan({sdk, fn, sync, tick, copy, decoder, inputBuffer, control, payloads, window, bases}) {
+function plan({
+  sdk,
+  fn,
+  sync,
+  tick,
+  copy,
+  decoder,
+  inputBuffer,
+  control,
+  payloads,
+  window,
+  bases,
+  holdOutputs = false
+}) {
   if (![2, 3].includes(window) || !payloads.length || payloads.length > 120)
     throw Error('Throughput plan needs 1..120 AUs and window 2 or 3');
   const verified = new Set(Object.values(fn));
@@ -157,13 +170,19 @@ function plan({sdk, fn, sync, tick, copy, decoder, inputBuffer, control, payload
         args: [decoder, slot, slot + 8, slot + 16, slot + 20]
       }) - 1;
     row.tick = outputCalls.push({function: tick, args: []}) - 1;
-    row.release =
-      outputCalls.push({
-        function: fn.releaseOutput,
-        args: [decoder, {u32: slot}]
-      }) - 1;
-    row.credit = outputCalls.push({function: sync.releaseSemaphore, args: [control + CREDITS]}) - 1;
     outputRows.push(row);
+    if (!holdOutputs || (index + 1) % window === 0 || index + 1 === payloads.length) {
+      const pending = holdOutputs ? outputRows.slice(Math.floor(index / window) * window) : [row];
+      for (const held of pending) {
+        held.release =
+          outputCalls.push({
+            function: fn.releaseOutput,
+            args: [decoder, {u32: held.slot}]
+          }) - 1;
+        held.credit =
+          outputCalls.push({function: sync.releaseSemaphore, args: [control + CREDITS]}) - 1;
+      }
+    }
   }
   const output = build(
     bases.output + FRAME_OFFSET,
@@ -280,9 +299,13 @@ function summarize(plan, inputResults, outputResults, outputSlots, frequency, wi
   };
 }
 
-async function main(directory, {clip, window, maxAus = 120, output, dryRun = false} = {}) {
+async function main(
+  directory,
+  {clip, window, maxAus = 120, output, dryRun = false, holdOutputs = false} = {}
+) {
   if (!clip) throw Error('Pass --clip with ip1080.h264');
   if (![2, 3].includes(window)) throw Error('--window must be 2 or 3');
+  if (holdOutputs && window !== 2) throw Error('--hold-outputs is limited to window 2');
   if (!Number.isInteger(maxAus) || maxAus < window || maxAus > 120)
     throw Error('--max-aus must be between the window and 120');
   directory = path.resolve(directory);
@@ -331,11 +354,13 @@ async function main(directory, {clip, window, maxAus = 120, output, dryRun = fal
       control: 0x52000000,
       payloads,
       window,
-      bases: {input: 0x50000000, output: 0x51000000}
+      bases: {input: 0x50000000, output: 0x51000000},
+      holdOutputs
     });
     const result = {
       dryRun: true,
       window,
+      holdOutputs,
       accessUnits: units.length,
       maxUnitBytes: Math.max(...units.map(unit => unit.data.length)),
       payloadBytes: align(total, 4096),
@@ -357,7 +382,8 @@ async function main(directory, {clip, window, maxAus = 120, output, dryRun = fal
       '-' +
       revision.slice(0, 8) +
       '-r3-throughput-w' +
-      window
+      window +
+      (holdOutputs ? '-hold' : '')
   );
   await fs.mkdir(output, {recursive: true, mode: 0o700});
   const entries = journal(path.join(output, 'decoder-throughput.jsonl'));
@@ -374,6 +400,7 @@ async function main(directory, {clip, window, maxAus = 120, output, dryRun = fal
     clip,
     clipSha256: crypto.createHash('sha256').update(bytes).digest('hex'),
     window,
+    holdOutputs,
     accessUnits: units.length
   };
   const report = path.join(output, 'decoder-throughput.json');
@@ -565,7 +592,8 @@ async function main(directory, {clip, window, maxAus = 120, output, dryRun = fal
       control,
       payloads,
       window,
-      bases: {input: inputBase, output: outputBase}
+      bases: {input: inputBase, output: outputBase},
+      holdOutputs
     });
     record.programs = {
       inputCalls: programs.input.proof.logicalCalls,
@@ -729,7 +757,8 @@ if (require.main === module) {
     window: Number(get('--window')),
     maxAus: args.includes('--max-aus') ? Number(get('--max-aus')) : 120,
     output: get('--output'),
-    dryRun: args.includes('--dry-run')
+    dryRun: args.includes('--dry-run'),
+    holdOutputs: args.includes('--hold-outputs')
   }).catch(error => {
     console.error(error);
     process.exitCode = 1;

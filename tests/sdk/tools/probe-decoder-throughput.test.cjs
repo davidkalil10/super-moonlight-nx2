@@ -17,7 +17,7 @@ const sync = {
   waitEvent: sdk + 0x124000
 };
 
-function fixture(window, count = 6) {
+function fixture(window, count = 6, holdOutputs = false) {
   return plan({
     sdk,
     fn,
@@ -32,7 +32,8 @@ function fixture(window, count = 6) {
       length: 40000
     })),
     window,
-    bases: {input: 0x50000000, output: 0x51000000}
+    bases: {input: 0x50000000, output: 0x51000000},
+    holdOutputs
   });
 }
 
@@ -108,4 +109,15 @@ test('R3 maps the window-three stalled call to the final output event wait', () 
     au: 119,
     step: 'wait'
   });
+});
+
+test('held-output plan acquires two outputs before releasing either one', () => {
+  const planned = fixture(2, 5, true);
+  const rows = planned.outputRows;
+  assert.ok(rows[0].acquire < rows[1].acquire);
+  assert.ok(rows[1].acquire < rows[0].release);
+  assert.ok(rows[0].release < rows[1].release);
+  assert.ok(rows[1].credit < rows[2].wait);
+  assert.ok(rows[3].acquire < rows[2].release);
+  assert.ok(rows[4].release > rows[4].acquire);
 });
