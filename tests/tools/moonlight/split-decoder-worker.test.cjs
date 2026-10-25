@@ -189,11 +189,19 @@ test('short receive cannot open the decode gate', async () => {
   const job = await worker.stageInput({
     index: 1,
     length: 4096,
+    receiveLength: 2048,
     pts: 30,
     inputAddress: 0x72000000,
     payload: Buffer.alloc(4096)
   });
-  await assert.rejects(worker.completeInput(job), /Native TCP receive returned 2048\/4096/);
+  const inputJob = f.read(f.control + 0x140, 16);
+  assert.equal(inputJob.readUInt32LE(8), 4096);
+  assert.equal(inputJob.readUInt32LE(12), 2048);
+  await assert.rejects(
+    worker.completeInput(job, Buffer.alloc(2048)),
+    /Native TCP receive returned 2048\/4096/
+  );
+  assert.equal(f.transport.sent[0].length, 2048);
   assert.equal(worker.diagnostics.decodeGateSignals, 0);
   assert.equal(
     f.calls.filter(

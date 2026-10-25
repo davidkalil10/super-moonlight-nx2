@@ -12,6 +12,7 @@ async function fixture(stage) {
   await fs.writeFile(clip, Buffer.concat([accessUnit, accessUnit, accessUnit]));
   const calls = [];
   let sequence = 0;
+  let receiveLength = 0;
   const result = await main(directory, {
     clip,
     stage,
@@ -52,10 +53,14 @@ async function fixture(stage) {
         },
         async stageSplitInput(unit) {
           calls.push('stage:' + unit.pts);
+          receiveLength = unit.receiveLength;
         },
-        async completeSplitInput() {
-          await transport.send(Buffer.alloc(10));
-          throw Error('Native TCP receive returned 5/10 bytes and sequence 1/1');
+        async completeSplitInput(payload) {
+          assert.equal(payload.length, receiveLength);
+          await transport.send(payload);
+          throw Error(
+            `Native TCP receive returned ${payload.length}/${payload.length * 2} bytes and sequence 1/1`
+          );
         },
         async submitSplit(unit) {
           calls.push('input:' + unit.pts);
@@ -96,7 +101,7 @@ test('short receive probe accepts only a closed decode gate', async () => {
   const {result, calls} = await fixture('short-recv');
   assert.equal(result.verdict, 'PASS');
   assert.equal(result.result.decodeGateSignals, 0);
-  assert.ok(calls.includes('send:5'));
-  assert.ok(calls.includes('abort'));
+  assert.ok(calls.some(call => call.startsWith('send:')));
+  assert.equal(calls.includes('abort'), false);
   assert.equal(calls.at(-2), 'close');
 });

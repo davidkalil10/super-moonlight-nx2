@@ -135,10 +135,7 @@ async function main(
     transport = {
       ...opened,
       async send(bytes) {
-        const payload =
-          stage === 'short-recv' ? bytes.subarray(0, Math.max(1, bytes.length >>> 1)) : bytes;
-        await step('TCP send ' + payload.length + '/' + bytes.length, () => opened.send(payload));
-        if (stage === 'short-recv') opened.abort();
+        await step('TCP send ' + bytes.length, () => opened.send(bytes));
       },
       abort() {
         entries.write({phase: 'before', step: 'TCP abort'});
@@ -186,10 +183,15 @@ async function main(
       await step('input worker enter receive', () => decoder.stageSplitInput(unit(nextIndex)));
       record.result = {inputWorker: 'receive blocked before payload'};
     } else if (stage === 'short-recv') {
-      await step('input worker enter receive', () => decoder.stageSplitInput(unit(nextIndex)));
+      const shortLength = Math.max(1, units[nextIndex].data.length >>> 1);
+      await step('input worker enter bounded receive', () =>
+        decoder.stageSplitInput({...unit(nextIndex), receiveLength: shortLength})
+      );
       let expected = null;
       try {
-        await step('short receive and host count check', () => decoder.completeSplitInput());
+        await step('short receive and host count check', () =>
+          decoder.completeSplitInput(units[nextIndex].data.subarray(0, shortLength))
+        );
       } catch (error) {
         if (!/Native TCP receive returned/.test(error.message)) throw error;
         expected = error.message;
