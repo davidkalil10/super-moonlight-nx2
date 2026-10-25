@@ -169,7 +169,7 @@ test('staggered 120 fps needs a 120 Hz present', async () => {
   const fast = await simulate({mode: 'staggered', frames: 240, presentHz: 120, model});
   assert.ok(slow.fps < 61, `60 Hz present gave ${slow.fps} fps`);
   assert.ok(fast.fps > slow.fps * 1.2, `120 Hz present gave ${fast.fps} fps`);
-  assert.ok(fast.fps < 120, "one decode in flight caps the loop below 120 fps");
+  assert.ok(fast.fps < 120, 'one decode in flight caps the loop below 120 fps');
 });
 
 test('staggered lag 2 keeps two decodes in flight', async () => {
@@ -191,4 +191,24 @@ test('budget reports the staggered matrix', async () => {
 test('budget reports lag 2 at both decode times', async () => {
   const {staggeredLag2} = await budget({frames: 60});
   assert.equal(Object.keys(staggeredLag2).length, 6);
+});
+
+test('staggered acquire barrier keeps the host requests and 120 Hz lag 2 rate', async () => {
+  for (const decodeMs of [MODEL.decodeMs, 6.85]) {
+    const options = {mode: 'staggered', frames: 240, presentHz: 120, lag: 2, paced: false};
+    const model = {...MODEL, decodeMs, sourceFps: 120};
+    const open = await simulate({...options, model});
+    const barrier = await simulate({...options, barrier: true, model});
+    assert.equal(barrier.barrier, true);
+    assert.equal(barrier.requestsPerFrame, open.requestsPerFrame);
+    assert.ok(barrier.fps <= open.fps, `barrier ${barrier.fps} fps against ${open.fps}`);
+    assert.ok(barrier.fps >= 110, `barrier at ${decodeMs} ms decode gave ${barrier.fps} fps`);
+  }
+});
+
+test('budget reports the barrier matrix', async () => {
+  const {staggeredBarrier} = await budget({frames: 60});
+  assert.equal(Object.keys(staggeredBarrier).length, 24);
+  for (const [name, entry] of Object.entries(staggeredBarrier))
+    if (name.endsWith('retry0')) assert.ok(entry.requestsPerFrame <= BUDGET.staggered, name);
 });

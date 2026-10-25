@@ -484,6 +484,9 @@ function createConsole(
 // R(N) reads one status snapshot, W(N) is one writeAndCall that opens decode gate N
 // and fetch gate N-1. A late receive, acquire or renderer ack costs one extra read
 // after an off-bridge wait; retryRate spreads those rereads evenly over the frames.
+// With barrier set the console orders each submit as in cb183ad: gate N releases the
+// held output first (fetchMs), then N is submitted once output N-1 is acquired. The
+// host side is unchanged.
 async function simulateStaggered({
   frames = 120,
   warmup = 4,
@@ -491,6 +494,7 @@ async function simulateStaggered({
   presentHz = 60,
   retryRate = 0,
   lag = 1,
+  barrier = false,
   model = MODEL
 }) {
   const timing = {...model, vsyncMs: 1000 / presentHz};
@@ -548,7 +552,10 @@ async function simulateStaggered({
       }
       await request();
       await request();
-      decoded[frame] = Math.max(clock.now(), decoderFree) + timing.decodeMs;
+      let submit = clock.now();
+      if (barrier && frame)
+        submit = Math.max(submit + (frame >= lag ? timing.fetchMs : 0), decoded[frame - 1]);
+      decoded[frame] = Math.max(submit, decoderFree) + timing.decodeMs;
       decoderFree = decoded[frame];
       if (frame >= lag) apply(frame - lag, clock.now() + timing.fetchMs);
       sent = clock.now();
@@ -563,6 +570,7 @@ async function simulateStaggered({
       presentHz,
       retryRate,
       lag,
+      barrier,
       requestsPerFrame: perFrame(exchanges),
       bridgeMsPerFrame: perFrame(bridgeMs),
       msPerFrame: perFrame(elapsed),
@@ -582,10 +590,11 @@ async function simulate({
   presentHz,
   retryRate,
   lag,
+  barrier,
   model = MODEL
 }) {
   if (mode === 'staggered')
-    return simulateStaggered({frames, warmup, paced, presentHz, retryRate, lag, model});
+    return simulateStaggered({frames, warmup, paced, presentHz, retryRate, lag, barrier, model});
   const paired = mode === 'paired';
   if (paired && (nativePublish || autoQueue || linkedGates))
     throw Error('The paired loop publishes from its own worker');
@@ -781,7 +790,15 @@ async function budget({frames = 120, model = MODEL} = {}) {
     const autoQueue = name === 'splitPublishAuto' || name === 'splitLinked';
     const linkedGates = name === 'splitLinked';
     const paced = await simulate({mode, frames, model, nativePublish, autoQueue, linkedGates});
-    const free = await simulate({mode, frames, model, nativePublish, autoQueue, linkedGates, paced: false});
+    const free = await simulate({
+      mode,
+      frames,
+      model,
+      nativePublish,
+      autoQueue,
+      linkedGates,
+      paced: false
+    });
     modes[name] = {
       requestsPerFrame: paced.requestsPerFrame,
       bridgeMsPerFrame: paced.bridgeMsPerFrame,
@@ -862,6 +879,29 @@ async function budget({frames = 120, model = MODEL} = {}) {
       };
     }
   }
+  const staggeredBarrier = {};
+  for (const sourceFps of [60, 120]) {
+    for (const presentHz of [60, 120]) {
+      for (const decodeMs of [model.decodeMs, R3_DECODE_MS]) {
+        for (const retryRate of [0, 0.1, 0.3]) {
+          const options = {mode: 'staggered', frames, presentHz, retryRate, lag: 2};
+          const rate = {...model, decodeMs, sourceFps};
+          const paced = await simulate({...options, barrier: true, model: rate});
+          const free = await simulate({...options, barrier: true, model: rate, paced: false});
+          const open = await simulate({...options, model: rate, paced: false});
+          staggeredBarrier[
+            `${sourceFps}fps-${presentHz}Hz-decode${decodeMs}-retry${retryRate * 100}`
+          ] = {
+            requestsPerFrame: paced.requestsPerFrame,
+            bridgeMsPerFrame: paced.bridgeMsPerFrame,
+            fps: paced.fps,
+            predictedFps: free.fps,
+            predictedFpsWithoutBarrier: open.fps
+          };
+        }
+      }
+    }
+  }
   return {
     frames,
     model,
@@ -873,6 +913,7 @@ async function budget({frames = 120, model = MODEL} = {}) {
     paired,
     staggered,
     staggeredLag2,
+    staggeredBarrier,
     planDecodeMs: {decodeMs: PLAN_DECODE_MS, ...planDecode}
   };
 }
