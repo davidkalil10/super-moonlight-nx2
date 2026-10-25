@@ -15,12 +15,13 @@ const FUNCTIONS = {
   releaseOutput: 0x5000000c
 };
 
-function fixture() {
+function fixture({delayedSecondWake = false} = {}) {
   const regions = [];
   const calls = [];
   let allocations = 0;
   let control = 0;
   let presentation = null;
+  let stopSignals = 0;
   const regionAt = address =>
     regions.find(region => address >= region.base && address < region.base + region.data.length);
   const write = (address, bytes) => {
@@ -54,7 +55,17 @@ function fixture() {
         thread.writeBigUInt64LE(0x1234n);
         write(args[0], thread);
       }
-      return {result: address === SDK + CODE.tryWait.offset ? 1n : 0n};
+      if (address === SDK + SYNC.signalEvent.offset && delayedSecondWake) {
+        stopSignals++;
+        if (stopSignals === 1 || stopSignals === 3) {
+          const result = Buffer.alloc(8);
+          result.writeBigUInt64LE(0x100en);
+          write(control + CONTROL.acquireResults + (stopSignals === 1 ? 0 : 8), result);
+        }
+      }
+      if (address === SDK + CODE.tryWait.offset)
+        return {result: !delayedSecondWake || stopSignals >= 3 ? 1n : 0n};
+      return {result: 0n};
     },
     async read(address, length) {
       if (address === MAPPED + ring.CONTROL.current && length === 24) {
@@ -191,4 +202,18 @@ test('paired loop stop releases a first held output when the second never arrive
   assert.equal(releases.length, 1);
   assert.equal(releases[0].args[1], 4);
   assert.equal(worker.diagnostics.retained, false);
+});
+
+test('paired loop stop retries a coalesced second output wake', async () => {
+  const f = fixture({delayedSecondWake: true});
+  const worker = await workerFor(f);
+  await worker.start();
+  await worker.beginPair(1);
+  await worker.stop();
+  assert.equal(worker.diagnostics.joined, true);
+  assert.equal(worker.diagnostics.retained, false);
+  assert.equal(
+    f.calls.filter(call => call.address === SDK + SYNC.signalEvent.offset).length,
+    3
+  );
 });
