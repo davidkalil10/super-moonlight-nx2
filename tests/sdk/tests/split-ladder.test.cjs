@@ -7,8 +7,9 @@ const {main, parseArgs} = require('../tools/probe-split-ladder.cjs');
 
 const ALL = ['one', 'two', 'stop-input', 'stop-output', 'short-recv'];
 
-async function ladder(args, outcomes = {}) {
+async function ladder(t, args, outcomes = {}) {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'hbl-split-ladder-'));
+  t.after(() => fs.rm(directory, {recursive: true, force: true}));
   const runsFile = path.join(directory, 'RUNS.md');
   await fs.writeFile(runsFile, '# Runs\n');
   const calls = [];
@@ -36,8 +37,8 @@ async function ladder(args, outcomes = {}) {
 
 const CLIP = ['--clip', '/clips/ip1080.h264'];
 
-test('runs every stage in ladder order and records each one', async () => {
-  const {result, calls, lines, runs} = await ladder(['/runs/launcher-x', ...CLIP]);
+test('runs every stage in ladder order and records each one', async t => {
+  const {result, calls, lines, runs} = await ladder(t, ['/runs/launcher-x', ...CLIP]);
   assert.deepEqual(
     calls.map(call => call.stage),
     ALL
@@ -65,8 +66,8 @@ test('runs every stage in ladder order and records each one', async () => {
   assert.match(lines.at(-1), /^SPLIT LADDER PASS/);
 });
 
-test('stops at the first failing stage and asks for a restart', async () => {
-  const {result, calls, lines, runs} = await ladder(CLIP, {'stop-input': 'FAIL'});
+test('stops at the first failing stage and asks for a restart', async t => {
+  const {result, calls, lines, runs} = await ladder(t, CLIP, {'stop-input': 'FAIL'});
   assert.deepEqual(
     calls.map(call => call.stage),
     ['one', 'two', 'stop-input']
@@ -79,19 +80,19 @@ test('stops at the first failing stage and asks for a restart', async () => {
   assert.match(lines.join('\n'), /Restart SmileBASIC/);
 });
 
-test('a nonzero exit or a missing PASS marker fails the stage', async () => {
-  const crashed = await ladder(CLIP, {one: 'crash'});
+test('a nonzero exit or a missing PASS marker fails the stage', async t => {
+  const crashed = await ladder(t, CLIP, {one: 'crash'});
   assert.equal(crashed.result.stages[0].verdict, 'FAIL');
   assert.match(crashed.runs, /^- one: FAIL, no record, 1.5s$/m);
-  const silent = await ladder(CLIP, {two: 'nomarker'});
+  const silent = await ladder(t, CLIP, {two: 'nomarker'});
   assert.deepEqual(
     silent.result.stages.map(stage => stage.verdict),
     ['PASS', 'FAIL']
   );
 });
 
-test('a stage subset runs in ladder order', async () => {
-  const {calls, runs} = await ladder([...CLIP, '--stages', 'short-recv,one']);
+test('a stage subset runs in ladder order', async t => {
+  const {calls, runs} = await ladder(t, [...CLIP, '--stages', 'short-recv,one']);
   assert.deepEqual(
     calls.map(call => call.stage),
     ['one', 'short-recv']
@@ -119,11 +120,24 @@ test('dry run prints the probe commands without running or recording', async () 
   );
 });
 
-test('native publication passes the flag to each probe stage', async () => {
-  const {result, calls} = await ladder([...CLIP, '--native-publish']);
+test('native publication passes the flag to each probe stage', async t => {
+  const {result, calls} = await ladder(t, [...CLIP, '--native-publish']);
   assert.equal(result.nativePublish, true);
   assert.equal(calls.length, ALL.length);
   assert.ok(calls.every(call => call.args.at(-1) === '--native-publish'));
+});
+
+test('refuses a known exhausted session before running a probe', async () => {
+  const options = parseArgs([
+    '/runs/launcher-old',
+    ...CLIP,
+    '--reject-session',
+    'launcher-old'
+  ]);
+  await assert.rejects(
+    main(options, {run: () => assert.fail('no device probe should run')}),
+    /fresh normal START session/
+  );
 });
 
 test('argument validation rejects missing and malformed options', () => {
@@ -132,6 +146,7 @@ test('argument validation rejects missing and malformed options', () => {
   assert.throws(() => parseArgs(['--clip', '--dry-run']), /--clip needs a value/);
   assert.throws(() => parseArgs([...CLIP, '--stages']), /--stages needs a value/);
   assert.throws(() => parseArgs([...CLIP, '--stages', '']), /--stages needs a value/);
+  assert.throws(() => parseArgs([...CLIP, '--reject-session']), /--reject-session needs a value/);
   assert.throws(() => parseArgs([...CLIP, '--stages', 'one,0']), /Unknown stage "0"/);
   assert.throws(() => parseArgs([...CLIP, '--stages', 'one,one']), /Repeated/);
   assert.throws(() => parseArgs([...CLIP, '--stage', 'one']), /Unknown option --stage/);
@@ -142,4 +157,5 @@ test('argument validation rejects missing and malformed options', () => {
   assert.equal(defaults.output, null);
   assert.equal(defaults.dryRun, false);
   assert.equal(defaults.nativePublish, false);
+  assert.equal(defaults.rejectSession, null);
 });

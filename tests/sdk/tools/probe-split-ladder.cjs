@@ -8,7 +8,7 @@ const PROBE = path.join(__dirname, 'probe-split-decoder.cjs');
 const BUILDS = '/media/storage2/builds/HBLauncher/native-h264';
 const RUNS_FILE = '/media/storage/local/hbl-notes/RUNS.md';
 const RESTART = 'Restart SmileBASIC (fresh normal START session) before any further probe run.';
-const VALUE_OPTIONS = ['--clip', '--stages', '--output'];
+const VALUE_OPTIONS = ['--clip', '--stages', '--output', '--reject-session'];
 const FLAGS = ['--dry-run', '--native-publish'];
 
 function parseArgs(args) {
@@ -18,7 +18,8 @@ function parseArgs(args) {
     stages: STAGES,
     output: null,
     dryRun: false,
-    nativePublish: false
+    nativePublish: false,
+    rejectSession: null
   };
   for (let index = 0; index < args.length; index++) {
     const arg = args[index];
@@ -31,7 +32,8 @@ function parseArgs(args) {
         throw Error(arg + ' needs a value');
       if (arg === '--clip') parsed.clip = value;
       else if (arg === '--output') parsed.output = value;
-      else parsed.stages = parseStages(value);
+      else if (arg === '--stages') parsed.stages = parseStages(value);
+      else parsed.rejectSession = value;
     } else if (arg.startsWith('--')) {
       throw Error('Unknown option ' + arg);
     } else if (index === 0) {
@@ -106,7 +108,7 @@ async function main(
     now = () => new Date()
   } = {}
 ) {
-  const {directory, clip, stages, dryRun, nativePublish} = options;
+  const {directory, clip, stages, dryRun, nativePublish, rejectSession} = options;
   const commands = stages.map(stage => ({
     stage,
     ...stageCommand({directory, clip, stage, nativePublish})
@@ -115,6 +117,8 @@ async function main(
     for (const {command, args} of commands) log([command, ...args].map(quote).join(' '));
     return {dryRun: true, commands};
   }
+  if (rejectSession && directory && path.basename(path.resolve(directory)) === rejectSession)
+    throw Error('Start a fresh normal START session before retrying; ' + rejectSession + ' is exhausted');
   const rev = sourceRevision || revision();
   const started = now();
   const output =
