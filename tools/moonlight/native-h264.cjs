@@ -58,20 +58,7 @@ async function run({
   if (at < 0 || !host || !app) throw Error('Native H.264 requires --moonlight HOST APP');
   const audio = !args.includes('--no-audio');
   const bitrate = require('./bitrate.cjs').bitrate(args, width, height, fps);
-  const decoderWorker = args.includes('--decoder-worker')
-    ? args[args.indexOf('--decoder-worker') + 1]
-    : 'host';
-  if (!['host', 'persistent'].includes(decoderWorker))
-    throw Error('--decoder-worker is host or persistent');
-  const decoderData = args.includes('--decoder-data')
-    ? args[args.indexOf('--decoder-data') + 1]
-    : 'rpc';
-  if (
-    !['rpc', 'tcp'].includes(decoderData) ||
-    (decoderData === 'tcp' && decoderWorker !== 'persistent')
-  )
-    throw Error('--decoder-data is rpc or tcp with a persistent worker');
-  if (decoderData === 'tcp' && !rpc.host)
+  if (!rpc.host)
     throw Error('Native TCP requires a fresh launcher session from this branch');
   const revision =
     sourceRevision ||
@@ -150,13 +137,13 @@ async function run({
     let resets = [];
     let generation = 0;
     const makeDecoder = async () => {
-      const transport = decoderData === 'tcp' ? await createTransport({rpc, host: rpc.host}) : null;
+      const transport = await createTransport({rpc, host: rpc.host});
       try {
         return await createDecoder({
           rpc,
           directory,
           workerDirectory: path.join(output, 'decoder-' + generation),
-          workerMode: decoderWorker,
+          workerMode: 'persistent',
           transport,
           log,
           cancelled
@@ -341,22 +328,16 @@ async function run({
         await decoder.submit(unit);
         stats.submitted++;
         outstanding++;
-        // Pull once per submit, then drain only genuine backlog. Leaving one
-        // frame in the decoder's pipeline means a one-frame decode latency never
-        // costs a known-empty acquireOutput in steady state. The next
-        // destination() waits for the GPU to apply the last frame, so no
-        // explicit wait is needed and submit of N+1 is not blocked on it.
-        // Persistent mode drains the pipeline fully so the worker starts with no
-        // output owed.
-        const drained = decoderWorker === 'persistent' ? 0 : 1,
-          drainUntil = Date.now() + 200;
-        for (let pull = true; pull || outstanding > drained; pull = false) {
+        // Frames before the persistent worker take the host-driven path, which is
+        // drained fully so the worker starts with no output owed.
+        const drainUntil = Date.now() + 200;
+        for (let pull = true; pull || outstanding > 0; pull = false) {
           enter('destination');
           const destination = await sink.destination();
           enter('receive');
           const frame = await decoder.receive(destination);
           if (!frame) {
-            if (drained || Date.now() > drainUntil) break;
+            if (Date.now() > drainUntil) break;
             await new Promise(resolve => setTimeout(resolve, 5));
             continue;
           }
@@ -365,7 +346,7 @@ async function run({
           enter('publish');
           await sink.publish(destination, frame);
           stats.presented++;
-          if (decoderWorker === 'persistent' && outstanding === 0 && !persistentStarted) {
+          if (outstanding === 0 && !persistentStarted) {
             await decoder.startPersistent();
             persistentStarted = true;
             log({event: 'persistent-worker', started: true});
