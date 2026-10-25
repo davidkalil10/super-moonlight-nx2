@@ -439,8 +439,16 @@ test('a scored run writes summary.json and rejects a bare --expect', {timeout: 5
     );
     assert.deepEqual(saved, JSON.parse(JSON.stringify(summary)));
     assert.equal(saved.pass, false);
+    assert.equal(saved.stopReason, 'cleanup');
+    assert.ok(saved.failures.includes('ended before duration: cleanup'));
     assert.deepEqual(saved.expect, {fps: 30, idr: 0});
     assert.equal(saved.workerMode, 'persistent');
+    const events = (await fs.readFile(path.join(f.directory, 'logs', 'events.jsonl'), 'utf8'))
+      .trim()
+      .split('\n')
+      .map(JSON.parse);
+    assert.ok(events.some(event => event.event === 'helper-exit' && event.code === 0));
+    assert.ok(events.some(event => event.event === 'native-stop' && event.reason === 'cleanup'));
   });
   const g = await fixture();
   await exercise(g, async () => {
