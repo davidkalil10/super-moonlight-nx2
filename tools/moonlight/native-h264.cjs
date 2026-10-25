@@ -306,12 +306,20 @@ async function run({
         // costs a known-empty acquireOutput in steady state. The next
         // destination() waits for the GPU to apply the last frame, so no
         // explicit wait is needed and submit of N+1 is not blocked on it.
-        for (let pull = true; pull || outstanding > 1; pull = false) {
+        // Persistent mode drains the pipeline fully so the worker starts with no
+        // output owed.
+        const drained = decoderWorker === 'persistent' ? 0 : 1,
+          drainUntil = Date.now() + 200;
+        for (let pull = true; pull || outstanding > drained; pull = false) {
           enter('destination');
           const destination = await sink.destination();
           enter('receive');
           const frame = await decoder.receive(destination);
-          if (!frame) break;
+          if (!frame) {
+            if (drained || Date.now() > drainUntil) break;
+            await new Promise(resolve => setTimeout(resolve, 5));
+            continue;
+          }
           outstanding--;
           stats.decoded++;
           enter('publish');
