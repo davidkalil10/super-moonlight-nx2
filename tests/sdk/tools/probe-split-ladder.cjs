@@ -9,7 +9,7 @@ const BUILDS = '/media/storage2/builds/HBLauncher/native-h264';
 const RUNS_FILE = '/media/storage/local/hbl-notes/RUNS.md';
 const RESTART = 'Restart SmileBASIC (fresh normal START session) before any further probe run.';
 const VALUE_OPTIONS = ['--clip', '--stages', '--output', '--reject-session'];
-const FLAGS = ['--dry-run', '--native-publish', '--auto-output-queue'];
+const FLAGS = ['--dry-run', '--native-publish', '--auto-output-queue', '--linked-gates'];
 
 function parseArgs(args) {
   const parsed = {
@@ -20,6 +20,7 @@ function parseArgs(args) {
     dryRun: false,
     nativePublish: false,
     autoOutputQueue: false,
+    linkedGates: false,
     rejectSession: null
   };
   for (let index = 0; index < args.length; index++) {
@@ -27,7 +28,8 @@ function parseArgs(args) {
     if (FLAGS.includes(arg)) {
       if (arg === '--dry-run') parsed.dryRun = true;
       else if (arg === '--native-publish') parsed.nativePublish = true;
-      else parsed.autoOutputQueue = true;
+      else if (arg === '--auto-output-queue') parsed.autoOutputQueue = true;
+      else parsed.linkedGates = true;
     } else if (VALUE_OPTIONS.includes(arg)) {
       const value = args[++index];
       if (value === undefined || value === '' || value.startsWith('--'))
@@ -47,6 +49,8 @@ function parseArgs(args) {
   if (!parsed.clip) throw Error('Pass --clip with an H.264 probe clip');
   if (parsed.autoOutputQueue && !parsed.nativePublish)
     throw Error('--auto-output-queue requires --native-publish');
+  if (parsed.linkedGates && !parsed.autoOutputQueue)
+    throw Error('--linked-gates requires --auto-output-queue');
   return parsed;
 }
 
@@ -58,12 +62,13 @@ function parseStages(value) {
   return STAGES.filter(stage => names.includes(stage));
 }
 
-function stageCommand({directory, clip, stage, nativePublish = false, autoOutputQueue = false}) {
+function stageCommand({directory, clip, stage, nativePublish = false, autoOutputQueue = false, linkedGates = false}) {
   const args = [PROBE];
   if (directory) args.push(path.resolve(directory));
   args.push('--clip', path.resolve(clip), '--stage', stage);
   if (nativePublish) args.push('--native-publish');
   if (autoOutputQueue) args.push('--auto-output-queue');
+  if (linkedGates) args.push('--linked-gates');
   return {command: process.execPath, args};
 }
 
@@ -113,10 +118,10 @@ async function main(
     now = () => new Date()
   } = {}
 ) {
-  const {directory, clip, stages, dryRun, nativePublish, autoOutputQueue, rejectSession} = options;
+  const {directory, clip, stages, dryRun, nativePublish, autoOutputQueue, linkedGates, rejectSession} = options;
   const commands = stages.map(stage => ({
     stage,
-    ...stageCommand({directory, clip, stage, nativePublish, autoOutputQueue})
+    ...stageCommand({directory, clip, stage, nativePublish, autoOutputQueue, linkedGates})
   }));
   if (dryRun) {
     for (const {command, args} of commands) log([command, ...args].map(quote).join(' '));
@@ -126,6 +131,13 @@ async function main(
     throw Error('Start a fresh normal START session before retrying; ' + rejectSession + ' is exhausted');
   const rev = sourceRevision || revision();
   const started = now();
+  const mode = linkedGates
+    ? 'split-linked'
+    : autoOutputQueue
+      ? 'split-auto'
+      : nativePublish
+        ? 'split-publish'
+        : 'split';
   const output =
     options.output ||
     path.join(
@@ -133,7 +145,7 @@ async function main(
       started.toISOString().replace(/[:.]/g, '-') +
         '-' +
         rev.slice(0, 8) +
-        (autoOutputQueue ? '-split-auto-ladder' : nativePublish ? '-split-publish-ladder' : '-split-ladder')
+        '-' + mode + '-ladder'
     );
   await fsp.mkdir(output, {recursive: true, mode: 0o700});
   const ladder = {
@@ -143,6 +155,7 @@ async function main(
     clip: path.resolve(clip),
     nativePublish,
     autoOutputQueue,
+    linkedGates,
     stages: [],
     started: started.toISOString()
   };

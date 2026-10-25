@@ -108,6 +108,7 @@ async function main(
     sourceRevision,
     nativePublish = false,
     autoOutputQueue = false,
+    linkedGates = false,
     create = createDecoder,
     createNativeSink = createSink,
     openTransport = createTransport,
@@ -119,6 +120,8 @@ async function main(
   if (!clip) throw Error('Pass --clip with an H.264 probe clip');
   if (autoOutputQueue && !nativePublish)
     throw Error('--auto-output-queue requires --native-publish');
+  if (linkedGates && !autoOutputQueue)
+    throw Error('--linked-gates requires --auto-output-queue');
   directory = path.resolve(directory);
   clip = path.resolve(clip);
   const revision =
@@ -136,13 +139,19 @@ async function main(
     throw Error('Probe clip needs independent keyframes for this stage');
   const {sps, pps} = parameterSets(stream);
   if (!sps || !pps) throw Error('Probe clip needs SPS and PPS');
+  const mode = linkedGates
+    ? 'split-linked'
+    : autoOutputQueue
+      ? 'split-auto'
+      : nativePublish
+        ? 'split-publish'
+        : 'split';
   output ||= path.join(
     '/media/storage2/builds/HBLauncher/native-h264',
     new Date().toISOString().replace(/[:.]/g, '-') +
       '-' +
       revision.slice(0, 8) +
-      (autoOutputQueue ? '-split-auto-' : nativePublish ? '-split-publish-' : '-split-') +
-      stage
+      '-' + mode + '-' + stage
   );
   await fsp.mkdir(output, {recursive: true, mode: 0o700});
   const entries = journal(path.join(output, 'split-decoder.jsonl'));
@@ -158,6 +167,7 @@ async function main(
     clip,
     nativePublish,
     autoOutputQueue,
+    linkedGates,
     started: new Date().toISOString()
   };
   await fsp.writeFile(path.join(output, 'manifest.json'), JSON.stringify(record, null, 2) + '\n', {
@@ -222,7 +232,8 @@ async function main(
         workerMode: 'split',
         transport,
         publication: sink?.workerPublication,
-        autoQueue: autoOutputQueue
+        autoQueue: autoOutputQueue,
+        linkedGates
       })
     );
     const dimensions = await step('configure', () => decoder.configure(sps, pps, 30));
@@ -286,18 +297,40 @@ async function main(
         let secondJob = null;
         if (stage === 'two') {
           const secondIndex = keyframes[2];
-          secondJob = await step('input job 2 while output job 1 in flight', () =>
-            decoder.submitSplit(unit(secondIndex))
-          );
+          secondJob = linkedGates
+            ? await step('input job 2 staged while output job 1 in flight', () =>
+                decoder.stageSplitInput(unit(secondIndex), {sendFirst: true})
+              )
+            : await step('input job 2 while output job 1 in flight', () =>
+                decoder.submitSplit(unit(secondIndex))
+              );
         }
+        const acquired = linkedGates && secondJob
+          ? await step('host receive count and output acquire checks', async () => {
+              const [, output] = await Promise.all([
+                decoder.verifySplitReceive(undefined, firstJob),
+                decoder.waitSplitOutputAcquired(firstJob)
+              ]);
+              return output;
+            })
+          : null;
         const firstDestination = nativePublish
           ? await step('native destination 1', () =>
-              sink.workerDestination((secondJob || firstJob).presentation)
+              sink.workerDestination(acquired?.presentation || (secondJob || firstJob).presentation)
             )
           : destination;
-        const firstOutput = await step('output job 1 fetch', () =>
-          decoder.finishSplitOutput(firstJob, firstDestination, autoOutputQueue ? secondJob : null)
-        );
+        const firstOutput = linkedGates && secondJob
+          ? await step('linked output fetch and input submit', async () => {
+              await decoder.openSplitOutputFetch(firstJob, firstDestination, secondJob);
+              const [, output] = await Promise.all([
+                decoder.finishSplitInputAfterLinkedGate(),
+                decoder.completeSplitOutputFetch(firstJob)
+              ]);
+              return output;
+            })
+          : await step('output job 1 fetch', () =>
+              decoder.finishSplitOutput(firstJob, firstDestination, autoOutputQueue ? secondJob : null)
+            );
         if (firstOutput.pts !== String(nextIndex)) throw Error('Output job 1 PTS differs');
         const outputs = [firstOutput];
         const publications = [];
@@ -383,7 +416,8 @@ if (require.main === module) {
     stage: cli.option(args, '--stage'),
     output: cli.option(args, '--output') || undefined,
     nativePublish: args.includes('--native-publish'),
-    autoOutputQueue: args.includes('--auto-output-queue')
+    autoOutputQueue: args.includes('--auto-output-queue'),
+    linkedGates: args.includes('--linked-gates')
   }).catch(error => {
     console.error(error);
     process.exitCode = 1;

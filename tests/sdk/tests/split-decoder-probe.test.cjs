@@ -6,7 +6,7 @@ const path = require('node:path');
 const ring = require('../../tools/moonlight/ring.cjs');
 const {main, verifyPublication} = require('../tools/probe-split-decoder.cjs');
 
-async function fixture(stage, {nativePublish = false, autoOutputQueue = false} = {}) {
+async function fixture(stage, {nativePublish = false, autoOutputQueue = false, linkedGates = false} = {}) {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'hbl-split-probe-'));
   const clip = path.join(directory, 'idr.h264');
   const accessUnit = Buffer.from('0000016742001eab00000168ce0100000165abcd', 'hex');
@@ -22,6 +22,7 @@ async function fixture(stage, {nativePublish = false, autoOutputQueue = false} =
     stage,
     nativePublish,
     autoOutputQueue,
+    linkedGates,
     output: path.join(directory, 'record'),
     sourceRevision: 'test-revision',
     sessionRpc: {
@@ -64,9 +65,26 @@ async function fixture(stage, {nativePublish = false, autoOutputQueue = false} =
         calls.push('transport-close');
       }
     }),
-    async create({workerMode, transport, autoQueue}) {
+    async create({workerMode, transport, autoQueue, linkedGates: enabled}) {
       assert.equal(workerMode, 'split');
       assert.equal(autoQueue, autoOutputQueue);
+      assert.equal(enabled, linkedGates);
+      let staged = null;
+      let linked = null;
+      const publish = (destination, frame) => {
+        if (!nativePublish) return;
+        const values = [
+          destination.sequence,
+          destination.index,
+          frame.width,
+          frame.height,
+          frame.stride,
+          frame.sliceHeight,
+          destination.color
+        ];
+        values.push(ring.nativeChecksum(values[0], values.slice(1)));
+        values.forEach((value, index) => published.writeUInt32LE(value, index * 4));
+      };
       return {
         splitDiagnostics: {decodeGateSignals: 0},
         async configure() {
@@ -85,6 +103,10 @@ async function fixture(stage, {nativePublish = false, autoOutputQueue = false} =
         async stageSplitInput(unit) {
           calls.push('stage:' + unit.pts);
           receiveLength = unit.receiveLength;
+          if (linkedGates && stage === 'two') {
+            staged = {sequence: ++sequence, pts: BigInt(unit.pts)};
+            return staged;
+          }
         },
         async completeSplitInput(payload) {
           assert.equal(payload.length, receiveLength);
@@ -95,10 +117,36 @@ async function fixture(stage, {nativePublish = false, autoOutputQueue = false} =
         },
         async submitSplit(unit) {
           calls.push('input:' + unit.pts);
+          if (linkedGates) this.splitDiagnostics.decodeGateSignals++;
           return {sequence: ++sequence, pts: BigInt(unit.pts)};
         },
         async queueSplitOutput(job) {
           calls.push('queue:' + job.sequence);
+        },
+        async verifySplitReceive() {
+          calls.push('verify:' + staged.sequence);
+        },
+        async waitSplitOutputAcquired(job) {
+          calls.push('acquire:' + job.sequence);
+          return {index: 0, presentation: {current: 0, applied: 0}};
+        },
+        async openSplitOutputFetch(job, destination, nextJob) {
+          calls.push('open:' + job.sequence + '->' + nextJob.sequence);
+          linked = {job, destination};
+          this.splitDiagnostics.decodeGateSignals++;
+        },
+        async finishSplitInputAfterLinkedGate() {
+          calls.push('finish-input:' + staged.sequence);
+          staged.presentation = {current: 0, applied: 0};
+          return staged;
+        },
+        async completeSplitOutputFetch(job) {
+          calls.push('complete:' + job.sequence);
+          const frame = {
+            pts: job.pts.toString(), width: 1920, height: 1080, stride: 1920, sliceHeight: 1088
+          };
+          publish(linked.destination, frame);
+          return frame;
         },
         async finishSplitOutput(job, destination, nextJob) {
           calls.push('fetch:' + job.sequence);
@@ -110,19 +158,7 @@ async function fixture(stage, {nativePublish = false, autoOutputQueue = false} =
             stride: 1920,
             sliceHeight: 1088
           };
-          if (nativePublish) {
-            const values = [
-              destination.sequence,
-              destination.index,
-              frame.width,
-              frame.height,
-              frame.stride,
-              frame.sliceHeight,
-              destination.color
-            ];
-            values.push(ring.nativeChecksum(values[0], values.slice(1)));
-            values.forEach((value, index) => published.writeUInt32LE(value, index * 4));
-          }
+          publish(destination, frame);
           return frame;
         },
         async close() {
@@ -168,6 +204,30 @@ test('two-job auto queue probe hands off without a second host queue', async () 
   assert.deepEqual(calls.filter(call => call.startsWith('handoff:')), ['handoff:1->2']);
   assert.deepEqual(result.result.publications.map(item => item.sequence), [1, 2]);
   assert.equal(calls.at(-1), 'sink-close');
+});
+
+test('linked two-job probe checks both host gates before output fetch', async () => {
+  const {result, calls} = await fixture('two', {
+    nativePublish: true,
+    autoOutputQueue: true,
+    linkedGates: true
+  });
+  assert.equal(result.verdict, 'PASS');
+  assert.deepEqual(calls.filter(call => call.startsWith('queue:')), ['queue:1']);
+  const checked = Math.max(calls.indexOf('verify:2'), calls.indexOf('acquire:1'));
+  assert.ok(checked < calls.indexOf('open:1->2'));
+  assert.equal(result.result.decodeGateSignals, 2);
+  assert.deepEqual(result.result.publications.map(item => item.sequence), [1, 2]);
+});
+
+test('linked short-receive probe keeps its decode gate closed', async () => {
+  const {result} = await fixture('short-recv', {
+    nativePublish: true,
+    autoOutputQueue: true,
+    linkedGates: true
+  });
+  assert.equal(result.verdict, 'PASS');
+  assert.equal(result.result.decodeGateSignals, 0);
 });
 
 test('publication readback requires matching metadata and sequence', async () => {

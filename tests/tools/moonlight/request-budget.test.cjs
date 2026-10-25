@@ -5,7 +5,7 @@ const {BASELINE, MODEL, simulate} = require('./request-budget.cjs');
 // Modeled steady-state requests per presented frame at 1080p30. Bump these down
 // (never up) when a scheduler change lowers them, and record before/after in the
 // commit message.
-const BUDGET = {persistent: 10.05, split: 11.05, splitPublish: 8, splitPublishAuto: 7};
+const BUDGET = {persistent: 10.05, split: 11.05, splitPublish: 8, splitPublishAuto: 7, splitLinked: 4};
 const REQUEST_TOLERANCE = 1;
 const BRIDGE_MS_TOLERANCE = 3;
 
@@ -74,4 +74,32 @@ test('automatic output queue removes one host request per split frame', async ()
   assert.equal(result.byStage['split-queue'], undefined);
   assert.equal(result.byStage['split-input'].requests, 4);
   assert.equal(result.byStage['split-output'].requests, 3);
+});
+
+test('linked gates share both status reads and stay within four requests per frame', async () => {
+  const result = await simulate({
+    mode: 'split',
+    frames: 120,
+    nativePublish: true,
+    autoQueue: true,
+    linkedGates: true
+  });
+  assert.equal(result.frames, 120);
+  assert.ok(result.requestsPerFrame <= BUDGET.splitLinked);
+  assert.equal(result.byStage['split-input'].requests, 2);
+  assert.equal(result.byStage['split-output'].requests, 2);
+  assert.equal(result.byStage['split-queue'], undefined);
+});
+
+test('linked status reads remain shared at a modeled 60 fps source', async () => {
+  const result = await simulate({
+    mode: 'split',
+    frames: 120,
+    nativePublish: true,
+    autoQueue: true,
+    linkedGates: true,
+    model: {...MODEL, sourceFps: 60}
+  });
+  assert.ok(result.requestsPerFrame <= BUDGET.splitLinked);
+  assert.equal(result.frames, 120);
 });

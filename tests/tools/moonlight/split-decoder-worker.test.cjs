@@ -11,7 +11,7 @@ const SDK = 0x40000000;
 const MODULE = 0x50000000;
 const decoder = 0x70000000;
 
-function fixture({receiveBytes = 4096, outputIndex = 2, autoQueue = false} = {}) {
+function fixture({receiveBytes = 4096, outputIndex = 2, autoQueue = false, linkedGates = false} = {}) {
   const regions = [];
   const calls = [];
   const transport = {
@@ -90,10 +90,12 @@ function fixture({receiveBytes = 4096, outputIndex = 2, autoQueue = false} = {})
         received.writeBigInt64LE(BigInt(receiveBytes));
         received.writeUInt32LE(sequence, 8);
         write(control + 0x180, received);
-        const input = Buffer.alloc(28);
-        input.writeInt32LE(1, 16);
-        input.writeUInt32LE(sequence, 24);
-        write(control + 0x1a0, input);
+        if (!linkedGates || sequence === 1) {
+          const input = Buffer.alloc(28);
+          input.writeInt32LE(1, 16);
+          input.writeUInt32LE(sequence, 24);
+          write(control + 0x1a0, input);
+        }
       } else if (gate === 0x40) {
         const acquired = Buffer.alloc(36);
         acquired.writeInt32LE(outputIndex, 8);
@@ -101,6 +103,15 @@ function fixture({receiveBytes = 4096, outputIndex = 2, autoQueue = false} = {})
         acquired.writeUInt32LE(bytes.readUInt32LE(), 32);
         write(control + 0x1c0, acquired);
       } else if (gate === 0x60) {
+        if (linkedGates) {
+          const next = read(control + 0x338, 4).readUInt32LE();
+          if (next) {
+            const input = Buffer.alloc(28);
+            input.writeInt32LE(1, 16);
+            input.writeUInt32LE(next, 24);
+            write(control + 0x1a0, input);
+          }
+        }
         const fetched = Buffer.alloc(28);
         fetched.writeUInt32LE(read(control + 0x300, 4).readUInt32LE(), 24);
         write(control + 0x1f0, fetched);
@@ -341,6 +352,98 @@ test('automatic output queue hands the next sequence to the output worker', asyn
   await worker.finalize();
 });
 
+test('linked gates open decode only after the host checks receive and acquire', async () => {
+  const f = fixture({autoQueue: true, linkedGates: true});
+  const mapped = 0x30000000;
+  const worker = await workerFor(f, {
+    publication: {mapped, color: 1},
+    autoQueue: true,
+    linkedGates: true
+  });
+  const input = pts => ({
+    index: 1,
+    length: 4096,
+    pts,
+    inputAddress: 0x72000000,
+    payload: Buffer.alloc(4096)
+  });
+  const first = await worker.input(input(30));
+  await worker.queueOutput(first);
+  const second = await worker.stageInput({...input(60), sendFirst: true});
+  const beforeChecks = f.calls.filter(call => call.statusRead).length;
+  const [, acquired] = await Promise.all([
+    worker.verifyReceived(second, undefined, first),
+    worker.waitForAcquired(first)
+  ]);
+  assert.equal(f.calls.filter(call => call.statusRead).length - beforeChecks, 1);
+  assert.equal(second.received, true);
+  assert.deepEqual(acquired.presentation, {current: 0, applied: 0});
+  const frame = {width: 1920, height: 1080, stride: 1920, sliceHeight: 1088};
+  const destination = sequence => ({
+    index: sequence,
+    address: mapped + ring.frameOffset(sequence),
+    bytes: ring.FRAME_BYTES,
+    sequence,
+    color: 1
+  });
+  await worker.openOutputFetch(first, destination(1), frame, second);
+  const beforeCompletions = f.calls.filter(call => call.statusRead).length;
+  const [completed] = await Promise.all([
+    worker.finishInputAfterLinkedGate(second),
+    worker.completeOutputFetch(first)
+  ]);
+  assert.equal(f.calls.filter(call => call.statusRead).length - beforeCompletions, 1);
+  assert.equal(completed, second);
+  assert.equal(worker.diagnostics.decodeGateSignals, 2);
+  assert.equal(f.read(f.control + 0x348, 8).readBigUInt64LE(), 0x61300000n);
+  assert.equal(
+    f.calls.filter(call => call.address === SDK + sync.signalLightEvent.offset &&
+      call.args?.[0] === f.control + 0x20).length,
+    1
+  );
+  await worker.finishOutput(second, destination(2), frame);
+  assert.equal(f.read(f.control + 0x348, 8).readBigUInt64LE(), 0x61210000n);
+  await worker.stop();
+  await worker.finalize();
+});
+
+test('stop releases an automatically acquired successor even before host fetch completion', async () => {
+  const f = fixture({autoQueue: true, linkedGates: true});
+  const mapped = 0x30000000;
+  const worker = await workerFor(f, {
+    publication: {mapped, color: 1},
+    autoQueue: true,
+    linkedGates: true
+  });
+  const input = pts => ({
+    index: 1,
+    length: 4096,
+    pts,
+    inputAddress: 0x72000000,
+    payload: Buffer.alloc(4096)
+  });
+  const first = await worker.input(input(30));
+  await worker.queueOutput(first);
+  const second = await worker.stageInput({...input(60), sendFirst: true});
+  await worker.verifyReceived(second, undefined, first);
+  const destination = {
+    index: 1,
+    address: mapped + ring.frameOffset(1),
+    bytes: ring.FRAME_BYTES,
+    sequence: 1,
+    color: 1
+  };
+  const frame = {width: 1920, height: 1080, stride: 1920, sliceHeight: 1088};
+  await worker.openOutputFetch(first, destination, frame, second);
+  await worker.stop();
+  assert.ok(
+    f.calls.some(call =>
+      call.address === MODULE + definitions.releaseOutput.offset && call.args?.[1] === 2
+    )
+  );
+  await worker.finalize();
+});
+
 test('short receive cannot open the decode gate', async () => {
   const f = fixture({receiveBytes: 2048});
   const worker = await workerFor(f);
@@ -372,6 +475,28 @@ test('short receive cannot open the decode gate', async () => {
   await worker.finalize();
 });
 
+test('linked gates leave a short receive closed', async () => {
+  const f = fixture({receiveBytes: 2048, autoQueue: true, linkedGates: true});
+  const worker = await workerFor(f, {
+    publication: {mapped: 0x30000000, color: 1},
+    autoQueue: true,
+    linkedGates: true
+  });
+  const job = await worker.stageInput({
+    index: 1,
+    length: 4096,
+    receiveLength: 2048,
+    pts: 30,
+    inputAddress: 0x72000000,
+    payload: Buffer.alloc(4096)
+  });
+  await assert.rejects(worker.verifyReceived(job, Buffer.alloc(2048)), /returned 2048\/4096/);
+  assert.equal(worker.diagnostics.decodeGateSignals, 0);
+  assert.equal(f.calls.filter(call => call.combined && call.args?.[0] === f.control + 0x60).length, 0);
+  await worker.stop();
+  await worker.finalize();
+});
+
 test('invalid acquire cannot open the fetch gate', async () => {
   const f = fixture({outputIndex: -1});
   const worker = await workerFor(f);
@@ -394,6 +519,31 @@ test('invalid acquire cannot open the fetch gate', async () => {
     ).length,
     0
   );
+  await worker.stop();
+  await worker.finalize();
+});
+
+test('linked gates refuse an invalid acquire before opening the next decode gate', async () => {
+  const f = fixture({outputIndex: -1, autoQueue: true, linkedGates: true});
+  const worker = await workerFor(f, {
+    publication: {mapped: 0x30000000, color: 1},
+    autoQueue: true,
+    linkedGates: true
+  });
+  const input = pts => ({
+    index: 1,
+    length: 4096,
+    pts,
+    inputAddress: 0x72000000,
+    payload: Buffer.alloc(4096)
+  });
+  const first = await worker.input(input(30));
+  await worker.queueOutput(first);
+  const second = await worker.stageInput({...input(60), sendFirst: true});
+  await worker.verifyReceived(second);
+  await assert.rejects(worker.waitForAcquired(first), /acquire returned/);
+  assert.equal(worker.diagnostics.decodeGateSignals, 1);
+  assert.equal(f.calls.filter(call => call.combined && call.args?.[0] === f.control + 0x60).length, 0);
   await worker.stop();
   await worker.finalize();
 });

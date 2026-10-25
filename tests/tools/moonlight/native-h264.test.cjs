@@ -118,7 +118,8 @@ async function fixture({
         type: 'create-decoder',
         mode: config.workerMode,
         publication: config.publication,
-        autoQueue: config.autoQueue
+        autoQueue: config.autoQueue,
+        linkedGates: config.linkedGates
       });
       let splitSequence = 0;
       return {
@@ -156,6 +157,28 @@ async function fixture({
         async submitSplit(unit) {
           events.push({type: 'submit-split', unit});
           return {sequence: ++splitSequence, pts: unit.pts, presentation: {current: 0, applied: 0}};
+        },
+        async stageSplitInput(unit) {
+          events.push({type: 'stage-split', unit});
+          return {sequence: ++splitSequence, pts: unit.pts};
+        },
+        async verifySplitReceive() {
+          events.push({type: 'verify-receive'});
+        },
+        async waitSplitOutputAcquired(job) {
+          events.push({type: 'wait-acquire', job});
+          return {index: 0, presentation: {current: 0, applied: 0}};
+        },
+        async openSplitOutputFetch(job, destination, nextJob) {
+          events.push({type: 'open-fetch', job, destination, nextJob});
+        },
+        async finishSplitInputAfterLinkedGate() {
+          events.push({type: 'finish-linked-input'});
+          return {sequence: splitSequence, pts: 3000, presentation: {current: 0, applied: 0}};
+        },
+        async completeSplitOutputFetch(job) {
+          events.push({type: 'complete-fetch', job});
+          return {format: 'nv12', width: 128, height: 96, stride: 128, sliceHeight: 96};
         },
         async queueSplitOutput(job) {
           events.push({type: 'queue-split', job});
@@ -413,6 +436,29 @@ test('automatic output queue passes the next job without a second host queue cal
       [[2000, 3000], [3000, undefined]]
     );
     assert.equal(f.events.filter(event => event.type === 'worker-destination').length, 2);
+  });
+});
+
+test('linked gates check receive and acquire before opening the fetch gate', {timeout: 5000}, async () => {
+  const f = await fixture({
+    units: [
+      {hex: accessUnit.toString('hex'), keyframe: true, pts: 1000},
+      {hex: accessUnit.toString('hex'), keyframe: false, pts: 2000},
+      {hex: accessUnit.toString('hex'), keyframe: false, pts: 3000}
+    ]
+  });
+  f.options.args.push('--split-decoder', '--native-publish', '--auto-output-queue', '--linked-gates');
+  await exercise(f, async () => {
+    await run(f.options);
+    assert.equal(f.events.find(event => event.type === 'create-decoder').linkedGates, true);
+    assert.equal(f.events.filter(event => event.type === 'queue-split').length, 1);
+    assert.equal(f.events.filter(event => event.type === 'submit-split').length, 1);
+    const names = f.events.map(event => event.type);
+    const checked = Math.max(names.indexOf('verify-receive'), names.indexOf('wait-acquire'));
+    assert.ok(checked < names.indexOf('open-fetch'));
+    assert.equal(f.events.find(event => event.type === 'open-fetch').nextJob.sequence, 2);
+    assert.equal(f.events.filter(event => event.type === 'complete-fetch').length, 1);
+    assert.equal(f.events.filter(event => event.type === 'finish-split').length, 1);
   });
 });
 

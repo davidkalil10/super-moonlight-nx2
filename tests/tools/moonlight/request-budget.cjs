@@ -140,7 +140,7 @@ function createClock() {
 // A healthy console: one bridge exchange at a time, worker threads that answer the
 // host's gates after modeled latencies, and a presenter that applies each published
 // frame on the next vsync.
-function createConsole(clock, mode, model, nativePublish = false, autoQueue = false) {
+function createConsole(clock, mode, model, nativePublish = false, autoQueue = false, linkedGates = false) {
   const layout = LAYOUT[mode];
   const regions = [];
   const signaled = new Set();
@@ -261,7 +261,16 @@ function createConsole(clock, mode, model, nativePublish = false, autoQueue = fa
       const output = peek(control + layout.outputJob, 4).readUInt32LE();
       const decoded = decodes.get(output);
       if (!decoded) throw Error('Modeled console has no decode for output ' + output);
-      at(Math.max(clock.now(), decoded.done), () =>
+      at(Math.max(clock.now(), decoded.done), () => {
+        if (linkedGates) {
+          const presentation = Buffer.alloc(8);
+          presentation.writeUInt32LE(peek(MAPPED + ring.CONTROL.current, 4).readUInt32LE());
+          presentation.writeUInt32LE(
+            peek(MAPPED + ring.CONTROL.nativeApplied, 4).readUInt32LE(),
+            4
+          );
+          poke(control + 0x210, presentation);
+        }
         complete(
           layout.acquireResults,
           [
@@ -271,11 +280,13 @@ function createConsole(clock, mode, model, nativePublish = false, autoQueue = fa
             [32, 'writeUInt32LE', output]
           ],
           layout.acquired
-        )
-      );
+        );
+      });
     } else if (offset === layout.fetchGate) {
       const output =
         mode === 'split' ? peek(control + layout.outputJob, 4).readUInt32LE() : sequence;
+      if (linkedGates && peek(control + layout.outputJob + 56, 4).readUInt32LE())
+        gate(layout.decodeGate);
       decodes.delete(output);
       const fields =
         mode === 'split'
@@ -404,14 +415,16 @@ async function simulate({
   paced = true,
   nativePublish = false,
   autoQueue = false,
+  linkedGates = false,
   model = MODEL
 }) {
   if (!LAYOUT[mode]) throw Error('Unknown request budget mode ' + mode);
   if (nativePublish && mode !== 'split') throw Error('Native worker publication needs split mode');
   if (autoQueue && !nativePublish) throw Error('Automatic output queue needs worker publication');
+  if (linkedGates && !autoQueue) throw Error('Linked gates need automatic output queue');
   const clock = createClock();
   return clock.run(async () => {
-    const machine = createConsole(clock, mode, model, nativePublish, autoQueue);
+    const machine = createConsole(clock, mode, model, nativePublish, autoQueue, linkedGates);
     let stage = 'setup';
     const bridge = instrument(machine.rpc, () => stage, clock.now);
     const rpc = bridge.rpc;
@@ -439,7 +452,8 @@ async function simulate({
       format: DECODER + 0x180,
       transport: machine.transport,
       publication: nativePublish ? {mapped: MAPPED, color: 1} : null,
-      autoQueue
+      autoQueue,
+      linkedGates
     });
     await worker.register();
     await worker.start();
@@ -467,6 +481,24 @@ async function simulate({
       };
       if (mode === 'split') {
         stage = 'split-input';
+        if (linkedGates && pending) {
+          const staged = await worker.stageInput({...unit, sendFirst: true});
+          const [, acquired] = await Promise.all([
+            worker.verifyReceived(staged, undefined, pending),
+            worker.waitForAcquired(pending)
+          ]);
+          stage = 'destination';
+          const destination = await sink.workerDestination(acquired.presentation);
+          stage = 'split-output';
+          await worker.openOutputFetch(pending, destination, DECODED, staged);
+          const [current] = await Promise.all([
+            worker.finishInputAfterLinkedGate(staged),
+            worker.completeOutputFetch(pending)
+          ]);
+          pending = current;
+          presented++;
+          continue;
+        }
         const current = await worker.completeInput(
           await worker.stageInput({...unit, sendFirst: true})
         );
@@ -507,6 +539,7 @@ async function simulate({
       paced,
       nativePublish,
       autoQueue,
+      linkedGates,
       requestsPerFrame: perFrame(counted.exchanges),
       bridgeMsPerFrame: perFrame(counted.bridgeMs),
       msPerFrame: perFrame(elapsed),
@@ -523,12 +556,13 @@ async function simulate({
 
 async function budget({frames = 120, model = MODEL} = {}) {
   const modes = {};
-  for (const name of ['persistent', 'split', 'splitPublish', 'splitPublishAuto']) {
-    const mode = name.startsWith('splitPublish') ? 'split' : name;
-    const nativePublish = name.startsWith('splitPublish');
-    const autoQueue = name === 'splitPublishAuto';
-    const paced = await simulate({mode, frames, model, nativePublish, autoQueue});
-    const free = await simulate({mode, frames, model, nativePublish, autoQueue, paced: false});
+  for (const name of ['persistent', 'split', 'splitPublish', 'splitPublishAuto', 'splitLinked']) {
+    const mode = name.startsWith('splitPublish') || name === 'splitLinked' ? 'split' : name;
+    const nativePublish = name.startsWith('splitPublish') || name === 'splitLinked';
+    const autoQueue = name === 'splitPublishAuto' || name === 'splitLinked';
+    const linkedGates = name === 'splitLinked';
+    const paced = await simulate({mode, frames, model, nativePublish, autoQueue, linkedGates});
+    const free = await simulate({mode, frames, model, nativePublish, autoQueue, linkedGates, paced: false});
     modes[name] = {
       requestsPerFrame: paced.requestsPerFrame,
       bridgeMsPerFrame: paced.bridgeMsPerFrame,
@@ -543,11 +577,12 @@ async function budget({frames = 120, model = MODEL} = {}) {
     };
   }
   const planDecode = {};
-  for (const name of ['persistent', 'split', 'splitPublish', 'splitPublishAuto']) {
+  for (const name of ['persistent', 'split', 'splitPublish', 'splitPublishAuto', 'splitLinked']) {
     const options = {
-      mode: name.startsWith('splitPublish') ? 'split' : name,
-      nativePublish: name.startsWith('splitPublish'),
-      autoQueue: name === 'splitPublishAuto',
+      mode: name.startsWith('splitPublish') || name === 'splitLinked' ? 'split' : name,
+      nativePublish: name.startsWith('splitPublish') || name === 'splitLinked',
+      autoQueue: name === 'splitPublishAuto' || name === 'splitLinked',
+      linkedGates: name === 'splitLinked',
       frames,
       model: {...model, decodeMs: PLAN_DECODE_MS}
     };
