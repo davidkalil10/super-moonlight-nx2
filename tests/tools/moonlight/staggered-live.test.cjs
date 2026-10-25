@@ -32,6 +32,7 @@ function simulatedDevice({late = new Set(), clock = null} = {}) {
   let decoded = 0;
   let fetched = 0;
   let applied = 0;
+  const onScreenWrites = [];
   let staleReceive = null;
   const presents = [];
   const regionAt = address =>
@@ -87,11 +88,16 @@ function simulatedDevice({late = new Set(), clock = null} = {}) {
     if (!address) return;
     fetched = descriptor.readUInt32LE(outputPlan.DESCRIPTOR.sequence);
     ringWord(status.STATUS.fetch + 24, 4, fetched);
-    const index = [0, 1, 2].find(item => mapped + ring.frameOffset(item) === address);
+    const shown = read(mapped + ring.CONTROL.current, 4).readUInt32LE();
+    if (address === mapped + ring.frameOffset(shown)) onScreenWrites.push(fetched);
+    const published = outputPlan.DESCRIPTOR.metadata;
+    const sequence = descriptor.readUInt32LE(published + 28);
+    if (sequence === applied) return;
+    const index = descriptor.readUInt32LE(published);
     const present = (value => () => {
       ringWord(ring.CONTROL.current, 4, index);
       ringWord(ring.CONTROL.nativeApplied, 4, value);
-    })(++applied);
+    })((applied = sequence));
     if (!clock) return present();
     const vsync = Math.floor(clock.now / clock.vsyncMs + 1) * clock.vsyncMs;
     presents.push({at: Math.max(vsync, (presents.at(-1)?.at ?? 0) + clock.vsyncMs), present});
@@ -184,9 +190,30 @@ function simulatedDevice({late = new Set(), clock = null} = {}) {
         sequence,
         color: 1
       };
+    },
+    async discardDestination(presentation) {
+      const index = [0, 1, 2].find(item => item !== presentation.current);
+      return {
+        index,
+        address: mapped + ring.frameOffset(index),
+        bytes: ring.FRAME_BYTES,
+        color: 1,
+        skip: true
+      };
     }
   };
-  return {rpc, transport, module, functions, publication, sink, requests, pts};
+  return {
+    rpc,
+    transport,
+    module,
+    functions,
+    publication,
+    sink,
+    requests,
+    pts,
+    onScreenWrites,
+    applied: () => applied
+  };
 }
 
 async function liveOn(device, pause = noPause, clock = null) {
@@ -254,6 +281,7 @@ test('a short stream drains its lag-2 tail and stops both workers before finaliz
     submitted: 5,
     decoded: 5,
     presented: 5,
+    skipped: 0,
     tailDrained: 2,
     rereads: 0,
     waiting: {}
@@ -298,6 +326,72 @@ test('a late receive costs the one reread the request budget models', async () =
   assert.equal(live.counts.rereads, late.size);
   assert.deepEqual(live.counts.waiting, {receive: late.size});
   assert.deepEqual(pauses, [], 'late gate statuses are reread without a pause');
+  await live.finish({sink: device.sink});
+  await live.stop();
+});
+
+test('a host backlog skips older presents but decodes and fetches every unit', async () => {
+  const device = simulatedDevice();
+  const live = await liveOn(device);
+  const backlog = new Map([6, 7, 8, 9, 10, 11, 12].map(sequence => [sequence, 5]));
+  const shown = [];
+  for (let sequence = 1; sequence <= 16; sequence++) {
+    const unit = unitAt(sequence);
+    device.pts.set(sequence, BigInt(unit.pts));
+    await live.push(unit, {
+      sink: device.sink,
+      backlog: backlog.get(sequence) ?? 0,
+      onSkipped: () => shown.push('skip'),
+      onPresented: () => shown.push('show')
+    });
+  }
+  assert.deepEqual(shown.slice(0, 10), [
+    'show',
+    'show',
+    'skip',
+    'skip',
+    'skip',
+    'skip',
+    'show',
+    'skip',
+    'skip',
+    'show'
+  ]);
+  assert.deepEqual(await live.finish({sink: device.sink}), {drained: 2});
+  const counts = live.counts;
+  assert.equal(counts.decoded, 16);
+  assert.equal(counts.presented + counts.skipped, 16);
+  assert.equal(counts.skipped, 6);
+  assert.equal(device.applied(), counts.presented);
+  assert.deepEqual(device.onScreenWrites, []);
+  await live.stop();
+});
+
+test('a backlogged stream skips presents without sleeping to the vsync', async () => {
+  const clock = {now: 0, vsyncMs: 1000 / 60, readMs: 2.24};
+  const device = simulatedDevice({clock});
+  const sleeps = [];
+  const live = await liveOn(
+    device,
+    async ms => {
+      sleeps.push(ms);
+      clock.now += ms;
+    },
+    clock
+  );
+  const frames = 60;
+  for (let sequence = 1; sequence <= frames; sequence++) {
+    const unit = unitAt(sequence);
+    device.pts.set(sequence, BigInt(unit.pts));
+    await live.push(unit, {sink: device.sink, backlog: 5});
+  }
+  const {presented, skipped, decoded} = live.counts;
+  assert.equal(decoded, frames - 3);
+  assert.equal(presented + skipped, frames - 4);
+  assert.ok(skipped >= 4 * presented - 4, `${skipped} skipped, ${presented} presented`);
+  assert.ok(sleeps.length <= presented + 1, `${sleeps.length} vsync sleeps`);
+  assert.ok(clock.now < (frames * clock.vsyncMs) / 2, `${clock.now} ms for ${frames} units`);
+  assert.deepEqual(device.onScreenWrites, []);
   await live.finish({sink: device.sink});
   await live.stop();
 });

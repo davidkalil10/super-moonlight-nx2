@@ -206,6 +206,7 @@ test('every submit waits for the previous acquisition, so no output wake is lost
     submitted: 9,
     decoded: 9,
     presented: 9,
+    skipped: 0,
     tailDrained: 2,
     rereads: 6,
     waiting: {receive: 6}
@@ -256,6 +257,7 @@ test('a delayed N-2 fetch keeps decode N closed until N-1 is acquired', async ()
     submitted: 7,
     decoded: 7,
     presented: 7,
+    skipped: 0,
     tailDrained: 2,
     rereads: 3,
     waiting: {receive: 3}

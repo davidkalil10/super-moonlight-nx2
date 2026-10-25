@@ -100,6 +100,19 @@ test('worker destinations avoid the displayed and unpublished surfaces', async (
   assert.equal(sink.workerPublication.color, 1);
 });
 
+test('a discard surface avoids the displayed and unpublished surfaces without reserving one', async () => {
+  const f = fixture();
+  const sink = await create(f.rpc, f.storage);
+  await assert.rejects(sink.discardDestination({current: 0, applied: 0}), /No worker publication/);
+  const first = await sink.workerDestination({current: 0, applied: 0});
+  const discard = await sink.discardDestination({current: 0, applied: 0});
+  assert.deepEqual([discard.index, discard.skip, discard.sequence], [2, true, undefined]);
+  assert.equal(discard.address, f.storage.mapped + ring.frameOffset(2));
+  const second = await sink.workerDestination({current: 0, applied: 0});
+  assert.deepEqual([second.index, second.sequence], [2, first.sequence + 1]);
+  assert.equal(await sink.discardDestination({current: 0, applied: 0}), null);
+});
+
 test('a torn presentation snapshot is refreshed before recycling a surface', async () => {
   const f = fixture();
   const sink = await create(f.rpc, f.storage);

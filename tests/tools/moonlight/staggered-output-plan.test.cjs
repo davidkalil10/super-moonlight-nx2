@@ -102,3 +102,41 @@ test('staggered output descriptor checks ring surface and commits matching metad
     /target/
   );
 });
+
+test('a skipped output is copied off screen behind the last publication', () => {
+  const publication = {mapped: addresses.mapped, color: 1};
+  const surface = index => ({
+    index,
+    address: addresses.mapped + ring.frameOffset(index),
+    bytes: ring.FRAME_BYTES,
+    color: 1
+  });
+  const published = {...surface(1), sequence: 12};
+  const frame = {width: 1920, height: 1080, stride: 1920, sliceHeight: 1088};
+  const skip = output.outputDescriptor({
+    auSequence: 8,
+    destination: {...surface(2), skip: true},
+    frame,
+    publication,
+    published
+  });
+  const shown = output.outputDescriptor({
+    auSequence: 7,
+    destination: published,
+    frame,
+    publication
+  });
+  assert.equal(skip.readBigUInt64LE(8), BigInt(surface(2).address));
+  assert.deepEqual(skip.subarray(24, 56), shown.subarray(24, 56));
+  assert.throws(
+    () =>
+      output.outputDescriptor({
+        auSequence: 8,
+        destination: surface(2),
+        frame,
+        publication,
+        published: {...published, address: surface(0).address}
+      }),
+    /target/
+  );
+});
