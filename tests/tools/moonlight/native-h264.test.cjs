@@ -392,6 +392,26 @@ test('the persistent decoder gets its own TCP transport', {timeout: 5000}, async
   });
 });
 
+test('a scored run writes summary.json and rejects a bare --expect', {timeout: 5000}, async () => {
+  const f = await fixture();
+  await exercise(f, async () => {
+    f.options.args.push('--expect', 'fps=30,idr=0', '--duration', '30');
+    const summary = await run(f.options);
+    const saved = JSON.parse(
+      await fs.readFile(path.join(f.directory, 'logs', 'summary.json'), 'utf8')
+    );
+    assert.deepEqual(saved, JSON.parse(JSON.stringify(summary)));
+    assert.equal(saved.pass, false);
+    assert.deepEqual(saved.expect, {fps: 30, idr: 0});
+    assert.equal(saved.workerMode, 'persistent');
+  });
+  const g = await fixture();
+  await exercise(g, async () => {
+    g.options.args.push('--expect', '--duration', '5');
+    await assert.rejects(run(g.options), /--expect needs a value/);
+  });
+});
+
 test(
   'an audio process failure ends the native stream and releases decoder/display ownership',
   {timeout: 5000},
