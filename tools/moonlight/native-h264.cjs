@@ -1,5 +1,6 @@
 // Native H.264 route: ordered helper access units become console-written NV12 surfaces.
 const fs = require('node:fs/promises');
+const fsSync = require('node:fs');
 const path = require('node:path');
 const readline = require('node:readline');
 const {spawn} = require('node:child_process');
@@ -115,6 +116,7 @@ async function run({
   let printing = null;
   let ending = null;
   let stopped = false;
+  let stopReason = null;
   const rows = [];
   const children = [];
   const stats = {
@@ -127,7 +129,15 @@ async function run({
     resyncs: 0,
     idr: 0
   };
-  const log = value => console.error(JSON.stringify(value));
+  const log = value => {
+    const line = JSON.stringify(value);
+    fsSync.appendFileSync(
+      path.join(output, 'events.jsonl'),
+      JSON.stringify({at: new Date().toISOString(), ...value}) + '\n',
+      {mode: 0o600}
+    );
+    console.error(line);
+  };
   const cancelled = () => stopping;
   const idrRequester = createIdrRequester(() => {
     if (stopping) return;
@@ -135,9 +145,11 @@ async function run({
     helper.stdin.write(JSON.stringify({type: 'request-idr'}) + '\n');
   });
 
-  function stop() {
+  function stop(reason = 'cleanup') {
     if (stopped) return;
     stopped = stopping = true;
+    stopReason = reason;
+    log({event: 'native-stop', reason});
     idrRequester.close();
     for (const child of children) child.kill('SIGINT');
     reader?.close();
@@ -145,8 +157,10 @@ async function run({
     helper?.kill('SIGINT');
   }
 
-  process.on('SIGINT', stop);
-  process.on('SIGTERM', stop);
+  const onInterrupt = () => stop('SIGINT');
+  const onTerminate = () => stop('SIGTERM');
+  process.on('SIGINT', onInterrupt);
+  process.on('SIGTERM', onTerminate);
   function requestIdr() {
     if (!stopping) idrRequester.request();
   }
@@ -200,6 +214,7 @@ async function run({
     });
     helper.on('error', error => reader.fail(error));
     helper.on('exit', (code, signal) => {
+      log({event: 'helper-exit', code, signal, stopping});
       if (!stopping && code !== 0) reader.fail(Error('hbmoonlight exited: ' + (signal || code)));
     });
     statusLines = readline.createInterface({input: helper.stderr});
@@ -280,7 +295,7 @@ async function run({
     monitor = setInterval(async () => {
       try {
         const runtime = JSON.parse(await fs.readFile(path.join(directory, 'app-runtime.json')));
-        if (runtime.active?.id !== 'moonlight') stop();
+        if (runtime.active?.id !== 'moonlight') stop('app-exit');
       } catch (error) {
         reader.fail(error);
       }
@@ -315,7 +330,7 @@ async function run({
         stats[key] = 0;
       });
     }, 1000);
-    if (duration !== null) ending = setTimeout(stop, duration * 1000);
+    if (duration !== null) ending = setTimeout(() => stop('duration'), duration * 1000);
     for await (const unit of reader) {
       enter('unit');
       if (stopping) break;
@@ -439,7 +454,7 @@ async function run({
     clearInterval(monitor);
     clearInterval(printing);
     clearTimeout(ending);
-    stop();
+    stop('cleanup');
     statusLines?.close();
     const errors = [];
     try {
@@ -452,12 +467,15 @@ async function run({
     } catch (error) {
       errors.push(error);
     }
-    process.removeListener('SIGINT', stop);
-    process.removeListener('SIGTERM', stop);
+    process.removeListener('SIGINT', onInterrupt);
+    process.removeListener('SIGTERM', onTerminate);
     if (errors.length) throw new AggregateError(errors, 'Native H.264 shutdown failed');
   }
-  const summary = {workerMode, ...scoring.summarize(rows, {warmup}), expect};
+  const summary = {workerMode, ...scoring.summarize(rows, {warmup}), expect, stopReason};
   const result = scoring.verdict(summary, expect);
+  if (duration !== null && stopReason !== 'duration')
+    result.failures.push('ended before duration: ' + stopReason);
+  result.pass = result.failures.length === 0;
   Object.assign(summary, result);
   await fs.writeFile(path.join(output, 'summary.json'), JSON.stringify(summary, null, 2) + '\n', {
     mode: 0o600
@@ -473,6 +491,7 @@ async function run({
     idr: summary.idr,
     requestsPerFrame: summary.requestsPerFrame,
     bridgeMsPerFrame: summary.bridgeMsPerFrame,
+    stopReason,
     record: output
   });
   return summary;
