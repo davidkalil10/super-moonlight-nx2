@@ -10,7 +10,7 @@
 //        hbv1: [--workers 12]
 //        hbv2: [--budget 96] [--cap 256] (KiB) [--qp-min 4] [--qp-max 40]
 //              [--refresh 2] [--threads N] [--resync 1000] (ms)
-//        h264: [--split-decoder] (staged input/output workers)
+//        h264: [--split-decoder] [--native-publish] (staged workers, optional worker publication)
 //              [--duration S] [--warmup S] [--expect fps=30,dropped=0,idr=0] [--ab]
 // --moonlight runs tools/moonlight/helper's hbmoonlight (path from $HBMOONLIGHT)
 //   and, unless --no-input / --no-audio, also feeds controller+touch into its
@@ -284,7 +284,12 @@ async function main() {
     throw Error('The running Moonlight app predates HBV2; rebuild and reinstall it');
   if (codec === 'h264') {
     const runs = args.includes('--ab')
-      ? [args.filter(arg => arg !== '--ab' && arg !== '--split-decoder'), [...args, '--split-decoder']]
+      ? [
+          args.filter(
+            arg => arg !== '--ab' && arg !== '--split-decoder' && arg !== '--native-publish'
+          ),
+          [...args, '--split-decoder']
+        ]
       : [args];
     if (runs.length > 1 && !args.includes('--duration')) throw Error('--ab needs --duration');
     let pass = true;

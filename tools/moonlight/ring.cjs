@@ -4,7 +4,7 @@
 //                    count at which each HBV2 macroblock was last coded
 //   ring     8 slots of 9 exchanges; the host writes slot (sequence % SLOTS)
 //            with an HBV1 or HBV2 frame
-//   frames   two 1920x1088 4:2:0 YCbCr frames, the HBV2 decode targets
+//   frames   three 1920x1088 4:2:0 YCbCr frames; HBV2 uses the first two
 // The compute shader applies slots in sequence order and the fragment shader
 // only samples the result (or, for HBV1, decodes the chosen slot per pixel).
 const SLOTS = 8;
@@ -20,7 +20,8 @@ const FRAME_BYTES = LUMA_BYTES + 2 * CHROMA_BYTES;
 const FRAMES_OFFSET = RING_OFFSET + SLOTS * SLOT_BYTES;
 // One spare page: unaligned 12-byte loads in the shader may read a word past
 // the last frame.
-const MEMORY_BYTES = FRAMES_OFFSET + 2 * FRAME_BYTES + 4096;
+const NATIVE_FRAMES = 3;
+const MEMORY_BYTES = FRAMES_OFFSET + NATIVE_FRAMES * FRAME_BYTES + 4096;
 const TEST_CARD = [640, 352];
 const TEST_CARD_SEQUENCE = SLOTS;
 const CONTROL = {
@@ -42,10 +43,11 @@ const CONTROL = {
   nativeStride: 272,
   nativeSliceHeight: 276,
   nativeColor: 280,
+  nativeCommit: 284,
   written: 1024
 };
 const MODE = {none: 0, hbv1: 1, hbv2: 2, native: 3};
-const NATIVE_ABI = 0x484e5632;
+const NATIVE_ABI = 0x484e5633;
 const LOCAL_SIZE = 1024;
 
 function slotOffset(sequence) {
@@ -54,6 +56,13 @@ function slotOffset(sequence) {
 
 function frameOffset(index) {
   return FRAMES_OFFSET + index * FRAME_BYTES;
+}
+
+function nativeChecksum(sequence, fields) {
+  let checksum = 2166136261;
+  for (const value of [sequence, ...fields])
+    checksum = Math.imul(checksum ^ value, 16777619) >>> 0;
+  return checksum;
 }
 
 function glsl() {
@@ -72,6 +81,7 @@ const uint FRAME_STRIDE = ${FRAME_STRIDE}u;
 const uint FRAME_LUMA_BYTES = ${LUMA_BYTES}u;
 const uint FRAME_CHROMA_BYTES = ${CHROMA_BYTES}u;
 const uint FRAME_BYTES = ${FRAME_BYTES}u;
+const uint NATIVE_FRAMES = ${NATIVE_FRAMES}u;
 const uint FRAMES_OFFSET = ${FRAMES_OFFSET}u;
 const uint MODE_HBV1 = ${MODE.hbv1}u;
 const uint MODE_HBV2 = ${MODE.hbv2}u;
@@ -109,6 +119,7 @@ module.exports = {
   FRAME_STRIDE,
   FRAME_HEIGHT,
   FRAME_BYTES,
+  NATIVE_FRAMES,
   FRAMES_OFFSET,
   MEMORY_BYTES,
   TEST_CARD,
@@ -119,6 +130,7 @@ module.exports = {
   LOCAL_SIZE,
   slotOffset,
   frameOffset,
+  nativeChecksum,
   readFrame,
   glsl
 };

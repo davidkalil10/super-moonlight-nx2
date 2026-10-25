@@ -59,6 +59,9 @@ async function run({
   if (at < 0 || !host || !app) throw Error('Native H.264 requires --moonlight HOST APP');
   const audio = !args.includes('--no-audio');
   const workerMode = args.includes('--split-decoder') ? 'split' : 'persistent';
+  const nativePublish = args.includes('--native-publish');
+  if (nativePublish && workerMode !== 'split')
+    throw Error('--native-publish requires --split-decoder');
   const cli = require('../../sdk/cli.cjs');
   const scoring = require('./run-summary.cjs');
   const duration = cli.number(args, '--duration', null);
@@ -160,6 +163,7 @@ async function run({
           workerDirectory: path.join(output, 'decoder-' + generation),
           workerMode,
           transport,
+          publication: nativePublish ? sink.workerPublication : null,
           log,
           cancelled
         });
@@ -258,6 +262,7 @@ async function run({
       pendingSplitOutput = null,
       outstanding = 0;
     async function resync(error) {
+      if (nativePublish && workerStarted) throw error;
       resets = resets.filter(time => Date.now() - time < 30000);
       if (resets.length >= 3) throw error;
       resets.push(Date.now());
@@ -337,12 +342,16 @@ async function run({
           stats.submitted++;
           if (pendingSplitOutput) {
             enter('destination');
-            const destination = await sink.destination();
+            const destination = nativePublish
+              ? await sink.workerDestination(current.presentation)
+              : await sink.destination();
             enter('split-output');
             const frame = await decoder.finishSplitOutput(pendingSplitOutput, destination);
             stats.decoded++;
-            enter('publish');
-            await sink.publish(destination, frame);
+            if (!nativePublish) {
+              enter('publish');
+              await sink.publish(destination, frame);
+            }
             stats.presented++;
           }
           enter('split-queue');
@@ -403,12 +412,16 @@ async function run({
     }
     if (workerMode === 'split' && pendingSplitOutput && !stopping) {
       enter('destination');
-      const destination = await sink.destination();
+      const destination = nativePublish
+        ? await sink.workerDestination(null)
+        : await sink.destination();
       enter('split-output');
       const frame = await decoder.finishSplitOutput(pendingSplitOutput, destination);
       stats.decoded++;
-      enter('publish');
-      await sink.publish(destination, frame);
+      if (!nativePublish) {
+        enter('publish');
+        await sink.publish(destination, frame);
+      }
       stats.presented++;
       pendingSplitOutput = null;
     }

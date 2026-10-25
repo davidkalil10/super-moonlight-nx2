@@ -13,6 +13,7 @@ const {
 } = require('../../sdk/native/thread.cjs');
 const SYNC = require('../../sdk/native/os-sync-functions.json');
 const MOVIE_EVENTS = require('../../sdk/native/movie-event-functions.json');
+const ring = require('./ring.cjs');
 
 const CONTROL_BYTES = 0x1000;
 const INPUT_GATE = 0x00;
@@ -30,17 +31,22 @@ const DECODE_DISPATCH = 0x108;
 const OUTPUT_DISPATCH = 0x110;
 const FETCH_DISPATCH = 0x118;
 const INPUT_JOB = 0x140;
-const OUTPUT_JOB = 0x160;
+const OUTPUT_JOB = 0x300;
 const RECEIVE_RESULTS = 0x180;
 const INPUT_RESULTS = 0x1a0;
 const OUTPUT_RESULTS = 0x1c0;
 const FETCH_RESULTS = 0x1f0;
+const PRESENT_RESULTS = 0x210;
 const SHORT = 2;
 const AUTO_CLEAR = 1;
-const STATUS_BYTES = FETCH_RESULTS + 28 - RECEIVE_RESULTS;
+const STATUS_BYTES = PRESENT_RESULTS + 8 - RECEIVE_RESULTS;
 const STATUS_FIELDS = {
   receive: {offset: RECEIVE_RESULTS - RECEIVE_RESULTS, sequence: 8, bytes: 16},
-  input: {offset: INPUT_RESULTS - RECEIVE_RESULTS, sequence: 24, bytes: 28},
+  input: {
+    offset: INPUT_RESULTS - RECEIVE_RESULTS,
+    sequence: 24,
+    bytes: PRESENT_RESULTS + 8 - INPUT_RESULTS
+  },
   acquire: {offset: OUTPUT_RESULTS - RECEIVE_RESULTS, sequence: 32, bytes: 36},
   fetch: {offset: FETCH_RESULTS - RECEIVE_RESULTS, sequence: 24, bytes: 28}
 };
@@ -55,6 +61,7 @@ async function create({
   output,
   format,
   transport,
+  publication = null,
   cancelled = () => false,
   pollTimeoutMs = 5000,
   stopTimeoutMs = 5000
@@ -70,6 +77,13 @@ async function create({
     typeof transport.abort !== 'function'
   )
     throw Error('Split decoder needs a native TCP transport');
+  if (
+    publication &&
+    (!Number.isSafeInteger(publication.mapped) ||
+      publication.mapped <= 0 ||
+      ![1, 2].includes(publication.color))
+  )
+    throw Error('Invalid split decoder publication target');
 
   const sdk = rpc.a.sdk;
   const sync = {};
@@ -355,6 +369,23 @@ async function create({
           function: functions.acquireInput,
           args: [decoder, address(INPUT_RESULTS + 16), address(INPUT_RESULTS + 20), 0]
         },
+        ...(publication
+          ? [
+              {
+                function: copy,
+                args: [address(PRESENT_RESULTS), publication.mapped + ring.CONTROL.current, 4, 0]
+              },
+              {
+                function: copy,
+                args: [
+                  address(PRESENT_RESULTS + 4),
+                  publication.mapped + ring.CONTROL.nativeApplied,
+                  4,
+                  0
+                ]
+              }
+            ]
+          : []),
         {function: copy, args: [address(INPUT_RESULTS + 24), address(INPUT_JOB), 4, 0]},
         ...inputRestore,
         {function: sync.signalLightEvent, args: [address(INPUT_DONE), 0, 0, 0]},
@@ -407,6 +438,18 @@ async function create({
           function: functions.releaseOutput,
           args: [decoder, {u32: address(OUTPUT_RESULTS + 8)}, 0, 0]
         },
+        ...(publication
+          ? [
+              {
+                function: copy,
+                args: [publication.mapped + ring.CONTROL.nativeIndex, address(OUTPUT_JOB + 24), 28, 0]
+              },
+              {
+                function: copy,
+                args: [publication.mapped + ring.CONTROL.nativeSequence, address(OUTPUT_JOB + 52), 4, 0]
+              }
+            ]
+          : []),
         {function: copy, args: [address(FETCH_RESULTS + 24), address(OUTPUT_JOB), 4, 0]},
         ...outputRestore,
         {function: sync.signalLightEvent, args: [address(OUTPUT_DONE), 0, 0, 0]},
@@ -538,7 +581,13 @@ async function create({
         sequence: job.sequence,
         pts: job.pts,
         decodeGateAt: job.decodeGateAt,
-        input: {status: inputStatus, index: nextIndex}
+        input: {status: inputStatus, index: nextIndex},
+        presentation: publication
+          ? {
+              current: completed.readUInt32LE(PRESENT_RESULTS - INPUT_RESULTS),
+              applied: completed.readUInt32LE(PRESENT_RESULTS + 4 - INPUT_RESULTS)
+            }
+          : null
       };
     },
 
@@ -564,7 +613,7 @@ async function create({
       return acquiredOutput(job);
     },
 
-    async finishOutput(job, destination) {
+    async finishOutput(job, destination, frame = null) {
       if (!job || activeOutput !== job || !video.thread || video.joined)
         throw Error('Split output job is not ready');
       if (
@@ -574,10 +623,45 @@ async function create({
         destination.bytes <= 0
       )
         throw Error('Invalid split decoder output destination');
+      if (
+        publication &&
+        (!frame ||
+          ![0, 1, 2].includes(destination.index) ||
+          destination.address !== publication.mapped + ring.frameOffset(destination.index) ||
+          destination.bytes < ring.FRAME_BYTES ||
+          !Number.isInteger(destination.sequence) ||
+          destination.sequence < 1 ||
+          destination.sequence > 0xffffffff ||
+          destination.color !== publication.color ||
+          !Number.isInteger(frame.width) ||
+          frame.width < 2 ||
+          frame.width > 1920 ||
+          !Number.isInteger(frame.height) ||
+          frame.height < 2 ||
+          frame.height > 1088 ||
+          !Number.isInteger(frame.stride) ||
+          frame.stride < frame.width ||
+          !Number.isInteger(frame.sliceHeight) ||
+          frame.sliceHeight < frame.height ||
+          (frame.stride * frame.sliceHeight * 3) / 2 > ring.FRAME_BYTES)
+      )
+        throw Error('Invalid split decoder publication metadata');
       const acquired = await acquiredOutput(job);
-      const destinationBytes = Buffer.alloc(16);
+      const destinationBytes = Buffer.alloc(publication ? 48 : 16);
       destinationBytes.writeBigUInt64LE(BigInt(destination.address), 0);
       destinationBytes.writeBigUInt64LE(BigInt(destination.bytes), 8);
+      if (publication) {
+        const fields = [
+          destination.index,
+          frame.width,
+          frame.height,
+          frame.stride,
+          frame.sliceHeight,
+          destination.color
+        ];
+        fields.push(ring.nativeChecksum(destination.sequence, fields), destination.sequence);
+        fields.forEach((value, word) => destinationBytes.writeUInt32LE(value, 16 + word * 4));
+      }
       await rpc.writeAndCall(address(OUTPUT_JOB + 8), destinationBytes, sync.signalLightEvent, [
         address(FETCH_GATE)
       ]);

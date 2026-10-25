@@ -7,6 +7,16 @@ layout(local_size_x=HBV2_LOCAL_SIZE) in;
 layout(set=0,binding=1,std430) coherent buffer PrivateMemory { uint words[]; } memory;
 #include "hbv2-tables.glsl"
 #include "hbv2.glsl"
+uint nativeChecksum(uint sequence,uint index,uint width,uint height,uint stride,uint rows,uint color){
+ uint checksum=2166136261u;
+ checksum=(checksum^sequence)*16777619u;
+ checksum=(checksum^index)*16777619u;
+ checksum=(checksum^width)*16777619u;
+ checksum=(checksum^height)*16777619u;
+ checksum=(checksum^stride)*16777619u;
+ checksum=(checksum^rows)*16777619u;
+ return (checksum^color)*16777619u;
+}
 void main(){
  if(gl_LocalInvocationIndex==0u){
   uint held=hbButtons();
@@ -24,12 +34,13 @@ void main(){
     uint index=memory.words[CONTROL_NATIVE_INDEX];
     uint width=memory.words[CONTROL_NATIVE_WIDTH],height=memory.words[CONTROL_NATIVE_HEIGHT];
     uint stride=memory.words[CONTROL_NATIVE_STRIDE],rows=memory.words[CONTROL_NATIVE_SLICE_HEIGHT];
-    if(index<2u&&width>=2u&&height>=2u&&width<=1920u&&height<=1088u&&stride>=width&&rows>=height&&stride*rows*3u/2u<=FRAME_BYTES){
+    uint color=memory.words[CONTROL_NATIVE_COLOR];
+    if(memory.words[CONTROL_NATIVE_COMMIT]==nativeChecksum(sequence,index,width,height,stride,rows,color)&&index<NATIVE_FRAMES&&width>=2u&&height>=2u&&width<=1920u&&height<=1088u&&stride>=width&&rows>=height&&stride*rows*3u/2u<=FRAME_BYTES){
      memory.words[CONTROL_CURRENT]=index;
      memory.words[CONTROL_SIZE]=width|(height<<16);
      memory.words[CONTROL_CURRENT_STRIDE]=stride;
      memory.words[CONTROL_CURRENT_SLICE_HEIGHT]=rows;
-     memory.words[CONTROL_CURRENT_COLOR]=memory.words[CONTROL_NATIVE_COLOR];
+     memory.words[CONTROL_CURRENT_COLOR]=color;
      memory.words[CONTROL_MODE]=MODE_NATIVE;
      memoryBarrierBuffer();
      memory.words[CONTROL_NATIVE_APPLIED]=sequence;
