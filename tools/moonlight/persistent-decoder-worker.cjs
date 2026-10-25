@@ -23,11 +23,15 @@ const OUTPUT_EVENT = 0x40;
 const DECODER_EVENTS = 0x80;
 const DISPATCH = 0xc0;
 const FETCH_DISPATCH = 0xc8;
+const RECEIVE_DONE = 0xe0;
+const DECODE_GATE = 0xf0;
+const DECODE_DISPATCH = 0x100;
 const DECODE_RESULTS = 0x120;
 const FETCH_RESULTS = 0x160;
 const JOB = 0x1a0;
 const FETCH_JOB = 0x1c0;
 const PROBE_DONE = 0x1d0;
+const RECEIVE_RESULTS = 0x1e0;
 const SHORT = 2;
 const AUTO_CLEAR = 1;
 const READ = 0x586fb0;
@@ -43,10 +47,22 @@ async function create({
   decoder,
   output,
   format,
+  transport = null,
   cancelled = () => false,
   pollTimeoutMs = 5000,
   stopTimeoutMs = 5000
 }) {
+  if (
+    transport &&
+    (!Number.isInteger(transport.fd) ||
+      transport.fd < 0 ||
+      !Number.isInteger(transport.maxAccessUnit) ||
+      transport.maxAccessUnit < 1 ||
+      !Number.isSafeInteger(transport.recvFunction) ||
+      typeof transport.send !== 'function' ||
+      typeof transport.abort !== 'function')
+  )
+    throw Error('Invalid native TCP decoder transport');
   const sdk = rpc.a.sdk;
   const sync = {};
   await verifyCode(rpc);
@@ -81,7 +97,7 @@ async function create({
   const registerAddress = module.base + registration.offset;
   await verify(rpc, registerAddress, registration.hex);
 
-  const base = await allocate(rpc, 0x400000, {
+  const base = await allocate(rpc, transport ? 0x500000 : 0x400000, {
     failed: 'Persistent decoder worker allocation failed',
     invalid: 'Invalid persistent decoder worker allocation'
   });
@@ -94,7 +110,14 @@ async function create({
   data.writeBigUInt64LE(BigInt(event(OUTPUT_EVENT)), DECODER_EVENTS + 8);
   await rpc.write(control, data);
   const initialized = [];
-  for (const offset of [GATE, ACQUIRED, FETCH_GATE, DONE, PROBE_DONE]) {
+  for (const offset of [
+    GATE,
+    ACQUIRED,
+    FETCH_GATE,
+    DONE,
+    PROBE_DONE,
+    ...(transport ? [RECEIVE_DONE, DECODE_GATE] : [])
+  ]) {
     await rpc.callAddress(sync.initializeLightEvent, [event(offset), 0, AUTO_CLEAR, 0], SHORT);
     initialized.push({offset, finalize: sync.finalizeLightEvent});
   }
@@ -113,7 +136,9 @@ async function create({
   const decodeSnapshot = base + 0x180000;
   const fetchFrame = base + 0x210000;
   const fetchSnapshot = base + 0x280000;
-  const exitFrame = base + 0x350000;
+  const receiveFrame = base + 0x310000;
+  const receiveSnapshot = base + 0x380000;
+  const exitFrame = base + (transport ? 0x450000 : 0x350000);
 
   function frame(address, calls, results = {}) {
     const program = build(address, sdk, calls, CODE, false, new Set(Object.values(functions)));
@@ -243,6 +268,27 @@ async function create({
         {function: copy, args: [decodeFrame, decodeSnapshot, decode.length, 0]},
         {function: copy, args: [fetchFrame, fetchSnapshot, 0, 0]}
       ];
+      const receive = transport
+        ? frame(
+            receiveFrame,
+            [
+              {
+                function: transport.recvFunction,
+                args: [transport.fd, {u64: event(JOB + 24)}, {u32: event(JOB + 8)}, 0x40]
+              },
+              {function: copy, args: [event(RECEIVE_RESULTS + 8), event(JOB), 4, 0]},
+              {function: sync.signalLightEvent, args: [event(RECEIVE_DONE), 0, 0, 0]},
+              {function: sync.waitLightEvent, args: [event(DECODE_GATE), 0, 0, 0]},
+              {function: jump, args: [{u64: event(DECODE_DISPATCH)}, 1, 0, 0]}
+            ],
+            {0: RECEIVE_RESULTS}
+          )
+        : null;
+      if (receive)
+        restoreCalls.push({
+          function: copy,
+          args: [receiveFrame, receiveSnapshot, receive.length, 0]
+        });
       const fetchResults = [
         FETCH_RESULTS,
         FETCH_RESULTS + 8,
@@ -271,30 +317,43 @@ async function create({
         gate.length > gateSnapshot - gateFrame ||
         decode.length > decodeSnapshot - decodeFrame ||
         fetch.length > fetchSnapshot - fetchFrame ||
-        fetchSnapshot + fetch.length > exitFrame
+        fetchSnapshot + fetch.length > receiveFrame ||
+        (receive &&
+          (receive.length > receiveSnapshot - receiveFrame ||
+            receiveSnapshot + receive.length > exitFrame))
       )
         throw Error('Persistent decoder frame overlaps its snapshot');
       const stop = Buffer.alloc(0xb0);
       stop.writeBigUInt64LE(BigInt(sdk + CODE.exit.offset), 0x58);
-      stop.writeBigUInt64LE(BigInt(base + 0x370000), 0x68);
+      stop.writeBigUInt64LE(BigInt(base + (transport ? 0x470000 : 0x370000)), 0x68);
       await rpc.write(gateFrame, gate);
       await rpc.write(gateSnapshot, gate);
       await rpc.write(decodeFrame, decode);
       await rpc.write(decodeSnapshot, decode);
       await rpc.write(fetchFrame, fetch);
       await rpc.write(fetchSnapshot, fetch);
+      if (receive) {
+        await rpc.write(receiveFrame, receive);
+        await rpc.write(receiveSnapshot, receive);
+      }
       await rpc.write(exitFrame, stop);
       for (const [address, bytes] of [
         [gateSnapshot, gate],
         [decodeSnapshot, decode],
-        [fetchSnapshot, fetch]
+        [fetchSnapshot, fetch],
+        ...(receive ? [[receiveSnapshot, receive]] : [])
       ])
         if (!(await rpc.read(address, bytes.length)).equals(bytes))
           throw Error('Persistent decoder frame snapshot readback differs');
       const selectors = Buffer.alloc(16);
-      selectors.writeBigUInt64LE(BigInt(decodeFrame), 0);
+      selectors.writeBigUInt64LE(BigInt(receive ? receiveFrame : decodeFrame), 0);
       selectors.writeBigUInt64LE(BigInt(fetchFrame), 8);
       await rpc.write(event(DISPATCH), selectors);
+      if (receive) {
+        const selector = Buffer.alloc(8);
+        selector.writeBigUInt64LE(BigInt(decodeFrame));
+        await rpc.write(event(DECODE_DISPATCH), selector);
+      }
       uncertainStart = true;
       thread = await spawn(rpc, base, gateFrame, {
         failed: 'Persistent decoder thread creation failed'
@@ -302,17 +361,38 @@ async function create({
       uncertainStart = false;
     },
 
-    async begin({index, length, pts}) {
+    async begin({index, length, pts, inputAddress, payload}) {
       if (thread === null || joined || active)
         throw Error('Persistent decoder worker is not ready');
+      if (
+        transport &&
+        (!Buffer.isBuffer(payload) ||
+          payload.length !== length ||
+          payload.length > transport.maxAccessUnit ||
+          !Number.isSafeInteger(inputAddress) ||
+          inputAddress <= 0)
+      )
+        throw Error('Invalid native TCP decoder payload');
       sequence = (sequence + 1) >>> 0 || 1;
       active = sequence;
-      const job = Buffer.alloc(24);
+      const job = Buffer.alloc(transport ? 32 : 24);
       job.writeUInt32LE(sequence, 0);
       job.writeInt32LE(index, 4);
       job.writeUInt32LE(length, 8);
       job.writeBigUInt64LE(BigInt(pts), 16);
+      if (transport) job.writeBigUInt64LE(BigInt(inputAddress), 24);
       await rpc.writeAndCall(event(JOB), job, sync.signalLightEvent, [event(GATE)]);
+      if (transport) {
+        await transport.send(payload);
+        const received = await poll(RECEIVE_DONE, RECEIVE_RESULTS, 'TCP receive');
+        const count = received.readBigInt64LE(0);
+        const receivedSequence = received.readUInt32LE(8);
+        if (count !== BigInt(length) || receivedSequence !== sequence)
+          throw Error(
+            `Native TCP receive returned ${count}/${length} bytes and sequence ${receivedSequence}/${sequence}`
+          );
+        await rpc.callAddress(sync.signalLightEvent, [event(DECODE_GATE)], SHORT);
+      }
       return {sequence, pts: BigInt(pts)};
     },
 
@@ -396,8 +476,8 @@ async function create({
       };
     },
 
-    async run({index, length, pts, destination}) {
-      const job = await this.begin({index, length, pts});
+    async run({index, length, pts, destination, inputAddress, payload}) {
+      const job = await this.begin({index, length, pts, inputAddress, payload});
       return this.finish(job, destination);
     },
 
@@ -405,12 +485,19 @@ async function create({
       if (uncertainStart)
         throw Error('Persistent decoder thread creation is uncertain; decoder and events retained');
       if (thread === null || joined) return;
+      transport?.abort();
       const selectors = Buffer.alloc(16);
       selectors.writeBigUInt64LE(BigInt(exitFrame), 0);
       selectors.writeBigUInt64LE(BigInt(exitFrame), 8);
       await rpc.write(event(DISPATCH), selectors);
+      if (transport) {
+        const selector = Buffer.alloc(8);
+        selector.writeBigUInt64LE(BigInt(exitFrame));
+        await rpc.write(event(DECODE_DISPATCH), selector);
+      }
       await rpc.callAddress(sync.signalLightEvent, [event(GATE)], SHORT);
       await rpc.callAddress(sync.signalLightEvent, [event(FETCH_GATE)], SHORT);
+      if (transport) await rpc.callAddress(sync.signalLightEvent, [event(DECODE_GATE)], SHORT);
       await rpc.callAddress(sync.signalEvent, [event(OUTPUT_EVENT)], SHORT);
       if (
         !(await wait(rpc, thread, {

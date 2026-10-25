@@ -38,6 +38,7 @@ async function create({
   directory,
   workerDirectory,
   workerMode = 'host',
+  transport = null,
   persistentWorkerFactory = require('./persistent-decoder-worker.cjs').create,
   log = () => {},
   cancelled = () => false
@@ -239,6 +240,13 @@ async function create({
         errors.push(error);
       }
     }
+    if (transport) {
+      try {
+        await transport.close();
+      } catch (error) {
+        errors.push(error);
+      }
+    }
     if (!errors.length && persistent) {
       try {
         await persistent.finalize();
@@ -318,6 +326,7 @@ async function create({
           decoder: pointer('decoder'),
           output: pointer('output'),
           format: pointer('format'),
+          transport,
           cancelled
         });
         await persistent.register();
@@ -365,13 +374,16 @@ async function create({
       const {address, capacity} = inputs.get(index);
       if (!Number.isSafeInteger(address) || address <= 0 || unit.data.length > capacity)
         throw Error('H.264 access unit exceeds the native input buffer');
-      step = 'writeUnit';
-      await rpc.write(address, unit.data);
+      if (!transport) {
+        step = 'writeUnit';
+        await rpc.write(address, unit.data);
+      }
       step = 'persistent-start';
       persistentJob = await persistent.begin({
         index,
         length: unit.data.length,
-        pts: unit.pts
+        pts: unit.pts,
+        ...(transport ? {inputAddress: address, payload: unit.data} : {})
       });
       step = 'persistent-output';
     },

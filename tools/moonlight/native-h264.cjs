@@ -48,6 +48,7 @@ async function run({
   fps,
   sourceRevision,
   createDecoder = require('./native-decoder.cjs').create,
+  createTransport = require('./native-tcp.cjs').create,
   createSink = require('./native-sink.cjs').create,
   spawnProcess = spawn
 }) {
@@ -62,6 +63,16 @@ async function run({
     : 'host';
   if (!['host', 'persistent'].includes(decoderWorker))
     throw Error('--decoder-worker is host or persistent');
+  const decoderData = args.includes('--decoder-data')
+    ? args[args.indexOf('--decoder-data') + 1]
+    : 'rpc';
+  if (
+    !['rpc', 'tcp'].includes(decoderData) ||
+    (decoderData === 'tcp' && decoderWorker !== 'persistent')
+  )
+    throw Error('--decoder-data is rpc or tcp with a persistent worker');
+  if (decoderData === 'tcp' && !rpc.host)
+    throw Error('Native TCP requires a fresh launcher session from this branch');
   const revision =
     sourceRevision ||
     execFileSync('git', ['rev-parse', 'HEAD'], {
@@ -138,15 +149,23 @@ async function run({
     sink = await createSink(rpc, storage, {cancelled});
     let resets = [];
     let generation = 0;
-    const makeDecoder = () =>
-      createDecoder({
-        rpc,
-        directory,
-        workerDirectory: path.join(output, 'decoder-' + generation),
-        workerMode: decoderWorker,
-        log,
-        cancelled
-      });
+    const makeDecoder = async () => {
+      const transport = decoderData === 'tcp' ? await createTransport({rpc, host: rpc.host}) : null;
+      try {
+        return await createDecoder({
+          rpc,
+          directory,
+          workerDirectory: path.join(output, 'decoder-' + generation),
+          workerMode: decoderWorker,
+          transport,
+          log,
+          cancelled
+        });
+      } catch (error) {
+        await transport?.close().catch(() => {});
+        throw error;
+      }
+    };
     decoder = await makeDecoder();
     helper = spawnProcess(
       helperPath,
