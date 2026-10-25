@@ -1,6 +1,12 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const {primeReceive, checkedPrimeCounts, primeAppend, cycle} = require('./audio-socket-plan.cjs');
+const {
+  primeReceive,
+  checkedPrimeCounts,
+  primeAppend,
+  cycle,
+  checkedCycle
+} = require('./audio-socket-plan.cjs');
 
 const options = {
   sdk: 0x10000000,
@@ -37,6 +43,18 @@ test('socket audio primes two buffers and recycles only after release events', (
   }
   assert.ok(recycled.rows[0].append < recycled.rows[1].wait);
   assert.ok(recycled.program.frame.length < 0x100000);
+  const cycleResults = Array.from({length: recycled.calls.length}, () => 0n);
+  for (const row of recycled.rows) {
+    cycleResults[row.released] = BigInt(options.slots[row.index].descriptor);
+    cycleResults[row.receive] = 3840n;
+    cycleResults[row.append] = 1n;
+  }
+  assert.doesNotThrow(() => checkedCycle(cycleResults, recycled.rows, options.slots, 3840));
+  cycleResults[recycled.rows[1].released] = BigInt(options.slots[0].descriptor);
+  assert.throws(
+    () => checkedCycle(cycleResults, recycled.rows, options.slots, 3840),
+    /invalid descriptor or count/
+  );
 });
 
 test('socket audio refuses overlapping descriptors and oversized PCM chunks', () => {
