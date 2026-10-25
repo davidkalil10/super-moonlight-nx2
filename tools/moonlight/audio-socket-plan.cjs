@@ -95,7 +95,23 @@ function cycle({sdk, base, ...options}) {
   }
   const verified = new Set([recv, append, getReleased]);
   const program = repeating.frame({base, sdk, calls, code: CODE, verified});
-  return {program, rows};
+  return {program, rows, calls, verified};
 }
 
-module.exports = {primeReceive, checkedPrimeCounts, primeAppend, cycle};
+function checkedCycle(results, rows, slots, bufferBytes) {
+  if (!Array.isArray(results) || results.length < 8 || !Array.isArray(rows) || rows.length !== 2)
+    throw Error('Invalid socket audio recycle results');
+  for (const row of rows) {
+    if (
+      typeof results[row.released] !== 'bigint' ||
+      typeof results[row.receive] !== 'bigint' ||
+      typeof results[row.append] !== 'bigint' ||
+      results[row.released] !== BigInt(slots[row.index].descriptor) ||
+      Number(BigInt.asIntN(64, results[row.receive])) !== bufferBytes ||
+      results[row.append] !== 1n
+    )
+      throw Error(`Socket audio recycle ${row.index} returned an invalid descriptor or count`);
+  }
+}
+
+module.exports = {primeReceive, checkedPrimeCounts, primeAppend, cycle, checkedCycle};
