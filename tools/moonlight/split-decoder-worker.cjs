@@ -1,6 +1,6 @@
-const {build} = require('../../../hbl-platform/smilebasic/engine/shared/frames.cjs');
-const {allocate} = require('../../../hbl-platform/sdk/native/allocate.cjs');
-const {verify} = require('../../../hbl-platform/sdk/native/symbols.cjs');
+const {build} = require('../../../hbl-platform/smilebasic/engine/shared/frames.js');
+const {allocate} = require('../../../hbl-platform/sdk/native/allocate.js');
+const {verify} = require('../../../hbl-platform/sdk/native/symbols.js');
 const {
   CODE,
   IPC_COPY,
@@ -10,7 +10,7 @@ const {
   spawn,
   wait,
   join
-} = require('../../../hbl-platform/sdk/native/thread.cjs');
+} = require('../../../hbl-platform/sdk/native/thread.js');
 const SYNC = require('../../../hbl-platform/sdk/native/os-sync-functions.json');
 const MOVIE_EVENTS = require('../../sdk/native/movie-event-functions.json');
 const ring = require('./ring.cjs');

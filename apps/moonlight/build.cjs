@@ -5,7 +5,7 @@ const fs = require('node:fs/promises'),
   path = require('node:path');
 const {execFileSync} = require('node:child_process');
 const ring = require('../../tools/moonlight/ring.cjs');
-const {STATE} = require('../../../hbl-platform/sdk/host/state-layout.cjs');
+const {STATE} = require('../../../hbl-platform/sdk/host/state-layout.js');
 
 function testCard(width, height) {
   const bars = [
@@ -54,7 +54,7 @@ async function main() {
   await fs.writeFile(path.join(__dirname, 'shaders/ring.glsl'), ring.glsl());
   await fs.writeFile(path.join(__dirname, 'assets/memory.bin'), initialMemory(hbv2));
   execFileSync('python3', [path.join(__dirname, 'assets.py')], {stdio: 'inherit'});
-  await require('../../../hbl-platform/sdk/build.cjs').buildApp(__dirname);
+  await require('../../../hbl-platform/sdk/build.js').buildApp(__dirname);
 }
 
 if (require.main === module)

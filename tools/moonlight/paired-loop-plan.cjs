@@ -1,5 +1,5 @@
-const {build} = require('../../../hbl-platform/smilebasic/engine/shared/frames.cjs');
-const {CODE, IPC_COPY} = require('../../../hbl-platform/sdk/native/thread.cjs');
+const {build} = require('../../../hbl-platform/smilebasic/engine/shared/frames.js');
+const {CODE, IPC_COPY} = require('../../../hbl-platform/sdk/native/thread.js');
 const SYNC = require('../../../hbl-platform/sdk/native/os-sync-functions.json');
 const ring = require('./ring.cjs');
 

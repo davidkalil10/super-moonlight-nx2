@@ -7,8 +7,8 @@
 //        [--buffer-frames 3840] [--queue 3] [--prime 2]
 const fs = require('node:fs');
 const path = require('node:path');
-const session = require('../../../hbl-platform/sdk/host/session.cjs');
-const cli = require('../../../hbl-platform/sdk/cli.cjs');
+const session = require('../../../hbl-platform/sdk/host/session.js');
+const cli = require('../../../hbl-platform/sdk/cli.js');
 
 const SAMPLE_RATE = 48000;
 const CHANNELS = 2;
@@ -20,9 +20,9 @@ const PARAM_OFFSET = 0x300;
 const DESCRIPTOR_BASE = 0x400;
 const DESCRIPTOR_STRIDE = 0x40;
 
-const {sdkResolver} = require('../../../hbl-platform/sdk/native/symbols.cjs');
-const {allocate} = require('../../../hbl-platform/sdk/native/allocate.cjs');
-const audioOut = require('../../../hbl-platform/sdk/host/audio-out.cjs');
+const {sdkResolver} = require('../../../hbl-platform/sdk/native/symbols.js');
+const {allocate} = require('../../../hbl-platform/sdk/native/allocate.js');
+const audioOut = require('../../../hbl-platform/sdk/host/audio-out.js');
 
 const check = (value, message) => {
   if (!value) throw Error(message);

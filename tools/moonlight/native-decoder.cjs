@@ -2,8 +2,8 @@
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const definitions = require('../../sdk/native/movie-functions.json');
-const {create: createModule} = require('../../../hbl-platform/sdk/native/module.cjs');
-const {create: createFinite} = require('../../../hbl-platform/sdk/native/finite.cjs');
+const {create: createModule} = require('../../../hbl-platform/sdk/native/module.js');
+const {create: createFinite} = require('../../../hbl-platform/sdk/native/finite.js');
 
 const int32 = value => {
   const b = Buffer.alloc(4);

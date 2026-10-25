@@ -27,8 +27,8 @@ const {findPrivateStorage, nextSequence} = require('./feed.cjs');
 const hbv = require('./hbv.cjs');
 const {split} = require('./frames.cjs');
 const {HELPER} = require('./helper.cjs');
-const session = require('../../../hbl-platform/sdk/host/session.cjs');
-const cli = require('../../../hbl-platform/sdk/cli.cjs');
+const session = require('../../../hbl-platform/sdk/host/session.js');
+const cli = require('../../../hbl-platform/sdk/cli.js');
 
 function moonlight(args, fps, width, height, directory) {
   const at = args.indexOf('--moonlight');

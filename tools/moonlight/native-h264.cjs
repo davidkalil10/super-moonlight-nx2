@@ -94,7 +94,7 @@ async function run({
     throw Error('--auto-output-queue requires --native-publish');
   if (linkedGates && !autoOutputQueue)
     throw Error('--linked-gates requires --auto-output-queue');
-  const cli = require('../../../hbl-platform/sdk/cli.cjs');
+  const cli = require('../../../hbl-platform/sdk/cli.js');
   const scoring = require('./run-summary.cjs');
   const duration = cli.number(args, '--duration', null);
   const warmup = cli.number(args, '--warmup', 3);

@@ -7,8 +7,8 @@
 // own sequence instead of the one its slot held two AUs earlier.
 // Stopping the input worker points its dispatches at the exit frame first, then wakes the decode
 // gate and the acknowledgement, so a worker parked on either exits without another SendInput.
-const {allocate} = require('../../../hbl-platform/sdk/native/allocate.cjs');
-const {verify} = require('../../../hbl-platform/sdk/native/symbols.cjs');
+const {allocate} = require('../../../hbl-platform/sdk/native/allocate.js');
+const {verify} = require('../../../hbl-platform/sdk/native/symbols.js');
 const {
   CODE,
   verifyCode,
@@ -17,7 +17,7 @@ const {
   spawn,
   wait,
   join
-} = require('../../../hbl-platform/sdk/native/thread.cjs');
+} = require('../../../hbl-platform/sdk/native/thread.js');
 const SYNC = require('../../../hbl-platform/sdk/native/os-sync-functions.json');
 const MOVIE_EVENTS = require('../../sdk/native/movie-event-functions.json');
 const inputPlan = require('./staggered-input-plan.cjs');

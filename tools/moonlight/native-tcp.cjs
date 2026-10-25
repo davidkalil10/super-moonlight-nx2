@@ -1,8 +1,8 @@
 const net = require('node:net');
 const crypto = require('node:crypto');
-const {allocate} = require('../../../hbl-platform/sdk/native/allocate.cjs');
-const {verify} = require('../../../hbl-platform/sdk/native/symbols.cjs');
-const {create: createFinite} = require('../../../hbl-platform/sdk/native/finite.cjs');
+const {allocate} = require('../../../hbl-platform/sdk/native/allocate.js');
+const {verify} = require('../../../hbl-platform/sdk/native/symbols.js');
+const {create: createFinite} = require('../../../hbl-platform/sdk/native/finite.js');
 const definitions = require('../../../hbl-platform/sdk/native/socket-functions.json');
 
 const MAX_ACCESS_UNIT = 0x100000;

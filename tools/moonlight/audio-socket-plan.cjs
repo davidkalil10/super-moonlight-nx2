@@ -1,6 +1,6 @@
-const {build, SENTINEL} = require('../../../hbl-platform/smilebasic/engine/shared/frames.cjs');
-const repeating = require('../../../hbl-platform/sdk/native/repeating.cjs');
-const {CODE} = require('../../../hbl-platform/sdk/native/thread.cjs');
+const {build, SENTINEL} = require('../../../hbl-platform/smilebasic/engine/shared/frames.js');
+const repeating = require('../../../hbl-platform/sdk/native/repeating.js');
+const {CODE} = require('../../../hbl-platform/sdk/native/thread.js');
 const SYNC = require('../../../hbl-platform/sdk/native/os-sync-functions.json');
 
 const MSG_WAITALL = 0x40;

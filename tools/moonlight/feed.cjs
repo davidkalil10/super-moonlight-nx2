@@ -6,8 +6,8 @@ const path = require('node:path');
 const ring = require('./ring.cjs');
 const hbv = require('./hbv.cjs');
 const hbv2 = require('./hbv2.cjs');
-const session = require('../../../hbl-platform/sdk/host/session.cjs');
-const cli = require('../../../hbl-platform/sdk/cli.cjs');
+const session = require('../../../hbl-platform/sdk/host/session.js');
+const cli = require('../../../hbl-platform/sdk/cli.js');
 
 const SLOT = 32768;
 const HOST_COHERENT = 4;
