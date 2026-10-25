@@ -11,6 +11,7 @@
 //        hbv2: [--budget 96] [--cap 256] (KiB) [--qp-min 4] [--qp-max 40]
 //              [--refresh 2] [--threads N] [--resync 1000] (ms)
 //        h264: [--split-decoder] (staged input/output workers)
+//              [--duration S] [--warmup S] [--expect fps=30,dropped=0,idr=0] [--ab]
 // --moonlight runs tools/moonlight/helper's hbmoonlight (path from $HBMOONLIGHT)
 //   and, unless --no-input / --no-audio, also feeds controller+touch into its
 //   stdin (input-feeder.cjs) and plays its audio on the console (audio-stream.cjs).
@@ -282,16 +283,26 @@ async function main() {
   if (storage.bytes < ring.MEMORY_BYTES)
     throw Error('The running Moonlight app predates HBV2; rebuild and reinstall it');
   if (codec === 'h264') {
-    await require('./native-h264.cjs').run({
-      args,
-      directory,
-      rpc,
-      storage,
-      helperPath: HELPER,
-      width,
-      height,
-      fps
-    });
+    const runs = args.includes('--ab')
+      ? [args.filter(arg => arg !== '--ab' && arg !== '--split-decoder'), [...args, '--split-decoder']]
+      : [args];
+    if (runs.length > 1 && !args.includes('--duration')) throw Error('--ab needs --duration');
+    let pass = true;
+    for (const [index, runArgs] of runs.entries()) {
+      if (index) await new Promise(resolve => setTimeout(resolve, 3000));
+      const summary = await require('./native-h264.cjs').run({
+        args: runArgs,
+        directory,
+        rpc,
+        storage,
+        helperPath: HELPER,
+        width,
+        height,
+        fps
+      });
+      pass &&= summary.pass;
+    }
+    if (!pass) process.exitCode = 1;
     return;
   }
 
