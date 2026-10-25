@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const {STATUS, READ_START, READ_END, parse, check} = require('./staggered-status.cjs');
+const {STATUS, READ_START, READ_END, parse, check, checkOutput} = require('./staggered-status.cjs');
 const ring = require('./ring.cjs');
 
 function snapshot() {
@@ -64,4 +64,22 @@ test('staggered gate treats temporary lack of an input slot as retryable', () =>
   bytes.writeBigUInt64LE(0x100en, STATUS.input + 8 - READ_START);
   bytes.writeInt32LE(-1, STATUS.input + 16 - READ_START);
   assert.throws(() => check(parse(bytes), expected), {retryable: true});
+});
+
+test('tail output check requires acquisition and prior publication without a new receive', () => {
+  const state = parse(snapshot());
+  state.receive.count = 0n;
+  assert.deepEqual(
+    checkOutput(state, {
+      acquire: {sequence: 7, pts: 7000n},
+      fetch: {sequence: 6},
+      ack: {sequence: 14, index: 1}
+    }),
+    {outputIndex: 3, current: 1, nativeApplied: 14}
+  );
+  state.acquire.pts = 7001n;
+  assert.throws(
+    () => checkOutput(state, {acquire: {sequence: 7, pts: 7000n}}),
+    /output status/
+  );
 });

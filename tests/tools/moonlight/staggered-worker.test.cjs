@@ -226,3 +226,43 @@ test('input buffers are cached and a missing slot can be reacquired exceptionall
   await worker.finalize();
   assert.equal(f.calls.filter(call => call.address === f.functions.bufferDestroy).length, 1);
 });
+
+test('tail output drain opens only a checked fetch gate', async () => {
+  const f = fixture();
+  const worker = await started(f);
+  const acquired = Buffer.alloc(28);
+  acquired.writeInt32LE(2, 8);
+  acquired.writeBigUInt64LE(1n, 16);
+  acquired.writeUInt32LE(1, 24);
+  f.write(f.publication.mapped + status.STATUS.acquire, acquired);
+  const destination = {
+    index: 0,
+    address: f.publication.mapped + ring.frameOffset(0),
+    bytes: ring.FRAME_BYTES,
+    sequence: 2,
+    color: 1
+  };
+  const frame = {width: 1920, height: 1080, stride: 1920, sliceHeight: 1088};
+  const wrong = await worker.readStatus();
+  wrong.acquire.pts = 2n;
+  await assert.rejects(
+    () => worker.drainOutput({
+      snapshot: wrong,
+      expected: {acquire: {sequence: 1, pts: 1n}},
+      destination,
+      frame
+    }),
+    /output status/
+  );
+  assert.equal(f.calls.filter(call => call.combined).length, 0);
+  await worker.drainOutput({
+    snapshot: await worker.readStatus(),
+    expected: {acquire: {sequence: 1, pts: 1n}},
+    destination,
+    frame
+  });
+  assert.equal(f.calls.filter(call => call.combined).length, 1);
+  assert.equal(worker.diagnostics.decodeGateSignals, 0);
+  await worker.stop();
+  await worker.finalize();
+});
