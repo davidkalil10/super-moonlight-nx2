@@ -240,3 +240,41 @@ test('staggered late rereads cost less without the host pause', async () => {
     assert.ok(immediate.fps > paused.fps, `${immediate.fps} against ${paused.fps} fps`);
   }
 });
+
+test('skipping older presents lets a staggered backlog decode past the present rate', async () => {
+  const run = (paced, skipBacklog) =>
+    simulate({
+      mode: 'staggered',
+      frames: 240,
+      presentHz: 60,
+      lag: 2,
+      barrier: true,
+      paced,
+      skipBacklog,
+      model: {...MODEL, sourceFps: 60}
+    });
+  const capped = await run(false, null);
+  const skipping = await run(false, 2);
+  assert.equal(capped.decodedFps, 60);
+  assert.ok(skipping.decodedFps >= 95, `decoded ${skipping.decodedFps}/s`);
+  assert.ok(skipping.skipped > 0);
+  const steady = await run(true, 2);
+  assert.equal(steady.skipped, 0);
+  assert.equal(steady.requestsPerFrame, (await run(true, null)).requestsPerFrame);
+});
+
+test('a skipped present does not wait on the vsync pacer', async () => {
+  const result = await simulate({
+    mode: 'staggered',
+    frames: 240,
+    presentHz: 60,
+    lag: 2,
+    barrier: true,
+    paced: false,
+    hostWait: 'pacer',
+    skipBacklog: 2,
+    model: {...MODEL, sourceFps: 60}
+  });
+  assert.ok(result.decodedFps >= 95, `decoded ${result.decodedFps}/s`);
+  assert.ok(result.requestsPerFrame < 4, `${result.requestsPerFrame} requests/frame`);
+});

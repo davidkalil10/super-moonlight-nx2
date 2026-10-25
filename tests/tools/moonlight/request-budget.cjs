@@ -503,6 +503,8 @@ async function simulateStaggered({
   barrier = false,
   retryWaitMs = STAGGERED.retryWaitMs,
   hostWait = null,
+  skipBacklog = null,
+  maxSkips = 4,
   model = MODEL
 }) {
   if (hostWait && !['poll', 'pacer'].includes(hostWait))
@@ -521,6 +523,9 @@ async function simulateStaggered({
     let sent = origin;
     let started = origin;
     let presented = 0;
+    let skipped = 0;
+    let skips = 0;
+    const offScreen = new Set();
     let retryDebt = 0;
     let nextAudio = origin;
     let rereads = 0;
@@ -537,7 +542,11 @@ async function simulateStaggered({
       await clock.sleep(busyUntil - clock.now());
     };
     const applied = [];
-    const apply = (frame, fetchDone) => {
+    const apply = (frame, fetchDone, skip) => {
+      if (skip) {
+        applied[frame] = frame ? applied[frame - 1] : 0;
+        return;
+      }
       const vsync = Math.ceil((fetchDone + 1e-6) / timing.vsyncMs) * timing.vsyncMs;
       applied[frame] = Math.max(vsync, frame ? applied[frame - 1] + timing.vsyncMs : 0);
     };
@@ -546,6 +555,7 @@ async function simulateStaggered({
         exchanges = 0;
         bridgeMs = 0;
         presented = 0;
+        skipped = 0;
         retryDebt = 0;
         rereads = 0;
         started = clock.now();
@@ -566,13 +576,14 @@ async function simulateStaggered({
         await request();
         await clock.sleep(retryWaitMs);
       }
+      const acked = frame > lag && !offScreen.has(frame - lag - 1);
       if (hostWait) {
-        if (hostWait === 'pacer' && frame > lag) await pacer.beforeRead(fetchOpened);
+        if (hostWait === 'pacer' && acked) await pacer.beforeRead(fetchOpened);
         for (;;) {
           const startedAt = clock.now();
           await request();
           const at = clock.now();
-          if (frame > lag) pacer.observe(startedAt, presentReady <= at);
+          if (acked) pacer.observe(startedAt, presentReady <= at);
           if (inputReady <= at && presentReady <= at) break;
           rereads++;
           if (inputReady <= at && hostWait === 'pacer') await pacer.pending();
@@ -585,12 +596,24 @@ async function simulateStaggered({
         submit = Math.max(submit + (frame >= lag ? timing.fetchMs : 0), decoded[frame - 1]);
       decoded[frame] = Math.max(submit, decoderFree) + timing.decodeMs;
       decoderFree = decoded[frame];
-      if (frame >= lag) apply(frame - lag, clock.now() + timing.fetchMs);
+      const arrived = paced
+        ? Math.min(warmup + frames, Math.floor((clock.now() - origin) / interval) + 1)
+        : warmup + frames;
+      const skip =
+        skipBacklog !== null &&
+        frame > lag &&
+        arrived - frame - 1 > skipBacklog &&
+        skips < maxSkips;
+      skips = skip ? skips + 1 : 0;
+      if (skip) offScreen.add(frame - lag);
+      if (frame >= lag) apply(frame - lag, clock.now() + timing.fetchMs, skip);
       sent = clock.now();
-      if (frame >= lag) presented++;
+      if (frame >= lag && skip) skipped++;
+      else if (frame >= lag) presented++;
     }
     const elapsed = clock.now() - started;
-    const perFrame = value => Math.round((value / presented) * 100) / 100;
+    const outputs = presented + skipped;
+    const perFrame = value => Math.round((value / outputs) * 100) / 100;
     return {
       frames: presented,
       paced,
@@ -602,10 +625,13 @@ async function simulateStaggered({
       retryWaitMs,
       hostWait,
       rereadsPerFrame: perFrame(rereads),
+      skipBacklog,
+      skipped,
       requestsPerFrame: perFrame(exchanges),
       bridgeMsPerFrame: perFrame(bridgeMs),
       msPerFrame: perFrame(elapsed),
-      fps: Math.round((presented * 100000) / elapsed) / 100
+      fps: Math.round((presented * 100000) / elapsed) / 100,
+      decodedFps: Math.round((outputs * 100000) / elapsed) / 100
     };
   });
 }
@@ -624,6 +650,8 @@ async function simulate({
   barrier,
   retryWaitMs,
   hostWait,
+  skipBacklog,
+  maxSkips,
   model = MODEL
 }) {
   if (mode === 'staggered')
@@ -637,6 +665,8 @@ async function simulate({
       barrier,
       retryWaitMs,
       hostWait,
+      skipBacklog,
+      maxSkips,
       model
     });
   const paired = mode === 'paired';
