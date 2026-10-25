@@ -59,6 +59,15 @@ async function run({
   if (at < 0 || !host || !app) throw Error('Native H.264 requires --moonlight HOST APP');
   const audio = !args.includes('--no-audio');
   const workerMode = args.includes('--split-decoder') ? 'split' : 'persistent';
+  const cli = require('../../sdk/cli.cjs');
+  const scoring = require('./run-summary.cjs');
+  const duration = cli.number(args, '--duration', null);
+  const warmup = cli.number(args, '--warmup', 3);
+  if (duration !== null && !(duration > 0)) throw Error('--duration takes seconds');
+  if (!Number.isInteger(warmup) || warmup < 0) throw Error('--warmup takes whole seconds');
+  if (args.includes('--expect') && !/^[a-z]/i.test(cli.option(args, '--expect') ?? ''))
+    throw Error('--expect needs a value such as fps=30,dropped=0,idr=0');
+  const expect = scoring.parseExpect(cli.option(args, '--expect') ?? undefined);
   const bitrate = require('./bitrate.cjs').bitrate(args, width, height, fps);
   if (!rpc.host) throw Error('Native TCP requires a fresh launcher session from this branch');
   const revision =
@@ -101,7 +110,9 @@ async function run({
   let statusLines = null;
   let monitor = null;
   let printing = null;
+  let ending = null;
   let stopped = false;
+  const rows = [];
   const children = [];
   const stats = {
     received: 0,
@@ -281,14 +292,16 @@ async function run({
     };
     const statsFile = path.join(output, 'stats.jsonl');
     printing = setInterval(() => {
-      const line = JSON.stringify({
+      const row = {
         codec: 'h264',
         ...stats,
         dropped: reader.dropped - dropped,
         ...bridge.take(),
         at: stage + '/' + (decoder?.step ?? '-'),
         ms: Object.fromEntries(Object.entries(stageMs).map(([k, v]) => [k, Math.round(v)]))
-      });
+      };
+      rows.push(row);
+      const line = JSON.stringify(row);
       console.log(line);
       fs.appendFile(statsFile, line + '\n', {mode: 0o600}).catch(() => {});
       stageMs = {};
@@ -297,6 +310,7 @@ async function run({
         stats[key] = 0;
       });
     }, 1000);
+    if (duration !== null) ending = setTimeout(stop, duration * 1000);
     for await (const unit of reader) {
       enter('unit');
       if (stopping) break;
@@ -411,6 +425,7 @@ async function run({
   } finally {
     clearInterval(monitor);
     clearInterval(printing);
+    clearTimeout(ending);
     stop();
     statusLines?.close();
     const errors = [];
@@ -428,6 +443,26 @@ async function run({
     process.removeListener('SIGTERM', stop);
     if (errors.length) throw new AggregateError(errors, 'Native H.264 shutdown failed');
   }
+  const summary = {workerMode, ...scoring.summarize(rows, {warmup}), expect};
+  const result = scoring.verdict(summary, expect);
+  Object.assign(summary, result);
+  await fs.writeFile(path.join(output, 'summary.json'), JSON.stringify(summary, null, 2) + '\n', {
+    mode: 0o600
+  });
+  log({
+    event: 'summary',
+    verdict: result.pass ? 'PASS' : 'FAIL',
+    failures: result.failures,
+    mode: workerMode,
+    fps: summary.fps,
+    minFps: summary.minFps,
+    dropped: summary.dropped,
+    idr: summary.idr,
+    requestsPerFrame: summary.requestsPerFrame,
+    bridgeMsPerFrame: summary.bridgeMsPerFrame,
+    record: output
+  });
+  return summary;
 }
 
 module.exports = {run, createIdrRequester};
