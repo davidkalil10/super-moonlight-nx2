@@ -5,7 +5,7 @@ const session = require('../host/session.cjs');
 const split = require('./probe-split-decoder.cjs');
 const paired = require('./probe-paired-output.cjs');
 
-const STAGES = ['one', ...paired.STAGES];
+const STAGES = ['one', 'two', 'stop-input', 'stop-output', 'short-recv'];
 const BUILD_ROOT = '/media/storage2/builds/HBLauncher/native-h264';
 const RUNS_FILE = '/media/storage/local/hbl-notes/RUNS.md';
 

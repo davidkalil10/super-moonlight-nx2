@@ -170,7 +170,9 @@ async function create({
 
   return {
     async startAcquire() {
-      if (acquired || active || retained) throw Error('Paired output acquisition is unavailable');
+      if (active || retained) throw Error('Paired output acquisition is unavailable');
+      if (acquired && fetched.every(Boolean)) acquired = null;
+      if (acquired) throw Error('Paired output acquisition is unavailable');
       await rpc.write(control + ACQUIRED_FIRST, Buffer.alloc(0x60, 0xff));
       const plan = acquireFrame.plan({
         sdk: rpc.a.sdk,

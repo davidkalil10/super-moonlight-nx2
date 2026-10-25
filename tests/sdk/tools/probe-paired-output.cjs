@@ -18,7 +18,7 @@ const acquireFrame = require('../../tools/moonlight/paired-acquire-frame.cjs');
 const outputFrame = require('../../tools/moonlight/paired-output-frame.cjs');
 const ring = require('../../tools/moonlight/ring.cjs');
 
-const STAGES = ['two', 'stop-input', 'stop-output', 'short-recv'];
+const STAGES = ['two', 'four', 'stop-input', 'stop-output', 'short-recv'];
 const BUILD_ROOT = '/media/storage2/builds/HBLauncher/native-h264';
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -132,6 +132,7 @@ async function main(
       dryRun: true,
       stage,
       keyframes: keyframes.slice(0, 3),
+      pairs: stage === 'four' ? [[1, 2], [3, 4]] : [[keyframes[1], keyframes[2]]],
       acquireCalls: acquire.program.proof.logicalCalls,
       acquireBytes: acquire.program.frame.length,
       fetchCalls: fetch.map(item => item.program.proof.logicalCalls),
@@ -256,46 +257,54 @@ async function main(
         throw Error('Paired output short receive opened the decode gate');
       record.result = {expected, decodeGateSignals: 0};
     } else {
-      const plan = await step('paired output worker wait', () => paired.startAcquire());
       if (stage === 'stop-output') {
+        await step('paired output worker wait', () => paired.startAcquire());
         await step('paired output worker stop', () => paired.stop());
         record.result = {outputWorker: 'joined before any decoder output'};
       } else {
-        const firstJob = await step('first input receive and submit', () =>
-          decoder.submitSplit(unit(secondIndex))
-        );
-        const thirdIndex = keyframes[2];
-        const secondJob = await step('second input receive and submit', () =>
-          decoder.submitSplit(unit(thirdIndex))
-        );
-        const acquired = await step('host checks two output acquisitions', () =>
-          paired.finishAcquire(plan, [BigInt(secondIndex), BigInt(thirdIndex)])
-        );
-        const destinations = [
-          await step('first reserved native surface', () => sink.workerDestination()),
-          await step('second reserved native surface', () => sink.workerDestination())
-        ];
-        const outputs = [];
-        const publications = [];
-        for (let index = 0; index < 2; index++) {
-          outputs.push(
-            await step(`output ${index} fetch and presentation`, () =>
-              paired.fetch(index, destinations, first)
-            )
+        const indices = stage === 'four' ? [[1, 2], [3, 4]] : [[secondIndex, keyframes[2]]];
+        const pairs = [];
+        for (const [pairIndex, [left, right]] of indices.entries()) {
+          const plan = await step(`pair ${pairIndex} output worker wait`, () =>
+            paired.startAcquire()
           );
-          publications.push(
-            await step(`output ${index} publication readback`, () =>
-              verifyPublication(rpc, storage.mapped, destinations[index], first)
-            )
+          const firstJob = await step(`pair ${pairIndex} first input receive and submit`, () =>
+            decoder.submitSplit(unit(left))
           );
+          const secondJob = await step(`pair ${pairIndex} second input receive and submit`, () =>
+            decoder.submitSplit(unit(right))
+          );
+          const acquired = await step(`pair ${pairIndex} host checks two acquisitions`, () =>
+            paired.finishAcquire(plan, [BigInt(left), BigInt(right)])
+          );
+          const destinations = [
+            await step(`pair ${pairIndex} first reserved surface`, () => sink.workerDestination()),
+            await step(`pair ${pairIndex} second reserved surface`, () => sink.workerDestination())
+          ];
+          const outputs = [];
+          const publications = [];
+          for (let index = 0; index < 2; index++) {
+            outputs.push(
+              await step(`pair ${pairIndex} output ${index} fetch and presentation`, () =>
+                paired.fetch(index, destinations, first)
+              )
+            );
+            publications.push(
+              await step(`pair ${pairIndex} output ${index} publication readback`, () =>
+                verifyPublication(rpc, storage.mapped, destinations[index], first)
+              )
+            );
+          }
+          pairs.push({
+            inputSequences: [firstJob.sequence, secondJob.sequence],
+            acquired: acquired.map(item => ({index: item.index, pts: String(item.pts)})),
+            outputs: outputs.map(item => ({...item, pts: String(item.pts)})),
+            publications
+          });
         }
-        record.result = {
-          inputSequences: [firstJob.sequence, secondJob.sequence],
-          acquired: acquired.map(item => ({index: item.index, pts: String(item.pts)})),
-          outputs: outputs.map(item => ({...item, pts: String(item.pts)})),
-          publications,
-          decodeGateSignals: decoder.splitDiagnostics.decodeGateSignals
-        };
+        record.result = stage === 'four'
+          ? {pairs, decodeGateSignals: decoder.splitDiagnostics.decodeGateSignals}
+          : {...pairs[0], decodeGateSignals: decoder.splitDiagnostics.decodeGateSignals};
       }
     }
   } catch (error) {

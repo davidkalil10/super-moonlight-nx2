@@ -2,6 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const {CODE} = require('../../sdk/native/thread.cjs');
 const SYNC = require('../../sdk/native/os-sync-functions.json');
+const ring = require('./ring.cjs');
 const {create} = require('./paired-output-worker.cjs');
 
 const SDK = 0x40000000;
@@ -23,6 +24,7 @@ function fixture() {
   let plan = null;
   let signals = 0;
   let done = false;
+  let presentation = null;
   const regionAt = address =>
     regions.find(region => address >= region.base && address < region.base + region.data.length);
   const write = (address, bytes) => {
@@ -73,7 +75,21 @@ function fixture() {
       if (address === SDK + CODE.tryWait.offset) return {result: done ? 1n : 0n};
       return {result: 0n};
     },
-    read: async (address, length) => read(address, length),
+    read: async (address, length) => {
+      if (address === 0x72000000 + ring.CONTROL.current && length === 24) {
+        const state = Buffer.alloc(24);
+        state.writeUInt32LE(presentation.index, 0);
+        state.writeUInt32LE(presentation.sequence, 20);
+        return state;
+      }
+      if (address >= workerBase + 0x10000 && length === 56) {
+        const results = Buffer.alloc(56);
+        results.writeBigUInt64LE(BigInt(0x72000000 + ring.CONTROL.nativeIndex), 5 * 8);
+        results.writeBigUInt64LE(BigInt(0x72000000 + ring.CONTROL.nativeSequence), 6 * 8);
+        return results;
+      }
+      return read(address, length);
+    },
     write: async (address, bytes) => write(address, bytes)
   };
   return {
@@ -85,13 +101,16 @@ function fixture() {
     setPlan(value) {
       plan = value;
     },
-    completeAcquire() {
+    present(index, sequence) {
+      presentation = {index, sequence};
+    },
+    completeAcquire(firstPts = 1) {
       for (let index = 0; index < 2; index++) {
         result(index * 2, 0);
         result(index * 2 + 1, 0);
         const slot = Buffer.alloc(32);
         slot.writeInt32LE(index, 0);
-        slot.writeBigUInt64LE(BigInt(index + 1), 8);
+        slot.writeBigUInt64LE(BigInt(firstPts + index), 8);
         write(control + 0x100 + index * 0x40, slot);
       }
       done = true;
@@ -117,6 +136,41 @@ test('paired output stop wakes both event waits and joins without fetching', asy
   assert.equal(f.calls.filter(call => call.address === SDK + SYNC.signalEvent.offset).length, 2);
   assert.equal(f.calls.filter(call => call.address === SDK + CODE.join.offset).length, 1);
   assert.equal(f.calls.filter(call => call.address === FUNCTIONS.getOutput).length, 0);
+});
+
+test('paired output worker reuses its acquisition gate after two published frames', async () => {
+  const f = fixture();
+  const worker = await create({
+    rpc: f.rpc,
+    functions: FUNCTIONS,
+    decoder: DECODER,
+    output: DECODER + 0x300,
+    format: DECODER + 0x180,
+    event: EVENT,
+    publication: {mapped: 0x72000000, color: 1}
+  });
+  const frame = {width: 1920, height: 1080, stride: 1920, sliceHeight: 1088};
+  for (let pair = 0; pair < 2; pair++) {
+    const plan = await worker.startAcquire();
+    f.setPlan(plan);
+    f.completeAcquire(pair * 2 + 1);
+    await worker.finishAcquire(plan, [BigInt(pair * 2 + 1), BigInt(pair * 2 + 2)]);
+    await assert.rejects(worker.startAcquire(), /unavailable/);
+    const destinations = [0, 1].map(index => ({
+      index: index + 1,
+      address: 0x72000000 + ring.frameOffset(index + 1),
+      bytes: ring.FRAME_BYTES,
+      color: 1,
+      sequence: pair * 2 + index + 1
+    }));
+    for (let index = 0; index < 2; index++) {
+      f.present(destinations[index].index, destinations[index].sequence);
+      await worker.fetch(index, destinations, frame);
+    }
+  }
+  await worker.stop();
+  assert.equal(f.calls.filter(call => call.address === SDK + CODE.join.offset).length, 6);
+  assert.equal(worker.diagnostics.retained, false);
 });
 
 test('paired output rejects a wrong second PTS before any output fetch', async () => {
