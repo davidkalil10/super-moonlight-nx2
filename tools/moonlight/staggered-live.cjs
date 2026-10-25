@@ -4,6 +4,7 @@
 // the worker's checked writes (staggered-gate / staggered-status); call order, the odd tail
 // drain and stop follow sdk/tools/probe-staggered-ladder.cjs.
 const checked = require('./staggered-status.cjs');
+const presentPacer = require('./present-pacer.cjs');
 
 const RESTART = 'Staggered worker native objects retained; restart SmileBASIC';
 const PENDING_INPUT = [0x100en, 0x1011n];
@@ -13,12 +14,15 @@ const immediate = () => new Promise(resolve => setImmediate(resolve));
 async function waitChecked(
   worker,
   expected,
-  {timeoutMs = 5000, pause = delay, onReread = () => {}} = {}
+  {timeoutMs = 5000, pause = delay, onReread = () => {}, onRead = () => {}, now = Date.now} = {}
 ) {
   const until = Date.now() + timeoutMs;
   let nextInputRetry = 0;
+  let pending = null;
   while (Date.now() < until) {
+    const startedAt = now();
     const snapshot = await worker.readStatus();
+    onRead(snapshot, startedAt);
     try {
       checked.check(snapshot, expected);
       return snapshot;
@@ -37,8 +41,9 @@ async function waitChecked(
         nextInputRetry = Date.now() + 20;
       }
       onReread(error.pending);
+      pending = error.pending;
     }
-    await pause(5);
+    await pause(5, pending);
   }
   throw Error('Staggered checked status timed out');
 }
@@ -80,7 +85,9 @@ function jsonSafe(value) {
 function create({
   createWorker = require('./staggered-worker.cjs').create,
   timeoutMs = 5000,
-  pause = delay
+  pause = delay,
+  presentHz = 60,
+  now = Date.now
 } = {}) {
   let worker = null;
   let transport = null;
@@ -95,16 +102,28 @@ function create({
   const counts = {submitted: 0, decoded: 0, presented: 0, tailDrained: 0, rereads: 0};
   const waiting = {};
   const waits = {timeoutMs, pause};
-  // A late gate status is reread back to back: a pause costs the frame its vsync slot
-  // (request-budget.cjs staggeredRetryWait). The deadline still bounds the wait.
-  const rereads = {
+  // A gate late on receive, acquire or fetch rereads back to back: a pause costs the
+  // frame its vsync slot (request-budget.cjs staggeredRetryWait). A gate waiting for the
+  // renderer to apply a publication sleeps to the predicted vsync instead, since polling
+  // there only fills the bridge. The deadline bounds both.
+  const pacer = presentPacer.create({periodMs: 1000 / presentHz, now, sleep: ms => pause(ms)});
+  let fetchOpened = null;
+  const rereadsFor = expected => ({
     timeoutMs,
-    pause: immediate,
+    now,
+    pause: (_ms, pending) => (pending === 'applied' ? pacer.pending() : immediate()),
+    onRead: (snapshot, startedAt) => {
+      if (expected.ack)
+        pacer.observe(
+          startedAt,
+          (snapshot.nativeApplied - expected.ack.sequence) >>> 0 < 0x80000000
+        );
+    },
     onReread: pending => {
       counts.rereads++;
       waiting[pending] = (waiting[pending] || 0) + 1;
     }
-  };
+  });
 
   function remember(sequence, unit) {
     units.set(sequence, unit);
@@ -115,7 +134,8 @@ function create({
   async function gate(sequence, current, next, {sink, enter = () => {}, onDecoded, onPresented}) {
     enter('staggered-status');
     const expected = expectedFor(sequence, units, destinations);
-    const snapshot = await waitChecked(worker, expected, rereads);
+    if (expected.ack) await pacer.beforeRead(fetchOpened);
+    const snapshot = await waitChecked(worker, expected, rereadsFor(expected));
     if (expected.acquire) {
       counts.decoded++;
       onDecoded?.(1);
@@ -147,6 +167,7 @@ function create({
       destination,
       frame: layout
     });
+    if (destination) fetchOpened = now();
   }
 
   async function waitFinalInput(sequence) {
