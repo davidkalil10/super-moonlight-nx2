@@ -103,6 +103,7 @@ async function fixture({
     },
     async createDecoder(config) {
       events.push({type: 'create-decoder', mode: config.workerMode});
+      let splitSequence = 0;
       return {
         async configure(sps, pps, fps) {
           events.push({type: 'configure', sps, pps, fps});
@@ -131,6 +132,27 @@ async function fixture({
         async finishPersistent(destination) {
           events.push({type: 'finish-persistent', destination});
           return {format: 'nv12', width: 128, height: 96, stride: 128, sliceHeight: 96};
+        },
+        async startSplit() {
+          events.push({type: 'start-split'});
+        },
+        async submitSplit(unit) {
+          events.push({type: 'submit-split', unit});
+          return {sequence: ++splitSequence, pts: unit.pts};
+        },
+        async queueSplitOutput(job) {
+          events.push({type: 'queue-split', job});
+        },
+        async finishSplitOutput(job, destination) {
+          events.push({type: 'finish-split', job, destination});
+          return {
+            format: 'nv12',
+            width: 128,
+            height: 96,
+            stride: 128,
+            sliceHeight: 96,
+            pts: String(job.pts)
+          };
         },
         async close() {
           events.push({type: 'decoder-close'});
@@ -299,6 +321,39 @@ test('persistent worker takes over after a host-driven first frame', {timeout: 5
 });
 
 test(
+  'split workers submit the next input before fetching the previous output',
+  {timeout: 5000},
+  async () => {
+    const f = await fixture({
+      units: [
+        {hex: accessUnit.toString('hex'), keyframe: true, pts: 1000},
+        {hex: accessUnit.toString('hex'), keyframe: false, pts: 2000},
+        {hex: accessUnit.toString('hex'), keyframe: false, pts: 3000}
+      ]
+    });
+    f.options.args.push('--split-decoder');
+    await exercise(f, async () => {
+      await run(f.options);
+      assert.equal(f.events.find(event => event.type === 'create-decoder').mode, 'split');
+      assert.equal(f.events.filter(event => event.type === 'start-split').length, 1);
+      assert.equal(f.events.filter(event => event.type === 'submit').length, 1);
+      assert.equal(f.events.filter(event => event.type === 'submit-split').length, 2);
+      assert.equal(f.events.filter(event => event.type === 'publish').length, 3);
+      const inputThree = f.events.findIndex(
+        event => event.type === 'submit-split' && event.unit.pts === 3000
+      );
+      const firstQueue = f.events.findIndex(event => event.type === 'queue-split');
+      const firstFetch = f.events.findIndex(event => event.type === 'finish-split');
+      assert.ok(firstQueue < inputThree && inputThree < firstFetch);
+      assert.deepEqual(
+        f.events.filter(event => event.type === 'finish-split').map(event => event.job.pts),
+        [2000, 3000]
+      );
+    });
+  }
+);
+
+test(
   'persistent worker waits for a late first output before taking over',
   {timeout: 5000},
   async () => {
@@ -309,7 +364,7 @@ test(
         {hex: accessUnit.toString('hex'), keyframe: false, pts: 2000}
       ]
     });
-      await exercise(f, async () => {
+    await exercise(f, async () => {
       await run(f.options);
       assert.equal(f.events.filter(event => event.type === 'submit').length, 1);
       assert.equal(f.events.filter(event => event.type === 'receive').length, 3);
@@ -319,27 +374,23 @@ test(
   }
 );
 
-test(
-  'the persistent decoder gets its own TCP transport',
-  {timeout: 5000},
-  async () => {
-    const f = await fixture({
-      units: [
-        {hex: accessUnit.toString('hex'), keyframe: true, pts: 1000},
-        {hex: accessUnit.toString('hex'), keyframe: false, pts: 2000}
-      ]
-    });
-    await exercise(f, async () => {
-      await run(f.options);
-      assert.deepEqual(
-        f.events.filter(event => event.type === 'create-transport').map(event => event.host),
-        ['192.0.2.10']
-      );
-      assert.equal(f.events.filter(event => event.type === 'close-transport').length, 1);
-      assert.equal(f.events.filter(event => event.type === 'finish-persistent').length, 1);
-    });
-  }
-);
+test('the persistent decoder gets its own TCP transport', {timeout: 5000}, async () => {
+  const f = await fixture({
+    units: [
+      {hex: accessUnit.toString('hex'), keyframe: true, pts: 1000},
+      {hex: accessUnit.toString('hex'), keyframe: false, pts: 2000}
+    ]
+  });
+  await exercise(f, async () => {
+    await run(f.options);
+    assert.deepEqual(
+      f.events.filter(event => event.type === 'create-transport').map(event => event.host),
+      ['192.0.2.10']
+    );
+    assert.equal(f.events.filter(event => event.type === 'close-transport').length, 1);
+    assert.equal(f.events.filter(event => event.type === 'finish-persistent').length, 1);
+  });
+});
 
 test(
   'an audio process failure ends the native stream and releases decoder/display ownership',
