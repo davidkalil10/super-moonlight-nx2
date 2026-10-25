@@ -145,9 +145,23 @@ function fakeDecoder(
 
 async function run(
   display,
-  {console: consoleOptions = {}, decoder = {}, subset = null, listed = subset, ...options} = {}
+  {
+    console: consoleOptions = {},
+    decoder = {},
+    subset = null,
+    listed = subset,
+    surfaceReadDelayMs = 0,
+    ...options
+  } = {}
 ) {
   const fake = gateConsole({advanceOnRead: true, ...consoleOptions});
+  if (surfaceReadDelayMs) {
+    const read = fake.rpc.read.bind(fake.rpc);
+    fake.rpc.read = async (address, bytes) => {
+      if (bytes === FRAME) await new Promise(resolve => setTimeout(resolve, surfaceReadDelayMs));
+      return read(address, bytes);
+    };
+  }
   const movie = fakeDecoder(fake, decoder);
   const directory = runDirectory(fake.rpc, {
     'compatibility-module.json': {
@@ -421,6 +435,20 @@ test('a two-AU window submits both inputs before the first output acquire', asyn
   assert.equal(report.correctness.matched, 2);
   assert.equal(report.inputs.units, 2);
   assert.ok(report.loop.console.outputFps > 0);
+});
+
+test('slow surface readback does not consume the next output wait', async () => {
+  const {report, error} = await run([0, 1], {
+    window: 2,
+    maxAus: 2,
+    settleMs: 10,
+    surfaceReadDelayMs: 25
+  });
+  assert.equal(error, undefined);
+  assert.equal(report.verdict, 'PASS');
+  assert.equal(report.loop.received, 2);
+  assert.equal(report.loop.held, 0);
+  assert.equal(report.windows[0].received, 2);
 });
 
 test('a three-AU window records each RPC and drains all outputs before another input', async () => {

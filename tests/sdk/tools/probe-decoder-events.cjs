@@ -641,12 +641,13 @@ async function main(
         if (sends.length - frames.length < window && au + 1 < units.length) continue;
         const firstAu = frames.length;
         const submittedBeforeAcquire = sends.length - frames.length;
-        const until = performance.now() + settleMs;
+        let until = performance.now() + settleMs;
         while (frames.length < sends.length && performance.now() < until) {
           entries.write({phase: 'before', step: 'acquire', afterAu: au});
           const frame = await take(au);
           entries.write({phase: 'after', step: 'acquire', afterAu: au, display: frame?.display});
-          if (!frame) await sleep(pollMs);
+          if (frame) until = performance.now() + settleMs;
+          else await sleep(pollMs);
         }
         record.windows.push({
           firstAu,
