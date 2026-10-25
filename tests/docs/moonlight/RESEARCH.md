@@ -7,7 +7,7 @@ bridge; no console CPU code). Target stream: 1080p120, HEVC/H.264, Sunshine on L
 Scope note that governs everything below: HBLauncher runs no arbitrary CPU on the
 console. The host (Node) drives qualified native functions over the Wi-Fi RPC
 bridge, and per-frame work is a *fixed, branchless* repeating native call chain
-(`sdk/native/repeating.cjs`, `homebrew-launcher/launcher-loop.cjs`). Any decode
+(`hbl-platform/sdk/native/repeating.js`, `homebrew-launcher/launcher-loop.cjs`). Any decode
 path therefore has to be expressed as constant native calls with host-prepared
 arguments, not as a decoder running on the console. All Switch-1 facts cited are
 documented for Switch 1 firmware and are only hypotheses for T239 / 23.0.1.
@@ -47,10 +47,10 @@ whether `Initialize`'s transfer-memory + handle passing is qualified in this bri
 Probe needed: (0) IPC handle/transfer-memory path; (1) `nvdrv` Open of `/dev/nvhost-nvdec`,
 inspect `Err`.
 
-Local evidence (good): `sdk/native/ipc.cjs` `encode()` already supports `send_pid`
+Local evidence (good): `hbl-platform/sdk/native/ipc.js` `encode()` already supports `send_pid`
 and up to 8 copy handles; `sdk/native/ipc-functions.json` has qualified `send`,
 `transfer`, `copy`. So IPC-with-handles exists; a transfer-memory primitive looks
-reachable. `sdk/native/ipc.cjs` is explicitly "an investigation interface, not
+reachable. `hbl-platform/sdk/native/ipc.js` is explicitly "an investigation interface, not
 exposed to GPU packages" — opening nvdrv is a bridge-level probe, not an app API.
 
 ---
@@ -236,5 +236,5 @@ If probe 1 fails, stop: no on-console decode is possible under this model.
 - Limelight.h (callbacks/stream config): https://github.com/moonlight-stream/moonlight-common-c/blob/master/src/Limelight.h
 - Moonlight-Switch (XITRIX): https://github.com/XITRIX/Moonlight-Switch
 - libnx HID/NV references: https://github.com/switchbrew/libnx
-- Repo (read-only): `homebrew-launcher/launcher-loop.cjs`, `sdk/native/repeating.cjs`,
-  `sdk/native/ipc.cjs`, `sdk/native/service-functions.json`, `homebrew-launcher/game-audio.cjs`
+- Repo (read-only): `homebrew-launcher/launcher-loop.cjs`, `hbl-platform/sdk/native/repeating.js`,
+  `hbl-platform/sdk/native/ipc.js`, `sdk/native/service-functions.json`, `homebrew-launcher/game-audio.cjs`

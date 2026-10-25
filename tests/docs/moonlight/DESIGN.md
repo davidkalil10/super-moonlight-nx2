@@ -25,14 +25,14 @@ rate degrading before the quality.
 
 ### How the host writes console memory
 
-`NativeClient.write` (`smilebasic/engine/lib/native.cjs`) splits a buffer into
+`NativeClient.write` (`hbl-platform/smilebasic/engine/lib/native.js`) splits a buffer into
 32 KiB parts. Each part is one exchange: a 0x8080-byte request (two call records
 plus up to 0x8000 data bytes, landed in scratch and copied with `memcpy`)
 and a fixed 0x8010-byte response. The two directions together move about
 64 KiB on Wi-Fi per 32 KiB written. Exchanges are strictly serialized:
 `Connection.read` refuses a second pending response, `NativeClient` chains
 every exchange on one promise, and the local HTTP bridge
-(`smilebasic/engine/lib/bridge.cjs`) puts every stage's request on one queue.
+(`hbl-platform/smilebasic/engine/lib/bridge.js`) puts every stage's request on one queue.
 Pipelining is therefore not possible with the current code. It would need a
 host change, and a live test to see whether the console side accepts
 back-to-back requests.
@@ -406,7 +406,7 @@ node tools/moonlight/evaluate.cjs testsrc2.mp4 --frames 10
 node apps/moonlight/check.cjs testsrc2.mp4
 ```
 
-Shader build note: `sdk/build.cjs` needs `glslangValidator`, which this PC does
+Shader build note: `hbl-platform/sdk/build.js` needs `glslangValidator`, which this PC does
 not have. The committed SPIR-V was compiled with
 `glslc --target-env=vulkan1.0 -O` and passes
 `spirv-val --target-env vulkan1.0`. Rebuild with glslangValidator once it is

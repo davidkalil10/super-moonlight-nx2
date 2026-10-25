@@ -29,7 +29,7 @@ without a console. `../protocol3.test.cjs` drives it.
 ## Over HTTP (`bridge.cjs`)
 
 `bridge.cjs DIR` serves the same fake console through the real bridge
-(`smilebasic/engine/lib/bridge.cjs`) and writes a run directory there, so tools
+(`hbl-platform/smilebasic/engine/lib/bridge.js`) and writes a run directory there, so tools
 that speak the bridge protocol (the native `hbmoonlight-host`, or `live.cjs` /
 `input-feeder.cjs` through a copy of the real `shared/rpc.cjs`) pay the same
 HTTP, JSON and base64 costs as on a console. It also simulates the sound-memory

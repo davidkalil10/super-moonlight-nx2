@@ -169,7 +169,7 @@ a barrier after each. That maps directly onto:
 The one-line launcher change is the dispatch width:
 
 ```diff
---- homebrew-launcher/gpu-app.cjs (secondary recording, ~287)
+--- hbl-platform/homebrew-launcher/gpu-app.js (secondary recording, ~287)
 -        await call('vkCmdDispatch', secondary, 1, 1, 1);
 +        const width = (stage === 'compute' && app.manifest.computeSequence.groups) || 1;
 +        await call('vkCmdDispatch', secondary, width, 1, 1);
@@ -197,7 +197,7 @@ Record the transition straight to `PRESENT`, and keep a separate one-shot
 capture command buffer for screenshots:
 
 ```diff
---- homebrew-launcher/gpu-app.cjs (~354)
+--- hbl-platform/homebrew-launcher/gpu-app.js (~354)
 -      await barrier(2, 6, 0x400, 0x100, 0x1000, 0x800);
 -      await put(0x1400, ...);
 -      await put(0x1500, ...);

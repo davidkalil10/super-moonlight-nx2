@@ -10,7 +10,7 @@ this feeds.
 
 It reuses `game-audio.cjs`'s console path exactly: the same sound-memory
 allocation call (`rpc.call(5732112, ...)`), the same function resolution
-(`audio-symbols.json` + `smilebasic/reference/sdk-checks.cjs` `verify-function`),
+(`audio-symbols.json` + `hbl-platform/smilebasic/reference/sdk-checks.js` `verify-function`),
 and the same AudioOut sequence (InitializeAudioOutParameter at 48000 Hz / 2 ch,
 OpenDefaultAudioOut, Start/Stop, SetAudioOutBufferInfo, AppendAudioOutBuffer,
 GetReleasedAudioOutBuffer, FlushAudioOutBuffers, GetAudioOutBufferCount,

@@ -113,7 +113,7 @@ the same protocol-3 console, so the measurement is one code path.
 recv. If the socket service short-counts, `IF R#!=L THEN BREAK` ends the session
 on the first large write; the first measurement run reveals this immediately.
 
-### Host constants (`smilebasic/engine/lib/native.cjs`)
+### Host constants (`hbl-platform/smilebasic/engine/lib/native.js`)
 
 - `DATA_LENGTH_OFFSET = 88` — new, u32 request data length.
 - `MAX_DATA_BYTES = 0x3f000` — new cap.
@@ -132,7 +132,7 @@ Reuse the DESIGN.md §1 method: the launcher's startup write of ~14.7 MB right
 after `vkMapMemory2` is a clean throughput probe — the gap in
 `runs/<session>/launcher-auto-operations.jsonl` between that `vkMapMemory2` and
 the next `vkCreateBuffer` is the write time. `start.sh` and `start-launcher.cjs`
-inherit the environment into `smilebasic/host.cjs` (which owns the
+inherit the environment into `hbl-platform/smilebasic/host.js` (which owns the
 `NativeClient`), so `HB_WRITE_CHUNK` reaches the write path:
 
 ```sh
