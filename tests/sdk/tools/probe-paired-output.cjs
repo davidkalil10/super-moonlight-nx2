@@ -31,6 +31,7 @@ async function requireNewPairedSession(id, root = BUILD_ROOT) {
       'audio-socket-loop.json',
       'audio-event.json',
       'decoder-throughput.json',
+      'ladder.json',
       'result.json'
     ]) {
       try {
@@ -64,7 +65,10 @@ function journal(file) {
   };
 }
 
-async function main(directory, {clip, stage, output, dryRun = false} = {}) {
+async function main(
+  directory,
+  {clip, stage, output, dryRun = false, allowSameSession = false} = {}
+) {
   if (!STAGES.includes(stage)) throw Error('Use --stage ' + STAGES.join('|'));
   if (!clip) throw Error('Pass --clip with the ordered 1080p IP clip');
   directory = path.resolve(directory);
@@ -184,7 +188,7 @@ async function main(directory, {clip, stage, output, dryRun = false} = {}) {
   };
   try {
     if (!rpc.host) throw Error('Paired output probe needs a normal START session');
-    await requireNewPairedSession(rpc.a.session);
+    if (!allowSameSession) await requireNewPairedSession(rpc.a.session);
     const storage = await step('Moonlight private storage', () => findPrivateStorage(directory));
     sink = await step('native sink create', () => createSink(rpc, storage));
     transport = await step('native TCP create', () => createTransport({rpc, host: rpc.host}));
