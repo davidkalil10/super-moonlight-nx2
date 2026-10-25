@@ -83,7 +83,7 @@ async function main(directory) {
     steps: []
   };
   const save = await report(directory, 'probe-hbv2-decode.json', out);
-  const {functions: f} = await compat(rpc, directory, [
+  const {functions: f, base} = await compat(rpc, directory, [
     'vkAllocateCommandBuffers',
     'vkFreeCommandBuffers',
     'vkBeginCommandBuffer',
@@ -148,7 +148,7 @@ async function main(directory) {
     await rpc.write(p + 0x80, handle);
     await rpc.write(p + 0x400, struct(72, 4, {40: 1}, {48: p + 0x80}));
 
-    const worker = await job(rpc, new Set([f.vkQueueSubmit, f.vkQueueWaitIdle]));
+    const worker = await job(rpc, new Set([f.vkQueueSubmit, f.vkQueueWaitIdle]), base);
     const hz = await worker.frequency();
     const control = async () => {
       const b = await rpc.read(memory, 16);

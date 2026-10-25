@@ -28,6 +28,7 @@ const MOVIE = require('../native/movie-functions.json');
 const EVENTS = require('../native/movie-event-functions.json');
 const SYNC = require('../native/os-sync-functions.json');
 const TIMING = require('../../smilebasic/engine/switch2/app/timing-code.json').functions;
+const {read: consoleTickFrequency} = require('./console-tick-frequency.cjs');
 const {accessUnits} = require('./probe-decoder-events.cjs');
 const {parameterSets} = require('../../tools/moonlight/h264-stream.cjs');
 
@@ -422,7 +423,7 @@ async function main(
     await verifyCode(rpc);
     await verifyCopy(rpc);
     await verifyPreamble(rpc);
-    await verifyCode(rpc, [TIMING.tick, TIMING.frequency]);
+    await verifyCode(rpc, [TIMING.tick]);
     for (const name of [
       'initializeEvent',
       'waitEvent',
@@ -546,10 +547,7 @@ async function main(
     )
       throw Error('R3 access units do not fit the native input buffer');
     record.input = {firstIndex, capacity, maxUnitBytes};
-    const frequency = Number(
-      (await rpc.callAddress(rpc.a.sdk + TIMING.frequency.offset, [], SHORT)).result
-    );
-    if (!frequency) throw Error('R3 console tick frequency is zero');
+    const frequency = await consoleTickFrequency(rpc, module.base);
     record.tickFrequency = frequency;
 
     const payloads = [];

@@ -267,7 +267,7 @@ test('immediate output: one event and one first-try acquire per AU', async () =>
   assert.equal(report.afterStart.input, 1);
   assert.deepEqual(report.correctness.matched, 4);
   assert.equal(report.registerStatus, 0);
-  assert.equal(report.tickFrequency, 19200000);
+  assert.equal(report.tickFrequency, 31250000);
   assert.equal(loop.consoleLatencyMs.n, 4);
   assert.ok(loop.consoleLatencyMs.max >= 0);
   assert.equal(loop.submitMs.n, 4);
@@ -384,8 +384,8 @@ test('every event function is verified before use, the worker ones before spawn'
   assert.ok(position(lines, /^verify os\.atomicAddU32 /) < spawned);
   assert.ok(position(lines, /^verify timing\.tick /) < spawned);
   assert.ok(
-    position(lines, /^verify timing\.frequency /) <
-      position(lines, /^callAddress timing\.frequency/)
+    position(lines, /^verify compat\.frequency /) <
+      position(lines, /^callAddress compat\.frequency/)
   );
   assert.ok(
     position(lines, /^verify movie\.registerClientEvents /) <

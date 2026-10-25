@@ -20,6 +20,7 @@ const {nals, parameterSets} = require('../../tools/moonlight/h264-stream.cjs');
 const SYNC = require('../native/os-sync-functions.json');
 const MOVIE_EVENTS = require('../native/movie-event-functions.json');
 const TIMING = require('../../smilebasic/engine/switch2/app/timing-code.json').functions;
+const {read: consoleTickFrequency} = require('./console-tick-frequency.cjs');
 
 const USED = ['initializeEvent', 'waitEvent', 'signalEvent', 'finalizeEvent', 'atomicAddU32'];
 // Its own allocation, so no repeating region restores over the events or counters.
@@ -388,20 +389,17 @@ async function main(
   try {
     await verifyCode(rpc);
     await verifyCopy(rpc);
-    await verifyCode(rpc, [TIMING.tick, TIMING.frequency]);
+    await verifyCode(rpc, [TIMING.tick]);
     fn.tick = sdk + TIMING.tick.offset;
-    frequency = Number(
-      BigInt.asUintN(32, (await rpc.callAddress(sdk + TIMING.frequency.offset, [], SHORT)).result)
+    const module = JSON.parse(
+      await fs.readFile(path.join(directory, 'compatibility-module.json'), 'utf8')
     );
-    if (!frequency) throw Error('The console tick frequency is zero');
+    frequency = await consoleTickFrequency(rpc, module.base);
     record.tickFrequency = frequency;
     for (const name of USED) {
       await verify(rpc, sdk + SYNC[name].offset, SYNC[name].hex);
       fn[name] = sdk + SYNC[name].offset;
     }
-    const module = JSON.parse(
-      await fs.readFile(path.join(directory, 'compatibility-module.json'), 'utf8')
-    );
     const register = MOVIE_EVENTS.registerClientEvents;
     if (
       !module.symbols.some(

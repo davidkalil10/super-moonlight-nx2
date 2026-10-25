@@ -12,8 +12,8 @@ verify thread.tryWaitImplementation 112B 1a9bb7df
 verify thread.sleep 4B fcfa327b
 verify ipc.copy 16B c50102f7
 verify timing.tick 8B 7c090659
-verify timing.frequency 12B 1396137e
-callAddress timing.frequency() out=2
+verify compat.frequency 12B 7f33cf34
+callAddress compat.frequency()
 verify os.initializeEvent 32B 38512290
 verify os.waitEvent 32B f3dbe41d
 verify os.signalEvent 32B 4c0ab05b
