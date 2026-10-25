@@ -29,6 +29,7 @@ const STAGES = [
   'loop-two',
   'loop-four',
   'loop-odd',
+  'loop-keyframe',
   'loop-stop-input',
   'loop-stop-output',
   'loop-stop-present',
@@ -36,6 +37,18 @@ const STAGES = [
 ];
 const BUILD_ROOT = '/media/storage2/builds/HBLauncher/native-h264';
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+function pairIndices(scenario, keyframes) {
+  const idr = keyframes[1];
+  if (scenario === 'four') return [[1, 2], [3, 4]];
+  if (scenario === 'odd') return [[idr]];
+  if (scenario === 'keyframe') {
+    if (idr <= 2 || keyframes[2] <= idr + 2)
+      throw Error('Keyframe recovery probe needs two P frames on each side of the IDR');
+    return [[1, 2], [idr], [idr + 1, idr + 2]];
+  }
+  return [[idr, keyframes[2]]];
+}
 
 async function retryableStartup(record, directory, file) {
   if (
@@ -266,11 +279,7 @@ async function main(
       dryRun: true,
       stage,
       keyframes: keyframes.slice(0, 3),
-      pairs: scenario === 'four'
-        ? [[1, 2], [3, 4]]
-        : scenario === 'odd'
-          ? [[keyframes[1]]]
-          : [[keyframes[1], keyframes[2]]],
+      pairs: pairIndices(scenario, keyframes),
       looping,
       acquireCalls: acquire.program.proof.logicalCalls,
       acquireBytes: acquire.program.frame.length,
@@ -419,11 +428,7 @@ async function main(
         await step('paired output worker stop', () => paired.stop());
         record.result = {outputWorker: 'joined before any decoder output'};
       } else {
-        const indices = scenario === 'four'
-          ? [[1, 2], [3, 4]]
-          : scenario === 'odd'
-            ? [[secondIndex]]
-            : [[secondIndex, keyframes[2]]];
+        const indices = pairIndices(scenario, keyframes);
         const pairs = [];
         for (const [pairIndex, frameIndices] of indices.entries()) {
           const [left, right] = frameIndices;
@@ -478,7 +483,7 @@ async function main(
           });
         }
         if (scenario !== 'stop-present')
-          record.result = scenario === 'four'
+          record.result = ['four', 'keyframe'].includes(scenario)
             ? {pairs, decodeGateSignals: decoder.splitDiagnostics.decodeGateSignals}
             : {...pairs[0], decodeGateSignals: decoder.splitDiagnostics.decodeGateSignals};
       }
@@ -535,7 +540,7 @@ async function main(
   return record;
 }
 
-module.exports = {main, STAGES, requireNewPairedSession, waitForNativeReady};
+module.exports = {main, STAGES, pairIndices, requireNewPairedSession, waitForNativeReady};
 if (require.main === module) {
   const args = process.argv.slice(2);
   main(session.resolve(args[0]), {

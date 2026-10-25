@@ -5,9 +5,20 @@ const os = require('node:os');
 const path = require('node:path');
 const ring = require('../../tools/moonlight/ring.cjs');
 const {
+  pairIndices,
   requireNewPairedSession,
   waitForNativeReady
 } = require('./probe-paired-output.cjs');
+
+test('keyframe recovery keeps one decoder across P pair, IDR, and next P pair', () => {
+  assert.deepEqual(pairIndices('keyframe', [0, 30, 60]), [
+    [1, 2],
+    [30],
+    [31, 32]
+  ]);
+  assert.deepEqual(pairIndices('odd', [0, 30, 60]), [[30]]);
+  assert.throws(() => pairIndices('keyframe', [0, 2, 3]), /two P frames/);
+});
 
 test('paired output probe rejects launcher sessions used by prior native runs', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'paired-session-'));
