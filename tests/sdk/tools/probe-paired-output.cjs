@@ -19,6 +19,7 @@ const acquireFrame = require('../../tools/moonlight/paired-acquire-frame.cjs');
 const outputFrame = require('../../tools/moonlight/paired-output-frame.cjs');
 const loopFrame = require('../../tools/moonlight/paired-loop-plan.cjs');
 const ring = require('../../tools/moonlight/ring.cjs');
+const {SENTINEL} = require('../../smilebasic/engine/shared/frames.cjs');
 
 const STAGES = [
   'two',
@@ -30,6 +31,7 @@ const STAGES = [
   'loop-four',
   'loop-odd',
   'loop-keyframe',
+  'loop-overlap',
   'loop-stop-input',
   'loop-stop-output',
   'loop-stop-present',
@@ -40,7 +42,7 @@ const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 function pairIndices(scenario, keyframes) {
   const idr = keyframes[1];
-  if (scenario === 'four') return [[1, 2], [3, 4]];
+  if (scenario === 'four' || scenario === 'overlap') return [[1, 2], [3, 4]];
   if (scenario === 'odd') return [[idr]];
   if (scenario === 'keyframe') {
     if (idr <= 2 || keyframes[2] <= idr + 2)
@@ -48,6 +50,32 @@ function pairIndices(scenario, keyframes) {
     return [[1, 2], [idr], [idr + 1, idr + 2]];
   }
   return [[idr, keyframes[2]]];
+}
+
+async function stageOverlappedInput(decoder, unit, step) {
+  await step('next pair first input staged while current pair is held', () =>
+    decoder.stageSplitInput(unit, {sendFirst: true})
+  );
+  await step('next pair first exact receive check', () => decoder.verifySplitReceive());
+  const priorGates = decoder.splitDiagnostics.decodeGateSignals;
+  let failed = null;
+  const completion = decoder.completeSplitInput().then(
+    value => ({value}),
+    error => {
+      failed = error;
+      return {error};
+    }
+  );
+  await step('next pair first decode gate opened', async () => {
+    const until = Date.now() + 2000;
+    while (Date.now() < until) {
+      if (failed) throw failed;
+      if (decoder.splitDiagnostics.decodeGateSignals > priorGates) return;
+      await pause(5);
+    }
+    throw Error('Overlapped input decode gate did not open');
+  });
+  return {completion};
 }
 
 async function retryableStartup(record, directory, file) {
@@ -137,6 +165,24 @@ async function createLoopAdapter(options) {
     },
     async finishAcquire(_plan, expectedPts) {
       return (await worker.acquire(expectedPts)).map(item => ({...item, status: 0}));
+    },
+    async waitFirstAcquire(expectedPts) {
+      const until = Date.now() + 2000;
+      while (Date.now() < until) {
+        const snapshot = await worker.snapshot();
+        const results = Buffer.from(snapshot.results, 'hex');
+        const slots = Buffer.from(snapshot.acquiredSlots, 'hex');
+        const value = results.readBigUInt64LE();
+        if (value !== SENTINEL) {
+          const index = slots.readInt32LE();
+          const pts = slots.readBigUInt64LE(8);
+          if (Number(BigInt.asUintN(32, value)) !== 0 || index < 0 || pts !== expectedPts)
+            throw Error('Overlapped first output acquire failed or PTS differs');
+          return {index, pts};
+        }
+        await pause(5);
+      }
+      throw Error('Overlapped first output acquisition timed out');
     },
     async fetch(index, destinations, frame) {
       if (index === 0) await worker.openFetch(destinations, frame);
@@ -430,14 +476,22 @@ async function main(
       } else {
         const indices = pairIndices(scenario, keyframes);
         const pairs = [];
+        let successorJob = null;
+        let successorCompletion = null;
         for (const [pairIndex, frameIndices] of indices.entries()) {
           const [left, right] = frameIndices;
           const plan = await step(`pair ${pairIndex} output worker wait`, () =>
             paired.startAcquire(frameIndices.length)
           );
-          const firstJob = await step(`pair ${pairIndex} first input receive and submit`, () =>
-            decoder.submitSplit(unit(left))
-          );
+          const firstJob = successorJob ||
+            await step(`pair ${pairIndex} first input receive and submit`, () =>
+              decoder.submitSplit(unit(left))
+            );
+          successorJob = null;
+          if (scenario === 'overlap' && pairIndex === 1)
+            await step('overlapped first output acquired before second submit', () =>
+              paired.waitFirstAcquire(BigInt(left))
+            );
           const secondJob = right === undefined
             ? null
             : await step(`pair ${pairIndex} second input receive and submit`, () =>
@@ -453,6 +507,18 @@ async function main(
                 sink.workerDestination()
               )
             );
+          if (scenario === 'overlap' && pairIndex === 0) {
+            const staged = await stageOverlappedInput(
+              decoder,
+              unit(indices[1][0]),
+              step
+            );
+            successorCompletion = staged.completion;
+            record.overlap = {
+              firstPts: indices[1][0],
+              submittedBeforeCurrentPairFetch: true
+            };
+          }
           if (scenario === 'stop-present') {
             record.result = await step('stop output during presentation wait', () =>
               paired.stopDuringPresentation(destinations, first)
@@ -481,9 +547,17 @@ async function main(
             outputs: outputs.map(item => ({...item, pts: String(item.pts)})),
             publications
           });
+          if (scenario === 'overlap' && pairIndex === 0) {
+            const completed = await step('overlapped successor input completion', () =>
+              successorCompletion
+            );
+            if (completed.error) throw completed.error;
+            successorJob = completed.value;
+            record.overlap.inputSequence = successorJob.sequence;
+          }
         }
         if (scenario !== 'stop-present')
-          record.result = ['four', 'keyframe'].includes(scenario)
+          record.result = ['four', 'keyframe', 'overlap'].includes(scenario)
             ? {pairs, decodeGateSignals: decoder.splitDiagnostics.decodeGateSignals}
             : {...pairs[0], decodeGateSignals: decoder.splitDiagnostics.decodeGateSignals};
       }
@@ -540,7 +614,14 @@ async function main(
   return record;
 }
 
-module.exports = {main, STAGES, pairIndices, requireNewPairedSession, waitForNativeReady};
+module.exports = {
+  main,
+  STAGES,
+  pairIndices,
+  stageOverlappedInput,
+  requireNewPairedSession,
+  waitForNativeReady
+};
 if (require.main === module) {
   const args = process.argv.slice(2);
   main(session.resolve(args[0]), {

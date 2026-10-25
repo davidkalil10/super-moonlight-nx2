@@ -6,6 +6,7 @@ const path = require('node:path');
 const ring = require('../../tools/moonlight/ring.cjs');
 const {
   pairIndices,
+  stageOverlappedInput,
   requireNewPairedSession,
   waitForNativeReady
 } = require('./probe-paired-output.cjs');
@@ -18,6 +19,40 @@ test('keyframe recovery keeps one decoder across P pair, IDR, and next P pair', 
   ]);
   assert.deepEqual(pairIndices('odd', [0, 30, 60]), [[30]]);
   assert.throws(() => pairIndices('keyframe', [0, 2, 3]), /two P frames/);
+});
+
+test('overlap opens the next decode gate only after the host exact receive check', async () => {
+  const calls = [];
+  let releaseInput;
+  const pending = new Promise(resolve => { releaseInput = resolve; });
+  const diagnostics = {decodeGateSignals: 2};
+  const decoder = {
+    splitDiagnostics: diagnostics,
+    async stageSplitInput() { calls.push('stage'); },
+    async verifySplitReceive() { calls.push('verified'); },
+    async completeSplitInput() {
+      calls.push('decode gate');
+      diagnostics.decodeGateSignals++;
+      await pending;
+      return {sequence: 3};
+    }
+  };
+  const step = async (_name, run) => run();
+  const staged = await stageOverlappedInput(decoder, {pts: 3}, step);
+  assert.deepEqual(calls, ['stage', 'verified', 'decode gate']);
+  releaseInput();
+  assert.deepEqual(await staged.completion, {value: {sequence: 3}});
+
+  const rejected = {
+    splitDiagnostics: {decodeGateSignals: 0},
+    async stageSplitInput() {},
+    async verifySplitReceive() { throw Error('short receive'); },
+    async completeSplitInput() { throw Error('decode gate opened'); }
+  };
+  await assert.rejects(
+    stageOverlappedInput(rejected, {pts: 3}, step),
+    /short receive/
+  );
 });
 
 test('paired output probe rejects launcher sessions used by prior native runs', async () => {
