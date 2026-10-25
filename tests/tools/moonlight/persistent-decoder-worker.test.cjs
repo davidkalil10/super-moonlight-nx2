@@ -226,12 +226,9 @@ test('persistent decoder uses separate acquire and fetch gates, then joins', asy
   await worker.register();
   await worker.start();
   for (const pts of [90000, 180000]) {
-    const completed = await worker.run({
-      index: 1,
-      length: 4096,
-      pts,
-      destination: {address: 0x72000000, bytes: 0x400000}
-    });
+    const job = await worker.begin({index: 1, length: 4096, pts});
+    assert.equal(f.calls.filter(call => call.combined).length, pts === 90000 ? 1 : 3);
+    const completed = await worker.finish(job, {address: 0x72000000, bytes: 0x400000});
     assert.equal(completed.pts, BigInt(pts));
     assert.deepEqual(completed.input, {status: 0, index: 1});
   }

@@ -43,6 +43,7 @@ async function fixture({
     async createSink() {
       return {
         async destination() {
+          events.push({type: 'destination'});
           return {address: 0x1000000, bytes: 32768, index: 1};
         },
         async publish(destination, frame) {
@@ -78,8 +79,11 @@ async function fixture({
         async startPersistent() {
           events.push({type: 'start-persistent'});
         },
-        async processPersistent(unit, destination) {
-          events.push({type: 'process-persistent', unit, destination});
+        async beginPersistent(unit) {
+          events.push({type: 'begin-persistent', unit});
+        },
+        async finishPersistent(destination) {
+          events.push({type: 'finish-persistent', destination});
           return {format: 'nv12', width: 128, height: 96, stride: 128, sliceHeight: 96};
         },
         async close() {
@@ -236,28 +240,39 @@ test('persistent worker takes over after a host-driven first frame', {timeout: 5
     assert.equal(f.events.filter(event => event.type === 'submit').length, 1);
     assert.equal(f.events.filter(event => event.type === 'receive').length, 1);
     assert.equal(f.events.filter(event => event.type === 'start-persistent').length, 1);
-    assert.equal(f.events.filter(event => event.type === 'process-persistent').length, 1);
+    assert.equal(f.events.filter(event => event.type === 'begin-persistent').length, 1);
+    assert.equal(f.events.filter(event => event.type === 'finish-persistent').length, 1);
+    const began = f.events.findIndex(event => event.type === 'begin-persistent');
+    const destination = f.events.findIndex(
+      (event, index) => index > began && event.type === 'destination'
+    );
+    const finished = f.events.findIndex(event => event.type === 'finish-persistent');
+    assert.ok(began < destination && destination < finished);
     assert.equal(f.events.filter(event => event.type === 'publish').length, 2);
   });
 });
 
-test('persistent worker waits for a late first output before taking over', {timeout: 5000}, async () => {
-  const f = await fixture({
-    emptyPolls: 2,
-    units: [
-      {hex: accessUnit.toString('hex'), keyframe: true, pts: 1000},
-      {hex: accessUnit.toString('hex'), keyframe: false, pts: 2000}
-    ]
-  });
-  f.options.args.push('--decoder-worker', 'persistent');
-  await exercise(f, async () => {
-    await run(f.options);
-    assert.equal(f.events.filter(event => event.type === 'submit').length, 1);
-    assert.equal(f.events.filter(event => event.type === 'receive').length, 3);
-    assert.equal(f.events.filter(event => event.type === 'start-persistent').length, 1);
-    assert.equal(f.events.filter(event => event.type === 'process-persistent').length, 1);
-  });
-});
+test(
+  'persistent worker waits for a late first output before taking over',
+  {timeout: 5000},
+  async () => {
+    const f = await fixture({
+      emptyPolls: 2,
+      units: [
+        {hex: accessUnit.toString('hex'), keyframe: true, pts: 1000},
+        {hex: accessUnit.toString('hex'), keyframe: false, pts: 2000}
+      ]
+    });
+    f.options.args.push('--decoder-worker', 'persistent');
+    await exercise(f, async () => {
+      await run(f.options);
+      assert.equal(f.events.filter(event => event.type === 'submit').length, 1);
+      assert.equal(f.events.filter(event => event.type === 'receive').length, 3);
+      assert.equal(f.events.filter(event => event.type === 'start-persistent').length, 1);
+      assert.equal(f.events.filter(event => event.type === 'begin-persistent').length, 1);
+    });
+  }
+);
 
 test(
   'an audio process failure ends the native stream and releases decoder/display ownership',

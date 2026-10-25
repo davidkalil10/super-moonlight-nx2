@@ -504,9 +504,13 @@ test('persistent mode starts after the first host frame and joins before decoder
         async start() {
           events.push('start-worker');
         },
-        async run(job) {
-          events.push(job);
-          return {pts: BigInt(job.pts), input: {status: 0, index: 0}};
+        async begin(job) {
+          events.push({type: 'begin', job});
+          return {sequence: 1, pts: BigInt(job.pts)};
+        },
+        async finish(job, destination) {
+          events.push({type: 'finish', job, destination});
+          return {pts: job.pts, input: {status: 0, index: 0}};
         },
         async stop() {
           events.push('stop-worker');
@@ -523,15 +527,21 @@ test('persistent mode starts after the first host frame and joins before decoder
     await assert.rejects(decoder.startPersistent(), /first frame/);
     assert.ok(await frame(decoder, destination, 1000));
     await decoder.startPersistent();
-    const result = await decoder.processPersistent(
-      {data: Buffer.alloc(4000, 7), pts: 2000},
-      destination
+    await decoder.beginPersistent({data: Buffer.alloc(4000, 7), pts: 2000});
+    await assert.rejects(
+      decoder.beginPersistent({data: Buffer.alloc(4000, 7), pts: 3000}),
+      /already in flight/
     );
+    const result = await decoder.finishPersistent(destination);
     assert.equal(result.pts, '2000');
     assert.equal(result.stride, 1920);
     assert.equal(events[1], 'start-worker');
-    assert.equal(events[2].length, 4000);
-    assert.equal(events[2].destination, destination);
+    assert.equal(events[2].job.length, 4000);
+    assert.equal(events[3].destination, destination);
+    assert.equal(
+      (await decoder.processPersistent({data: Buffer.alloc(4000, 7), pts: 3000}, destination)).pts,
+      '3000'
+    );
     await decoder.close();
     assert.deepEqual(events.slice(-2), ['stop-worker', 'finalize-events']);
     assert.ok(consoleMock.log.indexOf('stop') >= 0);
