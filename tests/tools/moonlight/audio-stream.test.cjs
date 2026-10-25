@@ -74,10 +74,9 @@ test('primes, starts, appends in order and recycles across wraparound', async ()
   assert.strictEqual(stats.overruns, 0);
   assert.strictEqual(mock.queued.length, 0, 'queue fully drained');
 
-  // sequential release must not make the loop spin on GetReleasedAudioOutBuffer:
-  // one poll per buffer plus a bounded idle margin, not one per clock tick.
+  // polls only for buffers whose playback has elapsed: one per buffer, no empty terminator.
   assert.ok(
-    mock.getReleasedCalls <= 2 * stats.appended + 16,
+    mock.getReleasedCalls <= stats.appended + 2,
     'GetReleasedAudioOutBuffer polling stays within the exchange budget: ' + mock.getReleasedCalls
   );
 });
