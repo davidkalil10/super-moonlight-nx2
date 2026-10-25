@@ -6,6 +6,7 @@ const {spawn} = require('node:child_process');
 const {execFileSync} = require('node:child_process');
 const os = require('node:os');
 const {AccessUnits, parameterSets} = require('./h264-stream.cjs');
+const {instrument} = require('./bridge-counter.cjs');
 
 const IDR_COOLDOWN_MS = 100;
 
@@ -89,6 +90,9 @@ async function run({
     ) + '\n',
     {mode: 0o600}
   );
+  let stage = 'setup';
+  const bridge = instrument(rpc, () => stage);
+  rpc = bridge.rpc;
   let stopping = false;
   let decoder = null;
   let sink = null;
@@ -266,8 +270,8 @@ async function run({
       }
     }, 500);
     let dropped = 0;
-    let stage = 'read',
-      stageAt = performance.now(),
+    stage = 'read';
+    let stageAt = performance.now(),
       stageMs = {};
     const enter = name => {
       const now = performance.now();
@@ -281,6 +285,7 @@ async function run({
         codec: 'h264',
         ...stats,
         dropped: reader.dropped - dropped,
+        ...bridge.take(),
         at: stage + '/' + (decoder?.step ?? '-'),
         ms: Object.fromEntries(Object.entries(stageMs).map(([k, v]) => [k, Math.round(v)]))
       });
