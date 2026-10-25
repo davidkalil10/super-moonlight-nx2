@@ -11,6 +11,7 @@
 //        hbv2: [--budget 96] [--cap 256] (KiB) [--qp-min 4] [--qp-max 40]
 //              [--refresh 2] [--threads N] [--resync 1000] (ms)
 //        h264: [--split-decoder] [--native-publish] [--auto-output-queue] [--linked-gates]
+//              [--paired-loop] (input-only split worker plus a guarded two-frame output loop)
 //              [--duration S] [--warmup S] [--expect fps=30,dropped=0,idr=0] [--ab] [--queue 3] [--input-hz 60] [--audio-frames 960]
 //              [--socket-audio | --socket-audio-tone] (PCM or a 500 Hz test tone over native TCP to a console worker)
 // --moonlight runs tools/moonlight/helper's hbmoonlight (path from $HBMOONLIGHT)
@@ -293,7 +294,8 @@ async function main() {
               arg !== '--split-decoder' &&
               arg !== '--native-publish' &&
               arg !== '--auto-output-queue' &&
-              arg !== '--linked-gates'
+              arg !== '--linked-gates' &&
+              arg !== '--paired-loop'
           ),
           [...args, '--split-decoder']
         ]
