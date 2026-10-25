@@ -2,7 +2,7 @@
 // Reads interleaved 48 kHz stereo s16le from stdin (default), a numeric fd
 // (--fd N) or a file (--file PATH, offline test), keeps a small ring of console
 // AudioOut buffers primed and appended back to back, and measures underruns and
-// overruns. Functions resolve through sdk/native/symbols.cjs like game-audio.cjs.
+// overruns. Functions resolve through sdk/native/symbols.cjs like game-audio.js.
 // Usage: node tools/moonlight/audio-stream.cjs [runs/launcher-XXXX] [--fd N | --file PATH]
 //        [--buffer-frames 3840] [--queue 3] [--prime 2]
 const fs = require('node:fs');
@@ -164,7 +164,7 @@ function stream(options) {
       rate: SAMPLE_RATE,
       channels: CHANNELS,
       failed: opened =>
-        'OpenDefaultAudioOut failed (' + opened + '); game-audio.cjs may hold the device',
+        'OpenDefaultAudioOut failed (' + opened + '); game-audio.js may hold the device',
       format: 'Unexpected AudioOut format'
     });
 

@@ -1,7 +1,7 @@
 // Console controller state -> moonlight-common-c gamepad state.
 //
 // The launcher worker writes the selected NpadState to binding 0 every frame
-// (and five pad sources at 0x7f0000 + 640, see sdk/host/hardware.cjs). This
+// (and five pad sources at 0x7f0000 + 640, see sdk/host/hardware.js). This
 // module reads those bytes and maps them to the fields of
 // LiSendMultiControllerEvent: buttonFlags (Limelight.h *_FLAG bits),
 // leftTrigger/rightTrigger 0-255, stick axes int16 with Y up.

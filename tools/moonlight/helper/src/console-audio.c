@@ -156,7 +156,7 @@ static bool open_audio_out(void) {
     return fail("OpenDefaultAudioOut failed");
   if (result != 0) {
     status("{\"event\":\"error\",\"message\":\"audio: OpenDefaultAudioOut failed (%llu); "
-           "game-audio.cjs may hold the device\"}",
+           "game-audio.js may hold the device\"}",
            (unsigned long long)result);
     return false;
   }
