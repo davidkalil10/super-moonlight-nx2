@@ -10,16 +10,26 @@ const BUILD_ROOT = '/media/storage2/builds/HBLauncher/native-h264';
 const RUNS_FILE = '/media/storage/local/hbl-notes/RUNS.md';
 
 function parseArgs(args) {
-  const options = {directory: null, clip: null, stages: STAGES, dryRun: false, loop: false};
+  const options = {
+    directory: null,
+    clip: null,
+    stages: STAGES,
+    dryRun: false,
+    loop: false,
+    staggered: false
+  };
+  let stagesSpecified = false;
   for (let index = 0; index < args.length; index++) {
     const arg = args[index];
     if (arg === '--dry-run') options.dryRun = true;
     else if (arg === '--loop') options.loop = true;
+    else if (arg === '--staggered') options.staggered = true;
     else if (arg === '--clip' || arg === '--stages') {
       const value = args[++index];
       if (!value || value.startsWith('--')) throw Error(arg + ' needs a value');
       if (arg === '--clip') options.clip = value;
       else {
+        stagesSpecified = true;
         const names = value.split(',');
         if (new Set(names).size !== names.length || names.some(name => !STAGES.includes(name)))
           throw Error('Invalid paired ladder stages');
@@ -29,6 +39,8 @@ function parseArgs(args) {
     else throw Error('Unknown paired ladder argument ' + arg);
   }
   if (!options.clip) throw Error('Pass --clip with the ordered 1080p IP clip');
+  if (options.staggered && (options.loop || stagesSpecified))
+    throw Error('Staggered ladder selects its own complete safety stages');
   return options;
 }
 
@@ -53,6 +65,7 @@ async function main(
   {
     runSplit = split.main,
     runPaired = paired.main,
+    runStaggered = require('./probe-staggered-ladder.cjs').main,
     ensureFresh = paired.requireNewPairedSession,
     sessionRpc = session.rpc,
     sourceRevision,
@@ -63,6 +76,8 @@ async function main(
   } = {}
 ) {
   const {clip, stages, dryRun, loop: looping = false} = options;
+  if (options.staggered)
+    return runStaggered(options.directory, {clip, dryRun});
   const directory = options.directory ? path.resolve(options.directory) : null;
   const commands = stages.map(stage => ({
     stage,

@@ -10,8 +10,30 @@ test('paired ladder parses stages in safety order and rejects bad options', () =
   assert.deepEqual(parsed.stages, ['one', 'two', 'short-recv']);
   assert.deepEqual(STAGES, ['one', 'two', 'stop-input', 'stop-output', 'short-recv']);
   assert.equal(parseArgs(['--clip', '/tmp/ip1080.h264', '--loop']).loop, true);
+  assert.equal(parseArgs(['--clip', '/tmp/ip1080.h264', '--staggered']).staggered, true);
+  assert.throws(
+    () => parseArgs(['--clip', '/tmp/ip1080.h264', '--staggered', '--loop']),
+    /complete safety stages/
+  );
   assert.throws(() => parseArgs(['--clip', '/tmp/ip1080.h264', '--stages', 'two,two']), /stages/);
   assert.throws(() => parseArgs(['--clip']), /needs a value/);
+});
+
+test('paired ladder delegates one staggered safety batch', async () => {
+  let calls = 0;
+  const result = await main(
+    {directory: '/tmp/launcher-test', clip: '/tmp/ip1080.h264', staggered: true, dryRun: true},
+    {
+      runStaggered: async (directory, options) => {
+        calls++;
+        assert.equal(directory, '/tmp/launcher-test');
+        assert.deepEqual(options, {clip: '/tmp/ip1080.h264', dryRun: true});
+        return {dryRun: true};
+      }
+    }
+  );
+  assert.equal(calls, 1);
+  assert.equal(result.dryRun, true);
 });
 
 test('paired loop ladder maps only output stages to the persistent collector', async () => {
