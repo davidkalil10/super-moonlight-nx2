@@ -176,7 +176,8 @@ function stream(options) {
     }
 
     async function drain() {
-      for (let i = 0; i < DESCRIPTOR_COUNT && inFlight.length; i++) {
+      const due = inFlight.filter(item => item.releaseAt <= now()).length;
+      for (let i = 0; i < due; i++) {
         const address = await call('GetReleasedAudioOutBuffer', base);
         if (address === 0n) break;
         const slot = index.get(Number(address));
