@@ -37,7 +37,13 @@ const OUTPUT_RESULTS = 0x1c0;
 const FETCH_RESULTS = 0x1f0;
 const SHORT = 2;
 const AUTO_CLEAR = 1;
-const READ = 0x586fb0;
+const STATUS_BYTES = FETCH_RESULTS + 28 - RECEIVE_RESULTS;
+const STATUS_FIELDS = {
+  receive: {offset: RECEIVE_RESULTS - RECEIVE_RESULTS, sequence: 8, bytes: 16},
+  input: {offset: INPUT_RESULTS - RECEIVE_RESULTS, sequence: 24, bytes: 28},
+  acquire: {offset: OUTPUT_RESULTS - RECEIVE_RESULTS, sequence: 32, bytes: 36},
+  fetch: {offset: FETCH_RESULTS - RECEIVE_RESULTS, sequence: 24, bytes: 28}
+};
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const status = value => Number(BigInt.asUintN(32, value));
 
@@ -138,6 +144,9 @@ async function create({
   let activeInput = null;
   let activeOutput = null;
   let decodeGateSignals = 0;
+  const statusWaiters = new Set();
+  let statusLoop = null;
+  let statusClosing = false;
   const jump = sdk + CODE.longjmp.offset;
   const copy = sdk + IPC_COPY.offset;
   const frame = (base, calls, results = {}) => {
@@ -164,24 +173,57 @@ async function create({
   const inputAt = locations(inputBase);
   const outputAt = locations(outputBase);
 
-  async function poll(eventOffset, resultOffset, label) {
-    const until = Date.now() + pollTimeoutMs;
-    while (Date.now() < until && !cancelled()) {
-      const reply = await rpc.pair(
-        [
-          {address: sync.tryWaitLightEvent, args: [address(eventOffset), 0, 0, 0]},
-          {offset: READ, args: [rpc.output, address(resultOffset), 44, 0]}
-        ],
-        44
-      );
-      if ((reply.results[0] & 0xffn) === 1n) {
-        if (reply.results[1] !== BigInt(rpc.output))
-          throw Error('Split decoder result read failed');
-        return reply.output;
+  function rejectStatusWaiters(error) {
+    for (const waiter of statusWaiters) waiter.reject(error);
+    statusWaiters.clear();
+  }
+
+  function runStatusScheduler() {
+    if (statusLoop || statusClosing) return;
+    statusLoop = (async () => {
+      try {
+        while (statusWaiters.size && !statusClosing) {
+          const snapshot = await rpc.read(address(RECEIVE_RESULTS), STATUS_BYTES);
+          const now = Date.now();
+          for (const waiter of statusWaiters) {
+            const field = STATUS_FIELDS[waiter.kind];
+            const sequence = snapshot.readUInt32LE(field.offset + field.sequence);
+            if (sequence === waiter.sequence) {
+              statusWaiters.delete(waiter);
+              waiter.resolve(snapshot.subarray(field.offset, field.offset + field.bytes));
+            } else if (sequence > waiter.sequence) {
+              statusWaiters.delete(waiter);
+              waiter.reject(Error(`Split decoder ${waiter.label} sequence differs`));
+            } else if (now >= waiter.until) {
+              statusWaiters.delete(waiter);
+              waiter.reject(Error(`Split decoder ${waiter.label} timed out`));
+            }
+          }
+          if (cancelled()) rejectStatusWaiters(Error('Native decoding cancelled'));
+          if (statusWaiters.size) await sleep(2);
+        }
+      } catch (error) {
+        rejectStatusWaiters(error);
+      } finally {
+        statusLoop = null;
+        if (statusWaiters.size && !statusClosing) runStatusScheduler();
       }
-      await sleep(2);
-    }
-    throw Error(cancelled() ? 'Native decoding cancelled' : `Split decoder ${label} timed out`);
+    })();
+  }
+
+  function waitStatus(kind, sequence, label) {
+    if (statusClosing) throw Error('Split decoder status scheduler is stopped');
+    return new Promise((resolve, reject) => {
+      statusWaiters.add({
+        kind,
+        sequence,
+        label,
+        until: Date.now() + pollTimeoutMs,
+        resolve,
+        reject
+      });
+      runStatusScheduler();
+    });
   }
 
   async function install(worker, frames) {
@@ -211,9 +253,7 @@ async function create({
   async function acquiredOutput(job) {
     if (!job || activeOutput !== job || !video.thread || video.joined)
       throw Error('Split output job is not ready');
-    const acquired = await poll(ACQUIRED, OUTPUT_RESULTS, 'output acquire');
-    if (acquired.readUInt32LE(32) !== job.sequence)
-      throw Error('Split decoder acquired the wrong access unit');
+    const acquired = await waitStatus('acquire', job.sequence, 'output acquire');
     const acquiredStatus = status(acquired.readBigUInt64LE(0));
     const outputIndex = acquired.readInt32LE(8);
     if (acquiredStatus || outputIndex < 0) {
@@ -417,7 +457,7 @@ async function create({
       if (!job || activeInput !== job || !input.thread || input.joined)
         throw Error('Split input job is not ready');
       await transport.send(payload);
-      const received = await poll(RECEIVE_DONE, RECEIVE_RESULTS, 'TCP receive');
+      const received = await waitStatus('receive', job.sequence, 'TCP receive');
       const count = received.readBigInt64LE(0);
       const receivedSequence = received.readUInt32LE(8);
       if (count !== BigInt(job.length) || receivedSequence !== job.sequence)
@@ -426,7 +466,7 @@ async function create({
         );
       await rpc.callAddress(sync.signalLightEvent, [address(DECODE_GATE)], SHORT);
       decodeGateSignals++;
-      const completed = await poll(INPUT_DONE, INPUT_RESULTS, 'input submit');
+      const completed = await waitStatus('input', job.sequence, 'input submit');
       if (completed.readUInt32LE(24) !== job.sequence)
         throw Error('Split decoder submitted the wrong access unit');
       const sent = status(completed.readBigUInt64LE(0));
@@ -483,7 +523,7 @@ async function create({
       await rpc.writeAndCall(address(OUTPUT_JOB + 8), destinationBytes, sync.signalLightEvent, [
         address(FETCH_GATE)
       ]);
-      const fetched = await poll(OUTPUT_DONE, FETCH_RESULTS, 'output fetch');
+      const fetched = await waitStatus('fetch', job.sequence, 'output fetch');
       if (fetched.readUInt32LE(24) !== job.sequence)
         throw Error('Split decoder fetched the wrong access unit');
       activeOutput = null;
@@ -511,6 +551,9 @@ async function create({
     async stop() {
       if (input.uncertain || video.uncertain)
         throw Error('Split decoder thread creation is uncertain; decoder and events retained');
+      statusClosing = true;
+      rejectStatusWaiters(Error('Split decoder stopped'));
+      if (statusLoop) await statusLoop;
       if ((!input.thread || input.joined) && (!video.thread || video.joined)) return;
       transport.abort();
       const selectors = Buffer.alloc(32);
