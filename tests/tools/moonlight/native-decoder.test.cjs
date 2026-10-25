@@ -551,4 +551,65 @@ test('persistent mode starts after the first host frame and joins before decoder
   }
 });
 
+test('TCP persistent mode sends the access unit without an RPC input write', async () => {
+  const directory = await fixture();
+  const consoleMock = createConsole();
+  const events = [];
+  const transport = {
+    fd: 7,
+    recvFunction: SDK + 0x130000,
+    async close() {
+      events.push('close-transport');
+    }
+  };
+  const destination = {address: 0x70000000, bytes: (1920 * 1080 * 3) / 2 + 0x1000};
+  const decoder = await createDecoder({
+    rpc: consoleMock.rpc,
+    directory,
+    workerDirectory: path.join(directory, 'worker'),
+    workerMode: 'persistent',
+    transport,
+    async persistentWorkerFactory(options) {
+      assert.equal(options.transport, transport);
+      return {
+        async register() {},
+        async start() {},
+        async begin(job) {
+          events.push(job);
+          return {sequence: 1, pts: BigInt(job.pts)};
+        },
+        async finish(job) {
+          return {pts: job.pts, input: {status: 0, index: 0}};
+        },
+        async stop() {
+          events.push('stop-worker');
+        },
+        async finalize() {}
+      };
+    }
+  });
+  try {
+    await decoder.configure(sps, pps, 30);
+    assert.ok(await frame(decoder, destination, 1000));
+    await decoder.startPersistent();
+    const payload = Buffer.alloc(4000, 7);
+    const writes = [];
+    const write = consoleMock.rpc.write;
+    consoleMock.rpc.write = (address, bytes) => {
+      writes.push({address, bytes});
+      return write(address, bytes);
+    };
+    await decoder.beginPersistent({data: payload, pts: 2000});
+    assert.equal(events[0].payload, payload);
+    assert.ok(Number.isSafeInteger(events[0].inputAddress));
+    assert.equal(writes.some(entry => entry.bytes === payload), false);
+    assert.equal((await decoder.finishPersistent(destination)).pts, '2000');
+    await decoder.close();
+    assert.deepEqual(events.slice(-2), ['stop-worker', 'close-transport']);
+  } finally {
+    await decoder.close().catch(() => {});
+    await fs.rm(directory, {recursive: true, force: true});
+  }
+});
+
 module.exports = {createConsole};

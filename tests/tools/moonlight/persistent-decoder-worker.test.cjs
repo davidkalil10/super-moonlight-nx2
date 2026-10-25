@@ -17,6 +17,7 @@ function fixture({
   invalidOutput = false,
   noAcquired = false,
   noFetchCompleted = false,
+  tcpReceiveBytes = null,
   threadStuck = false,
   spawnFails = false
 } = {}) {
@@ -95,6 +96,12 @@ function fixture({
         result.writeBigUInt64LE(read(control + 0x1a0 + 16, 8).readBigUInt64LE(), 24);
         result.writeUInt32LE(read(control + 0x1a0, 4).readUInt32LE(), 40);
         write(control + 0x120, result);
+        if (tcpReceiveBytes !== null) {
+          const received = Buffer.alloc(44);
+          received.writeBigInt64LE(BigInt(tcpReceiveBytes));
+          received.writeUInt32LE(read(control + 0x1a0, 4).readUInt32LE(), 8);
+          write(control + 0x1e0, received);
+        }
       } else if (args[0] === control + 0x20) {
         const result = Buffer.alloc(44);
         result.writeInt32LE(1, 32);
@@ -576,4 +583,129 @@ test('fetch probes release an acquired output only when their body did not', asy
     );
     await worker.finalize();
   }
+});
+
+test('TCP input is checked before the worker decode gate opens', async () => {
+  for (const receivedBytes of [4096, 2048]) {
+    const f = fixture({tcpReceiveBytes: receivedBytes});
+    const sent = [];
+    const transport = {
+      fd: 7,
+      maxAccessUnit: 0x100000,
+      recvFunction: SDK + 0x130000,
+      async send(bytes) {
+        sent.push(Buffer.from(bytes));
+      },
+      abort() {}
+    };
+    const worker = await create({
+      rpc: f.rpc,
+      module: f.module,
+      functions: f.functions,
+      decoder,
+      output,
+      format,
+      transport
+    });
+    await worker.register();
+    await worker.start();
+    await assert.rejects(
+      worker.begin({
+        index: 1,
+        length: 0x100001,
+        pts: 90000,
+        inputAddress: 0x71000000,
+        payload: Buffer.alloc(0x100001)
+      }),
+      /Invalid native TCP decoder payload/
+    );
+    assert.equal(f.calls.filter(call => call.combined).length, 0);
+    const payload = Buffer.alloc(4096, 7);
+    const pending = worker.begin({
+      index: 1,
+      length: payload.length,
+      pts: 90000,
+      inputAddress: 0x71000000,
+      payload
+    });
+    if (receivedBytes === payload.length) {
+      const job = await pending;
+      assert.deepEqual(sent, [payload]);
+      assert.equal(f.read(f.control + 0x1a0 + 24, 8).readBigUInt64LE(), 0x71000000n);
+      assert.equal(
+        f.calls.filter(
+          call =>
+            call.address === SDK + sync.signalLightEvent.offset && call.args[0] === f.control + 0xf0
+        ).length,
+        1
+      );
+      await worker.finish(job, {address: 0x72000000, bytes: 0x400000});
+    } else {
+      await assert.rejects(pending, /receive returned 2048\/4096 bytes/);
+      assert.deepEqual(sent, [payload]);
+      assert.equal(
+        f.calls.filter(
+          call =>
+            call.address === SDK + sync.signalLightEvent.offset && call.args[0] === f.control + 0xf0
+        ).length,
+        0
+      );
+    }
+    await worker.stop();
+    await worker.finalize();
+  }
+});
+
+test('TCP receive frame reads the requested input address and length before decode', async () => {
+  const f = fixture();
+  const transport = {
+    fd: 7,
+    maxAccessUnit: 0x100000,
+    recvFunction: SDK + 0x130000,
+    async send() {},
+    abort() {}
+  };
+  const worker = await create({
+    rpc: f.rpc,
+    module: f.module,
+    functions: f.functions,
+    decoder,
+    output,
+    format,
+    transport
+  });
+  await worker.register();
+  await worker.start();
+  const job = Buffer.alloc(32);
+  job.writeUInt32LE(1, 0);
+  job.writeInt32LE(3, 4);
+  job.writeUInt32LE(4096, 8);
+  job.writeBigUInt64LE(90000n, 16);
+  job.writeBigUInt64LE(0x71000000n, 24);
+  f.write(f.control + 0x1a0, job);
+  const seen = [];
+  const acquired = Error('output acquired');
+  assert.throws(
+    () =>
+      emulate(f, 0x60000000 + 0x10000, (target, args) => {
+        if (target === transport.recvFunction) {
+          seen.push(args);
+          return 4096;
+        }
+        if (target === f.functions.acquireOutput) {
+          const index = Buffer.alloc(4);
+          index.writeInt32LE(2);
+          f.write(args[1], index);
+        }
+        if (target === SDK + sync.signalLightEvent.offset && args[0] === f.control + 0x10)
+          throw acquired;
+        return 0;
+      }),
+    error => error === acquired
+  );
+  assert.deepEqual(seen, [[7, 0x71000000, 4096, 0x40, 0, 0]]);
+  assert.equal(f.read(f.control + 0x1e0, 8).readBigUInt64LE(), 4096n);
+  assert.equal(f.read(f.control + 0x1e8, 4).readUInt32LE(), 1);
+  await worker.stop();
+  await worker.finalize();
 });

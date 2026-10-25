@@ -9,6 +9,7 @@ const {allocate} = require('../native/allocate.cjs');
 const {accessUnits} = require('./probe-decoder-events.cjs');
 const {parameterSets} = require('../../tools/moonlight/h264-stream.cjs');
 const {create: createDecoder} = require('../../tools/moonlight/native-decoder.cjs');
+const {create: createTransport} = require('../../tools/moonlight/native-tcp.cjs');
 
 const STAGES = [
   'gate',
@@ -108,9 +109,11 @@ async function main(
     clip,
     stage,
     jobs = 1,
+    decoderData = 'rpc',
     output,
     sourceRevision,
     create = createDecoder,
+    openTransport = createTransport,
     sessionRpc,
     allocateSurface = allocate
   } = {}
@@ -119,6 +122,8 @@ async function main(
   if (!clip) throw Error('Pass --clip with an H.264 probe clip');
   if (!Number.isInteger(jobs) || jobs < 1 || jobs > 3 || (jobs > 1 && stage !== 'fetch'))
     throw Error('--jobs must be 1 to 3 and requires --stage fetch above 1');
+  if (!['rpc', 'tcp'].includes(decoderData) || (decoderData === 'tcp' && stage !== 'fetch'))
+    throw Error('--decoder-data tcp requires --stage fetch');
   directory = path.resolve(directory);
   clip = path.resolve(clip);
   const revision =
@@ -127,6 +132,17 @@ async function main(
       cwd: path.resolve(__dirname, '../..'),
       encoding: 'utf8'
     }).trim();
+  const raw = sessionRpc || session.rpc(directory);
+  if (decoderData === 'tcp' && !raw.host)
+    throw Error('Native TCP requires a fresh launcher session from this branch');
+  const bytes = await fsp.readFile(clip);
+  const units = accessUnits(bytes);
+  const keyframes = units.flatMap((unit, index) => (unit.keyframe ? [index] : []));
+  if (keyframes.length < jobs + 1)
+    throw Error('Probe clip needs ' + (jobs + 1) + ' independent keyframes');
+  const [firstIndex, nextIndex] = keyframes;
+  const {sps, pps} = parameterSets(bytes);
+  if (!sps || !pps) throw Error('Probe clip needs SPS and PPS');
   output ||= path.join(
     '/media/storage2/builds/HBLauncher/native-h264',
     new Date().toISOString().replace(/[:.]/g, '-') +
@@ -137,20 +153,12 @@ async function main(
   );
   await fsp.mkdir(output, {recursive: true, mode: 0o700});
   const entries = journal(path.join(output, 'first-job.jsonl'));
-  const raw = sessionRpc || session.rpc(directory);
   const rpc = loggedRpc(raw, entries);
-  const bytes = await fsp.readFile(clip);
-  const units = accessUnits(bytes);
-  const keyframes = units.flatMap((unit, index) => (unit.keyframe ? [index] : []));
-  if (keyframes.length < jobs + 1)
-    throw Error('Probe clip needs ' + (jobs + 1) + ' independent keyframes');
-  const [firstIndex, nextIndex] = keyframes;
-  const {sps, pps} = parameterSets(bytes);
-  if (!sps || !pps) throw Error('Probe clip needs SPS and PPS');
   const record = {
     probe: 'persistent-first-job',
     stage,
     jobs,
+    decoderData,
     session: raw.a.session,
     sourceRevision: revision,
     builder: os.hostname(),
@@ -165,14 +173,44 @@ async function main(
     mode: 0o600
   });
   let decoder = null;
+  let transport = null;
   let failure = null;
   try {
+    if (decoderData === 'tcp') {
+      entries.write({phase: 'before', step: 'TCP transport create'});
+      const opened = await openTransport({rpc, host: rpc.host});
+      transport = {
+        ...opened,
+        async send(bytes) {
+          entries.write({phase: 'before', step: 'TCP send', bytes: bytes.length});
+          try {
+            await opened.send(bytes);
+            entries.write({phase: 'after', step: 'TCP send', bytes: bytes.length});
+          } catch (error) {
+            entries.write({phase: 'error', step: 'TCP send', message: error.message});
+            throw error;
+          }
+        },
+        abort() {
+          entries.write({phase: 'before', step: 'TCP abort'});
+          opened.abort();
+          entries.write({phase: 'after', step: 'TCP abort'});
+        },
+        async close() {
+          entries.write({phase: 'before', step: 'TCP close'});
+          await opened.close();
+          entries.write({phase: 'after', step: 'TCP close'});
+        }
+      };
+      entries.write({phase: 'after', step: 'TCP transport create', port: transport.port});
+    }
     entries.write({phase: 'before', step: 'decoder create'});
     decoder = await create({
       rpc,
       directory,
       workerDirectory: path.join(output, 'decoder'),
-      workerMode: 'persistent'
+      workerMode: 'persistent',
+      transport
     });
     entries.write({phase: 'after', step: 'decoder create'});
     entries.write({phase: 'before', step: 'configure'});
@@ -263,6 +301,15 @@ async function main(
   } else if (decoder) {
     record.retained = 'Bridge lost; no cleanup RPC sent. Restart SmileBASIC before another probe.';
     entries.write({phase: 'retained', step: 'decoder close', reason: 'bridge lost'});
+    transport?.abort();
+  }
+  if (!decoder && transport && !rpc.bridgeLost) {
+    try {
+      await transport.close();
+    } catch (error) {
+      failure ||= error;
+      entries.write({phase: 'error', step: 'TCP transport close', message: error.message});
+    }
   }
   record.finished = new Date().toISOString();
   record.verdict = failure ? 'FAIL' : 'PASS';
@@ -283,6 +330,7 @@ if (require.main === module) {
     clip: cli.option(args, '--clip'),
     stage: cli.option(args, '--stage'),
     jobs: Number(cli.option(args, '--jobs') || 1),
+    decoderData: cli.option(args, '--decoder-data') || 'rpc',
     output: cli.option(args, '--output') || undefined
   }).catch(error => {
     console.error(error);

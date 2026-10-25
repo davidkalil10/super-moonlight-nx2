@@ -184,3 +184,75 @@ test('fetch probe checks two jobs on one worker', async () => {
     await fs.rm(directory, {recursive: true, force: true});
   }
 });
+
+test('TCP first-job probe opens and closes the data transport', async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'hbl-tcp-first-job-'));
+  const clip = path.join(directory, 'two-idr.h264');
+  const unit = Buffer.from('0000016742001eab00000168ce0100000165abcd', 'hex');
+  await fs.writeFile(clip, Buffer.concat([unit, unit]));
+  const calls = [];
+  const transport = {
+    port: 42123,
+    async send(bytes) {
+      calls.push('transport-send:' + bytes.length);
+    },
+    abort() {
+      calls.push('transport-abort');
+    },
+    async close() {
+      calls.push('transport-close');
+    }
+  };
+  try {
+    const record = await main(directory, {
+      clip,
+      stage: 'fetch',
+      decoderData: 'tcp',
+      output: path.join(directory, 'output'),
+      sourceRevision: 'test-revision',
+      sessionRpc: {a: {session: 'test-session'}, host: '192.0.2.10'},
+      allocateSurface: async () => 0x70000000,
+      async openTransport({host}) {
+        calls.push('open:' + host);
+        return transport;
+      },
+      async create(options) {
+        assert.equal(options.transport.port, transport.port);
+        await options.transport.send(Buffer.from([1, 2, 3]));
+        return {
+          async configure() {
+            return {width: 128, height: 96};
+          },
+          async submit() {},
+          async receive() {
+            return {pts: '0'};
+          },
+          async startPersistent() {},
+          async processPersistent(unit) {
+            return {pts: String(unit.pts)};
+          },
+          async close() {
+            await options.transport.close();
+          }
+        };
+      }
+    });
+    assert.equal(record.verdict, 'PASS');
+    assert.equal(record.decoderData, 'tcp');
+    assert.deepEqual(calls, ['open:192.0.2.10', 'transport-send:3', 'transport-close']);
+    const journal = (await fs.readFile(path.join(directory, 'output', 'first-job.jsonl'), 'utf8'))
+      .trim()
+      .split('\n')
+      .map(JSON.parse);
+    assert.deepEqual(
+      journal.filter(row => row.step === 'TCP send').map(row => row.phase),
+      ['before', 'after']
+    );
+    assert.deepEqual(
+      journal.filter(row => row.step === 'TCP close').map(row => row.phase),
+      ['before', 'after']
+    );
+  } finally {
+    await fs.rm(directory, {recursive: true, force: true});
+  }
+});

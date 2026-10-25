@@ -74,13 +74,21 @@ async function fixture({
   const options = {
     args: ['--moonlight', 'host', 'Desktop'],
     directory,
-    rpc: {a: {session: 'test-session', protocol: 3}},
+    rpc: {a: {session: 'test-session', protocol: 3}, host: '192.0.2.10'},
     storage: {},
     helperPath: 'test-helper',
     sourceRevision: '049e2efe32799194a16c2f2f871025c1961aaade',
     width: 128,
     height: 96,
     fps: 30,
+    async createTransport({host}) {
+      events.push({type: 'create-transport', host});
+      return {
+        async close() {
+          events.push({type: 'close-transport'});
+        }
+      };
+    },
     async createSink() {
       return {
         async destination() {
@@ -129,6 +137,7 @@ async function fixture({
         },
         async close() {
           events.push({type: 'decoder-close'});
+          await config.transport?.close();
         }
       };
     },
@@ -311,6 +320,29 @@ test(
       assert.equal(f.events.filter(event => event.type === 'receive').length, 3);
       assert.equal(f.events.filter(event => event.type === 'start-persistent').length, 1);
       assert.equal(f.events.filter(event => event.type === 'begin-persistent').length, 1);
+    });
+  }
+);
+
+test(
+  'TCP data mode creates a separate transport for the persistent decoder',
+  {timeout: 5000},
+  async () => {
+    const f = await fixture({
+      units: [
+        {hex: accessUnit.toString('hex'), keyframe: true, pts: 1000},
+        {hex: accessUnit.toString('hex'), keyframe: false, pts: 2000}
+      ]
+    });
+    f.options.args.push('--decoder-worker', 'persistent', '--decoder-data', 'tcp');
+    await exercise(f, async () => {
+      await run(f.options);
+      assert.deepEqual(
+        f.events.filter(event => event.type === 'create-transport').map(event => event.host),
+        ['192.0.2.10']
+      );
+      assert.equal(f.events.filter(event => event.type === 'close-transport').length, 1);
+      assert.equal(f.events.filter(event => event.type === 'finish-persistent').length, 1);
     });
   }
 );

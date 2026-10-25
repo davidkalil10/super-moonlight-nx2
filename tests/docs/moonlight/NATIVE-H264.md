@@ -86,8 +86,14 @@ recorded wired session), so the frame rate tracks exchanges per frame.
 worker against an in-process console that walks every worker frame through a
 gadget-level emulator, and counts each wire exchange.
 
-`--decoder-worker` selects the path. The default is the host-driven worker; the
-persistent worker below is designed but not yet built.
+`--decoder-worker` selects the path. The default is the host-driven worker.
+`--decoder-worker persistent` keeps the decoder worker alive across frames and
+overlaps destination acquisition with decode. Add `--decoder-data tcp` to send
+access units through a second authenticated console connection. TCP mode needs
+a fresh launcher session created by this revision, because the session records
+the host address for that connection. The first frame still uses the host-driven
+path to establish the output layout. Check TCP with the staged first-job probe
+before a live stream.
 
 ### Host-driven (default)
 
@@ -118,13 +124,11 @@ as `six.cjs` does would carry the handle in the reply and make it 9.
 allocations (the module's six worker, the finite worker, and the module memory),
 none freed until the session ends; a resync builds a fresh set.
 
-### Persistent worker (`--decoder-worker persistent`) — designed, not yet built
+### Original persistent worker design
 
-Specified here but deliberately unimplemented: its body depends on decoder-event
-and GPU timings that cannot be settled off-console, and the mid-chain exit stage
-is a new ROP construct with no byte-level oracle (unlike chunk 1, which
-`six.cjs` proved). Build it only after the host-driven path is confirmed on the
-device (see the live-test plan). Target: ≤4 host exchanges per frame.
+The following records the original design. The implemented worker splits decode
+and output fetch into separately gated frames. TCP mode adds a receive frame and
+checks its byte count on the host before allowing decode to continue.
 
 **Shape.** A repeating frame built through `repeating.cjs` `frame`/`prepare`
 directly (so the program and its `verified` set stay reachable). Body:
@@ -275,8 +279,9 @@ Test in this order; do not raise fps until the step before it is clean.
    ```
 
 2. **Persistent at `--fps 30`**, then **persistent at `--fps 60`**, each adding
-   `--decoder-worker persistent` — only once that mode is built and the three
-   facts below hold at 30.
+   `--decoder-worker persistent`. For TCP data, first pass the staged fetch
+   probe in a fresh session, then add `--decoder-data tcp`. Raise the frame rate
+   only after the 30 fps run is stable.
 
 Watch the per-second stats line (`{"codec":"h264",...}`):
 
