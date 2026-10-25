@@ -40,10 +40,13 @@ async function create({
   workerMode = 'host',
   transport = null,
   persistentWorkerFactory = require('./persistent-decoder-worker.cjs').create,
+  splitWorkerFactory = null,
   log = () => {},
   cancelled = () => false
 }) {
-  if (!['host', 'persistent'].includes(workerMode)) throw Error('Unknown decoder worker mode');
+  if (!['host', 'persistent', 'split'].includes(workerMode))
+    throw Error('Unknown decoder worker mode');
+  if (workerMode === 'split' && !transport) throw Error('Split decoder needs a TCP transport');
   const module = JSON.parse(await fs.readFile(path.join(directory, 'compatibility-module.json')));
   for (const definition of Object.values(definitions)) {
     if (
@@ -93,6 +96,9 @@ async function create({
   let persistent = null;
   let persistentStarted = false;
   let persistentJob = null;
+  let split = null;
+  let splitStarted = false;
+  let splitInputJob = null;
 
   async function call(name, args) {
     const value = await api.call(name, args);
@@ -217,6 +223,7 @@ async function create({
 
   async function close() {
     if (closed) return;
+    if (split) await split.stop();
     if (persistent) await persistent.stop();
     closed = true;
     const errors = [];
@@ -250,6 +257,13 @@ async function create({
     if (!errors.length && persistent) {
       try {
         await persistent.finalize();
+      } catch (error) {
+        errors.push(error);
+      }
+    }
+    if (!errors.length && split) {
+      try {
+        await split.finalize();
       } catch (error) {
         errors.push(error);
       }
@@ -331,6 +345,19 @@ async function create({
         });
         await persistent.register();
       }
+      if (workerMode === 'split') {
+        split = await (splitWorkerFactory || require('./split-decoder-worker.cjs').create)({
+          rpc,
+          module,
+          functions: fn,
+          decoder: pointer('decoder'),
+          output: pointer('output'),
+          format: pointer('format'),
+          transport,
+          cancelled
+        });
+        await split.register();
+      }
       await beforeStart?.(pointer('decoder'));
       await success('start', [pointer('decoder')]);
       configured = running = true;
@@ -345,6 +372,91 @@ async function create({
 
     get lastStamp() {
       return lastStamp;
+    },
+
+    get splitDiagnostics() {
+      return split?.diagnostics ?? null;
+    },
+
+    async startSplit() {
+      if (workerMode !== 'split' || !running || closed || !sizing || !layout)
+        throw Error('Split decoder needs a completed host-driven first frame');
+      if (outputIndex >= 0 || pendingOutput) throw Error('Decoder output is still owned');
+      await split.start();
+      splitStarted = true;
+    },
+
+    async stageSplitInput(unit) {
+      if (!splitStarted || closed || !running || splitInputJob)
+        throw Error('Split decoder input is not ready');
+      if (
+        !Buffer.isBuffer(unit?.data) ||
+        !unit.data.length ||
+        !Number.isSafeInteger(unit.pts) ||
+        unit.pts < 0
+      )
+        throw Error('Invalid decoder access unit');
+      step = 'acquireInput';
+      if (pendingInput === null) pendingInput = await acquireInput();
+      const index = pendingInput;
+      step = 'cacheInput';
+      await cacheInput(index);
+      const {address, capacity} = inputs.get(index);
+      if (!Number.isSafeInteger(address) || address <= 0 || unit.data.length > capacity)
+        throw Error('H.264 access unit exceeds the native input buffer');
+      step = 'split-receive';
+      splitInputJob = await split.stageInput({
+        index,
+        length: unit.data.length,
+        pts: unit.pts,
+        inputAddress: address,
+        payload: unit.data
+      });
+      return splitInputJob;
+    },
+
+    async completeSplitInput(payload) {
+      if (!splitInputJob || closed || !running) throw Error('Split decoder has no staged input');
+      step = 'split-submit';
+      const completed = await split.completeInput(splitInputJob, payload);
+      splitInputJob = null;
+      pendingInput = completed.input.index >= 0 ? completed.input.index : null;
+      lastInput = completed.input;
+      step = 'idle';
+      return completed;
+    },
+
+    async submitSplit(unit) {
+      await this.stageSplitInput(unit);
+      return this.completeSplitInput();
+    },
+
+    async queueSplitOutput(job) {
+      if (!splitStarted || closed || !running) throw Error('Split decoder is not running');
+      step = 'split-output';
+      await split.queueOutput(job);
+    },
+
+    async waitSplitOutputAcquired(job) {
+      if (!splitStarted || closed || !running) throw Error('Split decoder is not running');
+      return split.waitForAcquired(job);
+    },
+
+    async finishSplitOutput(job, destination) {
+      if (!splitStarted || closed || !running) throw Error('Split decoder is not running');
+      const {bytes, alignment} = sizing;
+      if (
+        !Number.isSafeInteger(destination?.address) ||
+        !Number.isSafeInteger(destination.bytes) ||
+        destination.bytes < bytes ||
+        !alignment ||
+        destination.address % alignment
+      )
+        throw Error('Native output does not fit the aligned destination surface');
+      step = 'split-fetch';
+      const completed = await split.finishOutput(job, destination);
+      step = 'idle';
+      return {...layout, bytes, pts: completed.pts.toString(), format: 'nv12'};
     },
 
     async startPersistent({stage = null} = {}) {
