@@ -39,6 +39,7 @@ const MODEL = {
   sourceFps: 30
 };
 const PLAN_DECODE_MS = 13;
+const R3_DECODE_MS = 6.85;
 const STAGGERED = {retryWaitMs: 1, audioIntervalMs: 1000};
 
 // Step 3a device baselines at 1080p30, revision 8805924 (R1B-CONCURRENCY-RESULTS.md).
@@ -489,6 +490,7 @@ async function simulateStaggered({
   paced = true,
   presentHz = 60,
   retryRate = 0,
+  lag = 1,
   model = MODEL
 }) {
   const timing = {...model, vsyncMs: 1000 / presentHz};
@@ -530,8 +532,8 @@ async function simulateStaggered({
       const ready = Math.max(
         arrival,
         sent + timing.receiveMs,
-        frame ? decoded[frame - 1] : 0,
-        frame > 1 ? applied[frame - 2] : 0
+        frame >= lag ? decoded[frame - lag] : 0,
+        frame > lag ? applied[frame - lag - 1] : 0
       );
       if (ready > clock.now()) await clock.sleep(ready - clock.now());
       if (clock.now() >= nextAudio) {
@@ -548,9 +550,9 @@ async function simulateStaggered({
       await request();
       decoded[frame] = Math.max(clock.now(), decoderFree) + timing.decodeMs;
       decoderFree = decoded[frame];
-      if (frame) apply(frame - 1, clock.now() + timing.fetchMs);
+      if (frame >= lag) apply(frame - lag, clock.now() + timing.fetchMs);
       sent = clock.now();
-      if (frame) presented++;
+      if (frame >= lag) presented++;
     }
     const elapsed = clock.now() - started;
     const perFrame = value => Math.round((value / presented) * 100) / 100;
@@ -560,6 +562,7 @@ async function simulateStaggered({
       staggered: true,
       presentHz,
       retryRate,
+      lag,
       requestsPerFrame: perFrame(exchanges),
       bridgeMsPerFrame: perFrame(bridgeMs),
       msPerFrame: perFrame(elapsed),
@@ -578,10 +581,11 @@ async function simulate({
   linkedGates = false,
   presentHz,
   retryRate,
+  lag,
   model = MODEL
 }) {
   if (mode === 'staggered')
-    return simulateStaggered({frames, warmup, paced, presentHz, retryRate, model});
+    return simulateStaggered({frames, warmup, paced, presentHz, retryRate, lag, model});
   const paired = mode === 'paired';
   if (paired && (nativePublish || autoQueue || linkedGates))
     throw Error('The paired loop publishes from its own worker');
@@ -843,6 +847,21 @@ async function budget({frames = 120, model = MODEL} = {}) {
       }
     }
   }
+  const staggeredLag2 = {};
+  for (const decodeMs of [model.decodeMs, R3_DECODE_MS]) {
+    for (const retryRate of [0, 0.1, 0.3]) {
+      const options = {mode: 'staggered', frames, presentHz: 120, retryRate, lag: 2};
+      const rate = {...model, decodeMs, sourceFps: 120};
+      const paced = await simulate({...options, model: rate});
+      const free = await simulate({...options, model: rate, paced: false});
+      staggeredLag2[`120fps-120Hz-decode${decodeMs}-retry${retryRate * 100}`] = {
+        requestsPerFrame: paced.requestsPerFrame,
+        bridgeMsPerFrame: paced.bridgeMsPerFrame,
+        fps: paced.fps,
+        predictedFps: free.fps
+      };
+    }
+  }
   return {
     frames,
     model,
@@ -853,6 +872,7 @@ async function budget({frames = 120, model = MODEL} = {}) {
     modes,
     paired,
     staggered,
+    staggeredLag2,
     planDecodeMs: {decodeMs: PLAN_DECODE_MS, ...planDecode}
   };
 }

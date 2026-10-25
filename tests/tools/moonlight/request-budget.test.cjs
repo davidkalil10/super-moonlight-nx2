@@ -172,8 +172,23 @@ test('staggered 120 fps needs a 120 Hz present', async () => {
   assert.ok(fast.fps < 120, "one decode in flight caps the loop below 120 fps");
 });
 
+test('staggered lag 2 keeps two decodes in flight', async () => {
+  const model = {...MODEL, sourceFps: 120};
+  const one = await simulate({mode: 'staggered', frames: 240, presentHz: 120, model});
+  const two = await simulate({mode: 'staggered', frames: 240, presentHz: 120, lag: 2, model});
+  assert.equal(two.lag, 2);
+  assert.ok(two.requestsPerFrame <= BUDGET.staggered);
+  assert.ok(two.fps > one.fps * 1.4, `lag 2 gave ${two.fps} fps against ${one.fps}`);
+  assert.ok(two.fps >= 110, `lag 2 at 120 Hz present gave ${two.fps} fps`);
+});
+
 test('budget reports the staggered matrix', async () => {
   const {staggered} = await budget({frames: 60});
   assert.equal(Object.keys(staggered).length, 12);
   assert.equal(staggered['60fps-60Hz-retry0'].requestsPerFrame <= BUDGET.staggered, true);
+});
+
+test('budget reports lag 2 at both decode times', async () => {
+  const {staggeredLag2} = await budget({frames: 60});
+  assert.equal(Object.keys(staggeredLag2).length, 6);
 });
