@@ -52,6 +52,7 @@ async function run({
   createDecoder = require('./native-decoder.cjs').create,
   createTransport = require('./native-tcp.cjs').create,
   createSink = require('./native-sink.cjs').create,
+  createSocketAudio = require('./socket-audio-source.cjs').create,
   spawnProcess = spawn
 }) {
   const at = args.indexOf('--moonlight');
@@ -59,6 +60,8 @@ async function run({
     app = args[at + 2];
   if (at < 0 || !host || !app) throw Error('Native H.264 requires --moonlight HOST APP');
   const audio = !args.includes('--no-audio');
+  const socketAudio = args.includes('--socket-audio');
+  if (socketAudio && !audio) throw Error('--socket-audio cannot be combined with --no-audio');
   const workerMode = args.includes('--split-decoder') ? 'split' : 'persistent';
   const nativePublish = args.includes('--native-publish');
   const autoOutputQueue = args.includes('--auto-output-queue');
@@ -75,11 +78,17 @@ async function run({
   const warmup = cli.number(args, '--warmup', 3);
   const queue = cli.number(args, '--queue', 3);
   const inputHz = cli.number(args, '--input-hz', 60);
-  const audioFrames = cli.number(args, '--audio-frames', rpc.a.protocol >= 3 ? 960 : 1920);
+  const audioFrames = cli.number(
+    args,
+    '--audio-frames',
+    socketAudio ? 1920 : rpc.a.protocol >= 3 ? 960 : 1920
+  );
   if (!Number.isInteger(inputHz) || inputHz < 10 || inputHz > 120)
     throw Error('--input-hz takes 10 to 120');
   if (!Number.isInteger(audioFrames) || audioFrames < 240 || audioFrames % 240)
     throw Error('--audio-frames takes a multiple of 240');
+  if (socketAudio && audioFrames > 3840)
+    throw Error('--audio-frames takes up to 3840 with --socket-audio');
   if (!Number.isInteger(queue) || queue < 1 || queue > 16)
     throw Error('--queue takes 1 to 16 units');
   if (duration !== null && !(duration > 0)) throw Error('--duration takes seconds');
@@ -124,6 +133,8 @@ async function run({
   let stopping = false;
   let decoder = null;
   let sink = null;
+  let soundSource = null;
+  let socketAudioReport = null;
   let helper = null;
   let reader = null;
   let statusLines = null;
@@ -170,6 +181,7 @@ async function run({
     reader?.close();
     helper?.stdin.end();
     helper?.kill('SIGINT');
+    soundSource?.halt();
   }
 
   const onInterrupt = () => stop('SIGINT');
@@ -262,7 +274,16 @@ async function run({
       });
       children.push(child);
     }
-    if (audio) {
+    if (socketAudio) {
+      soundSource = await createSocketAudio({
+        rpc,
+        host: rpc.host,
+        bufferBytes: audioFrames * 4,
+        onError: error => reader.fail(error)
+      });
+      soundSource.attach(helper.stdio[3]);
+      log({event: 'socket-audio', started: true, bufferBytes: audioFrames * 4});
+    } else if (audio) {
       const child = spawnProcess(
         process.execPath,
         [
@@ -499,6 +520,26 @@ async function run({
     stop('cleanup');
     statusLines?.close();
     const errors = [];
+    if (soundSource) {
+      socketAudioReport = await soundSource.close();
+      log({event: 'socket-audio', ...socketAudioReport});
+      await fs
+        .writeFile(
+          path.join(directory, `moonlight-audio-${Date.now()}.json`),
+          JSON.stringify(
+            {
+              session: rpc.a.session,
+              mode: 'socket',
+              completed: new Date().toISOString(),
+              ...socketAudioReport
+            },
+            null,
+            2
+          )
+        )
+        .catch(error => errors.push(error));
+      if (socketAudioReport.retainedForSafety) errors.push(Error(socketAudioReport.error));
+    }
     try {
       await decoder?.close();
     } catch (error) {
@@ -519,12 +560,14 @@ async function run({
     inputHz,
     audioFrames,
     audio,
+    ...(socketAudio ? {socketAudio: socketAudioReport} : {}),
     input: !args.includes('--no-input'),
     ...scoring.summarize(rows, {warmup}),
     expect,
     stopReason
   };
   const result = scoring.verdict(summary, expect);
+  if (socketAudioReport?.error) result.failures.push('socket audio: ' + socketAudioReport.error);
   if (duration !== null && stopReason !== 'duration')
     result.failures.push('ended before duration: ' + stopReason);
   result.pass = result.failures.length === 0;
