@@ -32,7 +32,7 @@ const SHORT = 2;
 const AUTO_CLEAR = 1;
 const READ = 0x586fb0;
 const DECODE_PROBES = new Set(['gate', 'dispatch', 'send', 'wait', 'acquire']);
-const FETCH_PROBES = new Set(['setData', 'getOutput', 'release', 'input', 'done']);
+const FETCH_PROBES = new Set(['setData', 'getOutput', 'release', 'input', 'done', 'restore']);
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const status = value => Number(BigInt.asUintN(32, value));
 
@@ -108,8 +108,11 @@ async function create({
   let uncertainStart = false;
   let probeStage = null;
   const gateFrame = base + 0x10000;
+  const gateSnapshot = base + 0x80000;
   const decodeFrame = base + 0x110000;
+  const decodeSnapshot = base + 0x180000;
   const fetchFrame = base + 0x210000;
+  const fetchSnapshot = base + 0x280000;
   const exitFrame = base + 0x350000;
 
   function frame(address, calls, results = {}) {
@@ -231,36 +234,63 @@ async function create({
           function: functions.acquireInput,
           args: [decoder, event(FETCH_RESULTS + 32), event(FETCH_RESULTS + 36), 0]
         },
-        {function: copy, args: [event(FETCH_RESULTS + 40), event(JOB), 4, 0]},
-        {function: sync.signalLightEvent, args: [event(DONE), 0, 0, 0]}
+        {function: copy, args: [event(FETCH_RESULTS + 40), event(JOB), 4, 0]}
       ];
-      const fetchLengths = {setData: 1, getOutput: 2, release: 3, input: 4, done: 6};
+      const fetchLengths = {setData: 1, getOutput: 2, release: 3, input: 4};
       const fetchCount = fetchLengths[stage] ?? fetchCalls.length;
+      const restoreCalls = [
+        {function: copy, args: [gateFrame, gateSnapshot, gate.length, 0]},
+        {function: copy, args: [decodeFrame, decodeSnapshot, decode.length, 0]},
+        {function: copy, args: [fetchFrame, fetchSnapshot, 0, 0]}
+      ];
       const fetchResults = [
         FETCH_RESULTS,
         FETCH_RESULTS + 8,
         FETCH_RESULTS + 16,
         FETCH_RESULTS + 24
       ];
-      const fetch = frame(
-        fetchFrame,
-        [
-          ...fetchCalls.slice(0, fetchCount),
-          ...(FETCH_PROBES.has(stage)
-            ? [{function: sync.signalLightEvent, args: [event(PROBE_DONE), 0, 0, 0]}]
-            : [{function: jump, args: [gateFrame, 1, 0, 0]}])
-        ],
-        Object.fromEntries(
-          fetchResults.slice(0, Math.min(fetchCount, 4)).map((slot, i) => [i, slot])
-        )
+      const fetchBody = [
+        ...fetchCalls.slice(0, fetchCount),
+        ...(!FETCH_PROBES.has(stage) || stage === 'restore' ? restoreCalls : []),
+        ...(fetchCount === fetchCalls.length
+          ? [{function: sync.signalLightEvent, args: [event(DONE), 0, 0, 0]}]
+          : []),
+        ...(FETCH_PROBES.has(stage)
+          ? [{function: sync.signalLightEvent, args: [event(PROBE_DONE), 0, 0, 0]}]
+          : [{function: jump, args: [gateFrame, 1, 0, 0]}])
+      ];
+      const resultSlots = Object.fromEntries(
+        fetchResults.slice(0, Math.min(fetchCount, 4)).map((slot, i) => [i, slot])
       );
+      let fetch = frame(fetchFrame, fetchBody, resultSlots);
+      if (!FETCH_PROBES.has(stage) || stage === 'restore') {
+        restoreCalls[2].args[2] = fetch.length;
+        fetch = frame(fetchFrame, fetchBody, resultSlots);
+      }
+      if (
+        gate.length > gateSnapshot - gateFrame ||
+        decode.length > decodeSnapshot - decodeFrame ||
+        fetch.length > fetchSnapshot - fetchFrame ||
+        fetchSnapshot + fetch.length > exitFrame
+      )
+        throw Error('Persistent decoder frame overlaps its snapshot');
       const stop = Buffer.alloc(0xb0);
       stop.writeBigUInt64LE(BigInt(sdk + CODE.exit.offset), 0x58);
       stop.writeBigUInt64LE(BigInt(base + 0x370000), 0x68);
       await rpc.write(gateFrame, gate);
+      await rpc.write(gateSnapshot, gate);
       await rpc.write(decodeFrame, decode);
+      await rpc.write(decodeSnapshot, decode);
       await rpc.write(fetchFrame, fetch);
+      await rpc.write(fetchSnapshot, fetch);
       await rpc.write(exitFrame, stop);
+      for (const [address, bytes] of [
+        [gateSnapshot, gate],
+        [decodeSnapshot, decode],
+        [fetchSnapshot, fetch]
+      ])
+        if (!(await rpc.read(address, bytes.length)).equals(bytes))
+          throw Error('Persistent decoder frame snapshot readback differs');
       const selectors = Buffer.alloc(16);
       selectors.writeBigUInt64LE(BigInt(decodeFrame), 0);
       selectors.writeBigUInt64LE(BigInt(fetchFrame), 8);
@@ -388,7 +418,7 @@ async function create({
         if (
           acquired.readUInt32LE(40) === active &&
           completed.readUInt32LE() !== active &&
-          !['release', 'input', 'done'].includes(probeStage) &&
+          !['release', 'input', 'done', 'restore'].includes(probeStage) &&
           status(acquired.readBigUInt64LE(8)) === 0 &&
           acquired.readInt32LE(16) >= 0
         )
