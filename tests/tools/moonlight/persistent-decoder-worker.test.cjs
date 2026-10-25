@@ -158,7 +158,7 @@ test('persistent decoder uses separate acquire and fetch gates, then joins', asy
   await worker.finalize();
   assert.equal(
     f.calls.filter(call => call.address === SDK + sync.finalizeLightEvent.offset).length,
-    4
+    5
   );
   assert.equal(f.calls.filter(call => call.address === SDK + sync.finalizeEvent.offset).length, 1);
 });
@@ -231,4 +231,31 @@ test('an uncertain thread creation retains decoder resources', async () => {
   await assert.rejects(worker.start(), /Bridge dropped/);
   await assert.rejects(worker.stop(), /creation is uncertain/);
   await assert.rejects(worker.finalize(), /events retained/);
+});
+
+test('diagnostic stages stop after their selected first-job call', async () => {
+  for (const stage of ['gate', 'dispatch', 'send', 'wait', 'acquire']) {
+    const f = fixture();
+    const worker = await create({
+      rpc: f.rpc,
+      module: f.module,
+      functions: f.functions,
+      decoder,
+      output,
+      format
+    });
+    await worker.register();
+    await worker.start({stage});
+    const result = await worker.run({
+      index: 1,
+      length: 4096,
+      pts: 90000,
+      destination: {address: 0x72000000, bytes: 0x400000}
+    });
+    assert.equal(result.probe.stage, stage);
+    assert.equal(f.calls.filter(call => call.combined).length, 1);
+    assert.equal(f.calls.filter(call => call.paired).length, 1);
+    await worker.stop();
+    await worker.finalize();
+  }
 });

@@ -1,0 +1,82 @@
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs/promises');
+const os = require('node:os');
+const path = require('node:path');
+const {main, STAGES} = require('../tools/probe-persistent-first-job.cjs');
+
+test('first-job probe journals each stage and closes the decoder', async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'hbl-first-job-'));
+  const clip = path.join(directory, 'two-idr.h264');
+  const unit = Buffer.from('0000016742001eab00000168ce0100000165abcd', 'hex');
+  await fs.writeFile(clip, Buffer.concat([unit, unit]));
+  const calls = [];
+  try {
+    const result = await main(directory, {
+      clip,
+      stage: 'send',
+      output: path.join(directory, 'output'),
+      sourceRevision: 'test-revision',
+      sessionRpc: {a: {session: 'test-session'}},
+      allocateSurface: async (_, bytes) => {
+        assert.equal(bytes, 20480);
+        return 0x70000000;
+      },
+      async create(options) {
+        assert.equal(options.workerMode, 'persistent');
+        return {
+          async configure() {
+            calls.push('configure');
+            return {width: 128, height: 96};
+          },
+          async submit(unit) {
+            calls.push('submit:' + unit.pts);
+          },
+          async receive() {
+            calls.push('receive');
+            return {pts: '0'};
+          },
+          async startPersistent(options) {
+            calls.push('start:' + options.stage);
+          },
+          async processPersistent(unit) {
+            calls.push('process:' + unit.pts);
+            return {
+              probe: {
+                stage: 'send',
+                sendStatus: 0,
+                acquireStatus: 0,
+                outputIndex: -1,
+                completedSequence: 0
+              }
+            };
+          },
+          async close() {
+            calls.push('close');
+          }
+        };
+      }
+    });
+    assert.equal(result.verdict, 'PASS');
+    assert.deepEqual(calls, [
+      'configure',
+      'submit:0',
+      'receive',
+      'start:send',
+      'process:1',
+      'close'
+    ]);
+    const journal = (await fs.readFile(path.join(directory, 'output', 'first-job.jsonl'), 'utf8'))
+      .trim()
+      .split('\n')
+      .map(JSON.parse);
+    assert.deepEqual(
+      journal.filter(row => row.step === 'worker first job').map(row => row.phase),
+      ['before', 'after']
+    );
+    assert.equal(journal.at(-1).step, 'decoder close');
+    assert.deepEqual(STAGES, ['gate', 'dispatch', 'send', 'wait', 'acquire', 'fetch']);
+  } finally {
+    await fs.rm(directory, {recursive: true, force: true});
+  }
+});
