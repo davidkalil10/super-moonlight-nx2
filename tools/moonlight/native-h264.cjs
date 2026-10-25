@@ -74,7 +74,14 @@ async function run({
   const duration = cli.number(args, '--duration', null);
   const warmup = cli.number(args, '--warmup', 3);
   const queue = cli.number(args, '--queue', 3);
-  if (!Number.isInteger(queue) || queue < 1 || queue > 16) throw Error('--queue takes 1 to 16 units');
+  const inputHz = cli.number(args, '--input-hz', 60);
+  const audioFrames = cli.number(args, '--audio-frames', rpc.a.protocol >= 3 ? 960 : 1920);
+  if (!Number.isInteger(inputHz) || inputHz < 10 || inputHz > 120)
+    throw Error('--input-hz takes 10 to 120');
+  if (!Number.isInteger(audioFrames) || audioFrames < 240 || audioFrames % 240)
+    throw Error('--audio-frames takes a multiple of 240');
+  if (!Number.isInteger(queue) || queue < 1 || queue > 16)
+    throw Error('--queue takes 1 to 16 units');
   if (duration !== null && !(duration > 0)) throw Error('--duration takes seconds');
   if (!Number.isInteger(warmup) || warmup < 0) throw Error('--warmup takes whole seconds');
   if (args.includes('--expect') && !/^[a-z]/i.test(cli.option(args, '--expect') ?? ''))
@@ -243,7 +250,7 @@ async function run({
     if (!args.includes('--no-input')) {
       const child = spawnProcess(
         process.execPath,
-        [path.join(__dirname, 'input-feeder.cjs'), directory],
+        [path.join(__dirname, 'input-feeder.cjs'), directory, '--hz', String(inputHz)],
         {
           stdio: ['ignore', helper.stdin, 'inherit']
         }
@@ -262,7 +269,7 @@ async function run({
           path.join(__dirname, 'audio-stream.cjs'),
           directory,
           '--buffer-frames',
-          rpc.a.protocol >= 3 ? '960' : '1920',
+          String(audioFrames),
           '--queue',
           '2',
           '--prime',
@@ -506,7 +513,17 @@ async function run({
     process.removeListener('SIGTERM', onTerminate);
     if (errors.length) throw new AggregateError(errors, 'Native H.264 shutdown failed');
   }
-  const summary = {workerMode, queue, ...scoring.summarize(rows, {warmup}), expect, stopReason};
+  const summary = {
+    workerMode,
+    queue,
+    inputHz,
+    audioFrames,
+    audio,
+    input: !args.includes('--no-input'),
+    ...scoring.summarize(rows, {warmup}),
+    expect,
+    stopReason
+  };
   const result = scoring.verdict(summary, expect);
   if (duration !== null && stopReason !== 'duration')
     result.failures.push('ended before duration: ' + stopReason);

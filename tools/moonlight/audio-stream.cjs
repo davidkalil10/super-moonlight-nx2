@@ -28,12 +28,14 @@ const check = (value, message) => {
   if (!value) throw Error(message);
 };
 
-function resolver(rpc) {
+function resolver(rpc, counted = () => {}) {
   const resolve = sdkResolver(rpc, {ambiguous: 'Ambiguous audio symbol '});
   async function call(name, ...args) {
+    counted();
     return (await rpc.callAddress(await resolve(name), args, 2)).result;
   }
   call.writeAndCall = async (address, bytes, name, ...args) => {
+    counted();
     const target = await resolve(name);
     if (rpc.writeAndCall) return (await rpc.writeAndCall(address, bytes, target, args)).result;
     await rpc.write(address, bytes);
@@ -107,7 +109,8 @@ function stream(options) {
     overruns: 0,
     droppedBytes: 0,
     tail: 0,
-    receivedBytes: 0
+    receivedBytes: 0,
+    calls: 0
   };
 
   const pending = new ByteQueue();
@@ -146,7 +149,7 @@ function stream(options) {
   }
 
   async function run() {
-    const call = resolver(rpc);
+    const call = resolver(rpc, () => stats.calls++);
 
     const alloc = 65536 + DESCRIPTOR_COUNT * SLOT_STRIDE;
     base = await allocate(rpc, alloc, {
