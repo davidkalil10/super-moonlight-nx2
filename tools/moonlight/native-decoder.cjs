@@ -41,6 +41,7 @@ async function create({
   transport = null,
   publication = null,
   autoQueue = false,
+  linkedGates = false,
   persistentWorkerFactory = require('./persistent-decoder-worker.cjs').create,
   splitWorkerFactory = null,
   log = () => {},
@@ -358,6 +359,7 @@ async function create({
           transport,
           publication,
           autoQueue,
+          linkedGates,
           cancelled
         });
         await split.register();
@@ -432,6 +434,23 @@ async function create({
       return completed;
     },
 
+    async verifySplitReceive(payload, pairedOutput) {
+      if (!splitInputJob || closed || !running) throw Error('Split decoder has no staged input');
+      step = 'split-receive-check';
+      return split.verifyReceived(splitInputJob, payload, pairedOutput);
+    },
+
+    async finishSplitInputAfterLinkedGate() {
+      if (!splitInputJob || closed || !running) throw Error('Split decoder has no staged input');
+      step = 'split-submit';
+      const completed = await split.finishInputAfterLinkedGate(splitInputJob);
+      splitInputJob = null;
+      pendingInput = completed.input.index >= 0 ? completed.input.index : null;
+      lastInput = completed.input;
+      step = 'idle';
+      return completed;
+    },
+
     async submitSplit(unit) {
       await this.stageSplitInput(unit, {sendFirst: true});
       return this.completeSplitInput();
@@ -463,6 +482,28 @@ async function create({
       const completed = await split.finishOutput(job, destination, layout, nextJob);
       step = 'idle';
       return {...layout, bytes, pts: completed.pts.toString(), format: 'nv12'};
+    },
+
+    async openSplitOutputFetch(job, destination, nextJob) {
+      if (!splitStarted || closed || !running) throw Error('Split decoder is not running');
+      const {bytes, alignment} = sizing;
+      if (
+        !Number.isSafeInteger(destination?.address) ||
+        !Number.isSafeInteger(destination.bytes) ||
+        destination.bytes < bytes ||
+        !alignment ||
+        destination.address % alignment
+      )
+        throw Error('Native output does not fit the aligned destination surface');
+      step = 'split-fetch';
+      return split.openOutputFetch(job, destination, layout, nextJob);
+    },
+
+    async completeSplitOutputFetch(job) {
+      if (!splitStarted || closed || !running) throw Error('Split decoder is not running');
+      const completed = await split.completeOutputFetch(job);
+      step = 'idle';
+      return {...layout, bytes: sizing.bytes, pts: completed.pts.toString(), format: 'nv12'};
     },
 
     async startPersistent({stage = null} = {}) {

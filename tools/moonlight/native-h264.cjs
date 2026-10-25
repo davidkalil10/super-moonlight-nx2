@@ -62,10 +62,13 @@ async function run({
   const workerMode = args.includes('--split-decoder') ? 'split' : 'persistent';
   const nativePublish = args.includes('--native-publish');
   const autoOutputQueue = args.includes('--auto-output-queue');
+  const linkedGates = args.includes('--linked-gates');
   if (nativePublish && workerMode !== 'split')
     throw Error('--native-publish requires --split-decoder');
   if (autoOutputQueue && !nativePublish)
     throw Error('--auto-output-queue requires --native-publish');
+  if (linkedGates && !autoOutputQueue)
+    throw Error('--linked-gates requires --auto-output-queue');
   const cli = require('../../sdk/cli.cjs');
   const scoring = require('./run-summary.cjs');
   const duration = cli.number(args, '--duration', null);
@@ -182,6 +185,7 @@ async function run({
           transport,
           publication: nativePublish ? sink.workerPublication : null,
           autoQueue: autoOutputQueue,
+          linkedGates,
           log,
           cancelled
         });
@@ -357,6 +361,27 @@ async function run({
       try {
         if (workerStarted && workerMode === 'split') {
           enter('split-input');
+          if (linkedGates && pendingSplitOutput) {
+            const staged = await decoder.stageSplitInput(unit, {sendFirst: true});
+            stats.submitted++;
+            const [, acquired] = await Promise.all([
+              decoder.verifySplitReceive(undefined, pendingSplitOutput),
+              decoder.waitSplitOutputAcquired(pendingSplitOutput)
+            ]);
+            enter('destination');
+            const destination = await sink.workerDestination(acquired.presentation);
+            enter('split-output');
+            await decoder.openSplitOutputFetch(pendingSplitOutput, destination, staged);
+            const [current] = await Promise.all([
+              decoder.finishSplitInputAfterLinkedGate(),
+              decoder.completeSplitOutputFetch(pendingSplitOutput)
+            ]);
+            stats.decoded++;
+            stats.presented++;
+            pendingSplitOutput = current;
+            enter('read');
+            continue;
+          }
           const current = await decoder.submitSplit(unit);
           stats.submitted++;
           if (pendingSplitOutput) {

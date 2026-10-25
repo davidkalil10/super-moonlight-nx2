@@ -47,7 +47,11 @@ const STATUS_FIELDS = {
     sequence: 24,
     bytes: PRESENT_RESULTS + 8 - INPUT_RESULTS
   },
-  acquire: {offset: OUTPUT_RESULTS - RECEIVE_RESULTS, sequence: 32, bytes: 36},
+  acquire: {
+    offset: OUTPUT_RESULTS - RECEIVE_RESULTS,
+    sequence: 32,
+    bytes: PRESENT_RESULTS + 8 - OUTPUT_RESULTS
+  },
   fetch: {offset: FETCH_RESULTS - RECEIVE_RESULTS, sequence: 24, bytes: 28}
 };
 const EXPECTED_DECODE_MS = 12;
@@ -63,6 +67,7 @@ async function create({
   transport,
   publication = null,
   autoQueue = false,
+  linkedGates = false,
   cancelled = () => false,
   pollTimeoutMs = 5000,
   stopTimeoutMs = 5000
@@ -86,6 +91,7 @@ async function create({
   )
     throw Error('Invalid split decoder publication target');
   if (autoQueue && !publication) throw Error('Automatic output queue needs worker publication');
+  if (linkedGates && !autoQueue) throw Error('Linked gates need automatic output queue');
 
   const sdk = rpc.a.sdk;
   const sync = {};
@@ -185,7 +191,9 @@ async function create({
     firstSnapshot: base + 0x180000,
     second: base + 0x210000,
     secondSnapshot: base + 0x280000,
-    exit: base + 0x350000
+    third: base + 0x300000,
+    thirdSnapshot: base + 0x380000,
+    exit: base + 0x3f0000
   });
   const inputAt = locations(inputBase);
   const outputAt = locations(outputBase);
@@ -280,13 +288,17 @@ async function create({
       [at.firstSnapshot, frames.first],
       [at.second, frames.second],
       [at.secondSnapshot, frames.second],
+      ...(frames.third
+        ? [[at.third, frames.third], [at.thirdSnapshot, frames.third]]
+        : []),
       [at.exit, stop]
     ])
       await rpc.write(destination, bytes);
     for (const [snapshot, bytes] of [
       [at.gateSnapshot, frames.gate],
       [at.firstSnapshot, frames.first],
-      [at.secondSnapshot, frames.second]
+      [at.secondSnapshot, frames.second],
+      ...(frames.third ? [[at.thirdSnapshot, frames.third]] : [])
     ])
       if (!(await rpc.read(snapshot, bytes.length)).equals(bytes))
         throw Error('Split decoder frame snapshot readback differs');
@@ -295,6 +307,7 @@ async function create({
   async function acquiredOutput(job) {
     if (!job || activeOutput !== job || !video.thread || video.joined)
       throw Error('Split output job is not ready');
+    if (job.acquired) return job.acquired;
     const acquired = await waitStatus(
       'acquire',
       job.sequence,
@@ -309,7 +322,170 @@ async function create({
         result: value
       });
     }
-    return {index: outputIndex, pts: acquired.readBigUInt64LE(16)};
+    job.acquired = {
+      index: outputIndex,
+      pts: acquired.readBigUInt64LE(16),
+      ...(linkedGates
+        ? {
+            presentation: {
+              current: acquired.readUInt32LE(PRESENT_RESULTS - OUTPUT_RESULTS),
+              applied: acquired.readUInt32LE(PRESENT_RESULTS + 4 - OUTPUT_RESULTS)
+            }
+          }
+        : {})
+    };
+    return job.acquired;
+  }
+
+  async function verifyReceived(job, payload = job?.payload, pairedOutput = null) {
+    if (!job || activeInput !== job || !input.thread || input.joined)
+      throw Error('Split input job is not ready');
+    if (job.received) return job;
+    if (!job.sent) {
+      await transport.send(payload);
+      job.sent = true;
+    }
+    const readyAt = pairedOutput
+      ? Math.max(Date.now(), (pairedOutput.decodeGateAt ?? 0) + EXPECTED_DECODE_MS)
+      : Date.now();
+    if (pairedOutput && (!linkedGates || activeOutput !== pairedOutput))
+      throw Error('Split receive has no paired output job');
+    const received = await waitStatus('receive', job.sequence, 'TCP receive', readyAt);
+    const count = received.readBigInt64LE(0);
+    const receivedSequence = received.readUInt32LE(8);
+    if (count !== BigInt(job.length) || receivedSequence !== job.sequence)
+      throw Error(
+        `Native TCP receive returned ${count}/${job.length} bytes and sequence ${receivedSequence}/${job.sequence}`
+      );
+    job.received = true;
+    return job;
+  }
+
+  async function finishInput(job) {
+    if (!job || activeInput !== job || !input.thread || input.joined || !job.received)
+      throw Error('Split input job is not ready');
+    const completed = await waitStatus('input', job.sequence, 'input submit');
+    if (completed.readUInt32LE(24) !== job.sequence)
+      throw Error('Split decoder submitted the wrong access unit');
+    const sent = status(completed.readBigUInt64LE(0));
+    if (sent)
+      throw Object.assign(Error('movie::sendInput returned 0x' + sent.toString(16)), {
+        result: sent
+      });
+    const inputStatus = status(completed.readBigUInt64LE(8));
+    const nextIndex = completed.readInt32LE(16);
+    if (inputStatus && !(nextIndex < 0 && [0x100e, 0x1011].includes(inputStatus)))
+      throw Object.assign(Error('Decoder input queue returned 0x' + inputStatus.toString(16)), {
+        result: inputStatus
+      });
+    activeInput = null;
+    return Object.assign(job, {
+      input: {status: inputStatus, index: nextIndex},
+      presentation: publication
+        ? {
+            current: completed.readUInt32LE(PRESENT_RESULTS - INPUT_RESULTS),
+            applied: completed.readUInt32LE(PRESENT_RESULTS + 4 - INPUT_RESULTS)
+          }
+        : null
+    });
+  }
+
+  async function openOutputFetch(job, destination, frame, nextJob) {
+    if (!job || activeOutput !== job || !video.thread || video.joined)
+      throw Error('Split output job is not ready');
+    if (
+      !Number.isSafeInteger(destination?.address) ||
+      destination.address <= 0 ||
+      !Number.isSafeInteger(destination.bytes) ||
+      destination.bytes <= 0
+    )
+      throw Error('Invalid split decoder output destination');
+    if (
+      publication &&
+      (!frame ||
+        ![0, 1, 2].includes(destination.index) ||
+        destination.address !== publication.mapped + ring.frameOffset(destination.index) ||
+        destination.bytes < ring.FRAME_BYTES ||
+        !Number.isInteger(destination.sequence) ||
+        destination.sequence < 1 ||
+        destination.sequence > 0xffffffff ||
+        destination.color !== publication.color ||
+        !Number.isInteger(frame.width) ||
+        frame.width < 2 ||
+        frame.width > 1920 ||
+        !Number.isInteger(frame.height) ||
+        frame.height < 2 ||
+        frame.height > 1088 ||
+        !Number.isInteger(frame.stride) ||
+        frame.stride < frame.width ||
+        !Number.isInteger(frame.sliceHeight) ||
+        frame.sliceHeight < frame.height ||
+        (frame.stride * frame.sliceHeight * 3) / 2 > ring.FRAME_BYTES)
+    )
+      throw Error('Invalid split decoder publication metadata');
+    if (
+      nextJob &&
+      (!autoQueue ||
+        !Number.isInteger(nextJob.sequence) ||
+        nextJob.sequence !== job.sequence + 1 ||
+        nextJob.sequence > 0xffffffff ||
+        (linkedGates && (!nextJob.received || activeInput !== nextJob)))
+    )
+      throw Error('Invalid next split output job');
+    const acquired = await acquiredOutput(job);
+    const destinationBytes = Buffer.alloc(
+      linkedGates ? 72 : autoQueue ? 64 : publication ? 48 : 16
+    );
+    destinationBytes.writeBigUInt64LE(BigInt(destination.address), 0);
+    destinationBytes.writeBigUInt64LE(BigInt(destination.bytes), 8);
+    if (publication) {
+      const fields = [
+        destination.index,
+        frame.width,
+        frame.height,
+        frame.stride,
+        frame.sliceHeight,
+        destination.color
+      ];
+      fields.push(ring.nativeChecksum(destination.sequence, fields), destination.sequence);
+      fields.forEach((value, word) => destinationBytes.writeUInt32LE(value, 16 + word * 4));
+    }
+    if (autoQueue) {
+      destinationBytes.writeUInt32LE(nextJob?.sequence ?? 0, 48);
+      destinationBytes.writeBigUInt64LE(BigInt(nextJob ? outputAt.first : outputAt.gate), 56);
+    }
+    if (linkedGates)
+      destinationBytes.writeBigUInt64LE(BigInt(nextJob ? outputAt.third : outputAt.second), 64);
+    await rpc.writeAndCall(address(OUTPUT_JOB + 8), destinationBytes, sync.signalLightEvent, [
+      address(FETCH_GATE)
+    ]);
+    job.nextOutput = nextJob;
+    job.fetchOpened = true;
+    if (linkedGates && nextJob) {
+      nextJob.decodeGateAt = Date.now();
+      decodeGateSignals++;
+    }
+    return acquired;
+  }
+
+  async function completeOutputFetch(job) {
+    if (!job || activeOutput !== job || !job.fetchOpened)
+      throw Error('Split output fetch is not open');
+    const fetched = await waitStatus('fetch', job.sequence, 'output fetch');
+    if (fetched.readUInt32LE(24) !== job.sequence)
+      throw Error('Split decoder fetched the wrong access unit');
+    activeOutput = autoQueue ? job.nextOutput : null;
+    for (const [name, offset] of [
+      ['getOutput', 8],
+      ['releaseOutput', 16]
+    ]) {
+      const value = status(fetched.readBigUInt64LE(offset));
+      if (value)
+        throw Object.assign(Error('movie::' + name + ' returned 0x' + value.toString(16)), {
+          result: value
+        });
+    }
+    return {sequence: job.sequence, pts: job.acquired.pts};
   }
 
   return {
@@ -416,16 +592,39 @@ async function create({
             ]
           },
           {function: copy, args: [address(OUTPUT_RESULTS + 32), address(OUTPUT_JOB), 4, 0]},
+          ...(linkedGates
+            ? [
+                {
+                  function: copy,
+                  args: [address(PRESENT_RESULTS), publication.mapped + ring.CONTROL.current, 4, 0]
+                },
+                {
+                  function: copy,
+                  args: [
+                    address(PRESENT_RESULTS + 4),
+                    publication.mapped + ring.CONTROL.nativeApplied,
+                    4,
+                    0
+                  ]
+                }
+              ]
+            : []),
           {function: sync.signalLightEvent, args: [address(ACQUIRED), 0, 0, 0]},
           {function: sync.waitLightEvent, args: [address(FETCH_GATE), 0, 0, 0]},
-          {function: jump, args: [{u64: address(FETCH_DISPATCH)}, 1, 0, 0]}
+          {
+            function: jump,
+            args: [{u64: address(linkedGates ? OUTPUT_JOB + 72 : FETCH_DISPATCH)}, 1, 0, 0]
+          }
         ],
         {1: OUTPUT_RESULTS}
       );
       const outputRestore = [
         {function: copy, args: [outputAt.gate, outputAt.gateSnapshot, outputGate.length, 0]},
         {function: copy, args: [outputAt.first, outputAt.firstSnapshot, acquire.length, 0]},
-        {function: copy, args: [outputAt.second, outputAt.secondSnapshot, 0, 0]}
+        {function: copy, args: [outputAt.second, outputAt.secondSnapshot, 0, 0]},
+        ...(linkedGates
+          ? [{function: copy, args: [outputAt.third, outputAt.thirdSnapshot, 0, 0]}]
+          : [])
       ];
       const fetchCalls = [
         {
@@ -475,8 +674,25 @@ async function create({
         2: FETCH_RESULTS + 16
       });
 
+      let linkedFetch = null;
+      if (linkedGates) {
+        const linkedCalls = [
+          {function: sync.signalLightEvent, args: [address(DECODE_GATE), 0, 0, 0]},
+          ...fetchCalls
+        ];
+        const results = {1: FETCH_RESULTS, 2: FETCH_RESULTS + 8, 3: FETCH_RESULTS + 16};
+        linkedFetch = frame(outputAt.third, linkedCalls, results);
+        outputRestore[3].args[2] = linkedFetch.length;
+        linkedFetch = frame(outputAt.third, linkedCalls, results);
+        fetch = frame(outputAt.second, fetchCalls, {
+          0: FETCH_RESULTS,
+          1: FETCH_RESULTS + 8,
+          2: FETCH_RESULTS + 16
+        });
+      }
+
       await install(input, {gate: inputGate, first: receive, second: send});
-      await install(video, {gate: outputGate, first: acquire, second: fetch});
+      await install(video, {gate: outputGate, first: acquire, second: fetch, third: linkedFetch});
       const selectors = Buffer.alloc(32);
       for (const [index, target] of [
         inputAt.first,
@@ -486,6 +702,11 @@ async function create({
       ].entries())
         selectors.writeBigUInt64LE(BigInt(target), index * 8);
       await rpc.write(address(INPUT_DISPATCH), selectors);
+      if (linkedGates) {
+        const firstFetch = Buffer.alloc(8);
+        firstFetch.writeBigUInt64LE(BigInt(outputAt.second));
+        await rpc.write(address(OUTPUT_JOB + 72), firstFetch);
+      }
 
       input.uncertain = true;
       input.thread = await spawn(rpc, inputBase, inputAt.gate, {
@@ -553,50 +774,21 @@ async function create({
       return job;
     },
 
+    async verifyReceived(job, payload, pairedOutput) {
+      return verifyReceived(job, payload, pairedOutput);
+    },
+
+    async finishInputAfterLinkedGate(job) {
+      if (!linkedGates || !job.decodeGateAt) throw Error('Linked decode gate is not open');
+      return finishInput(job);
+    },
+
     async completeInput(job, payload = job?.payload) {
-      if (!job || activeInput !== job || !input.thread || input.joined)
-        throw Error('Split input job is not ready');
-      if (!job.sent) {
-        await transport.send(payload);
-        job.sent = true;
-      }
-      const received = await waitStatus('receive', job.sequence, 'TCP receive');
-      const count = received.readBigInt64LE(0);
-      const receivedSequence = received.readUInt32LE(8);
-      if (count !== BigInt(job.length) || receivedSequence !== job.sequence)
-        throw Error(
-          `Native TCP receive returned ${count}/${job.length} bytes and sequence ${receivedSequence}/${job.sequence}`
-        );
+      await verifyReceived(job, payload);
       await rpc.callAddress(sync.signalLightEvent, [address(DECODE_GATE)], SHORT);
       job.decodeGateAt = Date.now();
       decodeGateSignals++;
-      const completed = await waitStatus('input', job.sequence, 'input submit');
-      if (completed.readUInt32LE(24) !== job.sequence)
-        throw Error('Split decoder submitted the wrong access unit');
-      const sent = status(completed.readBigUInt64LE(0));
-      if (sent)
-        throw Object.assign(Error('movie::sendInput returned 0x' + sent.toString(16)), {
-          result: sent
-        });
-      const inputStatus = status(completed.readBigUInt64LE(8));
-      const nextIndex = completed.readInt32LE(16);
-      if (inputStatus && !(nextIndex < 0 && [0x100e, 0x1011].includes(inputStatus)))
-        throw Object.assign(Error('Decoder input queue returned 0x' + inputStatus.toString(16)), {
-          result: inputStatus
-        });
-      activeInput = null;
-      return {
-        sequence: job.sequence,
-        pts: job.pts,
-        decodeGateAt: job.decodeGateAt,
-        input: {status: inputStatus, index: nextIndex},
-        presentation: publication
-          ? {
-              current: completed.readUInt32LE(PRESENT_RESULTS - INPUT_RESULTS),
-              applied: completed.readUInt32LE(PRESENT_RESULTS + 4 - INPUT_RESULTS)
-            }
-          : null
-      };
+      return finishInput(job);
     },
 
     async input(job) {
@@ -621,88 +813,18 @@ async function create({
       return acquiredOutput(job);
     },
 
+    async openOutputFetch(job, destination, frame, nextJob) {
+      if (!linkedGates) throw Error('Linked gates are not enabled');
+      return openOutputFetch(job, destination, frame, nextJob);
+    },
+
+    async completeOutputFetch(job) {
+      return completeOutputFetch(job);
+    },
+
     async finishOutput(job, destination, frame = null, nextJob = null) {
-      if (!job || activeOutput !== job || !video.thread || video.joined)
-        throw Error('Split output job is not ready');
-      if (
-        !Number.isSafeInteger(destination?.address) ||
-        destination.address <= 0 ||
-        !Number.isSafeInteger(destination.bytes) ||
-        destination.bytes <= 0
-      )
-        throw Error('Invalid split decoder output destination');
-      if (
-        publication &&
-        (!frame ||
-          ![0, 1, 2].includes(destination.index) ||
-          destination.address !== publication.mapped + ring.frameOffset(destination.index) ||
-          destination.bytes < ring.FRAME_BYTES ||
-          !Number.isInteger(destination.sequence) ||
-          destination.sequence < 1 ||
-          destination.sequence > 0xffffffff ||
-          destination.color !== publication.color ||
-          !Number.isInteger(frame.width) ||
-          frame.width < 2 ||
-          frame.width > 1920 ||
-          !Number.isInteger(frame.height) ||
-          frame.height < 2 ||
-          frame.height > 1088 ||
-          !Number.isInteger(frame.stride) ||
-          frame.stride < frame.width ||
-          !Number.isInteger(frame.sliceHeight) ||
-          frame.sliceHeight < frame.height ||
-          (frame.stride * frame.sliceHeight * 3) / 2 > ring.FRAME_BYTES)
-      )
-        throw Error('Invalid split decoder publication metadata');
-      if (
-        nextJob &&
-        (!autoQueue ||
-          !Number.isInteger(nextJob.sequence) ||
-          nextJob.sequence !== job.sequence + 1 ||
-          nextJob.sequence > 0xffffffff)
-      )
-        throw Error('Invalid next split output job');
-      const acquired = await acquiredOutput(job);
-      const destinationBytes = Buffer.alloc(autoQueue ? 64 : publication ? 48 : 16);
-      destinationBytes.writeBigUInt64LE(BigInt(destination.address), 0);
-      destinationBytes.writeBigUInt64LE(BigInt(destination.bytes), 8);
-      if (publication) {
-        const fields = [
-          destination.index,
-          frame.width,
-          frame.height,
-          frame.stride,
-          frame.sliceHeight,
-          destination.color
-        ];
-        fields.push(ring.nativeChecksum(destination.sequence, fields), destination.sequence);
-        fields.forEach((value, word) => destinationBytes.writeUInt32LE(value, 16 + word * 4));
-      }
-      if (autoQueue) {
-        destinationBytes.writeUInt32LE(nextJob?.sequence ?? 0, 48);
-        destinationBytes.writeBigUInt64LE(
-          BigInt(nextJob ? outputAt.first : outputAt.gate),
-          56
-        );
-      }
-      await rpc.writeAndCall(address(OUTPUT_JOB + 8), destinationBytes, sync.signalLightEvent, [
-        address(FETCH_GATE)
-      ]);
-      const fetched = await waitStatus('fetch', job.sequence, 'output fetch');
-      if (fetched.readUInt32LE(24) !== job.sequence)
-        throw Error('Split decoder fetched the wrong access unit');
-      for (const [name, offset] of [
-        ['getOutput', 8],
-        ['releaseOutput', 16]
-      ]) {
-        const value = status(fetched.readBigUInt64LE(offset));
-        if (value)
-          throw Object.assign(Error('movie::' + name + ' returned 0x' + value.toString(16)), {
-            result: value
-          });
-      }
-      activeOutput = autoQueue ? nextJob : null;
-      return {sequence: job.sequence, pts: acquired.pts};
+      await openOutputFetch(job, destination, frame, nextJob);
+      return completeOutputFetch(job);
     },
 
     get diagnostics() {
@@ -726,6 +848,11 @@ async function create({
       for (let offset = 0; offset < selectors.length; offset += 8)
         selectors.writeBigUInt64LE(BigInt(offset < 16 ? inputAt.exit : outputAt.exit), offset);
       await rpc.write(address(INPUT_DISPATCH), selectors);
+      if (linkedGates) {
+        const fetchExit = Buffer.alloc(8);
+        fetchExit.writeBigUInt64LE(BigInt(outputAt.exit));
+        await rpc.write(address(OUTPUT_JOB + 72), fetchExit);
+      }
       for (const gate of [INPUT_GATE, DECODE_GATE, OUTPUT_GATE, FETCH_GATE])
         await rpc.callAddress(sync.signalLightEvent, [address(gate)], SHORT);
       await rpc.callAddress(sync.signalEvent, [address(OUTPUT_EVENT)], SHORT);
@@ -749,17 +876,16 @@ async function create({
         });
         worker.joined = true;
       }
-      if (activeOutput) {
-        const acquired = await rpc.read(address(OUTPUT_RESULTS), 36);
-        const fetched = await rpc.read(address(FETCH_RESULTS + 24), 4);
-        if (
-          acquired.readUInt32LE(32) === activeOutput.sequence &&
-          fetched.readUInt32LE() !== activeOutput.sequence &&
-          status(acquired.readBigUInt64LE(0)) === 0 &&
-          acquired.readInt32LE(8) >= 0
-        )
-          await rpc.callAddress(functions.releaseOutput, [decoder, acquired.readInt32LE(8)], SHORT);
-      }
+      const acquired = await rpc.read(address(OUTPUT_RESULTS), 36);
+      const fetched = await rpc.read(address(FETCH_RESULTS + 24), 4);
+      const acquiredSequence = acquired.readUInt32LE(32);
+      if (
+        acquiredSequence &&
+        fetched.readUInt32LE() !== acquiredSequence &&
+        status(acquired.readBigUInt64LE(0)) === 0 &&
+        acquired.readInt32LE(8) >= 0
+      )
+        await rpc.callAddress(functions.releaseOutput, [decoder, acquired.readInt32LE(8)], SHORT);
       activeInput = activeOutput = null;
     },
 
