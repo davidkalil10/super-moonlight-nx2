@@ -3,16 +3,19 @@
 // The host side is the real staggered-live scheduler and the ladder's held-fetch checks.
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const {ADDRESS} = require('../../sdk/tests/recording-rpc.cjs');
-const {gateConsole, BLOCK} = require('../../sdk/tests/gate-worker-mock.cjs');
-const definitions = require('../../sdk/native/movie-functions.json');
-const registration = require('../../sdk/native/movie-event-functions.json').registerClientEvents;
+const {ADDRESS} = require('../../../hbl-platform-dev/sdk/tests/recording-rpc.cjs');
+const {gateConsole, BLOCK} = require('../../../hbl-platform-dev/sdk/tests/gate-worker-mock.cjs');
+const definitions = require('../../../hbl-moonlight/sdk/native/movie-functions.json');
+const registration =
+  require('../../../hbl-moonlight/sdk/native/movie-event-functions.json').registerClientEvents;
 const {proveHeld, proveRelease} = require('../../sdk/tools/probe-staggered-ladder.cjs');
-const ring = require('./ring.cjs');
-const inputPlan = require('./staggered-input-plan.cjs');
-const outputPlan = require('./staggered-output-plan.cjs');
-const {create: createWorker} = require('./staggered-worker.cjs');
-const {create: createLive} = require('./staggered-live.cjs');
+const ring = require('../../../hbl-moonlight/tools/moonlight/ring.cjs');
+const inputPlan = require('../../../hbl-moonlight/tools/moonlight/staggered-input-plan.cjs');
+const outputPlan = require('../../../hbl-moonlight/tools/moonlight/staggered-output-plan.cjs');
+const {
+  create: createWorker
+} = require('../../../hbl-moonlight/tools/moonlight/staggered-worker.cjs');
+const {create: createLive} = require('../../../hbl-moonlight/tools/moonlight/staggered-live.cjs');
 
 const layout = {width: 1920, height: 1080, stride: 1920, sliceHeight: 1088};
 const noWait = async () => {};

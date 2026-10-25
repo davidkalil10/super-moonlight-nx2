@@ -3,23 +3,29 @@ const fsp = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
 const {execFileSync} = require('node:child_process');
-const cli = require('../cli.cjs');
-const session = require('../host/session.cjs');
+const cli = require('../../../hbl-platform/sdk/cli.cjs');
+const session = require('../../../hbl-platform/sdk/host/session.cjs');
 const {accessUnits, clipFrameRate} = require('./probe-decoder-events.cjs');
 const {loggedRpc, verifyPublication} = require('./probe-split-decoder.cjs');
-const {parameterSets} = require('../../tools/moonlight/h264-stream.cjs');
-const {findPrivateStorage} = require('../../tools/moonlight/feed.cjs');
-const {create: createDecoder} = require('../../tools/moonlight/native-decoder.cjs');
-const {create: createTransport} = require('../../tools/moonlight/native-tcp.cjs');
-const {create: createSink} = require('../../tools/moonlight/native-sink.cjs');
-const {create: createSplit} = require('../../tools/moonlight/split-decoder-worker.cjs');
+const {parameterSets} = require('../../../hbl-moonlight/tools/moonlight/h264-stream.cjs');
+const {findPrivateStorage} = require('../../../hbl-moonlight/tools/moonlight/feed.cjs');
+const {
+  create: createDecoder
+} = require('../../../hbl-moonlight/tools/moonlight/native-decoder.cjs');
+const {create: createTransport} = require('../../../hbl-moonlight/tools/moonlight/native-tcp.cjs');
+const {create: createSink} = require('../../../hbl-moonlight/tools/moonlight/native-sink.cjs');
+const {
+  create: createSplit
+} = require('../../../hbl-moonlight/tools/moonlight/split-decoder-worker.cjs');
 const {create: createPairedOutput} = require('../../tools/moonlight/paired-output-worker.cjs');
-const {create: createPairedLoop} = require('../../tools/moonlight/paired-loop-worker.cjs');
+const {
+  create: createPairedLoop
+} = require('../../../hbl-moonlight/tools/moonlight/paired-loop-worker.cjs');
 const acquireFrame = require('../../tools/moonlight/paired-acquire-frame.cjs');
-const outputFrame = require('../../tools/moonlight/paired-output-frame.cjs');
-const loopFrame = require('../../tools/moonlight/paired-loop-plan.cjs');
-const ring = require('../../tools/moonlight/ring.cjs');
-const {SENTINEL} = require('../../smilebasic/engine/shared/frames.cjs');
+const outputFrame = require('../../../hbl-moonlight/tools/moonlight/paired-output-frame.cjs');
+const loopFrame = require('../../../hbl-moonlight/tools/moonlight/paired-loop-plan.cjs');
+const ring = require('../../../hbl-moonlight/tools/moonlight/ring.cjs');
+const {SENTINEL} = require('../../../hbl-platform/smilebasic/engine/shared/frames.cjs');
 
 const STAGES = [
   'two',

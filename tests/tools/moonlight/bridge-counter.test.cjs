@@ -1,6 +1,9 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const {instrument, requestsFor} = require('./bridge-counter.cjs');
+const {
+  instrument,
+  requestsFor
+} = require('../../../hbl-moonlight/tools/moonlight/bridge-counter.cjs');
 
 test('bridge counter attributes requests and elapsed time to the active stage', async () => {
   let clock = 0;

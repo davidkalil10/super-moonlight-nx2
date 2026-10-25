@@ -9,10 +9,10 @@
 // both is kept in the session directory in case the probe dies part way.
 const fs = require('node:fs/promises'),
   path = require('node:path');
-const {struct, latest, compat, job, report} = require('./probe-job.cjs');
-const {allocate} = require('../native/allocate.cjs');
-const ring = require('../../tools/moonlight/ring.cjs');
-const hbv2 = require('../../tools/moonlight/hbv2.cjs');
+const {struct, latest, compat, job, report} = require('../../../hbl-dev/sdk/tools/probe-job.cjs');
+const {allocate} = require('../../../hbl-platform/sdk/native/allocate.cjs');
+const ring = require('../../../hbl-moonlight/tools/moonlight/ring.cjs');
+const hbv2 = require('../../../hbl-moonlight/tools/moonlight/hbv2.cjs');
 
 const STATE_BYTES = 4096;
 

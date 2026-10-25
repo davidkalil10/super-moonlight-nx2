@@ -9,16 +9,18 @@ const fs = require('node:fs/promises'),
   os = require('node:os');
 const assert = require('node:assert/strict');
 const {execFileSync} = require('node:child_process');
-const {testCard} = require('./build.cjs');
+const {testCard} = require('../../../hbl-moonlight/apps/moonlight/build.cjs');
 
-const root = path.resolve(__dirname, '../..');
-const ring = require(path.join(root, 'tools/moonlight/ring.cjs'));
-const {STATE} = require(path.join(root, 'sdk/host/state-layout.cjs'));
-const {NPAD} = require(path.join(root, 'sdk/host/npad.cjs'));
-const hbv = require(path.join(root, 'tools/moonlight/hbv.cjs'));
-const hbv2 = require(path.join(root, 'tools/moonlight/hbv2.cjs'));
-const {psnr} = require(path.join(root, 'tools/moonlight/reference.cjs'));
-const {readFrames} = require(path.join(root, 'tools/moonlight/frames.cjs'));
+const moonlight = path.resolve(__dirname, '../../../hbl-moonlight');
+const app = path.join(moonlight, 'apps/moonlight');
+const platform = path.resolve(__dirname, '../../../hbl-platform');
+const ring = require(path.join(moonlight, 'tools/moonlight/ring.cjs'));
+const {STATE} = require(path.join(platform, 'sdk/host/state-layout.cjs'));
+const {NPAD} = require(path.join(platform, 'sdk/host/npad.cjs'));
+const hbv = require(path.join(moonlight, 'tools/moonlight/hbv.cjs'));
+const hbv2 = require(path.join(moonlight, 'tools/moonlight/hbv2.cjs'));
+const {psnr} = require(path.join(moonlight, 'tools/moonlight/reference.cjs'));
+const {readFrames} = require(path.join(moonlight, 'tools/moonlight/frames.cjs'));
 const builds =
   process.env.HB_MOONLIGHT_CHECK_BUILDS ||
   path.join(os.homedir(), 'claude-builds/HBLauncher/gpu-check');
@@ -28,7 +30,7 @@ function harness() {
   require('node:fs').mkdirSync(builds, {recursive: true});
   execFileSync('cc', [
     '-O2',
-    path.join(root, 'tools/moonlight/gpu-check.c'),
+    path.join(__dirname, '../../tools/moonlight/gpu-check.c'),
     '-lvulkan',
     '-o',
     binary
@@ -52,9 +54,9 @@ async function run(dir, memory, patches = [], state = Buffer.alloc(1024)) {
     execFileSync(
       run.binary,
       [
-        __dirname,
+        app,
         path.join(dir, 'state'),
-        path.join(__dirname, 'assets/text.bin'),
+        path.join(app, 'assets/text.bin'),
         path.join(dir, 'memory'),
         dir,
         ...files
@@ -95,7 +97,7 @@ async function exitChecks(dir) {
 
 async function nativeCheck(dir) {
   const memory = Buffer.alloc(ring.MEMORY_BYTES);
-  (await fs.readFile(path.join(__dirname, 'assets/memory.bin'))).copy(memory);
+  (await fs.readFile(path.join(app, 'assets/memory.bin'))).copy(memory);
   const width = 128,
     height = 96,
     index = 2;
@@ -176,7 +178,7 @@ function scene(width, height, shift) {
 }
 
 async function testCardCheck(dir) {
-  const memory = await fs.readFile(path.join(__dirname, 'assets/memory.bin'));
+  const memory = await fs.readFile(path.join(app, 'assets/memory.bin'));
   const {rgb, memory: after, report} = await run(dir, memory);
   const decoder = new hbv2.Decoder();
   decoder.apply(ringWords(memory, ring.TEST_CARD_SEQUENCE));
@@ -262,7 +264,7 @@ async function chainCheck(dir) {
 }
 
 async function clipCheck(dir, clip) {
-  const {Encoder} = require(path.join(root, 'tools/moonlight/hbv2-encoder.cjs'));
+  const {Encoder} = require(path.join(moonlight, 'tools/moonlight/hbv2-encoder.cjs'));
   const encoder = new Encoder(),
     decoder = new hbv2.Decoder(),
     patches = [];

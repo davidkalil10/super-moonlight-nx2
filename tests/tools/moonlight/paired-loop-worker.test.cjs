@@ -1,10 +1,10 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const {CODE} = require('../../sdk/native/thread.cjs');
-const SYNC = require('../../sdk/native/os-sync-functions.json');
-const ring = require('./ring.cjs');
-const {CONTROL, locations} = require('./paired-loop-plan.cjs');
-const {create} = require('./paired-loop-worker.cjs');
+const {CODE} = require('../../../hbl-platform/sdk/native/thread.cjs');
+const SYNC = require('../../../hbl-platform/sdk/native/os-sync-functions.json');
+const ring = require('../../../hbl-moonlight/tools/moonlight/ring.cjs');
+const {CONTROL, locations} = require('../../../hbl-moonlight/tools/moonlight/paired-loop-plan.cjs');
+const {create} = require('../../../hbl-moonlight/tools/moonlight/paired-loop-worker.cjs');
 
 const SDK = 0x40000000;
 const MAPPED = 0x72000000;

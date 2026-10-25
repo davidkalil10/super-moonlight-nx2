@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const {PassThrough} = require('node:stream');
-const {create} = require('./socket-audio-source.cjs');
+const {create} = require('../../../hbl-moonlight/tools/moonlight/socket-audio-source.cjs');
 
 const CHUNK = 7680;
 const flush = () => new Promise(resolve => setImmediate(resolve));

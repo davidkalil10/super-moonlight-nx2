@@ -1,6 +1,6 @@
-const {build, SENTINEL} = require('../../smilebasic/engine/shared/frames.cjs');
-const {CODE} = require('../../sdk/native/thread.cjs');
-const SYNC = require('../../sdk/native/os-sync-functions.json');
+const {build, SENTINEL} = require('../../../hbl-platform/smilebasic/engine/shared/frames.cjs');
+const {CODE} = require('../../../hbl-platform/sdk/native/thread.cjs');
+const SYNC = require('../../../hbl-platform/sdk/native/os-sync-functions.json');
 
 function plan({sdk, acquireOutput, decoder, event, slots, base}) {
   if (

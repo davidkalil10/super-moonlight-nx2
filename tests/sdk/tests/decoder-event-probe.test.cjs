@@ -4,10 +4,16 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const {ADDRESS, runDirectory, expectSequence, temporary: tempDirectory} = require('./recording-rpc.cjs');
-const {gateConsole} = require('./gate-worker-mock.cjs');
+const {
+  ADDRESS,
+  runDirectory,
+  expectSequence,
+  temporary: tempDirectory
+} = require('../../../hbl-platform-dev/sdk/tests/recording-rpc.cjs');
+const {gateConsole} = require('../../../hbl-platform-dev/sdk/tests/gate-worker-mock.cjs');
 const probe = require('../tools/probe-decoder-events.cjs');
-const register = require('../native/movie-event-functions.json').registerClientEvents;
+const register =
+  require('../../../hbl-moonlight/sdk/native/movie-event-functions.json').registerClientEvents;
 
 const WIDTH = 16,
   HEIGHT = 8,

@@ -3,9 +3,11 @@ const fsSync = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 const {execFileSync} = require('node:child_process');
-const session = require('../host/session.cjs');
-const {create: createTransport} = require('../../tools/moonlight/native-tcp.cjs');
-const {create: createAudio} = require('../../tools/moonlight/audio-socket-worker.cjs');
+const session = require('../../../hbl-platform/sdk/host/session.cjs');
+const {create: createTransport} = require('../../../hbl-moonlight/tools/moonlight/native-tcp.cjs');
+const {
+  create: createAudio
+} = require('../../../hbl-moonlight/tools/moonlight/audio-socket-worker.cjs');
 
 const BUILD_ROOT = '/media/storage2/builds/HBLauncher/native-h264';
 const BUFFER_BYTES = 7680;

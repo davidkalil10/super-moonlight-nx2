@@ -1,7 +1,14 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const {STATUS, READ_START, READ_END, parse, check, checkOutput} = require('./staggered-status.cjs');
-const ring = require('./ring.cjs');
+const {
+  STATUS,
+  READ_START,
+  READ_END,
+  parse,
+  check,
+  checkOutput
+} = require('../../../hbl-moonlight/tools/moonlight/staggered-status.cjs');
+const ring = require('../../../hbl-moonlight/tools/moonlight/ring.cjs');
 
 function snapshot() {
   const bytes = Buffer.alloc(READ_END - READ_START);

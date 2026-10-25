@@ -1,9 +1,9 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const gate = require('./staggered-gate.cjs');
-const input = require('./staggered-input-plan.cjs');
-const output = require('./staggered-output-plan.cjs');
-const ring = require('./ring.cjs');
+const gate = require('../../../hbl-moonlight/tools/moonlight/staggered-gate.cjs');
+const input = require('../../../hbl-moonlight/tools/moonlight/staggered-input-plan.cjs');
+const output = require('../../../hbl-moonlight/tools/moonlight/staggered-output-plan.cjs');
+const ring = require('../../../hbl-moonlight/tools/moonlight/ring.cjs');
 
 function snapshot() {
   return {

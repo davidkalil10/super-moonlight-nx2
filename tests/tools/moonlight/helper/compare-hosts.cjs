@@ -11,7 +11,7 @@ const readline = require('node:readline');
 const {spawn} = require('node:child_process');
 
 const TICKS_PER_SECOND = 100;
-const moonlight = path.join(__dirname, '..');
+const moonlight = path.join(__dirname, '../../../../hbl-moonlight/tools/moonlight');
 
 function option(args, name, fallback) {
   return args.includes(name) ? args[args.indexOf(name) + 1] : fallback;
@@ -80,7 +80,7 @@ async function main() {
   fs.mkdirSync(directory, {recursive: true});
   const bridge = spawn(
     process.execPath,
-    [path.join(moonlight, 'fake-console/bridge.cjs'), directory],
+    [path.join(__dirname, '../fake-console/bridge.cjs'), directory],
     {
       stdio: ['ignore', 'pipe', 'inherit']
     }

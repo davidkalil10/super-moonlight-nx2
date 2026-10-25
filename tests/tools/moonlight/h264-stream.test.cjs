@@ -2,7 +2,10 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const {PassThrough} = require('node:stream');
 const {once} = require('node:events');
-const {AccessUnits, parameterSets} = require('./h264-stream.cjs');
+const {
+  AccessUnits,
+  parameterSets
+} = require('../../../hbl-moonlight/tools/moonlight/h264-stream.cjs');
 
 const metadata = (seq, bytes, fields = {}) => ({
   type: 'au',

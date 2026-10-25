@@ -1,14 +1,18 @@
 // Offline request budget for the native H.264 host loop. The real persistent and
 // split workers and the real sink run against a modeled console on a virtual clock;
 // the per-frame loop mirrors native-h264.cjs, including its stage labels.
-const {instrument, requestsFor} = require('./bridge-counter.cjs');
-const ring = require('./ring.cjs');
-const definitions = require('../../sdk/native/movie-functions.json');
-const registration = require('../../sdk/native/movie-event-functions.json').registerClientEvents;
-const SYNC = require('../../sdk/native/os-sync-functions.json');
-const {CODE} = require('../../sdk/native/thread.cjs');
-const PAIRED = require('./paired-loop-plan.cjs').CONTROL;
-const presentPacer = require('./present-pacer.cjs');
+const {
+  instrument,
+  requestsFor
+} = require('../../../hbl-moonlight/tools/moonlight/bridge-counter.cjs');
+const ring = require('../../../hbl-moonlight/tools/moonlight/ring.cjs');
+const definitions = require('../../../hbl-moonlight/sdk/native/movie-functions.json');
+const registration =
+  require('../../../hbl-moonlight/sdk/native/movie-event-functions.json').registerClientEvents;
+const SYNC = require('../../../hbl-platform/sdk/native/os-sync-functions.json');
+const {CODE} = require('../../../hbl-platform/sdk/native/thread.cjs');
+const PAIRED = require('../../../hbl-moonlight/tools/moonlight/paired-loop-plan.cjs').CONTROL;
+const presentPacer = require('../../../hbl-moonlight/tools/moonlight/present-pacer.cjs');
 
 const SDK = 0x40000000;
 const MODULE = 0x50000000;
@@ -693,12 +697,18 @@ async function simulate({
     const bridge = instrument(machine.rpc, () => stage, clock.now);
     const rpc = bridge.rpc;
     const pairedLive = paired
-      ? require('./paired-live.cjs').create({rpc, publication: {mapped: MAPPED, color: 1}})
+      ? require('../../../hbl-moonlight/tools/moonlight/paired-live.cjs').create({
+          rpc,
+          publication: {mapped: MAPPED, color: 1}
+        })
       : null;
     const create = paired
       ? pairedLive.factory
-      : require(mode === 'split' ? './split-decoder-worker.cjs' : './persistent-decoder-worker.cjs')
-          .create;
+      : require(
+          mode === 'split'
+            ? '../../../hbl-moonlight/tools/moonlight/split-decoder-worker.cjs'
+            : '../../../hbl-moonlight/tools/moonlight/persistent-decoder-worker.cjs'
+        ).create;
     const worker = await create({
       rpc,
       module: {
@@ -726,7 +736,10 @@ async function simulate({
     await worker.register();
     await worker.start();
     if (paired) await pairedLive.start();
-    const sink = await require('./native-sink.cjs').create(rpc, machine.storage);
+    const sink = await require('../../../hbl-moonlight/tools/moonlight/native-sink.cjs').create(
+      rpc,
+      machine.storage
+    );
     const payload = Buffer.alloc(ACCESS_UNIT_BYTES, 1);
     const interval = 1000 / model.sourceFps;
     const origin = clock.now();

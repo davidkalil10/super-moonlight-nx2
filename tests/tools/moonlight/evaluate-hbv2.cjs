@@ -11,11 +11,11 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const {spawnSync} = require('node:child_process');
-const hbv = require('./hbv.cjs');
-const hbv2 = require('./hbv2.cjs');
-const {psnr} = require('./reference.cjs');
-const {Encoder} = require('./hbv2-encoder.cjs');
-const cli = require('../../sdk/cli.cjs');
+const hbv = require('../../../hbl-moonlight/tools/moonlight/hbv.cjs');
+const hbv2 = require('../../../hbl-moonlight/tools/moonlight/hbv2.cjs');
+const {psnr} = require('../../../hbl-moonlight/tools/moonlight/reference.cjs');
+const {Encoder} = require('../../../hbl-moonlight/tools/moonlight/hbv2-encoder.cjs');
+const cli = require('../../../hbl-platform/sdk/cli.cjs');
 
 const WIDTH = 1920,
   HEIGHT = 1080,

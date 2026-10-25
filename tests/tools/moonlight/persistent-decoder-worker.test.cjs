@@ -1,11 +1,12 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const definitions = require('../../sdk/native/movie-functions.json');
-const registration = require('../../sdk/native/movie-event-functions.json').registerClientEvents;
-const sync = require('../../sdk/native/os-sync-functions.json');
-const {CODE} = require('../../sdk/native/thread.cjs');
-const {PREAMBLE} = require('../../smilebasic/engine/shared/frames.cjs');
-const {create} = require('./persistent-decoder-worker.cjs');
+const definitions = require('../../../hbl-moonlight/sdk/native/movie-functions.json');
+const registration =
+  require('../../../hbl-moonlight/sdk/native/movie-event-functions.json').registerClientEvents;
+const sync = require('../../../hbl-platform/sdk/native/os-sync-functions.json');
+const {CODE} = require('../../../hbl-platform/sdk/native/thread.cjs');
+const {PREAMBLE} = require('../../../hbl-platform/smilebasic/engine/shared/frames.cjs');
+const {create} = require('../../../hbl-moonlight/tools/moonlight/persistent-decoder-worker.cjs');
 
 const SDK = 0x40000000;
 const MODULE = 0x50000000;

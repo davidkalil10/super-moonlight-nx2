@@ -6,7 +6,11 @@ const os = require('node:os');
 const path = require('node:path');
 const {EventEmitter} = require('node:events');
 const {PassThrough} = require('node:stream');
-const {run, createIdrRequester, countsSince} = require('./native-h264.cjs');
+const {
+  run,
+  createIdrRequester,
+  countsSince
+} = require('../../../hbl-moonlight/tools/moonlight/native-h264.cjs');
 
 const accessUnit = Buffer.from('0000016742001eab00000168ce0100000165abcd', 'hex');
 const pcm = Buffer.from('0001020304050607', 'hex');

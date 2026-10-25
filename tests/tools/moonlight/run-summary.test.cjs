@@ -1,6 +1,10 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const {parseExpect, summarize, verdict} = require('./run-summary.cjs');
+const {
+  parseExpect,
+  summarize,
+  verdict
+} = require('../../../hbl-moonlight/tools/moonlight/run-summary.cjs');
 
 const row = (presented, extra = {}) => ({
   presented,

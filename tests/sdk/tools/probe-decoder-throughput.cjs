@@ -8,12 +8,12 @@ const path = require('node:path');
 const os = require('node:os');
 const crypto = require('node:crypto');
 const {execFileSync} = require('node:child_process');
-const cli = require('../cli.cjs');
-const session = require('../host/session.cjs');
-const {allocate} = require('../native/allocate.cjs');
-const {create: createModule} = require('../native/module.cjs');
-const {verify} = require('../native/symbols.cjs');
-const {build, SENTINEL} = require('../../smilebasic/engine/shared/frames.cjs');
+const cli = require('../../../hbl-platform/sdk/cli.cjs');
+const session = require('../../../hbl-platform/sdk/host/session.cjs');
+const {allocate} = require('../../../hbl-platform/sdk/native/allocate.cjs');
+const {create: createModule} = require('../../../hbl-platform/sdk/native/module.cjs');
+const {verify} = require('../../../hbl-platform/sdk/native/symbols.cjs');
+const {build, SENTINEL} = require('../../../hbl-platform/smilebasic/engine/shared/frames.cjs');
 const {
   CODE,
   IPC_COPY,
@@ -23,14 +23,17 @@ const {
   spawn,
   wait,
   join
-} = require('../native/thread.cjs');
-const MOVIE = require('../native/movie-functions.json');
-const EVENTS = require('../native/movie-event-functions.json');
-const SYNC = require('../native/os-sync-functions.json');
-const TIMING = require('../../smilebasic/engine/switch2/app/timing-code.json').functions;
-const {read: consoleTickFrequency} = require('./console-tick-frequency.cjs');
+} = require('../../../hbl-platform/sdk/native/thread.cjs');
+const MOVIE = require('../../../hbl-moonlight/sdk/native/movie-functions.json');
+const EVENTS = require('../../../hbl-moonlight/sdk/native/movie-event-functions.json');
+const SYNC = require('../../../hbl-platform/sdk/native/os-sync-functions.json');
+const TIMING =
+  require('../../../hbl-platform/smilebasic/engine/switch2/app/timing-code.json').functions;
+const {
+  read: consoleTickFrequency
+} = require('../../../hbl-platform-dev/sdk/tools/console-tick-frequency.cjs');
 const {accessUnits} = require('./probe-decoder-events.cjs');
-const {parameterSets} = require('../../tools/moonlight/h264-stream.cjs');
+const {parameterSets} = require('../../../hbl-moonlight/tools/moonlight/h264-stream.cjs');
 
 const CONTROL_BYTES = 0x4000;
 const OUTPUT_EVENT = 0x100;

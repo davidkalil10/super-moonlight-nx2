@@ -3,9 +3,9 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const hbv2 = require('./hbv2.cjs');
-const {NPAD} = require('./controller.cjs');
-const menu = require('./menu.cjs');
+const hbv2 = require('../../../hbl-moonlight/tools/moonlight/hbv2.cjs');
+const {NPAD} = require('../../../hbl-moonlight/tools/moonlight/controller.cjs');
+const menu = require('../../../hbl-moonlight/tools/moonlight/menu.cjs');
 
 // --- host list load/save/seed -----------------------------------------
 

@@ -13,11 +13,11 @@
 // Usage: node tools/moonlight/fake-console/bridge.cjs DIR [--pad]
 const fs = require('node:fs');
 const path = require('node:path');
-const {serve} = require('../../../smilebasic/engine/lib/bridge.cjs');
-const symbols = require('../../../sdk/native/audio-symbols.json');
-const sdkImage = require('../../../smilebasic/reference/sdk-checks.cjs');
+const {serve} = require('../../../../hbl-platform/smilebasic/engine/lib/bridge.cjs');
+const symbols = require('../../../../hbl-platform/sdk/native/audio-symbols.json');
+const sdkImage = require('../../../../hbl-platform/smilebasic/reference/sdk-checks.cjs');
 const fake = require('./shared/rpc.cjs');
-const {ALLOCATE} = require('../../../sdk/native/allocate.cjs');
+const {ALLOCATE} = require('../../../../hbl-platform/sdk/native/allocate.cjs');
 const report = require('./app-moonlight-1.json');
 
 const SCRATCH = 0x20000000,
@@ -225,7 +225,7 @@ async function main() {
     }
   });
   fs.copyFileSync(
-    path.join(__dirname, '../../../smilebasic/engine/shared/rpc.cjs'),
+    path.join(__dirname, '../../../../hbl-platform/smilebasic/engine/shared/rpc.cjs'),
     path.join(directory, 'shared/rpc.cjs')
   );
   json('app-moonlight-1.json', report);

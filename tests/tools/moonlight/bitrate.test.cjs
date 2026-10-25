@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const {defaultBitrate, bitrate} = require('./bitrate.cjs');
+const {defaultBitrate, bitrate} = require('../../../hbl-moonlight/tools/moonlight/bitrate.cjs');
 
 test('default bitrate follows Moonlight for common modes', () => {
   assert.equal(defaultBitrate(1280, 720, 60), 10000);

@@ -1,10 +1,10 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const input = require('./staggered-input-plan.cjs');
-const status = require('./staggered-status.cjs');
-const ring = require('./ring.cjs');
-const SYNC = require('../../sdk/native/os-sync-functions.json');
-const {CODE} = require('../../sdk/native/thread.cjs');
+const input = require('../../../hbl-moonlight/tools/moonlight/staggered-input-plan.cjs');
+const status = require('../../../hbl-moonlight/tools/moonlight/staggered-status.cjs');
+const ring = require('../../../hbl-moonlight/tools/moonlight/ring.cjs');
+const SYNC = require('../../../hbl-platform/sdk/native/os-sync-functions.json');
+const {CODE} = require('../../../hbl-platform/sdk/native/thread.cjs');
 
 const addresses = {
   sdk: 0x7100000000,

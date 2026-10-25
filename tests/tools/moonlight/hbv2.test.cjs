@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const {execFileSync} = require('node:child_process');
-const hbv2 = require('./hbv2.cjs');
+const hbv2 = require('../../../hbl-moonlight/tools/moonlight/hbv2.cjs');
 
 function scene(width, height, shift = 0) {
   const rgb = Buffer.alloc(width * height * 3);
@@ -149,7 +149,7 @@ test('skipped macroblocks are copied lazily from the previous frame', () => {
 });
 
 test('generated tables match the checked-in headers', () => {
-  const here = __dirname,
+  const here = path.join(__dirname, '../../../hbl-moonlight/tools/moonlight'),
     shaders = path.join(here, '../../apps/moonlight/shaders');
   assert.strictEqual(fs.readFileSync(path.join(here, 'hbv2-tables.h'), 'utf8'), hbv2.cTables());
   const glsl = path.join(shaders, 'hbv2-tables.glsl');
@@ -173,12 +173,16 @@ test(
       base = fs.existsSync(builds) ? builds : os.tmpdir(),
       build = fs.mkdtempSync(path.join(base, 'hbv2enc-test-'));
     try {
-      execFileSync('bash', [path.join(__dirname, 'build-hbv2enc.sh')], {
-        env: {...process.env, HBV2_BUILD: build},
-        stdio: 'ignore'
-      });
+      execFileSync(
+        'bash',
+        [path.join(__dirname, '../../../hbl-moonlight/tools/moonlight/build-hbv2enc.sh')],
+        {
+          env: {...process.env, HBV2_BUILD: build},
+          stdio: 'ignore'
+        }
+      );
       process.env.HBV2ENC = path.join(build, 'hbv2enc');
-      const {Encoder} = require('./hbv2-encoder.cjs');
+      const {Encoder} = require('../../../hbl-moonlight/tools/moonlight/hbv2-encoder.cjs');
       const recon = path.join(build, 'recon.bin'),
         encoder = new Encoder({threads: 2, recon}),
         decoder = new hbv2.Decoder(),

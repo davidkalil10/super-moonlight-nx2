@@ -1,6 +1,10 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const {create, watchBridge, RESTART} = require('./paired-live.cjs');
+const {
+  create,
+  watchBridge,
+  RESTART
+} = require('../../../hbl-moonlight/tools/moonlight/paired-live.cjs');
 
 const layout = {width: 1920, height: 1080, stride: 1920, sliceHeight: 1088};
 const unit = pts => ({data: Buffer.from([pts]), pts});

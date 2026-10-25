@@ -12,8 +12,11 @@ const {
   NativeClient,
   MAX_DATA_BYTES,
   DATA_LENGTH_OFFSET
-} = require('../../smilebasic/engine/lib/native.cjs');
-const {Connection, parseHello} = require('../../smilebasic/engine/lib/connection.cjs');
+} = require('../../../hbl-platform/smilebasic/engine/lib/native.cjs');
+const {
+  Connection,
+  parseHello
+} = require('../../../hbl-platform/smilebasic/engine/lib/connection.cjs');
 const {attach, defaultAddresses} = require('./fake-console/shared/console.cjs');
 
 const TOKEN = [1, 2, 3, 4];

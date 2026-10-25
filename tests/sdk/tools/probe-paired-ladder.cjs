@@ -1,7 +1,7 @@
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const {execFileSync} = require('node:child_process');
-const session = require('../host/session.cjs');
+const session = require('../../../hbl-platform/sdk/host/session.cjs');
 const split = require('./probe-split-decoder.cjs');
 const paired = require('./probe-paired-output.cjs');
 

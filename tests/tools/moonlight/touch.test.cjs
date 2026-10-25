@@ -1,7 +1,14 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const {TOUCH_BYTES, parseTouch, createTracker, step, flush, touchLine} = require('./touch.cjs');
-const {frame} = require('./input-feeder.cjs');
+const {
+  TOUCH_BYTES,
+  parseTouch,
+  createTracker,
+  step,
+  flush,
+  touchLine
+} = require('../../../hbl-moonlight/tools/moonlight/touch.cjs');
+const {frame} = require('../../../hbl-moonlight/tools/moonlight/input-feeder.cjs');
 
 // Build the raw nn::hid TouchScreenState<16> region (what parseTouch receives).
 function touchBytes(points, count) {

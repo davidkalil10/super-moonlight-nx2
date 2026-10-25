@@ -1,7 +1,7 @@
 const fsp = require('node:fs/promises');
 const path = require('node:path');
 const {spawn, execFileSync} = require('node:child_process');
-const session = require('../host/session.cjs');
+const session = require('../../../hbl-platform/sdk/host/session.cjs');
 const {STAGES} = require('./probe-split-decoder.cjs');
 
 const PROBE = path.join(__dirname, 'probe-split-decoder.cjs');

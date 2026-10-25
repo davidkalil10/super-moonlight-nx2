@@ -1,9 +1,9 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const {CODE, IPC_COPY} = require('../../sdk/native/thread.cjs');
-const SYNC = require('../../sdk/native/os-sync-functions.json');
-const ring = require('./ring.cjs');
-const {plan} = require('./paired-loop-plan.cjs');
+const {CODE, IPC_COPY} = require('../../../hbl-platform/sdk/native/thread.cjs');
+const SYNC = require('../../../hbl-platform/sdk/native/os-sync-functions.json');
+const ring = require('../../../hbl-moonlight/tools/moonlight/ring.cjs');
+const {plan} = require('../../../hbl-moonlight/tools/moonlight/paired-loop-plan.cjs');
 
 const SDK = 0x40000000;
 const CONTROL = 0x70000000;

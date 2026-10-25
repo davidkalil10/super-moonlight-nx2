@@ -11,16 +11,26 @@ const fs = require('node:fs/promises'),
   path = require('node:path');
 const crypto = require('node:crypto');
 const {execFileSync} = require('node:child_process');
-const cli = require('../cli.cjs');
-const {allocate} = require('../native/allocate.cjs');
-const {verify} = require('../native/symbols.cjs');
-const {prepare} = require('../native/repeating.cjs');
-const {CODE: code, verifyCode, verifyCopy, spawn, wait, join} = require('../native/thread.cjs');
-const {nals, parameterSets} = require('../../tools/moonlight/h264-stream.cjs');
-const SYNC = require('../native/os-sync-functions.json');
-const MOVIE_EVENTS = require('../native/movie-event-functions.json');
-const TIMING = require('../../smilebasic/engine/switch2/app/timing-code.json').functions;
-const {read: consoleTickFrequency} = require('./console-tick-frequency.cjs');
+const cli = require('../../../hbl-platform/sdk/cli.cjs');
+const {allocate} = require('../../../hbl-platform/sdk/native/allocate.cjs');
+const {verify} = require('../../../hbl-platform/sdk/native/symbols.cjs');
+const {prepare} = require('../../../hbl-platform/sdk/native/repeating.cjs');
+const {
+  CODE: code,
+  verifyCode,
+  verifyCopy,
+  spawn,
+  wait,
+  join
+} = require('../../../hbl-platform/sdk/native/thread.cjs');
+const {nals, parameterSets} = require('../../../hbl-moonlight/tools/moonlight/h264-stream.cjs');
+const SYNC = require('../../../hbl-platform/sdk/native/os-sync-functions.json');
+const MOVIE_EVENTS = require('../../../hbl-moonlight/sdk/native/movie-event-functions.json');
+const TIMING =
+  require('../../../hbl-platform/smilebasic/engine/switch2/app/timing-code.json').functions;
+const {
+  read: consoleTickFrequency
+} = require('../../../hbl-platform-dev/sdk/tools/console-tick-frequency.cjs');
 
 const USED = ['initializeEvent', 'waitEvent', 'signalEvent', 'finalizeEvent', 'atomicAddU32'];
 // Its own allocation, so no repeating region restores over the events or counters.
@@ -263,7 +273,7 @@ async function main(
     window = null,
     maxAus = null,
     output = process.env.HB_NATIVE_LOG_DIR,
-    createDecoder = require('../../tools/moonlight/native-decoder.cjs').create
+    createDecoder = require('../../../hbl-moonlight/tools/moonlight/native-decoder.cjs').create
   } = {}
 ) {
   if (!clip) throw Error('Expected --clip <file.h264>');
@@ -920,7 +930,10 @@ module.exports = {
 };
 if (require.main === module) {
   const args = process.argv.slice(2);
-  main(require('../host/session.cjs').resolve(args[0]), parseOptions(args)).catch(e => {
+  main(
+    require('../../../hbl-platform/sdk/host/session.cjs').resolve(args[0]),
+    parseOptions(args)
+  ).catch(e => {
     console.error(e);
     process.exitCode = 1;
   });

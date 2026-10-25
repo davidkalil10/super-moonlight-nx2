@@ -1,6 +1,12 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const {decode, toMoonlight, same, readController, NEUTRAL} = require('./controller.cjs');
+const {
+  decode,
+  toMoonlight,
+  same,
+  readController,
+  NEUTRAL
+} = require('../../../hbl-moonlight/tools/moonlight/controller.cjs');
 
 function npad({buttons = 0, lx = 0, ly = 0, rx = 0, ry = 0, connected = true} = {}) {
   const bytes = Buffer.alloc(64);

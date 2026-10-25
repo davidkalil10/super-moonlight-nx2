@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert');
-const hbv = require('./hbv.cjs');
-const {psnr} = require('./reference.cjs');
+const hbv = require('../../../hbl-moonlight/tools/moonlight/hbv.cjs');
+const {psnr} = require('../../../hbl-moonlight/tools/moonlight/reference.cjs');
 
 function gradient(width, height) {
   const rgb = Buffer.alloc(width * height * 3);
@@ -45,7 +45,7 @@ test('torn slot is rejected', () => {
 test('committed GLSL include matches the generator', () => {
   const fs = require('node:fs'),
     path = require('node:path');
-  const file = path.join(__dirname, '../../apps/moonlight/shaders/hbv.glsl');
+  const file = path.join(__dirname, '../../../hbl-moonlight/apps/moonlight/shaders/hbv.glsl');
   if (!fs.existsSync(file)) return;
   assert.strictEqual(fs.readFileSync(file, 'utf8'), hbv.glsl());
 });

@@ -1,15 +1,18 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const definitions = require('../../sdk/native/movie-functions.json');
-const registration = require('../../sdk/native/movie-event-functions.json').registerClientEvents;
-const {CODE} = require('../../sdk/native/thread.cjs');
-const ring = require('./ring.cjs');
-const status = require('./staggered-status.cjs');
-const gates = require('./staggered-gate.cjs');
-const outputPlan = require('./staggered-output-plan.cjs');
+const definitions = require('../../../hbl-moonlight/sdk/native/movie-functions.json');
+const registration =
+  require('../../../hbl-moonlight/sdk/native/movie-event-functions.json').registerClientEvents;
+const {CODE} = require('../../../hbl-platform/sdk/native/thread.cjs');
+const ring = require('../../../hbl-moonlight/tools/moonlight/ring.cjs');
+const status = require('../../../hbl-moonlight/tools/moonlight/staggered-status.cjs');
+const gates = require('../../../hbl-moonlight/tools/moonlight/staggered-gate.cjs');
+const outputPlan = require('../../../hbl-moonlight/tools/moonlight/staggered-output-plan.cjs');
 const {MODEL, simulate} = require('./request-budget.cjs');
-const {create: createWorker} = require('./staggered-worker.cjs');
-const {create, RESTART} = require('./staggered-live.cjs');
+const {
+  create: createWorker
+} = require('../../../hbl-moonlight/tools/moonlight/staggered-worker.cjs');
+const {create, RESTART} = require('../../../hbl-moonlight/tools/moonlight/staggered-live.cjs');
 
 const layout = {width: 1920, height: 1080, stride: 1920, sliceHeight: 1088};
 const noPause = async () => {};
