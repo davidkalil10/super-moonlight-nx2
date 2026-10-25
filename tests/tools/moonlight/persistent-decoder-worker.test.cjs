@@ -4,6 +4,7 @@ const definitions = require('../../sdk/native/movie-functions.json');
 const registration = require('../../sdk/native/movie-event-functions.json').registerClientEvents;
 const sync = require('../../sdk/native/os-sync-functions.json');
 const {CODE} = require('../../sdk/native/thread.cjs');
+const {PREAMBLE} = require('../../smilebasic/engine/shared/frames.cjs');
 const {create} = require('./persistent-decoder-worker.cjs');
 
 const SDK = 0x40000000;
@@ -123,10 +124,92 @@ function fixture({
     functions,
     calls,
     read,
+    write,
     get control() {
       return control;
     }
   };
+}
+
+function emulate(f, entry, onCall) {
+  const loadTable = SDK + CODE.loadTable.offset;
+  const call4 = SDK + CODE.call4.offset;
+  const save = SDK + CODE.saveResult64.offset;
+  const exit = SDK + CODE.exit.offset;
+  const jump = SDK + CODE.longjmp.offset;
+  const peek64 = address => Number(f.read(address, 8).readBigUInt64LE());
+  const poke64 = (address, value) => {
+    const bytes = Buffer.alloc(8);
+    bytes.writeBigUInt64LE(BigInt.asUintN(64, BigInt(value)));
+    f.write(address, bytes);
+  };
+  let registers;
+  let pc;
+  let result = 0n;
+  function enter(address) {
+    registers = {
+      x4: 0,
+      x5: 0,
+      x8: 0,
+      x19: peek64(address),
+      x20: peek64(address + 8),
+      x21: peek64(address + 0x10),
+      x25: peek64(address + 0x30),
+      sp: peek64(address + 0x68)
+    };
+    pc = peek64(address + 0x58);
+  }
+  enter(entry);
+  for (let steps = 0; steps < 10000; steps++) {
+    if (pc === exit) return;
+    if (pc === SDK + PREAMBLE) {
+      registers.x4 = registers.x21;
+      registers.x5 = registers.x20;
+      pc = registers.x19;
+    } else if (pc === loadTable || pc === loadTable + 8) {
+      if (pc === loadTable) registers.x8 = peek64(registers.x21);
+      registers.x20 = peek64(registers.sp + 0x20);
+      registers.x19 = peek64(registers.sp + 0x28);
+      registers.x21 = peek64(registers.sp + 0x10);
+      pc = peek64(registers.sp + 8);
+      registers.sp += 0x30;
+    } else if (pc === call4) {
+      const target = peek64(registers.x8 + 0x68);
+      const args = [
+        registers.x25,
+        registers.x21,
+        registers.x20,
+        registers.x19,
+        registers.x4,
+        registers.x5
+      ];
+      if (target === jump) {
+        enter(args[0]);
+        continue;
+      }
+      if (target === SDK + 0x586fb0 || target === SDK + 0x5872f0) {
+        f.write(args[0], f.read(args[1], args[2]));
+        result = BigInt(args[0]);
+      } else {
+        result = BigInt(onCall(target, args) ?? 0);
+      }
+      registers.x4 = registers.x5 = 0;
+      registers.x20 = peek64(registers.sp + 0xe0);
+      registers.x19 = peek64(registers.sp + 0xe8);
+      registers.x21 = peek64(registers.sp + 0xd8);
+      registers.x25 = peek64(registers.sp + 0xb8);
+      pc = peek64(registers.sp + 0xa8);
+      registers.sp += 0xf0;
+    } else if (pc === save) {
+      poke64(registers.x19, result);
+      registers.x19 = peek64(registers.sp + 0x10);
+      pc = peek64(registers.sp + 8);
+      registers.sp += 0x20;
+    } else {
+      throw Error('Unknown worker gadget at 0x' + pc.toString(16));
+    }
+  }
+  throw Error('Worker frame did not exit');
 }
 
 test('persistent decoder uses separate acquire and fetch gates, then joins', async () => {
@@ -258,4 +341,91 @@ test('diagnostic stages stop after their selected first-job call', async () => {
     await worker.stop();
     await worker.finalize();
   }
+});
+
+test('first gated wide call forwards the access-unit index, length and timestamp', async () => {
+  const f = fixture();
+  const worker = await create({
+    rpc: f.rpc,
+    module: f.module,
+    functions: f.functions,
+    decoder,
+    output,
+    format
+  });
+  await worker.register();
+  await worker.start({stage: 'send'});
+  const job = Buffer.alloc(24);
+  job.writeUInt32LE(1, 0);
+  job.writeInt32LE(3, 4);
+  job.writeUInt32LE(4096, 8);
+  job.writeBigUInt64LE(90000n, 16);
+  f.write(f.control + 0x1a0, job);
+  const seen = [];
+  emulate(f, 0x60000000 + 0x10000, (target, args) => {
+    seen.push({target, args});
+    return 0;
+  });
+  const send = seen.find(call => call.target === f.functions.sendInput);
+  assert.deepEqual(send.args, [decoder, 3, 0, 4096, 90000, 0]);
+  await worker.stop();
+  await worker.finalize();
+});
+
+test('first full gated job carries the acquired index into output fetch', async () => {
+  const f = fixture();
+  const worker = await create({
+    rpc: f.rpc,
+    module: f.module,
+    functions: f.functions,
+    decoder,
+    output,
+    format
+  });
+  await worker.register();
+  await worker.start();
+  const job = Buffer.alloc(24);
+  job.writeUInt32LE(1, 0);
+  job.writeInt32LE(3, 4);
+  job.writeUInt32LE(4096, 8);
+  job.writeBigUInt64LE(90000n, 16);
+  f.write(f.control + 0x1a0, job);
+  const destination = Buffer.alloc(16);
+  destination.writeBigUInt64LE(0x72000000n, 0);
+  destination.writeBigUInt64LE(0x400000n, 8);
+  f.write(f.control + 0x1c0, destination);
+  const seen = [];
+  const done = Error('done');
+  assert.throws(
+    () =>
+      emulate(f, 0x60000000 + 0x10000, (target, args) => {
+        if (target === f.functions.acquireOutput) {
+          const index = Buffer.alloc(4);
+          index.writeInt32LE(2);
+          f.write(args[1], index);
+          const pts = Buffer.alloc(8);
+          pts.writeBigUInt64LE(90000n);
+          f.write(args[2], pts);
+        }
+        if (target === SDK + sync.signalLightEvent.offset && args[0] === f.control + 0x30)
+          throw done;
+        seen.push({target, args});
+        return 0;
+      }),
+    error => error === done
+  );
+  assert.deepEqual(seen.find(call => call.target === f.functions.bufferSetData).args.slice(0, 3), [
+    output,
+    0x72000000,
+    0x400000
+  ]);
+  assert.deepEqual(seen.find(call => call.target === f.functions.getOutput).args.slice(0, 4), [
+    decoder,
+    2,
+    output,
+    format
+  ]);
+  assert.equal(seen.find(call => call.target === f.functions.releaseOutput).args[1], 2);
+  await worker.stop();
+  await worker.finalize();
 });
