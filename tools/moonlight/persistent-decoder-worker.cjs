@@ -31,6 +31,8 @@ const PROBE_DONE = 0x1d0;
 const SHORT = 2;
 const AUTO_CLEAR = 1;
 const READ = 0x586fb0;
+const DECODE_PROBES = new Set(['gate', 'dispatch', 'send', 'wait', 'acquire']);
+const FETCH_PROBES = new Set(['setData', 'getOutput', 'release', 'input', 'done']);
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const status = value => Number(BigInt.asUintN(32, value));
 
@@ -158,7 +160,7 @@ async function create({
 
     async start({stage = null} = {}) {
       if (thread !== null) throw Error('Persistent decoder worker already started');
-      if (stage !== null && !['gate', 'dispatch', 'send', 'wait', 'acquire'].includes(stage))
+      if (stage !== null && !DECODE_PROBES.has(stage) && !FETCH_PROBES.has(stage))
         throw Error('Invalid persistent decoder probe stage');
       probeStage = stage;
       await rpc.callAddress(sync.clearEvent, [event(OUTPUT_EVENT)], SHORT);
@@ -197,7 +199,7 @@ async function create({
                     acquireOutput,
                     {function: copy, args: [event(DECODE_RESULTS + 40), event(JOB), 4, 0]}
                   ]),
-              ...(stage
+              ...(DECODE_PROBES.has(stage)
                 ? [{function: sync.signalLightEvent, args: [event(PROBE_DONE), 0, 0, 0]}]
                 : [
                     {function: sync.signalLightEvent, args: [event(ACQUIRED), 0, 0, 0]},
@@ -212,30 +214,45 @@ async function create({
             ? {0: DECODE_RESULTS}
             : {0: DECODE_RESULTS, 2: DECODE_RESULTS + 8};
       const decode = frame(decodeFrame, decodeCalls, decodeResults);
+      const fetchCalls = [
+        {
+          function: functions.bufferSetData,
+          args: [output, {u64: event(FETCH_JOB)}, {u64: event(FETCH_JOB + 8)}, 0]
+        },
+        {
+          function: functions.getOutput,
+          args: [decoder, {u32: event(DECODE_RESULTS + 16)}, output, format]
+        },
+        {
+          function: functions.releaseOutput,
+          args: [decoder, {u32: event(DECODE_RESULTS + 16)}, 0, 0]
+        },
+        {
+          function: functions.acquireInput,
+          args: [decoder, event(FETCH_RESULTS + 32), event(FETCH_RESULTS + 36), 0]
+        },
+        {function: copy, args: [event(FETCH_RESULTS + 40), event(JOB), 4, 0]},
+        {function: sync.signalLightEvent, args: [event(DONE), 0, 0, 0]}
+      ];
+      const fetchLengths = {setData: 1, getOutput: 2, release: 3, input: 4, done: 6};
+      const fetchCount = fetchLengths[stage] ?? fetchCalls.length;
+      const fetchResults = [
+        FETCH_RESULTS,
+        FETCH_RESULTS + 8,
+        FETCH_RESULTS + 16,
+        FETCH_RESULTS + 24
+      ];
       const fetch = frame(
         fetchFrame,
         [
-          {
-            function: functions.bufferSetData,
-            args: [output, {u64: event(FETCH_JOB)}, {u64: event(FETCH_JOB + 8)}, 0]
-          },
-          {
-            function: functions.getOutput,
-            args: [decoder, {u32: event(DECODE_RESULTS + 16)}, output, format]
-          },
-          {
-            function: functions.releaseOutput,
-            args: [decoder, {u32: event(DECODE_RESULTS + 16)}, 0, 0]
-          },
-          {
-            function: functions.acquireInput,
-            args: [decoder, event(FETCH_RESULTS + 32), event(FETCH_RESULTS + 36), 0]
-          },
-          {function: copy, args: [event(FETCH_RESULTS + 40), event(JOB), 4, 0]},
-          {function: sync.signalLightEvent, args: [event(DONE), 0, 0, 0]},
-          {function: jump, args: [gateFrame, 1, 0, 0]}
+          ...fetchCalls.slice(0, fetchCount),
+          ...(FETCH_PROBES.has(stage)
+            ? [{function: sync.signalLightEvent, args: [event(PROBE_DONE), 0, 0, 0]}]
+            : [{function: jump, args: [gateFrame, 1, 0, 0]}])
         ],
-        {0: FETCH_RESULTS, 1: FETCH_RESULTS + 8, 2: FETCH_RESULTS + 16, 3: FETCH_RESULTS + 24}
+        Object.fromEntries(
+          fetchResults.slice(0, Math.min(fetchCount, 4)).map((slot, i) => [i, slot])
+        )
       );
       const stop = Buffer.alloc(0xb0);
       stop.writeBigUInt64LE(BigInt(sdk + CODE.exit.offset), 0x58);
@@ -266,7 +283,7 @@ async function create({
       job.writeUInt32LE(length, 8);
       job.writeBigUInt64LE(BigInt(pts), 16);
       await rpc.writeAndCall(event(JOB), job, sync.signalLightEvent, [event(GATE)]);
-      if (probeStage) {
+      if (DECODE_PROBES.has(probeStage)) {
         const result = await poll(PROBE_DONE, DECODE_RESULTS, 'probe ' + probeStage);
         return {
           pts: BigInt(pts),
@@ -295,7 +312,28 @@ async function create({
       const target = Buffer.alloc(16);
       target.writeBigUInt64LE(BigInt(destination.address), 0);
       target.writeBigUInt64LE(BigInt(destination.bytes), 8);
+      if (FETCH_PROBES.has(probeStage)) {
+        await rpc.write(event(FETCH_JOB), target);
+        if (!(await rpc.read(event(FETCH_JOB), target.length)).equals(target))
+          throw Error('Persistent decoder fetch job readback differs');
+      }
       await rpc.writeAndCall(event(FETCH_JOB), target, sync.signalLightEvent, [event(FETCH_GATE)]);
+      if (FETCH_PROBES.has(probeStage)) {
+        const fetched = await poll(PROBE_DONE, FETCH_RESULTS, 'probe ' + probeStage);
+        return {
+          pts: acquired.readBigUInt64LE(24),
+          input: {status: 0, index: -1},
+          probe: {
+            stage: probeStage,
+            outputIndex,
+            getStatus: status(fetched.readBigUInt64LE(8)),
+            releaseStatus: status(fetched.readBigUInt64LE(16)),
+            inputStatus: status(fetched.readBigUInt64LE(24)),
+            nextIndex: fetched.readInt32LE(32),
+            completedSequence: fetched.readUInt32LE(40)
+          }
+        };
+      }
       const fetched = await poll(DONE, FETCH_RESULTS, 'output fetch');
       if (fetched.readUInt32LE(40) !== sequence)
         throw Error('Persistent decoder completed the wrong access unit');
@@ -350,6 +388,7 @@ async function create({
         if (
           acquired.readUInt32LE(40) === active &&
           completed.readUInt32LE() !== active &&
+          !['release', 'input', 'done'].includes(probeStage) &&
           status(acquired.readBigUInt64LE(8)) === 0 &&
           acquired.readInt32LE(16) >= 0
         )
