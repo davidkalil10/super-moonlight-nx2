@@ -10,6 +10,7 @@ const row = (presented, extra = {}) => ({
   exchanges: presented * 10,
   bridgeMs: presented * 20,
   bridgeByStage: {persistent: {exchanges: presented * 8, bridgeMs: presented * 16}},
+  ms: {persistent: presented * 20, read: presented * 5},
   ...extra
 });
 
@@ -24,7 +25,13 @@ test('summary skips warm-up rows and reports per-frame bridge cost', () => {
   assert.equal(summary.idr, 0);
   assert.equal(summary.requestsPerFrame, 10);
   assert.equal(summary.bridgeMsPerFrame, 20);
-  assert.deepEqual(summary.stages.persistent, {requestsPerFrame: 8, bridgeMsPerFrame: 16});
+  assert.deepEqual(summary.stages.persistent, {
+    requestsPerFrame: 8,
+    bridgeMsPerFrame: 16,
+    wallMsPerFrame: 20,
+    waitMsPerFrame: 4
+  });
+  assert.equal(summary.stages.read.waitMsPerFrame, 5);
 });
 
 test('expectations parse strictly and score the summary', () => {

@@ -527,6 +527,11 @@ test('a scored run writes summary.json and rejects a bare --expect', {timeout: 5
     g.options.args.push('--expect', '--duration', '5');
     await assert.rejects(run(g.options), /--expect needs a value/);
   });
+  const h = await fixture();
+  await exercise(h, async () => {
+    h.options.args.push('--queue', '0');
+    await assert.rejects(run(h.options), /--queue takes 1 to 16/);
+  });
 });
 
 test(
