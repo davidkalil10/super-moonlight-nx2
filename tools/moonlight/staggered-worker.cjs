@@ -323,6 +323,30 @@ async function create({
       }
       decodeGateSignals++;
     },
+    async drainOutput({snapshot, expected, destination, frame}) {
+      if (!started || stopped || closed || retained || workers[1].joined)
+        throw Error('Staggered output drain is unavailable');
+      status.checkOutput(snapshot, expected);
+      const sequence = expected.acquire.sequence;
+      const descriptor = outputPlan.outputDescriptor({
+        auSequence: sequence,
+        destination,
+        frame,
+        publication
+      });
+      const slot = (sequence - 1) % 2;
+      try {
+        await rpc.writeAndCall(
+          at(outputPlan.CONTROL.descriptors[slot]),
+          descriptor,
+          sync.signalLightEvent,
+          [at(outputPlan.CONTROL.fetchGate)]
+        );
+      } catch (error) {
+        retained = true;
+        throw error;
+      }
+    },
     async inputSlot(index) {
       if (!started || stopped || closed || retained || !Number.isInteger(index) || index < 0)
         throw Error('Staggered input slot is unavailable');

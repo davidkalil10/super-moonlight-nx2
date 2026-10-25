@@ -57,32 +57,15 @@ function checkSequence(actual, expected, name) {
   if (actual !== expected) throw gateError(`${name} sequence ${actual}/${expected} differs`);
 }
 
-function check(snapshot, expected) {
-  const receive = expected.receive;
-  if (!receive || !Number.isInteger(receive.bytes) || receive.bytes < 1)
-    throw Error('Missing expected staggered receive');
-  checkSequence(snapshot.receive.sequence, receive.sequence, 'Receive');
-  if (snapshot.receive.count !== BigInt(receive.bytes))
-    throw gateError(`Short receive ${snapshot.receive.count}/${receive.bytes}`);
-
-  if (expected.input) {
-    checkSequence(snapshot.input.sequence, expected.input.sequence, 'Input');
-    if (snapshot.input.sendStatus !== 0n) throw gateError('Decoder input submit failed');
-    if (snapshot.input.nextIndex < 0 && [0x100en, 0x1011n].includes(snapshot.input.nextSlotStatus))
-      throw gateError('Decoder has no checked next input slot', true);
-    if (snapshot.input.nextSlotStatus !== 0n || snapshot.input.nextIndex < 0)
-      throw gateError('Decoder next-slot acquire failed');
-  }
-
-  if (expected.acquire) {
-    checkSequence(snapshot.acquire.sequence, expected.acquire.sequence, 'Acquire');
-    if (
-      snapshot.acquire.status !== 0n ||
-      snapshot.acquire.index < 0 ||
-      snapshot.acquire.pts !== BigInt(expected.acquire.pts)
-    )
-      throw gateError('Decoder output status, index or PTS differs');
-  }
+function checkOutput(snapshot, expected) {
+  if (!expected.acquire) throw Error('Missing expected staggered output acquire');
+  checkSequence(snapshot.acquire.sequence, expected.acquire.sequence, 'Acquire');
+  if (
+    snapshot.acquire.status !== 0n ||
+    snapshot.acquire.index < 0 ||
+    snapshot.acquire.pts !== BigInt(expected.acquire.pts)
+  )
+    throw gateError('Decoder output status, index or PTS differs');
 
   if (expected.fetch) {
     checkSequence(snapshot.fetch.sequence, expected.fetch.sequence, 'Fetch');
@@ -101,11 +84,38 @@ function check(snapshot, expected) {
       throw gateError('Applied publication surface differs');
   }
   return {
-    inputIndex: expected.input ? snapshot.input.nextIndex : null,
-    outputIndex: expected.acquire ? snapshot.acquire.index : null,
+    outputIndex: snapshot.acquire.index,
     current: snapshot.current,
     nativeApplied: snapshot.nativeApplied
   };
 }
 
-module.exports = {STATUS, READ_START, READ_END, parse, check};
+function check(snapshot, expected) {
+  const receive = expected.receive;
+  if (!receive || !Number.isInteger(receive.bytes) || receive.bytes < 1)
+    throw Error('Missing expected staggered receive');
+  checkSequence(snapshot.receive.sequence, receive.sequence, 'Receive');
+  if (snapshot.receive.count !== BigInt(receive.bytes))
+    throw gateError(`Short receive ${snapshot.receive.count}/${receive.bytes}`);
+
+  if (expected.input) {
+    checkSequence(snapshot.input.sequence, expected.input.sequence, 'Input');
+    if (snapshot.input.sendStatus !== 0n) throw gateError('Decoder input submit failed');
+    if (snapshot.input.nextIndex < 0 && [0x100en, 0x1011n].includes(snapshot.input.nextSlotStatus))
+      throw gateError('Decoder has no checked next input slot', true);
+    if (snapshot.input.nextSlotStatus !== 0n || snapshot.input.nextIndex < 0)
+      throw gateError('Decoder next-slot acquire failed');
+  }
+
+  const output = expected.acquire
+    ? checkOutput(snapshot, expected)
+    : {outputIndex: null, current: snapshot.current, nativeApplied: snapshot.nativeApplied};
+  if (!expected.acquire && (expected.fetch || expected.ack))
+    throw Error('Staggered fetch/ack check requires an acquired output');
+  return {
+    inputIndex: expected.input ? snapshot.input.nextIndex : null,
+    ...output
+  };
+}
+
+module.exports = {STATUS, READ_START, READ_END, parse, check, checkOutput};
