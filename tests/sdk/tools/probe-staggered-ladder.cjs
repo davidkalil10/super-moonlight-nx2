@@ -14,6 +14,7 @@ const {create: createDecoder} = require('../../tools/moonlight/native-decoder.cj
 const {create: createTransport} = require('../../tools/moonlight/native-tcp.cjs');
 const {create: createSink} = require('../../tools/moonlight/native-sink.cjs');
 const {create: createStaggered} = require('../../tools/moonlight/staggered-worker.cjs');
+const {waitChecked, waitOutput} = require('../../tools/moonlight/staggered-live.cjs');
 const inputPlan = require('../../tools/moonlight/staggered-input-plan.cjs');
 const outputPlan = require('../../tools/moonlight/staggered-output-plan.cjs');
 const checked = require('../../tools/moonlight/staggered-status.cjs');
@@ -87,49 +88,6 @@ async function requireFresh(sessionId, root = BUILD_ROOT) {
       if (error.code !== 'ENOENT') throw error;
     }
   }
-}
-
-async function waitChecked(worker, expected, {timeoutMs = 5000} = {}) {
-  const until = Date.now() + timeoutMs;
-  let nextInputRetry = 0;
-  while (Date.now() < until) {
-    const snapshot = await worker.readStatus();
-    try {
-      checked.check(snapshot, expected);
-      return snapshot;
-    } catch (error) {
-      if (!error.retryable) throw error;
-      if (
-        Date.now() >= nextInputRetry &&
-        expected.input &&
-        snapshot.receive.sequence === expected.receive.sequence &&
-        snapshot.receive.count === BigInt(expected.receive.bytes) &&
-        snapshot.input.sequence === expected.input.sequence &&
-        snapshot.input.nextIndex < 0 &&
-        [0x100en, 0x1011n].includes(snapshot.input.nextSlotStatus)
-      ) {
-        await worker.retryInputSlot(expected.input.sequence);
-        nextInputRetry = Date.now() + 20;
-      }
-    }
-    await pause(5);
-  }
-  throw Error('Staggered checked status timed out');
-}
-
-async function waitOutput(worker, expected, {timeoutMs = 5000} = {}) {
-  const until = Date.now() + timeoutMs;
-  while (Date.now() < until) {
-    const snapshot = await worker.readStatus();
-    try {
-      checked.checkOutput(snapshot, expected);
-      return snapshot;
-    } catch (error) {
-      if (!error.retryable) throw error;
-    }
-    await pause(5);
-  }
-  throw Error('Staggered tail output timed out');
 }
 
 async function runScenario({rpc, directory, storage, units, sps, pps, indices, mode, step}) {

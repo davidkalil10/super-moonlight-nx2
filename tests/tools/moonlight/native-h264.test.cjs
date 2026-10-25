@@ -733,3 +733,158 @@ test(
     });
   }
 );
+
+function staggeredFake(events, {pushFails = null, stopFails = false} = {}) {
+  return () => {
+    let pending = false;
+    events.push({type: 'staggered-create'});
+    return {
+      async factory() {},
+      start({frame}) {
+        events.push({type: 'staggered-start', layout: frame});
+      },
+      async push(unit, {sink, onDecoded, onPresented}) {
+        events.push({type: 'staggered-push', pts: unit.pts});
+        if (unit.pts === pushFails) throw Error('Short receive 10/20');
+        if (pending) {
+          await sink.workerDestination({current: 0, applied: 0});
+          onDecoded(1);
+          onPresented(1);
+        }
+        pending = true;
+      },
+      async finish({onDecoded, onPresented}) {
+        events.push({type: 'staggered-finish'});
+        pending = false;
+        onDecoded(2);
+        onPresented(2);
+        return {drained: 2};
+      },
+      async snapshot() {
+        events.push({type: 'staggered-snapshot'});
+        return {receive: {sequence: 1, count: '10'}};
+      },
+      async stop() {
+        events.push({type: 'staggered-stop'});
+        if (stopFails) throw Error('Staggered worker native objects retained; restart SmileBASIC');
+      },
+      exists: true,
+      get pending() {
+        return pending;
+      },
+      get counts() {
+        return {submitted: 5, decoded: 5, presented: 5, tailDrained: 2};
+      }
+    };
+  };
+}
+
+test('--staggered rejects the paired and split worker flags', {timeout: 5000}, async () => {
+  for (const flag of [
+    '--paired-loop',
+    '--native-publish',
+    '--auto-output-queue',
+    '--linked-gates'
+  ]) {
+    const f = await fixture();
+    await exercise(f, async () => {
+      f.options.args.push('--staggered', flag);
+      await assert.rejects(run(f.options), /--staggered drives its own input and output workers/);
+    });
+  }
+});
+
+test('the default path never creates the staggered scheduler', {timeout: 5000}, async () => {
+  const f = await fixture({units: pairedUnits(3)});
+  f.options.createStaggered = () => assert.fail('staggered scheduler created');
+  await exercise(f, async () => {
+    const summary = await run(f.options);
+    assert.equal(summary.workerMode, 'persistent');
+    assert.equal(summary.staggered, undefined);
+    assert.equal(f.events.find(event => event.type === 'create-decoder').publication, null);
+  });
+});
+
+test(
+  '--staggered feeds units after the host IDR, drains the tail, then stops before the decoder',
+  {timeout: 5000},
+  async () => {
+    const f = await fixture({units: pairedUnits(6)});
+    f.options.createStaggered = staggeredFake(f.events);
+    f.options.args.push('--staggered', '--queue', '16');
+    await exercise(f, async () => {
+      const summary = await run(f.options);
+      const created = f.events.find(event => event.type === 'create-decoder');
+      assert.equal(created.mode, 'split');
+      assert.deepEqual(created.publication, {mapped: 0x1000000, color: 1});
+      assert.equal(typeof created.splitWorkerFactory, 'function');
+      const names = f.events.map(event => event.type);
+      assert.ok(names.indexOf('publish') < names.indexOf('staggered-start'));
+      assert.equal(names.includes('start-split'), false);
+      assert.equal(f.events.find(event => event.type === 'staggered-start').layout.width, 128);
+      assert.deepEqual(
+        f.events.filter(event => event.type === 'staggered-push').map(event => event.pts),
+        [2000, 3000, 4000, 5000, 6000]
+      );
+      assert.ok(names.lastIndexOf('staggered-push') < names.indexOf('staggered-finish'));
+      assert.deepEqual(names.slice(-4), [
+        'staggered-stop',
+        'decoder-close',
+        'close-transport',
+        'sink-close'
+      ]);
+      assert.equal(summary.workerMode, 'staggered');
+      assert.deepEqual(summary.staggered.tail, {drained: 2});
+      assert.equal(summary.staggered.tailDrained, 2);
+    });
+  }
+);
+
+test(
+  'a failed staggered check snapshots the worker and stops it without a tail',
+  {timeout: 5000},
+  async () => {
+    const f = await fixture({units: pairedUnits(4)});
+    f.options.createStaggered = staggeredFake(f.events, {pushFails: 3000});
+    f.options.args.push('--staggered', '--queue', '16');
+    await exercise(f, async () => {
+      await assert.rejects(run(f.options), /Short receive/);
+      const names = f.events.map(event => event.type);
+      assert.equal(names.includes('staggered-finish'), false);
+      assert.ok(names.indexOf('staggered-snapshot') < names.indexOf('staggered-stop'));
+      assert.deepEqual(names.slice(-4), [
+        'staggered-stop',
+        'decoder-close',
+        'close-transport',
+        'sink-close'
+      ]);
+    });
+  }
+);
+
+test(
+  'an uncertain staggered stop aborts TCP and leaves decoder and sink retained',
+  {timeout: 5000},
+  async () => {
+    const f = await fixture({units: pairedUnits(3)});
+    f.options.createStaggered = staggeredFake(f.events, {stopFails: true});
+    const createTransport = f.options.createTransport;
+    f.options.createTransport = async config => ({
+      ...(await createTransport(config)),
+      abort() {
+        f.events.push({type: 'abort-transport'});
+      }
+    });
+    f.options.args.push('--staggered');
+    await exercise(f, async () => {
+      await assert.rejects(run(f.options), error =>
+        error.errors.every(item => /restart SmileBASIC/.test(item.message))
+      );
+      const names = f.events.map(event => event.type);
+      assert.deepEqual(names.slice(-2), ['staggered-stop', 'abort-transport']);
+      assert.equal(names.filter(name => name === 'staggered-stop').length, 1);
+      assert.equal(names.includes('decoder-close'), false);
+      assert.equal(names.includes('sink-close'), false);
+    });
+  }
+);
