@@ -26,12 +26,15 @@ function summarize(rows, {warmup = 3} = {}) {
   const presented = sum('presented');
   const perFrame = value => (presented ? +(value / presented).toFixed(2) : null);
   const stages = {};
-  for (const row of steady)
+  const stageOf = name => (stages[name] ||= {exchanges: 0, bridgeMs: 0, wallMs: 0});
+  for (const row of steady) {
     for (const [name, value] of Object.entries(row.bridgeByStage || {})) {
-      const stage = (stages[name] ||= {exchanges: 0, bridgeMs: 0});
+      const stage = stageOf(name);
       stage.exchanges += value.exchanges;
       stage.bridgeMs += value.bridgeMs;
     }
+    for (const [name, value] of Object.entries(row.ms || {})) stageOf(name).wallMs += value;
+  }
   return {
     seconds: steady.length,
     warmup: Math.min(warmup, rows.length),
@@ -46,7 +49,12 @@ function summarize(rows, {warmup = 3} = {}) {
     stages: Object.fromEntries(
       Object.entries(stages).map(([name, stage]) => [
         name,
-        {requestsPerFrame: perFrame(stage.exchanges), bridgeMsPerFrame: perFrame(stage.bridgeMs)}
+        {
+          requestsPerFrame: perFrame(stage.exchanges),
+          bridgeMsPerFrame: perFrame(stage.bridgeMs),
+          wallMsPerFrame: perFrame(stage.wallMs),
+          waitMsPerFrame: perFrame(Math.max(0, stage.wallMs - stage.bridgeMs))
+        }
       ])
     )
   };

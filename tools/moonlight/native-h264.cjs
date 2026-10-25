@@ -73,6 +73,8 @@ async function run({
   const scoring = require('./run-summary.cjs');
   const duration = cli.number(args, '--duration', null);
   const warmup = cli.number(args, '--warmup', 3);
+  const queue = cli.number(args, '--queue', 3);
+  if (!Number.isInteger(queue) || queue < 1 || queue > 16) throw Error('--queue takes 1 to 16 units');
   if (duration !== null && !(duration > 0)) throw Error('--duration takes seconds');
   if (!Number.isInteger(warmup) || warmup < 0) throw Error('--warmup takes whole seconds');
   if (args.includes('--expect') && !/^[a-z]/i.test(cli.option(args, '--expect') ?? ''))
@@ -214,7 +216,7 @@ async function run({
       {stdio: ['pipe', 'ignore', 'pipe', audio ? 'pipe' : 'ignore', 'pipe']}
     );
     reader = new AccessUnits(helper.stdio[4], {
-      maxQueuedUnits: 3,
+      maxQueuedUnits: queue,
       onBacklog: requestIdr
     });
     helper.stdin.on('error', error => {
@@ -504,7 +506,7 @@ async function run({
     process.removeListener('SIGTERM', onTerminate);
     if (errors.length) throw new AggregateError(errors, 'Native H.264 shutdown failed');
   }
-  const summary = {workerMode, ...scoring.summarize(rows, {warmup}), expect, stopReason};
+  const summary = {workerMode, queue, ...scoring.summarize(rows, {warmup}), expect, stopReason};
   const result = scoring.verdict(summary, expect);
   if (duration !== null && stopReason !== 'duration')
     result.failures.push('ended before duration: ' + stopReason);
