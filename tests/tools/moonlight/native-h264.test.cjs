@@ -14,6 +14,7 @@ const pcm = Buffer.from('0001020304050607', 'hex');
 async function fixture({
   audioFailure = false,
   latency = 0,
+  emptyPolls = 0,
   units = [{hex: accessUnit.toString('hex'), keyframe: true, pts: 123456}]
 } = {}) {
   const root = process.env.HB_NATIVE_TEST_DIR || path.join(os.tmpdir(), 'hbl-native-h264-tests');
@@ -27,7 +28,8 @@ async function fixture({
   const children = [];
   // The decoder holds `latency` frames in its pipeline before the first comes
   // out, so a frame is ready to acquire only once more than `latency` are in.
-  let pipeline = 0;
+  let pipeline = 0,
+    pending = 0;
   const options = {
     args: ['--moonlight', 'host', 'Desktop'],
     directory,
@@ -64,6 +66,11 @@ async function fixture({
         },
         async receive() {
           events.push({type: 'receive'});
+          if (pending < emptyPolls) {
+            pending++;
+            return null;
+          }
+          pending = 0;
           if (pipeline <= latency) return null;
           pipeline--;
           return {format: 'nv12', width: 128, height: 96, stride: 128, sliceHeight: 96};
@@ -231,6 +238,24 @@ test('persistent worker takes over after a host-driven first frame', {timeout: 5
     assert.equal(f.events.filter(event => event.type === 'start-persistent').length, 1);
     assert.equal(f.events.filter(event => event.type === 'process-persistent').length, 1);
     assert.equal(f.events.filter(event => event.type === 'publish').length, 2);
+  });
+});
+
+test('persistent worker waits for a late first output before taking over', {timeout: 5000}, async () => {
+  const f = await fixture({
+    emptyPolls: 2,
+    units: [
+      {hex: accessUnit.toString('hex'), keyframe: true, pts: 1000},
+      {hex: accessUnit.toString('hex'), keyframe: false, pts: 2000}
+    ]
+  });
+  f.options.args.push('--decoder-worker', 'persistent');
+  await exercise(f, async () => {
+    await run(f.options);
+    assert.equal(f.events.filter(event => event.type === 'submit').length, 1);
+    assert.equal(f.events.filter(event => event.type === 'receive').length, 3);
+    assert.equal(f.events.filter(event => event.type === 'start-persistent').length, 1);
+    assert.equal(f.events.filter(event => event.type === 'process-persistent').length, 1);
   });
 });
 
