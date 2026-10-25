@@ -209,7 +209,19 @@ async function create({
         sequence > 0xffffffff
       )
         throw Error('Paired loop cannot start another pair');
-      await rpc.write(at(c.acquired[0]), Buffer.alloc(0x280, 0xff));
+      const reset = Buffer.alloc(0x280, 0xff);
+      for (const offset of [
+        c.acquireResults,
+        c.acquireResults + 8,
+        c.firstResults,
+        c.firstResults + 8,
+        c.firstResults + 16,
+        c.secondResults,
+        c.secondResults + 8,
+        c.secondResults + 16
+      ])
+        reset.writeBigUInt64LE(SENTINEL, offset - c.acquired[0]);
+      await rpc.write(at(c.acquired[0]), reset);
       const job = Buffer.alloc(4);
       job.writeUInt32LE(sequence);
       active = {sequence, acquired: null, destinations: null, firstDone: false};
@@ -321,23 +333,27 @@ async function create({
           redirects.writeBigUInt64LE(BigInt(built.locations.exit), index * 8);
         await rpc.write(at(c.dispatch[0]), redirects);
         await signal('startGate');
+        await signal('fetchGate');
+        await signal('secondGate');
         if (active && !active.acquired) {
-          const first = await rpc.read(at(c.acquireResults), 8);
-          if (first.readBigUInt64LE() === SENTINEL) {
-            await rpc.callAddress(rpc.a.sdk + SYNC.signalEvent.offset, [event], SHORT);
-            const until = Date.now() + timeoutMs;
+          const until = Date.now() + timeoutMs;
+          for (let index = 0; index < 2; index++) {
             while (Date.now() < until) {
-              const current = await rpc.read(at(c.acquireResults), 8);
+              const current = await rpc.read(at(c.acquireResults + index * 8), 8);
               if (current.readBigUInt64LE() !== SENTINEL) break;
-              if ((await rpc.callAddress(rpc.a.sdk + CODE.tryWait.offset, [thread], SHORT)).result === 1n)
-                break;
+              const state = (
+                await rpc.callAddress(rpc.a.sdk + CODE.tryWait.offset, [thread], SHORT)
+              ).result;
+              if (state === 1n) break;
+              if (state !== 0n) {
+                retained = true;
+                throw Error('Paired loop thread state invalid during stop');
+              }
+              await rpc.callAddress(rpc.a.sdk + SYNC.signalEvent.offset, [event], SHORT);
               await pause(25);
             }
           }
-          await rpc.callAddress(rpc.a.sdk + SYNC.signalEvent.offset, [event], SHORT);
         }
-        await signal('fetchGate');
-        await signal('secondGate');
         const done = await wait(rpc, thread, {
           timeoutMs,
           pollMs: 25,
