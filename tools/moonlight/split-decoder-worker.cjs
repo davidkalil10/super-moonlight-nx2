@@ -44,7 +44,7 @@ const STATUS_FIELDS = {
   acquire: {offset: OUTPUT_RESULTS - RECEIVE_RESULTS, sequence: 32, bytes: 36},
   fetch: {offset: FETCH_RESULTS - RECEIVE_RESULTS, sequence: 24, bytes: 28}
 };
-const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+const EXPECTED_DECODE_MS = 12;
 const status = value => Number(BigInt.asUintN(32, value));
 
 async function create({
@@ -147,6 +147,7 @@ async function create({
   const statusWaiters = new Set();
   let statusLoop = null;
   let statusClosing = false;
+  let wakeStatusLoop = null;
   const jump = sdk + CODE.longjmp.offset;
   const copy = sdk + IPC_COPY.offset;
   const frame = (base, calls, results = {}) => {
@@ -178,14 +179,36 @@ async function create({
     statusWaiters.clear();
   }
 
+  function waitForStatusTick(delay) {
+    return new Promise(resolve => {
+      const timer = setTimeout(() => {
+        wakeStatusLoop = null;
+        resolve();
+      }, delay);
+      wakeStatusLoop = () => {
+        clearTimeout(timer);
+        wakeStatusLoop = null;
+        resolve();
+      };
+    });
+  }
+
   function runStatusScheduler() {
     if (statusLoop || statusClosing) return;
     statusLoop = (async () => {
       try {
         while (statusWaiters.size && !statusClosing) {
+          const readyAt = Math.min(
+            ...Array.from(statusWaiters, waiter => Math.min(waiter.readyAt, waiter.until))
+          );
+          if (readyAt > Date.now()) {
+            await waitForStatusTick(readyAt - Date.now());
+            continue;
+          }
           const snapshot = await rpc.read(address(RECEIVE_RESULTS), STATUS_BYTES);
           const now = Date.now();
           for (const waiter of statusWaiters) {
+            if (now < waiter.readyAt && now < waiter.until) continue;
             const field = STATUS_FIELDS[waiter.kind];
             const sequence = snapshot.readUInt32LE(field.offset + field.sequence);
             if (sequence === waiter.sequence) {
@@ -200,7 +223,7 @@ async function create({
             }
           }
           if (cancelled()) rejectStatusWaiters(Error('Native decoding cancelled'));
-          if (statusWaiters.size) await sleep(2);
+          if (statusWaiters.size) await waitForStatusTick(2);
         }
       } catch (error) {
         rejectStatusWaiters(error);
@@ -211,18 +234,21 @@ async function create({
     })();
   }
 
-  function waitStatus(kind, sequence, label) {
+  function waitStatus(kind, sequence, label, readyAt = Date.now()) {
     if (statusClosing) throw Error('Split decoder status scheduler is stopped');
     return new Promise((resolve, reject) => {
+      const running = Boolean(statusLoop);
       statusWaiters.add({
         kind,
         sequence,
         label,
+        readyAt,
         until: Date.now() + pollTimeoutMs,
         resolve,
         reject
       });
       runStatusScheduler();
+      if (running) wakeStatusLoop?.();
     });
   }
 
@@ -253,7 +279,12 @@ async function create({
   async function acquiredOutput(job) {
     if (!job || activeOutput !== job || !video.thread || video.joined)
       throw Error('Split output job is not ready');
-    const acquired = await waitStatus('acquire', job.sequence, 'output acquire');
+    const acquired = await waitStatus(
+      'acquire',
+      job.sequence,
+      'output acquire',
+      (job.decodeGateAt ?? Date.now()) + EXPECTED_DECODE_MS
+    );
     const acquiredStatus = status(acquired.readBigUInt64LE(0));
     const outputIndex = acquired.readInt32LE(8);
     if (acquiredStatus || outputIndex < 0) {
@@ -417,7 +448,15 @@ async function create({
       video.uncertain = false;
     },
 
-    async stageInput({index, length, receiveLength = length, pts, inputAddress, payload}) {
+    async stageInput({
+      index,
+      length,
+      receiveLength = length,
+      pts,
+      inputAddress,
+      payload,
+      sendFirst = false
+    }) {
       if (!input.thread || input.joined || activeInput)
         throw Error('Split input worker is not ready');
       if (
@@ -428,6 +467,7 @@ async function create({
         !Number.isInteger(receiveLength) ||
         receiveLength < 1 ||
         receiveLength > length ||
+        (sendFirst && receiveLength !== length) ||
         !Number.isInteger(index) ||
         index < 0 ||
         !Number.isSafeInteger(inputAddress) ||
@@ -438,7 +478,7 @@ async function create({
         throw Error('Invalid split decoder input job');
       const sequence = (nextSequence + 1) >>> 0 || 1;
       nextSequence = sequence;
-      const job = {sequence, pts: BigInt(pts), length, payload};
+      const job = {sequence, pts: BigInt(pts), length, payload, sent: false};
       const bytes = Buffer.alloc(32);
       bytes.writeUInt32LE(sequence, 0);
       bytes.writeInt32LE(index, 4);
@@ -446,17 +486,29 @@ async function create({
       bytes.writeUInt32LE(receiveLength, 12);
       bytes.writeBigUInt64LE(BigInt(pts), 16);
       bytes.writeBigUInt64LE(BigInt(inputAddress), 24);
+      if (sendFirst) {
+        await transport.send(payload);
+        job.sent = true;
+      }
       activeInput = job;
-      await rpc.writeAndCall(address(INPUT_JOB), bytes, sync.signalLightEvent, [
-        address(INPUT_GATE)
-      ]);
+      try {
+        await rpc.writeAndCall(address(INPUT_JOB), bytes, sync.signalLightEvent, [
+          address(INPUT_GATE)
+        ]);
+      } catch (error) {
+        activeInput = null;
+        throw error;
+      }
       return job;
     },
 
     async completeInput(job, payload = job?.payload) {
       if (!job || activeInput !== job || !input.thread || input.joined)
         throw Error('Split input job is not ready');
-      await transport.send(payload);
+      if (!job.sent) {
+        await transport.send(payload);
+        job.sent = true;
+      }
       const received = await waitStatus('receive', job.sequence, 'TCP receive');
       const count = received.readBigInt64LE(0);
       const receivedSequence = received.readUInt32LE(8);
@@ -465,6 +517,7 @@ async function create({
           `Native TCP receive returned ${count}/${job.length} bytes and sequence ${receivedSequence}/${job.sequence}`
         );
       await rpc.callAddress(sync.signalLightEvent, [address(DECODE_GATE)], SHORT);
+      job.decodeGateAt = Date.now();
       decodeGateSignals++;
       const completed = await waitStatus('input', job.sequence, 'input submit');
       if (completed.readUInt32LE(24) !== job.sequence)
@@ -481,7 +534,12 @@ async function create({
           result: inputStatus
         });
       activeInput = null;
-      return {sequence: job.sequence, pts: job.pts, input: {status: inputStatus, index: nextIndex}};
+      return {
+        sequence: job.sequence,
+        pts: job.pts,
+        decodeGateAt: job.decodeGateAt,
+        input: {status: inputStatus, index: nextIndex}
+      };
     },
 
     async input(job) {
@@ -553,6 +611,7 @@ async function create({
         throw Error('Split decoder thread creation is uncertain; decoder and events retained');
       statusClosing = true;
       rejectStatusWaiters(Error('Split decoder stopped'));
+      wakeStatusLoop?.();
       if (statusLoop) await statusLoop;
       if ((!input.thread || input.joined) && (!video.thread || video.joined)) return;
       transport.abort();

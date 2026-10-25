@@ -386,7 +386,7 @@ async function create({
       splitStarted = true;
     },
 
-    async stageSplitInput(unit) {
+    async stageSplitInput(unit, {sendFirst = false} = {}) {
       if (!splitStarted || closed || !running || splitInputJob)
         throw Error('Split decoder input is not ready');
       if (
@@ -411,7 +411,8 @@ async function create({
         receiveLength: unit.receiveLength,
         pts: unit.pts,
         inputAddress: address,
-        payload: unit.data
+        payload: unit.data,
+        sendFirst
       });
       return splitInputJob;
     },
@@ -428,7 +429,7 @@ async function create({
     },
 
     async submitSplit(unit) {
-      await this.stageSplitInput(unit);
+      await this.stageSplitInput(unit, {sendFirst: true});
       return this.completeSplitInput();
     },
 
