@@ -40,8 +40,8 @@ const MODEL = {
 };
 const PLAN_DECODE_MS = 13;
 const R3_DECODE_MS = 6.85;
-// staggered-live.cjs pauses 5 ms before rereading a late status.
-const STAGGERED = {retryWaitMs: 5, audioIntervalMs: 1000};
+// staggered-live.cjs rereads a late gate status back to back; it paused 5 ms before.
+const STAGGERED = {retryWaitMs: 0, audioIntervalMs: 1000};
 
 // Step 3a device baselines at 1080p30, revision 8805924 (R1B-CONCURRENCY-RESULTS.md).
 const BASELINE = {
@@ -919,7 +919,7 @@ async function budget({frames = 120, model = MODEL} = {}) {
   const staggeredRetryWait = {};
   for (const decodeMs of [model.decodeMs, R3_DECODE_MS]) {
     for (const retryRate of [0.1, 0.3]) {
-      for (const retryWaitMs of [STAGGERED.retryWaitMs, 1, 0]) {
+      for (const retryWaitMs of [5, 1, 0]) {
         const options = {mode: 'staggered', frames, presentHz: 120, retryRate, lag: 2};
         const rate = {...model, decodeMs, sourceFps: 120};
         const free = await simulate({

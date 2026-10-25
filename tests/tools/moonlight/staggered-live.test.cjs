@@ -177,8 +177,8 @@ function simulatedDevice({late = new Set()} = {}) {
   return {rpc, transport, module, functions, publication, sink, requests, pts};
 }
 
-async function liveOn(device) {
-  const live = create({createWorker, pause: noPause});
+async function liveOn(device, pause = noPause) {
+  const live = create({createWorker, pause});
   const worker = await live.factory({
     rpc: device.rpc,
     module: device.module,
@@ -234,7 +234,13 @@ test('a short stream drains its lag-2 tail and stops both workers before finaliz
     ['gate', 'drain', 'drain']
   );
   assert.equal(device.transport.aborted, true);
-  assert.deepEqual(live.counts, {submitted: 5, decoded: 5, presented: 5, tailDrained: 2});
+  assert.deepEqual(live.counts, {
+    submitted: 5,
+    decoded: 5,
+    presented: 5,
+    tailDrained: 2,
+    rereads: 0
+  });
   await live.stop();
   assert.equal(live.retained, false);
 });
@@ -260,7 +266,8 @@ test('steady frames cost the request-budget staggered lag-2 reference', async ()
 test('a late receive costs the one reread the request budget models', async () => {
   const late = new Set([10, 12, 14, 16, 18, 20, 22, 24]);
   const device = simulatedDevice({late});
-  const live = await liveOn(device);
+  const pauses = [];
+  const live = await liveOn(device, async ms => pauses.push(ms));
   const steady = [];
   await stream(device, live, 25, (sequence, requests) => {
     if (sequence > 9) steady.push(requests.length);
@@ -271,6 +278,8 @@ test('a late receive costs the one reread the request budget models', async () =
     Math.abs(measured - reference) < 0.02,
     `scheduler ${measured} vs model ${reference} requests/frame`
   );
+  assert.equal(live.counts.rereads, late.size);
+  assert.deepEqual(pauses, [], 'late gate statuses are reread without a pause');
   await live.finish({sink: device.sink});
   await live.stop();
 });

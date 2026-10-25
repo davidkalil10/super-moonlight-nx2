@@ -202,7 +202,13 @@ test('every submit waits for the previous acquisition, so no output wake is lost
   const live = await d.live();
   await stream(live, d.sink, 9);
   assert.deepEqual(await live.finish({sink: d.sink}), {drained: 2});
-  assert.deepEqual(live.counts, {submitted: 9, decoded: 9, presented: 9, tailDrained: 2});
+  assert.deepEqual(live.counts, {
+    submitted: 9,
+    decoded: 9,
+    presented: 9,
+    tailDrained: 2,
+    rereads: 6
+  });
   assert.equal(d.decoder.coalesced, 0);
   assert.equal(d.decoder.maxReady, 1);
   submittedAfterAcquired(d.log);
@@ -245,7 +251,13 @@ test('a delayed N-2 fetch keeps decode N closed until N-1 is acquired', async ()
   assert.equal(observed.parked.gates, 4);
   assert.equal(observed.released.acquire, 3);
   assert.deepEqual(await live.finish({sink: d.sink}), {drained: 2});
-  assert.deepEqual(live.counts, {submitted: 7, decoded: 7, presented: 7, tailDrained: 2});
+  assert.deepEqual(live.counts, {
+    submitted: 7,
+    decoded: 7,
+    presented: 7,
+    tailDrained: 2,
+    rereads: 3
+  });
   assert.equal(d.decoder.coalesced, 0);
   submittedAfterAcquired(d.log);
   await live.stop();
