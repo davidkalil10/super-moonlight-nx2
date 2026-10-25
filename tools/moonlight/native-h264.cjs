@@ -57,9 +57,9 @@ async function run({
     app = args[at + 2];
   if (at < 0 || !host || !app) throw Error('Native H.264 requires --moonlight HOST APP');
   const audio = !args.includes('--no-audio');
+  const workerMode = args.includes('--split-decoder') ? 'split' : 'persistent';
   const bitrate = require('./bitrate.cjs').bitrate(args, width, height, fps);
-  if (!rpc.host)
-    throw Error('Native TCP requires a fresh launcher session from this branch');
+  if (!rpc.host) throw Error('Native TCP requires a fresh launcher session from this branch');
   const revision =
     sourceRevision ||
     execFileSync('git', ['rev-parse', 'HEAD'], {
@@ -143,7 +143,7 @@ async function run({
           rpc,
           directory,
           workerDirectory: path.join(output, 'decoder-' + generation),
-          workerMode: 'persistent',
+          workerMode,
           transport,
           log,
           cancelled
@@ -239,7 +239,8 @@ async function run({
     let sps,
       pps,
       configured = false,
-      persistentStarted = false,
+      workerStarted = false,
+      pendingSplitOutput = null,
       outstanding = 0;
     async function resync(error) {
       resets = resets.filter(time => Date.now() - time < 30000);
@@ -251,7 +252,8 @@ async function run({
       generation++;
       decoder = await makeDecoder();
       configured = false;
-      persistentStarted = false;
+      workerStarted = false;
+      pendingSplitOutput = null;
       outstanding = 0;
       requestIdr();
     }
@@ -310,7 +312,27 @@ async function run({
         configured = true;
       }
       try {
-        if (persistentStarted) {
+        if (workerStarted && workerMode === 'split') {
+          enter('split-input');
+          const current = await decoder.submitSplit(unit);
+          stats.submitted++;
+          if (pendingSplitOutput) {
+            enter('destination');
+            const destination = await sink.destination();
+            enter('split-output');
+            const frame = await decoder.finishSplitOutput(pendingSplitOutput, destination);
+            stats.decoded++;
+            enter('publish');
+            await sink.publish(destination, frame);
+            stats.presented++;
+          }
+          enter('split-queue');
+          await decoder.queueSplitOutput(current);
+          pendingSplitOutput = current;
+          enter('read');
+          continue;
+        }
+        if (workerStarted) {
           enter('persistent');
           await decoder.beginPersistent(unit);
           enter('destination');
@@ -347,10 +369,11 @@ async function run({
           enter('publish');
           await sink.publish(destination, frame);
           stats.presented++;
-          if (outstanding === 0 && !persistentStarted) {
-            await decoder.startPersistent();
-            persistentStarted = true;
-            log({event: 'persistent-worker', started: true});
+          if (outstanding === 0 && !workerStarted) {
+            if (workerMode === 'split') await decoder.startSplit();
+            else await decoder.startPersistent();
+            workerStarted = true;
+            log({event: workerMode + '-worker', started: true});
           }
         }
       } catch (error) {
@@ -358,6 +381,17 @@ async function run({
         await resync(error);
       }
       enter('read');
+    }
+    if (workerMode === 'split' && pendingSplitOutput && !stopping) {
+      enter('destination');
+      const destination = await sink.destination();
+      enter('split-output');
+      const frame = await decoder.finishSplitOutput(pendingSplitOutput, destination);
+      stats.decoded++;
+      enter('publish');
+      await sink.publish(destination, frame);
+      stats.presented++;
+      pendingSplitOutput = null;
     }
   } catch (error) {
     if (!stopping) {

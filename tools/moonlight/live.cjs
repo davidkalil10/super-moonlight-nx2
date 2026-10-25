@@ -10,6 +10,7 @@
 //        hbv1: [--workers 12]
 //        hbv2: [--budget 96] [--cap 256] (KiB) [--qp-min 4] [--qp-max 40]
 //              [--refresh 2] [--threads N] [--resync 1000] (ms)
+//        h264: [--split-decoder] (staged input/output workers)
 // --moonlight runs tools/moonlight/helper's hbmoonlight (path from $HBMOONLIGHT)
 //   and, unless --no-input / --no-audio, also feeds controller+touch into its
 //   stdin (input-feeder.cjs) and plays its audio on the console (audio-stream.cjs).
