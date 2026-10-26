@@ -10,8 +10,10 @@
  * replay of the last applied publication, so the shader keeps it off screen and the next gate
  * does not wait for a present. At most MAX_SKIPS outputs in a row are skipped this way.
  * trimBacklogMs (backlog rule only) skips one output the same way once the unit in hand has
- * been older than that at TRIM_FRAMES gates in a row, which drops a standing frame of delay
- * that the queued count cannot see.
+ * been older than that, with another unit queued behind it, at TRIM_FRAMES gates in a row.
+ * That drops a standing frame of delay the queued count cannot see. With nothing queued the age
+ * is arrival phase and a trim cannot lower it. After a trim the next TRIM_FRAMES gates do not
+ * count, so trims stay at most one per 2 * TRIM_FRAMES gates.
  *
  * skipRule 'vsync' instead keeps at most one publication pending: the newest output is
  * published once the previous publication is applied and the outputs in between go off
@@ -299,6 +301,7 @@ function create({
   let pending = null;
   let skips = 0;
   let stale = 0;
+  let cooling = 0;
   const waiting = {};
   const waits = {timeoutMs, pause};
   const pacer = presentPacer.create({periodMs, now, sleep: ms => pause(ms)});
@@ -434,12 +437,18 @@ function create({
   }
 
   /**
-   * Whether the unit in hand has been stale at TRIM_FRAMES gates in a row.
+   * Whether the unit in hand has been stale, with a unit queued, at TRIM_FRAMES gates in a
+   * row since the last trim's cooldown.
    * @param {number | undefined} arrivedAt
+   * @param {number} backlog
    */
-  function trimDue(arrivedAt) {
+  function trimDue(arrivedAt, backlog) {
     if (trimBacklogMs === null || arrivedAt === undefined) return false;
-    stale = now() - arrivedAt > trimBacklogMs ? stale + 1 : 0;
+    if (cooling > 0) {
+      cooling--;
+      return false;
+    }
+    stale = backlog >= 1 && now() - arrivedAt > trimBacklogMs ? stale + 1 : 0;
     return stale >= TRIM_FRAMES;
   }
 
@@ -456,13 +465,14 @@ function create({
       pending = {sequence: published.sequence, index: published.index, openedAt: null};
       return published;
     }
-    const trim = trimDue(arrivedAt);
+    const trim = trimDue(arrivedAt, backlog);
     if (published && (backlog > skipBacklog || trim) && skips < MAX_SKIPS) {
       const discard = await sink.discardDestination(presentation);
       if (discard) {
         skips++;
         stale = 0;
         if (backlog <= skipBacklog) {
+          cooling = TRIM_FRAMES;
           counts.trimmed++;
           onTrimmed?.(now() - arrivedAt);
         }
