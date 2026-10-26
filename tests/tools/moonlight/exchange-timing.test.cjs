@@ -38,6 +38,8 @@ test('the avoid window delays a read to after the event and parses from the flag
   assert.equal(delayFor(22.9, [20], avoid), 0.10000000000000142);
   assert.equal(delayFor(23, [20], avoid), 0);
   assert.equal(delayFor(18, [20, 24], avoid), 9, 'a read pushed into the next window moves again');
+  assert.equal(delayFor(18, [24, 20], avoid), 9, 'whatever order the events come in');
+  assert.equal(delayFor(18, [25, null, 20], avoid), 10);
   assert.equal(delayFor(18, [null, undefined], avoid), 0);
   assert.equal(delayFor(18, [20], null), 0);
   assert.deepEqual(parseAvoid('2-3.5'), {beforeMs: 2, afterMs: 3.5});
