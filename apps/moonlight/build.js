@@ -79,6 +79,11 @@ function initialState() {
 }
 
 async function main() {
+  if (process.argv.length > 2)
+    throw Error(
+      'build.js takes no arguments and rewrites the package in place; to check it, run ' +
+        'node ../hbl-platform/sdk/build.js --check apps/moonlight'
+    );
   const output = name => path.join(import.meta.dirname, name);
   const backend = name => output(path.join(BACKEND, name));
   await fs.writeFile(backend('state.bin'), initialState());

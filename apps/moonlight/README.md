@@ -22,6 +22,7 @@ Build and check from the project root:
 ```sh
 tools/moonlight/build-hbv2enc.sh       # native encoder, used by check.cjs CLIP and live.js
 node apps/moonlight/build.js           # needs glslangValidator and spirv-val
+node ../hbl-platform/sdk/build.js --check apps/moonlight  # checks the package, writes nothing
 node ../moonlight-dev/apps/moonlight/check.cjs [CLIP]  # desktop Vulkan decode check, bit-exact against hbv2.js
 ```
 
