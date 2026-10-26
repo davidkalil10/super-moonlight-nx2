@@ -376,10 +376,7 @@ not change. Raw mode reproduced the input byte for byte (600 units, SPS first).
   and its Node wrapper (built by `build-hbv2enc.sh`, run with passive OMP wait).
 - `tools/moonlight/reference.js`: BC1, YUV420, bilinear upscale, PSNR, changed
   blocks.
-- `tools/moonlight/evaluate.cjs CLIP [--frames N] [--json OUT]`: the HBV1 format
-  tables in section 2.
-- `tools/moonlight/evaluate-hbv2.cjs OUT SEQUENCE...`: the HBV2-vs-HBV1 tables in
-  section 6.5. `desktop-scenes.py` renders the synthetic 1080p sequences.
+- `desktop-scenes.py` renders the synthetic 1080p sequences of section 6.5.
 - `tools/moonlight/encode.cjs CLIP OUT.hbv [--size WxH]`: the slot stream the
   host would write.
 - `tools/moonlight/live.js [...] --codec hbv1|hbv2`: the live sender.
@@ -402,7 +399,6 @@ Reproduce:
 
 ```
 ffmpeg -f lavfi -i testsrc2=size=1280x720:rate=60 -t 3 -pix_fmt yuv420p -c:v libx264 -crf 12 testsrc2.mp4
-node tools/moonlight/evaluate.cjs testsrc2.mp4 --frames 10
 node apps/moonlight/check.cjs testsrc2.mp4
 ```
 
@@ -487,9 +483,8 @@ lost blocks heal without a full keyframe. The live sender polls the console's
 
 ### 6.5 Measured quality, bytes and speed
 
-`tools/moonlight/evaluate-hbv2.cjs` replays each 1080p sequence (120 frames)
-through a latest-wins sender on a 32 KiB-per-exchange link and scores what the
-screen shows at every 60 Hz vsync. `coded` is the luma PSNR of a delivered
+Each 1080p sequence (120 frames) was replayed through a latest-wins sender on a
+32 KiB-per-exchange link, scoring what the screen shows at every 60 Hz vsync. `coded` is the luma PSNR of a delivered
 frame against its own source; `displayed` compares the frame on screen at each
 vsync with that vsync's source, so dropped frames count against it. HBV1 is the
 1080p fixed-rate slot (288 KiB). Encode is on an otherwise idle m5; under the

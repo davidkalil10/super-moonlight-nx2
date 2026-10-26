@@ -12,7 +12,7 @@ Short answer: to reach 120 fps end to end, three things have to hold together:
 3. The bridge feeds 120 slots per second.
 
 None of the three is true today, and only the second can be fixed in this tree
-without first running a probe. The probes in `sdk/tools/` decide which branch
+without first running a probe. The probes in section 6 decide which branch
 of the plan applies.
 
 ## 1. Correction to RESEARCH.md Q3
@@ -130,8 +130,7 @@ register pressure. The lever is structural (item 1).
 
 `HBV2_LOCAL_SIZE` 512 is committed (7e9e16d). Both GPUs are bit-exact. Raphael
 gets 2.3x faster; Navi31 is flat to slightly slower. 512 is also safe for any
-`maxComputeWorkGroupInvocations` NVIDIA reports. Console confirmation is
-pending `probe-hbv2-decode.cjs`.
+`maxComputeWorkGroupInvocations` NVIDIA reports. It is not confirmed on the console.
 
 ## 5. Ranked changes
 
@@ -182,7 +181,7 @@ The app then sets `"computeSequence": {"repeat": 3, "groups": 8}` and splits
 
 Expected effect: decode time drops roughly with the number of SMs used. Public
 specs give T239 12 SMs (not verified here), and today one workgroup can only
-ever occupy one of them. Measure with `probe-hbv2-decode.cjs` before and after.
+ever occupy one of them.
 Smaller workgroups also leave each invocation more registers, which section 4
 shows matters.
 
@@ -314,14 +313,7 @@ node sdk/tools/probe-present.cjs runs/launcher-XXXX
 # Then the vi frame-number rate (skipped automatically if uninitialized):
 node sdk/tools/probe-present.cjs runs/launcher-XXXX --vi
 
-# 3. HBV2 decode on the console, loop stopped, Moonlight prepared.
-touch runs/launcher-XXXX/launcher-loop.stop      # wait for "HBLauncher stopped"
-node sdk/tools/probe-hbv2-decode.cjs runs/launcher-XXXX
-#    Compare summary.pMeanMs / catchUpMs with the rig table in section 4.
-#    Private storage and app state are restored; copies are kept as
-#    probe-hbv2-decode-{memory,state}.bin. Relaunch Moonlight afterwards.
-
-# 4. Restart the loop, then the swap-interval dry run.
+# 3. Loop running: the swap-interval dry run.
 node sdk/tools/probe-swap-interval.cjs runs/launcher-XXXX
 # Only if the dry run says "table callable: true". The pair is an example;
 # the meaning of the two ints is unknown, so record what each pair does.
@@ -334,12 +326,8 @@ What each answer decides:
 - `maxComputeWorkGroupInvocations` and `timestampPeriod` confirm the 512 choice
   and the item 1 sizing.
 - `viFramesPerSecond` above 60 proves a faster panel; about 60 proves nothing (see item 4).
-- `probe-hbv2-decode`'s `pMeanMs` says whether 60 Hz is safe with 512, and how
-  much item 1 must gain for 120: under 7 ms is needed.
 - `probe-swap-interval`'s `applied` row against `before` shows whether the vi
   call does anything.
 
 GPU timestamps were not used: `vkGetQueryPoolResults` takes 8 arguments and the
-bridge passes 4. The decode probe instead times submit + WaitIdle on the console
-with the SDK tick (31.25 MHz). This includes a small fixed submit cost, measured
-by its `idle` row.
+bridge passes 4.

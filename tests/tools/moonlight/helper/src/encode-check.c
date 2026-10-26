@@ -1,7 +1,6 @@
 /* hbv2-encode-check: the hbv2enc stdin/stdout protocol served by the
- * in-process encoder (encoder.c), so tools/moonlight/helper/encode-check.cjs
- * can compare its slots with the hbv2enc process frame by frame. PSNR is
- * reported as 0. */
+ * in-process encoder (encoder.c), so its slots can be compared with the
+ * hbv2enc process frame by frame. PSNR is reported as 0. */
 #include "encoder.h"
 
 #include <stdio.h>

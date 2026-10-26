@@ -1,6 +1,6 @@
 # moonlight-dev
 
-Tests, probes, simulators and research for `hbl-moonlight` (Phase 1 of the rewrite,
+Tests, simulators and research for `hbl-moonlight` (Phase 1 of the rewrite,
 `hbl-notes/team/REWRITE.md`). Nothing here ships to users.
 
 ## Sibling checkouts
@@ -18,7 +18,7 @@ Everything runs against the runtime code by relative path:
 ## Test
 
 ```
-npm test                                     # 429 tests
+npm test                                     # 377 tests
 npm run typecheck                            # tsc --checkJs (npm install once)
 node apps/moonlight/check.cjs                # desktop Vulkan check, needs a GPU
 ```
