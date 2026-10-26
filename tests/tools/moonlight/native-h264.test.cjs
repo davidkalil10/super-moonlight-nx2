@@ -1316,6 +1316,10 @@ test(
       [
         ['--staggered', '--skip-rule', 'vsync', '--skip-backlog', '1', '--trim-backlog-ms', '20'],
         /--trim-backlog-ms needs --skip-rule backlog/
+      ],
+      [
+        ['--staggered', '--skip-backlog', '0', '--trim-backlog-ms', '20'],
+        /--trim-backlog-ms needs --skip-backlog 1 or more/
       ]
     ]) {
       const g = await fixture();

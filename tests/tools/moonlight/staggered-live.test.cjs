@@ -928,6 +928,14 @@ test('a standing stale queue trims at most once per six gates', async () => {
   assert.equal(counts.skipped, 2);
 });
 
+test('the backlog trim needs a skip backlog of at least 1', () => {
+  assert.throws(
+    () => create({skipBacklog: 0, trimBacklogMs: 20}),
+    /backlog trim needs a skip backlog of at least 1/
+  );
+  assert.doesNotThrow(() => create({skipBacklog: Infinity, trimBacklogMs: 20}));
+});
+
 test('the backlog trim needs the backlog skip rule', () => {
   assert.throws(
     () => create({skipRule: 'vsync', skipBacklog: 1, trimBacklogMs: 20}),
