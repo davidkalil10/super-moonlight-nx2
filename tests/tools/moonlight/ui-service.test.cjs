@@ -431,7 +431,11 @@ test('quit stops the stream first, cancels on the host and confirms on the list'
   );
   children.last('list').finish({out: list(0)});
   await until(() => service.model().screen === 'apps', 'apps after late quit');
-  assert.equal(service.model().message, 'Quit confirmed', 'the host state wins over a slow helper');
+  assert.equal(
+    service.model().message,
+    'Host closed the game on its own; the quit request failed',
+    'a cleared host after a failed request is said so, not confirmed'
+  );
 });
 
 test('a stream that dies before connecting is an error; the service leaves with the app', async () => {
@@ -507,4 +511,30 @@ test('mDNS hosts join the list after the manual ones and are saved once', async 
   await until(() => console.shown().items.length === 3, 'the new host on the page');
   assert.deepEqual(written, [[...HOSTS, {name: 'Office PC', address: '10.0.0.7'}]]);
   assert.equal(service.model().hosts[2].name, 'Office PC');
+});
+
+test('a restart inside the same second takes a fresh epoch from the shown page', async () => {
+  const fixture = await setup();
+  const {console, service} = fixture;
+  const {MAGIC} = await uiPage();
+  console.setWord(UI.uiApplied, 9);
+  console.setWord(UI.uiShown, 1);
+  console.setWord(UI_OFFSET + UI_PAGE_BYTES, MAGIC);
+  console.setWord(UI_OFFSET + UI_PAGE_BYTES + 4, 1700000000);
+  await service.attach();
+  assert.equal(service.state().epoch, 1700000001, 'not the epoch the console still shows');
+  assert.equal(console.word(UI.uiEpoch), 1700000001);
+  assert.equal(console.word(UI.uiSequence), 10);
+  const other = await setup();
+  other.console.setWord(UI.uiShown, 1);
+  other.console.setWord(UI_OFFSET + UI_PAGE_BYTES, MAGIC);
+  other.console.setWord(UI_OFFSET + UI_PAGE_BYTES + 4, 1699999999);
+  await other.service.attach();
+  assert.equal(other.service.state().epoch, 1700000000, 'an older stored epoch changes nothing');
+  const ahead = await setup();
+  ahead.console.setWord(UI.uiShown, 0);
+  ahead.console.setWord(UI_OFFSET, MAGIC);
+  ahead.console.setWord(UI_OFFSET + 4, 1700000005);
+  await ahead.service.attach();
+  assert.equal(ahead.service.state().epoch, 1700000006, 'a clock behind the console moves past it');
 });
