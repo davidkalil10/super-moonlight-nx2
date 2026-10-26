@@ -320,6 +320,7 @@ test('a short stream drains its lag-2 tail and stops both workers before finaliz
     skipped: 0,
     tailDrained: 2,
     rereads: 0,
+    appliedPeriodMs: 1000 / 60,
     waiting: {}
   });
   await live.stop();

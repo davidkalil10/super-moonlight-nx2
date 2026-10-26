@@ -380,6 +380,39 @@ test('the vsync skip rule needs a host wait and a threshold', async () => {
   await assert.rejects(simulate({...options, skipRule: 'newest'}), /Unknown staggered skip rule/);
 });
 
+test('the vsync rule learns a console applying every other refresh', async () => {
+  const run = (presentHz, appliedHz) =>
+    simulate({
+      mode: 'staggered',
+      frames: 600,
+      presentHz,
+      appliedHz,
+      lag: 2,
+      barrier: true,
+      hostWait: 'pacer',
+      skipBacklog: 1,
+      skipRule: 'vsync',
+      decodeWait: true,
+      model: {...MODEL, sourceFps: 120, decodeMs: 6.85}
+    });
+  const every = await run(120, 120);
+  const sixty = await run(60, 60);
+  const other = await run(120, 60);
+  assert.equal(every.appliedPeriodMs, 1000 / 120);
+  assert.equal(sixty.appliedPeriodMs, 1000 / 60);
+  assert.equal(other.appliedPeriodMs, 1000 / 60);
+  assert.equal(every.fps, 120);
+  assert.ok(other.fps >= sixty.fps - 1, `${other.fps} fps against ${sixty.fps} on a 60 Hz grid`);
+  assert.ok(
+    other.rereadsPerFrame <= sixty.rereadsPerFrame + 0.1,
+    `${other.rereadsPerFrame} rereads/frame against ${sixty.rereadsPerFrame}`
+  );
+  assert.ok(
+    other.requestsPerFrame <= sixty.requestsPerFrame + 0.1,
+    `${other.requestsPerFrame} requests/frame against ${sixty.requestsPerFrame}`
+  );
+});
+
 test('the decode wait sleeps through a pending acquire instead of rereading', async () => {
   const run = (presentHz, decodeMs, decodeWait, retryRate = 0) =>
     simulate({

@@ -46,6 +46,8 @@ test('the estimate grows on a late receive and shrinks on an early one', async (
   clock.now = 3;
   wait.observe(1, 3, false, {pendingSeen: false});
   assert.equal(wait.perKbMs, 0.2 + 0.5 / 10, 'a pending read past the prediction grows it');
+  wait.observe(1, 4, false, {pendingSeen: true});
+  assert.equal(wait.perKbMs, 0.2 + 0.5 / 10, 'a stalled unit grows it once, not per reread');
   clock.now = 1;
   wait.sent(2, 10 * KB, 1);
   wait.observe(2, 1.5, false, {pendingSeen: false});

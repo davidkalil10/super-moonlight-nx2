@@ -212,6 +212,7 @@ test('every submit waits for the previous acquisition, so no output wake is lost
     skipped: 0,
     tailDrained: 2,
     rereads: 6,
+    appliedPeriodMs: 1000 / 60,
     waiting: {receive: 6}
   });
   assert.equal(d.decoder.coalesced, 0);
@@ -263,6 +264,7 @@ test('a delayed N-2 fetch keeps decode N closed until N-1 is acquired', async ()
     skipped: 0,
     tailDrained: 2,
     rereads: 3,
+    appliedPeriodMs: 1000 / 60,
     waiting: {receive: 3}
   });
   assert.equal(d.decoder.coalesced, 0);

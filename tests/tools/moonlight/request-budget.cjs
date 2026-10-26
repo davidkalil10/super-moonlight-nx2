@@ -518,6 +518,7 @@ async function simulateStaggered({
   warmup = 4,
   paced = true,
   presentHz = 60,
+  appliedHz = presentHz,
   retryRate = 0,
   lag = 1,
   barrier = false,
@@ -538,6 +539,7 @@ async function simulateStaggered({
     throw Error('The vsync skip rule needs a poll or pacer host wait and a backlog threshold');
   if (decodeWait && skipRule !== 'vsync') throw Error('The decode wait needs the vsync skip rule');
   const timing = {...model, vsyncMs: 1000 / presentHz};
+  const applyMs = 1000 / appliedHz;
   const clock = createClock();
   return clock.run(async () => {
     const interval = 1000 / timing.sourceFps;
@@ -587,8 +589,8 @@ async function simulateStaggered({
         applied[frame] = frame ? applied[frame - 1] : 0;
         return;
       }
-      const vsync = Math.ceil((fetchDone + 1e-6) / timing.vsyncMs) * timing.vsyncMs;
-      applied[frame] = Math.max(vsync, frame ? applied[frame - 1] + timing.vsyncMs : 0);
+      const vsync = Math.ceil((fetchDone + 1e-6) / applyMs) * applyMs;
+      applied[frame] = Math.max(vsync, frame ? applied[frame - 1] + applyMs : 0);
     };
     for (let frame = 0; frame < warmup + frames; frame++) {
       if (frame === warmup) {
@@ -623,7 +625,7 @@ async function simulateStaggered({
       }
       const acked = vsyncRule
         ? pending !== null &&
-          (queued(frame) <= skipBacklog || clock.now() - pending.at > 2 * timing.vsyncMs)
+          (queued(frame) <= skipBacklog || clock.now() - pending.at > 2 * pacer.periodMs)
         : frame > lag && !offScreen.has(frame - lag - 1);
       if (vsyncRule) {
         let retriedInputSlot = false;
@@ -725,7 +727,7 @@ async function simulateStaggered({
         if (frame >= lag && pending) skipped++;
         else if (frame >= lag) {
           const fetchDone = clock.now() + timing.fetchMs;
-          const vsync = Math.ceil((fetchDone + 1e-6) / timing.vsyncMs) * timing.vsyncMs;
+          const vsync = Math.ceil((fetchDone + 1e-6) / applyMs) * applyMs;
           pending = {at: clock.now(), applied: vsync};
         }
         sent = clock.now();
@@ -753,6 +755,8 @@ async function simulateStaggered({
       paced,
       staggered: true,
       presentHz,
+      appliedHz,
+      appliedPeriodMs: pacer.periodMs,
       retryRate,
       lag,
       barrier,
@@ -784,6 +788,7 @@ async function simulate({
   autoQueue = false,
   linkedGates = false,
   presentHz,
+  appliedHz,
   retryRate,
   lag,
   barrier,
@@ -802,6 +807,7 @@ async function simulate({
       warmup,
       paced,
       presentHz,
+      appliedHz,
       retryRate,
       lag,
       barrier,
