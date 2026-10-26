@@ -366,6 +366,13 @@ async function uiCheck(dir) {
   assert.equal(word(back, 'cmdOp'), UI_OP.b);
   assert.equal(word(back, 'cmdItem'), 0);
 
+  const stale = await published(0);
+  stale.writeUInt32LE(1, UI.uiApplied);
+  stale.writeUInt32LE(1, UI.uiShown);
+  const restarted = await run(dir, stale, [], state());
+  assert.equal(word(restarted, 'uiShown'), 0, 'a new epoch applies over a stale uiApplied');
+  assert.deepEqual(pixel(restarted, 50, 50), [8, 16, 32]);
+
   const rejected = await run(dir, await published(0, true), [], state());
   assert.equal(word(rejected, 'uiApplied'), 0, 'torn page stays unapplied');
   assert.notDeepEqual(pixel(rejected, 50, 50), [8, 16, 32], 'the test card stays up');

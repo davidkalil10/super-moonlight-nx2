@@ -15,7 +15,7 @@ const PACKAGE = path.join(moonlight, 'apps/moonlight');
 const PINNED = {
   vertex: 'b7ff21339bf0cf87fc6d428091deb15913533c94d08062539ea48a2e54a9fe4f',
   fragment: 'a640be602c8fb874a314e1349a1c4d6baa51638e5bcff85ab810cd593775da08',
-  compute: '64538e6bf2075e4c4307655acfd53f347d5014ab4ed073f44ad7dd19cf447fd5',
+  compute: 'beb948bfe8070a75c91c2657801d0fdeb8add89f9382beea86044805e8fd50a2',
   state: '370c0ab9bc38e877611b4dc867e5eabab6d0fd6cf24f90a6010f8e3a51b80051',
   data: 'f5bd127446b306fc0d512f5382c53087f34ce4b7fb4fc8477743520bce98ffdd',
   memory: '9573805be9a6be2fe3b4f095fe2180a771321d3549fdcf48eba1cb1607a8efa2',
