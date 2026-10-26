@@ -27,9 +27,18 @@ add_executable(hbmoonlight
 target_compile_options(hbmoonlight PRIVATE -Wall -Wextra -Wno-unused-parameter)
 target_link_libraries(hbmoonlight PRIVATE gamestream Threads::Threads)
 
-add_executable(hbmoonlight-bench src/bench.c src/status.c src/mailbox.c src/video.c)
-target_compile_options(hbmoonlight-bench PRIVATE -Wall -Wextra -Wno-unused-parameter)
-target_link_libraries(hbmoonlight-bench PRIVATE gamestream Threads::Threads)
+# The bench, the encoder check and the input test live in moonlight-dev: they build when that
+# checkout sits beside this one, or where DEV_DIR points.
+set(DEV_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../../../moonlight-dev/tools/moonlight/helper"
+  CACHE PATH "moonlight-dev helper directory")
+set(HAVE_DEV EXISTS "${DEV_DIR}/src/bench.c")
+
+if(${HAVE_DEV})
+  add_executable(hbmoonlight-bench ${DEV_DIR}/src/bench.c src/status.c src/mailbox.c src/video.c)
+  target_include_directories(hbmoonlight-bench PRIVATE src)
+  target_compile_options(hbmoonlight-bench PRIVATE -Wall -Wextra -Wno-unused-parameter)
+  target_link_libraries(hbmoonlight-bench PRIVATE gamestream Threads::Threads)
+endif()
 
 # HBV2 encoder: tools/moonlight/hbv2enc.c built as is, and linked in process
 # through src/encoder.c, with the flags of build-hbv2enc.sh.
@@ -43,9 +52,12 @@ add_library(hbv2 STATIC src/encoder.c)
 target_compile_options(hbv2 PRIVATE ${HBV2_FLAGS} -Wall -Wextra -Wno-unused-function)
 target_link_libraries(hbv2 PUBLIC OpenMP::OpenMP_C m Threads::Threads)
 
-add_executable(hbv2-encode-check src/encode-check.c)
-target_compile_options(hbv2-encode-check PRIVATE -Wall -Wextra)
-target_link_libraries(hbv2-encode-check PRIVATE hbv2)
+if(${HAVE_DEV})
+  add_executable(hbv2-encode-check ${DEV_DIR}/src/encode-check.c)
+  target_include_directories(hbv2-encode-check PRIVATE src)
+  target_compile_options(hbv2-encode-check PRIVATE -Wall -Wextra)
+  target_link_libraries(hbv2-encode-check PRIVATE hbv2)
+endif()
 
 add_executable(hbmoonlight-host
   src/host.c src/run.c src/bridge.c src/sender.c src/console-input.c src/console-audio.c
@@ -54,8 +66,8 @@ target_compile_options(hbmoonlight-host PRIVATE -Wall -Wextra -Wno-unused-parame
 target_link_libraries(hbmoonlight-host PRIVATE gamestream hbv2 Threads::Threads)
 
 include(CTest)
-if(BUILD_TESTING)
-  add_executable(hbmoonlight-input-check tests/input.c src/input.c)
+if(BUILD_TESTING AND ${HAVE_DEV})
+  add_executable(hbmoonlight-input-check ${DEV_DIR}/tests/input.c src/input.c)
   target_include_directories(hbmoonlight-input-check PRIVATE src ${UPSTREAM_DIR}/moonlight-common-c/src)
   target_compile_options(hbmoonlight-input-check PRIVATE -Wall -Wextra -Wno-unused-parameter -UNDEBUG)
   add_test(NAME input-routing COMMAND hbmoonlight-input-check)
