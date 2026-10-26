@@ -35,6 +35,8 @@ const BUTTON = {y: 640, width: 400, gap: 48};
 const PAGER = {width: 300};
 /** The tag on the cover of the app the PC is running. */
 const RUNNING = {width: 112, height: 30};
+/** Strips are at most this tall, so a taller panel is a stack of them. */
+const STRIP_HEIGHT = 96;
 /** Strips kept across pages, by text, size, width and alignment. */
 const CACHE_LIMIT = 512;
 
@@ -207,6 +209,16 @@ function createPages(raster) {
     });
     page.text(SIDE, y + 44, title, size, width, color, 'left', {weight: 700, tracking});
     if (line) page.text(SIDE, y + 148, line, 28, width, COLOR.muted, 'left', {weight: 500});
+  }
+
+  /**
+   * An opaque rectangle of any height, as a stack of strips.
+   * @param {ReturnType<typeof compose>} page @param {number} x @param {number} y
+   * @param {number} w @param {number} h @param {number} color
+   */
+  function panel(page, x, y, w, h, color) {
+    for (let top = 0; top < h; top += STRIP_HEIGHT)
+      page.solid(x, y + top, w, Math.min(STRIP_HEIGHT, h - top), color);
   }
 
   /**
@@ -464,14 +476,21 @@ function createPages(raster) {
 
   /** @param {Model} model */
   function overlay(model) {
-    const page = horizon({
-      background: COLOR.clear,
-      flags: PAGE_FLAG.overlay,
-      keys: [
-        ['A', 'Choose'],
-        ['B', 'Hide']
-      ]
-    });
+    const page = horizon({background: COLOR.clear, flags: PAGE_FLAG.overlay});
+    const width = 2 * 520 + BUTTON.gap;
+    panel(
+      page,
+      SIDE - 40,
+      HEADING.status - 40,
+      width + 80,
+      BUTTON.y + CARDS.height + 40 - (HEADING.status - 40),
+      COLOR.background
+    );
+    panel(page, SIDE - 40, LEGEND.y - 16, 440, LEGEND.height + 32, COLOR.background);
+    page.legend(SIDE, LEGEND.y, [
+      ['A', 'Choose'],
+      ['B', 'Hide']
+    ]);
     heading(page, 'Streaming', model.app?.name ?? 'Moonlight', model.host?.name ?? null, {
       y: HEADING.status
     });
