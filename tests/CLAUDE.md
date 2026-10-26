@@ -22,7 +22,7 @@ A worktree must see the right `../hbl-moonlight`: the tests import `../../../hbl
 ## Build and test
 
 ```
-npm test                                     # 365 tests
+npm test                                     # 399 tests
 npm run typecheck                            # tsc --checkJs (npm install once)
 node apps/moonlight/check.cjs [CLIP]         # desktop Vulkan check, needs a GPU
 ```
