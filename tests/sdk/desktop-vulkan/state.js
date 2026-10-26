@@ -126,6 +126,7 @@ function parseFrameScript(json) {
   const snapshots = inputs.map((input, index) => {
     check(input && input.frame === index, 'Input ' + index + ' must be frame ' + index);
     check(typeof input.connected === 'boolean', 'Frame ' + index + ' connected must be boolean');
+    check(Array.isArray(input.buttons), 'Frame ' + index + ' buttons must be a list');
     return {
       frame: index,
       connected: input.connected,

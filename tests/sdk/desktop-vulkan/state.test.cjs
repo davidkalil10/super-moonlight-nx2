@@ -158,6 +158,17 @@ test('rejects-short-input-state-and-atlas-buffers', () => {
       }),
     /one input per frame/
   );
+  assert.throws(
+    () =>
+      parseFrameScript({
+        format: 'hb-desktop-frame-script',
+        version: 1,
+        frameCount: 1,
+        clock: {mode: 'fixed-step', originMs: 0, rateHz: 60},
+        inputs: [{frame: 0, connected: true}]
+      }),
+    {message: 'Frame 0 buttons must be a list'}
+  );
   const clocked = (originMs, rateHz, frameCount = 2) => () =>
     parseFrameScript({
       format: 'hb-desktop-frame-script',

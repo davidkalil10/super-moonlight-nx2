@@ -82,6 +82,7 @@ function sectionFile(root, name, min, max) {
     throw Error('Missing backend file: ' + file);
   }
   check(real.startsWith(root + path.sep), 'Path escapes its package: ' + file);
+  check(real.startsWith(path.join(root, SECTION_DIR)), 'Path leaves ' + SECTION_DIR + ': ' + file);
   const stat = fs.statSync(real);
   check(stat.isFile(), 'Not a regular file: ' + file);
   check(stat.size >= min && stat.size <= max, 'Invalid file size: ' + file);

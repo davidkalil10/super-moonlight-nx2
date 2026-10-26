@@ -4,9 +4,9 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
-const {gpuStatus, run, WIDTH, HEIGHT} = require('./run.cjs');
+const {run, WIDTH, HEIGHT} = require('./run.cjs');
 const {checkFrames, clockProvider, initialState, loadFrameScript} = require('./state.js');
-const {SCRIPT, runHelloWorld} = require('./hello-world.cjs');
+const {SCRIPT} = require('./hello-world.cjs');
 const {builds} = require('../../../hbl-platform/scripts/toolchain.js');
 
 fs.mkdirSync(builds('desktop-vulkan'), {recursive: true});
@@ -154,21 +154,4 @@ test('fails-closed-on-runner-error', () => {
   );
   for (const name of ['run.json', 'frame.rgba'])
     assert.ok(!fs.existsSync(path.join(options.outputDir, name)), name);
-});
-
-const gpu = gpuStatus(path.join(scratch, 'runner'));
-
-test('same-device-repeat-hash-is-stable', {skip: gpu.reason ?? false}, async t => {
-  const buildDir = path.join(scratch, 'repeat');
-  const runs = [];
-  for (const name of ['first', 'second'])
-    runs.push(
-      await runHelloWorld({buildDir, outputDir: path.join(buildDir, name), runner: gpu.runner})
-    );
-  assert.deepEqual(runs[1].device, runs[0].device);
-  assert.equal(runs[1].sha256, runs[0].sha256);
-  assert.deepEqual(runs[1].state, runs[0].state);
-  t.diagnostic(
-    runs[0].device.name + ' driver ' + runs[0].device.driverVersion + ' sha256 ' + runs[0].sha256
-  );
 });

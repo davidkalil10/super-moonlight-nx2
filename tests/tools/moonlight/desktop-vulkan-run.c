@@ -51,6 +51,7 @@ typedef struct {
 
 static VkPhysicalDevice physical;
 static VkDevice device;
+static uint32_t timestampBits;
 
 static void *readFile(const char *name, size_t *size, size_t max) {
   FILE *f = fopen(name, "rb");
@@ -150,6 +151,11 @@ static Buffer createBuffer(const char *name, size_t size, VkBufferUsageFlags usa
   return b;
 }
 
+static void destroyBuffer(Buffer b) {
+  vkDestroyBuffer(device, b.buffer, 0);
+  vkFreeMemory(device, b.memory, 0);
+}
+
 static VkShaderModule shader(const char *path) {
   size_t size;
   uint32_t *code = readFile(path, &size, MAX_SPIRV_BYTES);
@@ -197,6 +203,7 @@ static uint32_t pickDevice(VkInstance instance) {
       for (uint32_t f = 0; f < familyCount; f++)
         if ((families[f].queueFlags & wanted) == wanted && families[f].timestampValidBits) {
           physical = devices[d];
+          timestampBits = families[f].timestampValidBits;
           return f;
         }
     }
@@ -204,10 +211,26 @@ static uint32_t pickDevice(VkInstance instance) {
   exit(NO_DEVICE);
 }
 
+static void printString(const char *text) {
+  putchar('"');
+  for (const unsigned char *c = (const unsigned char *)text; *c; c++)
+    if (*c == '"' || *c == '\\') printf("\\%c", *c);
+    else if (*c < 0x20) printf("\\u%04x", *c);
+    else putchar(*c);
+  putchar('"');
+}
+
 static void printDevice(const VkPhysicalDeviceProperties *p) {
-  printf("\"device\":{\"name\":\"%s\",\"vendorId\":%u,\"deviceId\":%u,\"driverVersion\":%u,"
-         "\"apiVersion\":%u}",
-         p->deviceName, p->vendorID, p->deviceID, p->driverVersion, p->apiVersion);
+  printf("\"device\":{\"name\":");
+  printString(p->deviceName);
+  printf(",\"vendorId\":%u,\"deviceId\":%u,\"driverVersion\":%u,\"apiVersion\":%u}",
+         p->vendorID, p->deviceID, p->driverVersion, p->apiVersion);
+}
+
+// Ticks between two timestamps, which wrap at timestampValidBits.
+static uint64_t ticks(uint64_t from, uint64_t to) {
+  uint64_t mask = timestampBits >= 64 ? ~0ull : (1ull << timestampBits) - 1;
+  return (to - from) & mask;
 }
 
 int main(int argc, char **argv) {
@@ -246,6 +269,7 @@ int main(int argc, char **argv) {
     printf("{");
     printDevice(&properties);
     printf("}\n");
+    vkDestroyInstance(instance, 0);
     return 0;
   }
   float priority = 1;
@@ -497,7 +521,8 @@ int main(int argc, char **argv) {
     uint64_t stamps[3];
     VK(vkGetQueryPoolResults(device, queries, 0, 3, sizeof stamps, stamps, 8,
                              VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT));
-    timings[frame] = (Timing){(stamps[1] - stamps[0]) * tick, (stamps[2] - stamps[1]) * tick};
+    timings[frame] =
+        (Timing){ticks(stamps[0], stamps[1]) * tick, ticks(stamps[1], stamps[2]) * tick};
     memcpy(states + (size_t)frame * STATE_BYTES, controls.mapped, STATE_BYTES);
   }
   vkDeviceWaitIdle(device);
@@ -513,5 +538,30 @@ int main(int argc, char **argv) {
     printf("%s{\"computeMs\":%.3f,\"drawMs\":%.3f}", frame ? "," : "", timings[frame].computeMs,
            timings[frame].drawMs);
   printf("]}\n");
+
+  vkDestroyCommandPool(device, commandPool, 0);
+  vkDestroyQueryPool(device, queries, 0);
+  vkDestroyPipeline(device, graphicsPipeline, 0);
+  vkDestroyPipeline(device, computePipeline, 0);
+  vkDestroyShaderModule(device, vertex, 0);
+  vkDestroyShaderModule(device, fragment, 0);
+  vkDestroyShaderModule(device, compute, 0);
+  vkDestroyDescriptorPool(device, pool, 0);
+  vkDestroyPipelineLayout(device, layout, 0);
+  vkDestroyDescriptorSetLayout(device, setLayout, 0);
+  vkDestroyFramebuffer(device, framebuffer, 0);
+  vkDestroyRenderPass(device, renderPass, 0);
+  vkDestroyImageView(device, view, 0);
+  vkDestroyImage(device, image, 0);
+  vkFreeMemory(device, imageMemory, 0);
+  destroyBuffer(controls);
+  destroyBuffer(readback);
+  vkDestroyDevice(device, 0);
+  vkDestroyInstance(instance, 0);
+  free(states);
+  free(timings);
+  free(frames);
+  free(data);
+  free(state);
   return 0;
 }

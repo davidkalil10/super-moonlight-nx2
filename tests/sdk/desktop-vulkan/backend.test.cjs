@@ -105,6 +105,20 @@ test('refuses-missing-or-escaping-backend-file', async () => {
   await assert.rejects(loadApp(root, [guarded], {}), /Path escapes its package/);
 });
 
+test('refuses-section-file-linked-elsewhere-in-the-package', async () => {
+  const root = await hello((manifest, root) => {
+    fs.symlinkSync(
+      '../hblauncher.gpu-app/app.comp.spv',
+      path.join(root, SECTION_DIR, 'linked.spv')
+    );
+    manifest.backends[ID].shaders.compute = SECTION_DIR + 'linked.spv';
+  });
+  assert.equal(
+    backend.supports(await readPackage(root)),
+    'Path leaves ' + SECTION_DIR + ': ' + SECTION_DIR + 'linked.spv'
+  );
+});
+
 test('checks-state-and-data-size', async () => {
   assert.equal(
     await reason((manifest, root) =>
