@@ -40,6 +40,11 @@
     "../hbl-moonlight/tools/moonlight/touch.js",
     "../hbl-moonlight/tools/moonlight/audio-socket-plan.js",
     "../hbl-moonlight/tools/moonlight/audio-socket-worker.js",
-    "../hbl-moonlight/tools/moonlight/audio-stream.js"
+    "../hbl-moonlight/tools/moonlight/audio-stream.js",
+    "../hbl-moonlight/tools/moonlight/staggered-input-plan.js",
+    "../hbl-moonlight/tools/moonlight/staggered-live.js",
+    "../hbl-moonlight/tools/moonlight/staggered-output-plan.js",
+    "../hbl-moonlight/tools/moonlight/staggered-status.js",
+    "../hbl-moonlight/tools/moonlight/staggered-worker.js"
   ]
 }
