@@ -23,8 +23,10 @@ const ITEM = {
   app: 200,
   setting: 300
 };
-/** Covers per apps page: 5 columns by 4 rows, within the page's 24 images and 32 items. */
-const APPS_PER_PAGE = 20;
+/** Covers per apps page: two rows of five, within the page's 24 images and 4 MiB body. */
+const APPS_PER_PAGE = 10;
+/** Host cards per hosts page: two columns of three. */
+const HOSTS_PER_PAGE = 6;
 
 /**
  * @typedef {{name: string, address: string}} Host
@@ -32,7 +34,8 @@ const APPS_PER_PAGE = 20;
  * @typedef {{type: string, [key: string]: any}} Intent
  * @typedef {{
  *   screen: string, hosts: Host[], host: Host | null, apps: App[], currentGame: number,
- *   app: App | null, appPage: number, pin: string | null, url: string | null,
+ *   app: App | null, appPage: number, hostPage: number, hostIndex: number,
+ *   pin: string | null, url: string | null,
  *   message: string | null, back: string, from: string, overlay: boolean,
  *   settings: Record<string, any>
  * }} Model
@@ -52,6 +55,8 @@ function makeModel(hosts, settings = defaults()) {
     currentGame: 0,
     app: null,
     appPage: 0,
+    hostPage: 0,
+    hostIndex: 0,
     pin: null,
     url: null,
     message: null,
@@ -67,11 +72,24 @@ const next = (model, patch, intents = []) => ({model: {...model, ...patch}, inte
 /** @param {Model} model */
 const same = model => ({model, intents: []});
 
-/** @param {Model} model @param {Host} host */
-function openHost(model, host) {
-  return next(model, {screen: 'connecting', host, pin: null, url: null, message: null}, [
-    {type: 'list', host}
-  ]);
+/** The last page of a list paged by `size`. @param {number} length @param {number} size */
+const lastPage = (length, size) => Math.max(0, Math.ceil(length / size) - 1);
+
+/** @param {Model} model @param {Host} host @param {number} [index] The host's place in the list. */
+function openHost(model, host, index = model.hostIndex) {
+  return next(
+    model,
+    {
+      screen: 'connecting',
+      host,
+      hostIndex: index,
+      hostPage: Math.floor(index / HOSTS_PER_PAGE),
+      pin: null,
+      url: null,
+      message: null
+    },
+    [{type: 'list', host}]
+  );
 }
 
 /** @param {Model} model @param {string} message @param {string} back */
@@ -87,7 +105,12 @@ function onCommand(model, command) {
   switch (model.screen) {
     case 'hosts': {
       const host = model.hosts[item - ITEM.host];
-      if (op === 'a' && host) return openHost(model, host);
+      if (op === 'a' && host) return openHost(model, host, item - ITEM.host);
+      const last = lastPage(model.hosts.length, HOSTS_PER_PAGE);
+      if (op === 'a' && item === ITEM.previous)
+        return next(model, {hostPage: Math.max(0, model.hostPage - 1)});
+      if (op === 'a' && item === ITEM.next)
+        return next(model, {hostPage: Math.min(last, model.hostPage + 1)});
       if (op === 'y') return next(model, {}, [{type: 'refreshHosts'}]);
       return same(model);
     }
@@ -105,7 +128,10 @@ function onCommand(model, command) {
       if (item === ITEM.back)
         return next(model, {screen: 'hosts', host: null, apps: [], app: null});
       if (item === ITEM.previous) return next(model, {appPage: Math.max(0, model.appPage - 1)});
-      if (item === ITEM.next) return next(model, {appPage: model.appPage + 1});
+      if (item === ITEM.next)
+        return next(model, {
+          appPage: Math.min(lastPage(model.apps.length, APPS_PER_PAGE), model.appPage + 1)
+        });
       const app = model.apps[item - ITEM.app];
       if (!app) return same(model);
       return next(model, {screen: 'launching', app, message: null, overlay: false}, [
@@ -164,11 +190,14 @@ function reduce(model, event) {
     case 'attached':
       return next(model, {screen: 'hosts'});
     case 'hosts':
-      return next(model, {hosts: event.hosts});
+      return next(model, {
+        hosts: event.hosts,
+        hostPage: Math.min(model.hostPage, lastPage(event.hosts.length, HOSTS_PER_PAGE))
+      });
     case 'listed': {
       if (!['connecting', 'pairing', 'quitting'].includes(model.screen)) return same(model);
       const apps = event.apps;
-      const page = Math.min(model.appPage, Math.max(0, Math.ceil(apps.length / APPS_PER_PAGE) - 1));
+      const page = Math.min(model.appPage, lastPage(apps.length, APPS_PER_PAGE));
       return next(
         model,
         {
@@ -221,4 +250,4 @@ function reduce(model, event) {
   }
 }
 
-export {ITEM, APPS_PER_PAGE, makeModel, reduce};
+export {ITEM, APPS_PER_PAGE, HOSTS_PER_PAGE, makeModel, reduce};
