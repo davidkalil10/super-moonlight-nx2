@@ -88,6 +88,7 @@ function isValidRecord(record, maxUnitBytes) {
  * @property {number} [maxUnitBytes] largest accepted access unit
  * @property {number} [maxQueuedUnits] ready units held before pausing or dropping
  * @property {() => void} [onBacklog] switches to drop-to-keyframe mode; called per dropped unit
+ * @property {() => number} [now] stamps each unit's arrivedAt with this clock when it is cut
  */
 
 /** Async iterator of {...metadata, data} access units joined from a pipe and its metadata. */
@@ -101,7 +102,8 @@ class AccessUnits {
     {
       maxUnitBytes = DEFAULT_MAX_UNIT_BYTES,
       maxQueuedUnits = DEFAULT_MAX_QUEUED_UNITS,
-      onBacklog
+      onBacklog,
+      now
     } = {}
   ) {
     if (
@@ -120,6 +122,7 @@ class AccessUnits {
     this.maxUnitBytes = maxUnitBytes;
     this.maxQueuedUnits = maxQueuedUnits;
     this.onBacklog = onBacklog;
+    this.now = now;
     this.dropping = false;
     this.dropped = 0;
     this.chunks = [];
@@ -220,6 +223,7 @@ class AccessUnits {
     ) {
       const record = this.metadata.shift();
       const unit = {...record, data: this.take(record.bytes)};
+      if (this.now) unit.arrivedAt = this.now();
       if (this.onBacklog && this.ready.length >= this.maxQueuedUnits) {
         this.dropped += this.ready.length;
         this.ready = [];

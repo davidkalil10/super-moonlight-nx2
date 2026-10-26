@@ -64,6 +64,41 @@ function countsSince(now, before) {
   );
 }
 
+const tenths = value => Math.round(value * 10) / 10;
+
+/**
+ * One stats row's access-unit timing: the mean and longest wait from host arrival to send, and
+ * over the units that went through a gate, the mean age at gate and how many were in hand.
+ * @param {{arrivedAt: number, gatedAt: number | null, sentAt: number, inHand: number | null}[]} samples
+ */
+function auTiming(samples) {
+  const gated = samples.filter(sample => sample.gatedAt !== null);
+  const mean = values =>
+    values.length ? tenths(values.reduce((sum, value) => sum + value, 0) / values.length) : null;
+  const waits = samples.map(sample => sample.sentAt - sample.arrivedAt);
+  return {
+    units: samples.length,
+    gated: gated.length,
+    waitMs: mean(waits),
+    maxWaitMs: waits.length ? tenths(Math.max(...waits)) : null,
+    gateAgeMs: mean(gated.map(sample => sample.gatedAt - sample.arrivedAt)),
+    inHand: mean(gated.map(sample => sample.inHand)),
+    maxInHand: gated.length ? Math.max(...gated.map(sample => sample.inHand)) : null
+  };
+}
+
+/**
+ * Adds the input feeder's bridge counts to a row's bridgeByStage, leaving the row's own
+ * exchange totals to the video process.
+ * @param {{bridgeByStage: Record<string, {exchanges: number, bridgeMs: number}>}} counts
+ * @param {{exchanges: number, bridgeMs: number}} input
+ */
+function withInputStage(counts, input) {
+  if (input.exchanges)
+    counts.bridgeByStage.input = {exchanges: input.exchanges, bridgeMs: Math.round(input.bridgeMs)};
+  return counts;
+}
+
 async function run({
   args,
   directory,
@@ -81,7 +116,9 @@ async function run({
   createPaired = pairedLive.create,
   createStaggered = createStaggeredLive,
   spawnProcess = spawn,
-  consoleStallMs = CONSOLE_STALL_MS
+  consoleStallMs = CONSOLE_STALL_MS,
+  statsMs = 1000,
+  now = () => performance.now()
 }) {
   const at = args.indexOf('--moonlight');
   const host = args[at + 1],
@@ -209,6 +246,8 @@ async function run({
   let stopReason = null;
   const rows = [];
   const children = [];
+  let inputBridge = {exchanges: 0, bridgeMs: 0};
+  let auSamples = [];
   const stats = {
     received: 0,
     submitted: 0,
@@ -271,7 +310,7 @@ async function run({
           decodeWait,
           receiveWait,
           avoid: avoidWindow,
-          now: () => performance.now()
+          now
         });
       try {
         return await createDecoder({
@@ -314,7 +353,8 @@ async function run({
     );
     reader = new AccessUnits(helper.stdio[4], {
       maxQueuedUnits: queue,
-      onBacklog: requestIdr
+      onBacklog: requestIdr,
+      now
     });
     helper.stdin.on('error', error => {
       if (!stopping) reader.fail(error);
@@ -340,11 +380,26 @@ async function run({
     if (!args.includes('--no-input')) {
       const child = spawnProcess(
         process.execPath,
-        [path.join(import.meta.dirname, 'input-feeder.js'), directory, '--hz', String(inputHz)],
+        [
+          path.join(import.meta.dirname, 'input-feeder.js'),
+          directory,
+          '--hz',
+          String(inputHz),
+          '--counts-fd',
+          '3'
+        ],
         {
-          stdio: ['ignore', helper.stdin, 'inherit']
+          stdio: ['ignore', helper.stdin, 'inherit', 'pipe']
         }
       );
+      if (child.stdio?.[3])
+        readline.createInterface({input: child.stdio[3]}).on('line', line => {
+          try {
+            const counts = JSON.parse(line);
+            inputBridge.exchanges += counts.exchanges;
+            inputBridge.bridgeMs += counts.bridgeMs;
+          } catch {}
+        });
       child.on('error', error => reader.fail(error));
       child.on('exit', (code, signal) => {
         if (!stopping && code !== 0)
@@ -448,7 +503,8 @@ async function run({
         dropped: reader.dropped - dropped,
         queued,
         ...(staggeredLive ? {waiting: countsSince(staggeredLive.counts.waiting, waited)} : {}),
-        ...bridge.take(),
+        ...(staggered ? {au: auTiming(auSamples)} : {}),
+        ...withInputStage(bridge.take(), inputBridge),
         at: stage + '/' + (decoder?.step ?? '-'),
         ms: Object.fromEntries(Object.entries(stageMs).map(([k, v]) => [k, Math.round(v)]))
       };
@@ -457,13 +513,15 @@ async function run({
       console.log(line);
       fs.appendFile(statsFile, line + '\n', {mode: 0o600}).catch(() => {});
       stageMs = {};
+      inputBridge = {exchanges: 0, bridgeMs: 0};
+      auSamples = [];
       dropped = reader.dropped;
       queued = 0;
       waited = staggeredLive?.counts.waiting ?? {};
       Object.keys(stats).forEach(key => {
         stats[key] = 0;
       });
-    }, 1000);
+    }, statsMs);
     if (duration !== null) ending = setTimeout(() => stop('duration'), duration * 1000);
     for await (const unit of reader) {
       enter('unit');
@@ -488,11 +546,20 @@ async function run({
       try {
         if (workerStarted && staggered) {
           pairing = true;
+          const sample = {arrivedAt: unit.arrivedAt, gatedAt: null, sentAt: null, inHand: null};
           try {
             await staggeredLive.push(unit, {
               sink,
               enter,
               backlog: reader.ready.length,
+              onGate: at => {
+                sample.gatedAt = at;
+                sample.inHand = 1 + reader.ready.length;
+              },
+              onSent: at => {
+                sample.sentAt = at;
+                auSamples.push(sample);
+              },
               onSkipped: count => {
                 stats.skipped += count;
               },
@@ -840,4 +907,4 @@ async function run({
   return summary;
 }
 
-export {run, createIdrRequester, countsSince};
+export {run, createIdrRequester, countsSince, auTiming, withInputStage};

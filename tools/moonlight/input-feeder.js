@@ -11,7 +11,11 @@
  * sender. --sources is intentionally not supported here; the extra pad sources live far outside
  * that window.
  *
+ * With --counts-fd N, the reads' bridge exchanges and time go out on that descriptor once a
+ * second as {exchanges, bridgeMs} lines, for the stream's stats rows (stage "input").
+ *
  * Usage: node tools/moonlight/input-feeder.js [runs/launcher-XXXX] [--hz 60] [--labels]
+ *        [--counts-fd N]
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -21,6 +25,7 @@ import {STATE} from '../../../hbl-platform/sdk/host/state-layout.js';
 import {NEUTRAL, decode, toMoonlight, same, NPAD_BYTES} from './controller.js';
 import {TOUCH_BYTES, parseTouch, createTracker, step, flush, touchLine} from './touch.js';
 import {UI, UI_MAGIC} from './ring.js';
+import {instrument} from './bridge-counter.js';
 
 /** One read from the start of the state buffer to the end of the touch block. */
 const READ_BYTES = STATE.touch + TOUCH_BYTES;
@@ -29,6 +34,8 @@ const DEFAULT_HZ = 60;
 const SOURCE_CHECK_MS = 250;
 /** How often the console UI overlay word is read; input is dropped while it is raised. */
 const OVERLAY_CHECK_MS = 100;
+/** How often the bridge counts go out on --counts-fd. */
+const COUNTS_MS = 1000;
 
 /**
  * @param {object} controller toMoonlight fields
@@ -99,7 +106,14 @@ async function main() {
   const hz = cli.number(args, '--hz', DEFAULT_HZ);
   const layout = args.includes('--labels') ? 'labels' : 'position';
   const directory = session.resolve(args[0]);
-  const rpc = session.rpc(directory);
+  const countsFd = cli.number(args, '--counts-fd', null);
+  const bridge = instrument(session.rpc(directory), () => 'input');
+  const rpc = bridge.rpc;
+  if (countsFd !== null)
+    setInterval(() => {
+      const {exchanges, bridgeMs} = bridge.take();
+      fs.write(countsFd, JSON.stringify({exchanges, bridgeMs}) + '\n', () => {});
+    }, COUNTS_MS).unref();
 
   const tracker = createTracker();
   let stopping = false;

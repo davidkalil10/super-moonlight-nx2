@@ -224,7 +224,8 @@ function jsonSafe(value) {
 /**
  * The staggered scheduler. push() and finish() take hooks: `sink` gives each output a
  * destination (workerDestination, or discardDestination when skipping), `enter` names each
- * step, and onDecoded, onPresented and onSkipped count outputs.
+ * step, and onDecoded, onPresented and onSkipped count outputs. push() also calls onGate with
+ * the time its gate write starts and onSent with the time its unit went out.
  * @param {object} [options]
  * @param {(options: any) => Promise<any>} [options.createWorker]
  * @param {number} [options.timeoutMs]
@@ -447,7 +448,7 @@ function create({
     sequence,
     current,
     next,
-    {sink, enter = () => {}, onDecoded, onPresented, onSkipped, backlog = 0}
+    {sink, enter = () => {}, onDecoded, onPresented, onSkipped, onGate, backlog = 0}
   ) {
     enter('staggered-status');
     const expected = expectedFor(sequence, units, destinations);
@@ -491,6 +492,7 @@ function create({
     }
     enter('staggered-gate');
     const gateStarted = now();
+    onGate?.(gateStarted);
     await worker.openGates({
       snapshot,
       expected,
@@ -567,6 +569,7 @@ function create({
       enter('staggered-send');
       await transport.send(unit.data);
       lastSend = now();
+      hooks.onSent?.(lastSend);
       receive?.sent(sequence, next.length, lastSend);
       held = {sequence, ...next};
       counts.submitted++;

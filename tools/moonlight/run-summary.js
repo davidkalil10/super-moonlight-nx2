@@ -60,6 +60,31 @@ function stageTotals(steady) {
 }
 
 /**
+ * The access-unit timing of the steady rows that carry it (staggered rows), weighted by units;
+ * null for rows from before it was recorded.
+ * @param {object[]} steady
+ */
+function auTotals(steady) {
+  const timed = steady.filter(row => row.au?.units);
+  if (!timed.length) return null;
+  const total = weight => timed.reduce((sum, row) => sum + (row.au[weight] ?? 0), 0);
+  const mean = (key, weight) =>
+    +(
+      timed.reduce((sum, row) => sum + (row.au[key] ?? 0) * (row.au[weight] ?? 0), 0) /
+      (total(weight) || 1)
+    ).toFixed(1);
+  return {
+    units: total('units'),
+    gated: total('gated'),
+    waitMs: mean('waitMs', 'units'),
+    maxWaitMs: Math.max(...timed.map(row => row.au.maxWaitMs ?? 0)),
+    gateAgeMs: mean('gateAgeMs', 'gated'),
+    inHand: mean('inHand', 'gated'),
+    maxInHand: Math.max(...timed.map(row => row.au.maxInHand ?? 0))
+  };
+}
+
+/**
  * Summarizes the rows after the warmup, with per-frame figures rounded to two decimals.
  * @param {object[]} rows
  * @param {{warmup?: number}} [options]
@@ -70,6 +95,7 @@ function summarize(rows, {warmup = DEFAULT_WARMUP} = {}) {
   const presented = sum('presented');
   const perFrame = value => (presented ? +(value / presented).toFixed(2) : null);
   const stages = stageTotals(steady);
+  const au = auTotals(steady);
   return {
     seconds: steady.length,
     warmup: Math.min(warmup, rows.length),
@@ -94,7 +120,8 @@ function summarize(rows, {warmup = DEFAULT_WARMUP} = {}) {
           waitMsPerFrame: perFrame(Math.max(0, stage.wallMs - stage.bridgeMs))
         }
       ])
-    )
+    ),
+    ...(au ? {au} : {})
   };
 }
 
