@@ -3,6 +3,9 @@
 // acknowledging its ring write. It tags frame buffers as live.js copies them
 // out of the capture pipe, follows them through Encoder.encode and times the
 // matching rpc.write. Prints one JSON line to stderr on exit.
+//
+// live.js imports the ES module encoder, which bypasses Module._load, so the
+// encoder is wrapped up front; require(esm) shares the instance with import.
 const Module = require('node:module');
 const path = require('node:path');
 
@@ -27,6 +30,8 @@ function wrapEncoder(exports) {
   };
 }
 
+wrapEncoder(require('../../../../hbl-moonlight/tools/moonlight/hbv2-encoder.js'));
+
 function wrapRpc(exports) {
   const write = exports.write;
   exports.write = async function (address, data) {
@@ -39,11 +44,6 @@ function wrapRpc(exports) {
 const load = Module._load;
 Module._load = function (request, parent, isMain) {
   const exports = load.apply(this, arguments);
-  const name = path.basename(request);
-  if (name === 'hbv2-encoder.js' && !exports.Encoder.probed) {
-    wrapEncoder(exports);
-    exports.Encoder.probed = true;
-  }
   if (request.endsWith(path.join('shared', 'rpc.cjs')) && !exports.probed) {
     wrapRpc(exports);
     exports.probed = true;
