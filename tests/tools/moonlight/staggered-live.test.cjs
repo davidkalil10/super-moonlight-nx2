@@ -20,7 +20,11 @@ const {MODEL, simulate} = require('./request-budget.cjs');
 const {
   create: createWorker
 } = require('../../../hbl-moonlight/tools/moonlight/staggered-worker.js');
-const {create, RESTART} = require('../../../hbl-moonlight/tools/moonlight/staggered-live.js');
+const {
+  create,
+  RESTART,
+  TRIM_FRAMES
+} = require('../../../hbl-moonlight/tools/moonlight/staggered-live.js');
 
 const layout = {width: 1920, height: 1080, stride: 1920, sliceHeight: 1088};
 const noPause = async () => {};
@@ -826,4 +830,77 @@ test('push reports its gate write and its send on the scheduler clock', async ()
   assert.equal(times.at(-1).sent, clock.now);
   await live.finish({sink: device.sink});
   await live.stop();
+});
+
+async function trimRun(stale, options) {
+  const device = simulatedDevice();
+  const discard = device.sink.discardDestination;
+  const discards = [];
+  device.sink.discardDestination = async presentation => {
+    discards.push(presentation);
+    return discard(presentation);
+  };
+  const live = await liveOn(device, noPause, null, options);
+  const shown = [];
+  const trims = [];
+  for (let sequence = 1; sequence <= 16; sequence++) {
+    const unit = {
+      ...unitAt(sequence),
+      arrivedAt: stale.has(sequence) ? Date.now() - 1000 : Date.now() + 1e6
+    };
+    device.pts.set(sequence, BigInt(unit.pts));
+    await live.push(unit, {
+      sink: device.sink,
+      onSkipped: () => shown.push(sequence + ':skip'),
+      onTrimmed: ageMs => trims.push({sequence, ageMs})
+    });
+  }
+  await live.finish({sink: device.sink});
+  const counts = live.counts;
+  assert.equal(counts.decoded, 16);
+  assert.equal(counts.presented + counts.skipped, 16);
+  assert.deepEqual(device.onScreenWrites, []);
+  await live.stop();
+  return {counts, shown, trims, discards};
+}
+
+test('a unit stale at three gates in a row trims one output through the skip path', async () => {
+  assert.equal(TRIM_FRAMES, 3);
+  const {counts, shown, trims, discards} = await trimRun(new Set([6, 7, 8, 9]), {
+    trimBacklogMs: 20
+  });
+  assert.deepEqual(
+    trims.map(trim => trim.sequence),
+    [8]
+  );
+  assert.ok(trims[0].ageMs >= 1000);
+  assert.equal(discards.length, 1);
+  assert.equal(counts.trimmed, 1);
+  assert.equal(counts.skipped, 1);
+  assert.equal(shown.length, 1);
+});
+
+test('a stale run broken by a fresh unit never trims', async () => {
+  const {counts, trims, discards} = await trimRun(new Set([4, 5, 7, 8, 10, 11]), {
+    trimBacklogMs: 20
+  });
+  assert.deepEqual(trims, []);
+  assert.deepEqual(discards, []);
+  assert.equal(counts.trimmed, 0);
+  assert.equal(counts.skipped, 0);
+});
+
+test('without trimBacklogMs stale units present every output', async () => {
+  const {counts, trims, discards} = await trimRun(new Set([4, 5, 6, 7, 8, 9, 10, 11]));
+  assert.deepEqual(trims, []);
+  assert.deepEqual(discards, []);
+  assert.equal(counts.skipped, 0);
+  assert.equal('trimmed' in counts, false);
+});
+
+test('the backlog trim needs the backlog skip rule', () => {
+  assert.throws(
+    () => create({skipRule: 'vsync', skipBacklog: 1, trimBacklogMs: 20}),
+    /backlog trim needs the backlog rule/
+  );
 });

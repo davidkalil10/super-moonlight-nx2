@@ -1215,6 +1215,8 @@ test(
       const fed = rows.find(row => row.bridgeByStage.input);
       assert.deepEqual(fed.bridgeByStage.input, {exchanges: 4, bridgeMs: 7});
       assert.equal(fed.exchanges, 0, 'the feeder reads stay out of the video exchange total');
+      assert.equal(summary.trimmed, undefined);
+      assert.ok(rows.every(row => !('trimmed' in row)));
     });
   }
 );
@@ -1265,3 +1267,62 @@ test('--input-hz 120 reaches the input feeder and the summary', {timeout: 5000},
     await assert.rejects(run(g.options), /--input-hz takes 10 to 120/);
   });
 });
+
+test(
+  '--trim-backlog-ms reaches the scheduler, logs each trim and counts it apart from drops',
+  {timeout: 5000},
+  async () => {
+    const f = await fixture({units: pairedUnits(6)});
+    const created = [];
+    const timed = timedStaggeredFake(f.events, []);
+    f.options.createStaggered = options => {
+      created.push(options);
+      const live = timed();
+      return {
+        ...live,
+        async push(unit, hooks) {
+          await live.push(unit, hooks);
+          if (unit.pts === 4000) hooks.onTrimmed(31.26);
+        },
+        get pending() {
+          return live.pending;
+        }
+      };
+    };
+    f.options.now = () => 1000;
+    f.options.statsMs = 10;
+    f.options.args.push('--staggered', '--queue', '16', '--warmup', '0', '--trim-backlog-ms', '20');
+    await exercise(f, async () => {
+      const summary = await run(f.options);
+      assert.equal(created[0].trimBacklogMs, 20);
+      assert.equal(summary.trimBacklogMs, 20);
+      assert.equal(summary.trimmed, 1);
+      assert.equal(summary.dropped, 0);
+      assert.ok(!summary.failures.includes('dropped 0'));
+      const events = (await fs.readFile(path.join(f.directory, 'logs', 'events.jsonl'), 'utf8'))
+        .trim()
+        .split('\n')
+        .map(JSON.parse);
+      const trims = events.filter(event => event.event === 'backlog-trim');
+      assert.equal(trims.length, 1);
+      assert.equal(trims[0].ageMs, 31.3);
+      assert.equal(trims[0].trimBacklogMs, 20);
+      assert.equal(events.find(event => event.event === 'summary').trimmed, 1);
+    });
+    for (const [extra, message] of [
+      [['--trim-backlog-ms', '20'], /--trim-backlog-ms applies to --staggered/],
+      [['--staggered', '--trim-backlog-ms', '0'], /--trim-backlog-ms takes/],
+      [['--staggered', '--trim-backlog-ms', 'soon'], /--trim-backlog-ms takes/],
+      [
+        ['--staggered', '--skip-rule', 'vsync', '--skip-backlog', '1', '--trim-backlog-ms', '20'],
+        /--trim-backlog-ms needs --skip-rule backlog/
+      ]
+    ]) {
+      const g = await fixture();
+      await exercise(g, async () => {
+        g.options.args.push(...extra);
+        await assert.rejects(run(g.options), message);
+      });
+    }
+  }
+);

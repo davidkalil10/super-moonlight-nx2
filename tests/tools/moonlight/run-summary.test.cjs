@@ -123,3 +123,17 @@ test('rows with access-unit timing are weighted by units, and rows without it st
   assert.equal(old.fps, 30);
   assert.deepEqual(verdict(old, {}), {pass: true, failures: []});
 });
+
+test('backlog trims are summed apart from dropped frames and fail only an explicit limit', () => {
+  const rows = [row(30), row(60, {trimmed: 2, skipped: 2}), row(60, {trimmed: 1, skipped: 3})];
+  const summary = summarize(rows, {warmup: 1});
+  assert.equal(summary.trimmed, 3);
+  assert.equal(summary.skipped, 5);
+  assert.equal(summary.dropped, 0);
+  assert.deepEqual(verdict(summary, {}), {pass: true, failures: []});
+  assert.deepEqual(parseExpect('trimmed=0'), {trimmed: 0});
+  assert.deepEqual(verdict(summary, {trimmed: 0}), {pass: false, failures: ['trimmed 0']});
+  const old = summarize([row(30), row(30), row(30), row(30)]);
+  assert.equal('trimmed' in old, false);
+  assert.deepEqual(verdict(old, {trimmed: 0}), {pass: true, failures: []});
+});
