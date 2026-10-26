@@ -19,6 +19,9 @@
 #define HTTP_PORT 47989
 #define CONNECT_TIMEOUT 15
 
+/* Defined by the pinned http.c but not declared in its header. */
+void http_cleanup(void);
+
 static atomic_bool started;
 static atomic_bool terminated;
 
@@ -59,7 +62,13 @@ bool session_key_directory(char *path, size_t size) {
   return key_directory(path, size);
 }
 
+/* gs_init makes a new curl handle each time. The previous one would keep its last HTTPS
+ * connection open, and Sunshine answers no other HTTPS request until it closes. */
 int session_connect(SERVER_DATA *server, char *host) {
+  static bool initialised;
+  if (initialised)
+    http_cleanup();
+  initialised = true;
   char keys[4096];
   if (!key_directory(keys, sizeof(keys)))
     return session_fail("cannot create the key directory", keys);
