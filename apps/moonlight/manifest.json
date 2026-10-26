@@ -28,6 +28,7 @@
   "display": {
     "modes": [{"width": 1920, "height": 1080, "hz": 60}]
   },
+  "network": {"needs": ["tcp-client"]},
   "backends": {
     "hblauncher.gpu-app": {
       "abi": 1,

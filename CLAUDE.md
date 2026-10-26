@@ -8,7 +8,7 @@ research live in `moonlight-dev`.
 
 Phase 1 keeps the original HBLauncher paths, so history and file names line up:
 
-- `apps/moonlight/`: the console app as an HB package (`manifest.json`, `assets/`, `src/`,
+- `apps/moonlight/`: the console app as an HB package (`manifest.json`, `assets/`,
   `backends/hblauncher.gpu-app/`, `build.js`).
 - `tools/moonlight/`: the PC host (`live.js`, `native-h264.js`, staggered workers,
   ring/HBV formats) and `helper/` (`hbmoonlight`, C, GPLv3 upstreams).

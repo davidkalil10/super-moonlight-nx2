@@ -89,8 +89,7 @@ async function main() {
   execFileSync('python3', [output('assets.py')], {stdio: 'inherit'});
   const {headers, compile} = await import('../../../hbl-platform/sdk/build.js');
   await headers(output(BACKEND));
-  compile(output('src/app.vert'), backend('app.vert.spv'));
-  for (const stage of ['frag', 'comp'])
+  for (const stage of ['vert', 'frag', 'comp'])
     compile(backend('app.' + stage), backend('app.' + stage + '.spv'));
 }
 

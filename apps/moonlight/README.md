@@ -13,10 +13,9 @@ remain enabled. Setup, DUT results and performance limits are documented in
 [Native H.264](../../../moonlight-dev/docs/moonlight/NATIVE-H264.md).
 
 The app is an HB package (`manifest.json`, see hbl-platform `docs/hb-package.md`):
-`assets/` holds the icon and text atlas, `src/` the vertex shader, and
-`backends/hblauncher.gpu-app/` the compute and fragment shaders with their includes, the
-SPIR-V and the state and memory images. Both shaders read the frame ring, so the package
-has no portable entry yet.
+`assets/` holds the icon and text atlas and `backends/hblauncher.gpu-app/` the shaders
+with their includes, the SPIR-V and the state and memory images. The compute and fragment
+shaders read the frame ring, so the package has no portable entry and no `src/` yet.
 
 Build and check from the project root:
 
