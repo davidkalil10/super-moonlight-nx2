@@ -80,6 +80,13 @@ function create({startMs = 6, growMs = 0.5, shrinkMs = 0.1, now = Date.now, slee
       if (waited) estimate = Math.max(0, estimate - shrinkMs);
       bound = waited || pendingSeen;
     },
+    /**
+     * When `unit` is predicted acquired, or null before its gate.
+     * @param {number} unit
+     */
+    predictedAt(unit) {
+      return gates.has(unit) ? predicted(unit) : null;
+    },
     get estimateMs() {
       return estimate;
     }

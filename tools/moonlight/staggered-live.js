@@ -23,11 +23,18 @@
  * since a pause costs the frame its vsync slot (request-budget.cjs staggeredRetryWait). A gate
  * waiting for the renderer to apply a publication sleeps to the vsync present-pacer predicts
  * instead, since polling there only fills the bridge. The deadline bounds both.
+ *
+ * Exchange timing: every status read and gate write is binned by exchange-timing.js against
+ * the last gate, the last send and the predicted decode-done and receive-done, and reported
+ * in counts.exchanges. `avoid` ({beforeMs, afterMs}) keeps a status read from starting
+ * inside that span around a predicted event, delaying it to afterMs past the event, so a
+ * live run can move reads off the console's busy window once the bins show where it is.
  */
 import * as checked from './staggered-status.js';
 import * as presentPacer from './present-pacer.js';
 import * as decodeWaits from './decode-wait.js';
 import * as receiveWaits from './receive-wait.js';
+import * as exchangeTiming from './exchange-timing.js';
 import {create as createStaggeredWorker} from './staggered-worker.js';
 
 const RESTART = 'Staggered worker native objects retained; restart SmileBASIC';
@@ -227,6 +234,8 @@ function jsonSafe(value) {
  * @param {'backlog' | 'vsync'} [options.skipRule]
  * @param {boolean} [options.decodeWait] sleep through a pending acquire (vsync rule only)
  * @param {boolean} [options.receiveWait] sleep through a pending receive
+ * @param {{beforeMs: number, afterMs: number} | null} [options.avoid] span around a predicted
+ *   decode-done or receive-done no status read starts in
  * @param {() => number} [options.now]
  */
 function create({
@@ -238,6 +247,7 @@ function create({
   skipRule = 'backlog',
   decodeWait = false,
   receiveWait = false,
+  avoid = null,
   now = Date.now
 } = {}) {
   if (!SKIP_RULES.includes(skipRule)) throw Error('Unknown staggered skip rule ' + skipRule);
@@ -275,6 +285,10 @@ function create({
   let readMs = 0;
   /** When the last gate opened a fetch, for the pacer's vsync prediction. */
   let fetchOpened = null;
+  const timing = exchangeTiming.create();
+  /** When the last gate opened and the last unit went out, for the exchange bins. */
+  let lastGate = null;
+  let lastSend = null;
   /**
    * One per gate: the acquire it expects and what its reads have seen of it.
    * @param {Expected} expected
@@ -312,9 +326,12 @@ function create({
         link.waited = await receive.beforeRead(link.unit, link.pendingSeen, readMs);
       if (watch && !watch.acquired)
         watch.waited = await decode.beforeRead(watch.unit, watch.pendingSeen, readMs);
+      const delay = exchangeTiming.delayFor(now(), predictions(expected), avoid);
+      if (delay > 0) await pause(delay);
     },
     onRead: (snapshot, startedAt) => {
       readMs = now() - startedAt;
+      timing.record('status', startedAt, now(), references(expected));
       if (link && !link.received) {
         link.received =
           snapshot.receive.sequence === link.unit && snapshot.receive.count === BigInt(link.bytes);
@@ -337,6 +354,23 @@ function create({
       waiting[pending] = (waiting[pending] || 0) + 1;
     }
   });
+
+  /**
+   * The predicted decode-done and receive-done for a gate's expected units.
+   * @param {Expected} expected
+   */
+  const predictions = expected => [
+    expected.acquire ? decode?.predictedAt(expected.acquire.sequence) : null,
+    receive?.predictedAt(expected.receive.sequence)
+  ];
+  /**
+   * The event times an exchange of a gate is binned against.
+   * @param {Expected} expected
+   */
+  const references = expected => {
+    const [decodeDone, receiveDone] = predictions(expected);
+    return {gate: lastGate, send: lastSend, decodeDone, receiveDone};
+  };
 
   /** Keeps the units and destinations later gates still check, and drops older ones. */
   function remember(sequence, unit) {
@@ -456,6 +490,7 @@ function create({
       destinations.set(sequence - 2, destination);
     }
     enter('staggered-gate');
+    const gateStarted = now();
     await worker.openGates({
       snapshot,
       expected,
@@ -466,8 +501,10 @@ function create({
       published,
       frame: layout
     });
-    decode?.opened(sequence, now());
-    if (destination) fetchOpened = now();
+    timing.record('gate', gateStarted, now(), references(expected));
+    lastGate = now();
+    decode?.opened(sequence, lastGate);
+    if (destination) fetchOpened = lastGate;
     if (pending && destination === published) pending.openedAt = fetchOpened;
   }
 
@@ -529,7 +566,8 @@ function create({
       remember(sequence, next);
       enter('staggered-send');
       await transport.send(unit.data);
-      receive?.sent(sequence, next.length, now());
+      lastSend = now();
+      receive?.sent(sequence, next.length, lastSend);
       held = {sequence, ...next};
       counts.submitted++;
     },
@@ -608,7 +646,7 @@ function create({
     },
 
     get counts() {
-      return {...counts, pacer: pacer.counters, waiting: {...waiting}};
+      return {...counts, pacer: pacer.counters, waiting: {...waiting}, exchanges: timing.counts};
     },
 
     get retained() {

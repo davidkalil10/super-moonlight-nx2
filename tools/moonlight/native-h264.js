@@ -18,6 +18,7 @@ import {create as createNativeSink} from './native-sink.js';
 import {create as createSocketAudioSource} from './socket-audio-source.js';
 import * as pairedLive from './paired-live.js';
 import {create as createStaggeredLive} from './staggered-live.js';
+import * as exchangeTiming from './exchange-timing.js';
 
 const IDR_COOLDOWN_MS = 100;
 // A staggered host runs at present pace, so it needs room for a source burst (batch C2).
@@ -111,6 +112,7 @@ async function run({
   const skipRule = cli.option(args, '--skip-rule') ?? 'backlog';
   const decodeWait = args.includes('--decode-wait');
   const receiveWait = args.includes('--receive-wait');
+  const avoidWindow = exchangeTiming.parseAvoid(cli.option(args, '--avoid-window') ?? undefined);
   const skipBacklog =
     cli.option(args, '--skip-backlog') === 'off'
       ? Infinity
@@ -129,6 +131,8 @@ async function run({
   if (skipRule === 'vsync' && skipBacklog === Infinity)
     throw Error('--skip-rule vsync needs a --skip-backlog unit count');
   if (decodeWait && skipRule !== 'vsync') throw Error('--decode-wait needs --skip-rule vsync');
+  if (avoidWindow && !(decodeWait || receiveWait))
+    throw Error('--avoid-window needs --decode-wait or --receive-wait to predict the events');
   if (
     !staggered &&
     ['--present-hz', '--skip-backlog', '--skip-rule'].some(name => args.includes(name))
@@ -260,7 +264,9 @@ async function run({
           skipBacklog,
           skipRule,
           decodeWait,
-          receiveWait
+          receiveWait,
+          avoid: avoidWindow,
+          now: () => performance.now()
         });
       try {
         return await createDecoder({
@@ -773,6 +779,7 @@ async function run({
           skipRule,
           decodeWait,
           receiveWait,
+          avoidWindow,
           staggered: {...(staggeredLive?.counts ?? {}), tail}
         }
       : {}),

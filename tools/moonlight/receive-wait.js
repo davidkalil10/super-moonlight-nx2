@@ -92,6 +92,13 @@ function create({
       if (waited) perKbMs = Math.max(0, perKbMs - shrinkMs / send.kb);
       bound = waited || pendingSeen;
     },
+    /**
+     * When `unit` is predicted received, or null before its send.
+     * @param {number} unit
+     */
+    predictedAt(unit) {
+      return sends.has(unit) ? predicted(unit) : null;
+    },
     get perKbMs() {
       return perKbMs;
     }

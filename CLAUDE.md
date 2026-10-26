@@ -34,6 +34,7 @@ The paths become package imports with the ESM switch in Phase 2.
 
 Requests per frame fell by about two thirds, but bridge ms/frame stayed flat; decoded units never cross the bridge.
 Status and gate exchanges became 2.7x slower (2.5 to 7 ms) as they grew sparser; the flat gap probe points to contention while streaming, not idle wake-up, leaving roughly 40 fps at 120 present.
+`summary.staggered.exchanges` bins every status read and gate write by its start against the last gate, the last send and the predicted decode-done and receive-done (1 ms bins, host clock); `--avoid-window before-after` then keeps status reads out of that span around a predicted event. The window is chosen from a live run's bins, not guessed.
 The pacer stayed at 8.33 ms and did not learn the panel's 16.67 ms apply grid in 40 s; that remains open.
 
 ## Rules
