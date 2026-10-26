@@ -29,6 +29,7 @@ const STAGES = [
 const SECTION_DIR = 'backends/' + ID + '/';
 const SPIRV_MAGIC = 0x07230203;
 const SPIRV_HEADER_BYTES = 20;
+/** Also desktop-vulkan-run.c's cap; 4x backend one's 1 MiB shader limit. */
 const MAX_SPIRV_BYTES = 4 * 1024 * 1024;
 const FULL_SCREEN_VERTEX = path.join(
   import.meta.dirname,
@@ -208,4 +209,4 @@ async function build(pkg) {
   return shaders;
 }
 
-export {ID, ABI, SERVICES, SECTION_DIR, backend, program, build};
+export {ID, ABI, SERVICES, SECTION_DIR, MAX_SPIRV_BYTES, backend, program, build};

@@ -33,7 +33,7 @@ enum {
   MAX_FRAMES = 3600,
   MAX_WRITES = 64,
   MAX_FRAMES_BYTES = MAX_FRAMES * (4 + 8 * MAX_WRITES),
-  MAX_SPIRV_BYTES = 16 << 20,
+  MAX_SPIRV_BYTES = 4 << 20,
   SPIRV_MAGIC = 0x07230203,
   NO_DEVICE = 2
 };
@@ -58,6 +58,8 @@ static void *readFile(const char *name, size_t *size, size_t max) {
   CHECK(f);
   CHECK(!fseek(f, 0, SEEK_END));
   long end = ftell(f);
+  if (end > 0 && (unsigned long)end > max)
+    fprintf(stderr, "desktop-vulkan-run: %s is over %zu bytes\n", name, max);
   CHECK(end >= 0 && (unsigned long)end <= max);
   *size = (size_t)end;
   rewind(f);

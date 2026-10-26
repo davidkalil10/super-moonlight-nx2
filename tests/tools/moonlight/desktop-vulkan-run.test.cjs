@@ -4,9 +4,14 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const {spawnSync} = require('node:child_process');
-const {gpuStatus, run, WIDTH, HEIGHT} = require('../../sdk/desktop-vulkan/run.cjs');
+const {SOURCE, gpuStatus, run, WIDTH, HEIGHT} = require('../../sdk/desktop-vulkan/run.cjs');
 const {clockProvider, parseFrameScript} = require('../../sdk/desktop-vulkan/state.js');
-const {program} = require('../../sdk/desktop-vulkan/backend.js');
+const {
+  MAX_SPIRV_BYTES,
+  SECTION_DIR,
+  backend,
+  program
+} = require('../../sdk/desktop-vulkan/backend.js');
 const {preparePackage} = require('../../sdk/desktop-vulkan/hello-world.cjs');
 const {readPackage} = require('../../../hbl-platform/sdk/package/manifest.js');
 const {builds} = require('../../../hbl-platform/scripts/toolchain.js');
@@ -198,4 +203,36 @@ test('rejects-failed-readback-allocation', {skip}, async () => {
   );
   for (const name of ['run.json', 'frame.rgba'])
     assert.ok(!fs.existsSync(path.join(outputDir, name)), name);
+});
+
+test('spirv-cap-is-one-value-in-backend-and-runner', async t => {
+  const [, mib] = /MAX_SPIRV_BYTES = (\d+) << 20,/.exec(fs.readFileSync(SOURCE, 'utf8'));
+  assert.equal(Number(mib) << 20, MAX_SPIRV_BYTES);
+  const root = await preparePackage(path.join(scratch, 'cap'), {compile: false});
+  const compute = path.join(root, SECTION_DIR, 'app.comp.spv');
+  const spirv = fs.readFileSync(compute);
+  const padded = bytes => Buffer.concat([spirv, Buffer.alloc(bytes - spirv.length)]);
+  fs.writeFileSync(compute, padded(MAX_SPIRV_BYTES));
+  assert.equal(backend.supports(await readPackage(root)), null);
+  fs.writeFileSync(compute, padded(MAX_SPIRV_BYTES + 4));
+  assert.equal(
+    backend.supports(await readPackage(root)),
+    'Invalid file size: ' + SECTION_DIR + 'app.comp.spv'
+  );
+  if (skip) return t.diagnostic('runner side skipped: ' + skip);
+  const {shaders, initialState, data} = await hello();
+  const ok = await frames('cap-ok', [[true, []]]);
+  const framesFile = path.join(path.dirname(ok.files['frame.rgba']), 'frames.bin');
+  const output = path.join(scratch, 'over-cap');
+  fs.mkdirSync(output);
+  const over = spawnSync(
+    gpu.runner,
+    [shaders.vertex, shaders.fragment, compute, initialState, data, framesFile, output],
+    {encoding: 'utf8'}
+  );
+  assert.equal(over.signal, null);
+  assert.equal(over.status, 1);
+  assert.match(over.stderr, new RegExp('app.comp.spv is over ' + MAX_SPIRV_BYTES + ' bytes'));
+  assert.equal(over.stdout, '');
+  assert.deepEqual(fs.readdirSync(output), []);
 });
