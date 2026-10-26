@@ -14,7 +14,7 @@
 //              [--paired-loop] (input-only split worker plus a guarded two-frame output loop)
 //              [--duration S] [--warmup S] [--expect fps=30,dropped=0,idr=0] [--ab] [--queue 3, 8 with --staggered] [--input-hz 60] [--audio-frames 960]
 //              --staggered: [--present-hz 60|120] [--skip-backlog 2|off] [--skip-rule backlog|vsync]
-//                           [--decode-wait] (with --skip-rule vsync)
+//                           [--decode-wait] (with --skip-rule vsync) [--receive-wait]
 //              [--socket-audio | --socket-audio-tone] (PCM or a 500 Hz test tone over native TCP to a console worker)
 // --moonlight runs tools/moonlight/helper's hbmoonlight (path from $HBMOONLIGHT)
 //   and, unless --no-input / --no-audio, also feeds controller+touch into its

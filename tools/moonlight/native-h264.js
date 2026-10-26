@@ -110,6 +110,7 @@ async function run({
   const presentHz = cli.number(args, '--present-hz', 60);
   const skipRule = cli.option(args, '--skip-rule') ?? 'backlog';
   const decodeWait = args.includes('--decode-wait');
+  const receiveWait = args.includes('--receive-wait');
   const skipBacklog =
     cli.option(args, '--skip-backlog') === 'off'
       ? Infinity
@@ -254,7 +255,13 @@ async function run({
       transport = await createTransport({rpc, host: rpc.host});
       if (pairedLoop) paired = createPaired({rpc, publication: sink.workerPublication});
       if (staggered)
-        staggeredLive = createStaggered({presentHz, skipBacklog, skipRule, decodeWait});
+        staggeredLive = createStaggered({
+          presentHz,
+          skipBacklog,
+          skipRule,
+          decodeWait,
+          receiveWait
+        });
       try {
         return await createDecoder({
           rpc,
@@ -765,6 +772,7 @@ async function run({
           skipBacklog: skipBacklog === Infinity ? 'off' : skipBacklog,
           skipRule,
           decodeWait,
+          receiveWait,
           staggered: {...(staggeredLive?.counts ?? {}), tail}
         }
       : {}),
