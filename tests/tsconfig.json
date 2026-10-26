@@ -37,6 +37,9 @@
     "../hbl-moonlight/tools/moonlight/present-pacer.js",
     "../hbl-moonlight/tools/moonlight/run-summary.js",
     "../hbl-moonlight/tools/moonlight/staggered-gate.js",
-    "../hbl-moonlight/tools/moonlight/touch.js"
+    "../hbl-moonlight/tools/moonlight/touch.js",
+    "../hbl-moonlight/tools/moonlight/audio-socket-plan.js",
+    "../hbl-moonlight/tools/moonlight/audio-socket-worker.js",
+    "../hbl-moonlight/tools/moonlight/audio-stream.js"
   ]
 }
