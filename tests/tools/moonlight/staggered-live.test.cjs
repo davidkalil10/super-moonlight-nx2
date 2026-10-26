@@ -860,7 +860,7 @@ async function trimRun(stale, options, backlog = 1) {
     device.pts.set(sequence, BigInt(unit.pts));
     await live.push(unit, {
       sink: device.sink,
-      backlog,
+      backlog: typeof backlog === 'function' ? backlog(sequence) : backlog,
       onSkipped: () => shown.push(sequence + ':skip'),
       onTrimmed: ageMs => trims.push({sequence, ageMs})
     });
@@ -926,6 +926,17 @@ test('a standing stale queue trims at most once per six gates', async () => {
   );
   assert.equal(counts.trimmed, 2);
   assert.equal(counts.skipped, 2);
+});
+
+test('an empty-queue gate in a stale run restarts the count', async () => {
+  const {counts, trims} = await trimRun(everyUnit, {trimBacklogMs: 20}, sequence =>
+    sequence === 5 ? 0 : 1
+  );
+  assert.deepEqual(
+    trims.map(trim => trim.sequence),
+    [8, 14]
+  );
+  assert.equal(counts.trimmed, 2);
 });
 
 test('the backlog trim needs a skip backlog of at least 1', () => {
