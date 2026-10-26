@@ -75,14 +75,25 @@ function buildCopy(args, {cwd = '', env = {}} = {}) {
   }
 }
 
+/** The hint build.js prints for `target` from `cwd`: the shorter form, absolute from /. */
+function hint(cwd, target) {
+  const relative = path.relative(cwd, target) || '.';
+  return relative.length < target.length && cwd !== '/' ? relative : target;
+}
+
 test('build.js refuses arguments before it writes the package', () => {
   for (const [cwd, check] of [
     ['', 'node ../hbl-platform/sdk/build.js --check apps/moonlight'],
     ['apps/moonlight', 'node ../../../hbl-platform/sdk/build.js --check .'],
-    [__dirname, copy => `node ${copy}/../hbl-platform/sdk/build.js --check ${copy}/apps/moonlight`]
+    ...[__dirname, '/'].map(from => [
+      from,
+      copy =>
+        `node ${hint(from, path.resolve(copy, '../hbl-platform/sdk/build.js'))} --check ` +
+        hint(from, path.join(copy, 'apps/moonlight'))
+    ])
   ]) {
     const result = buildCopy(['--check'], {cwd});
-    const shown = typeof check === 'function' ? path.normalize(check(result.copy)) : check;
+    const shown = typeof check === 'function' ? check(result.copy) : check;
     assert.equal(result.status, 1);
     assert.equal(
       result.stderr,
@@ -92,6 +103,9 @@ test('build.js refuses arguments before it writes the package', () => {
     );
     assert.ok(result.unchanged);
   }
+  const wrongGlslc = buildCopy(['--check'], {env: {GLSLC: '/bin/false'}});
+  assert.match(wrongGlslc.stderr, /^build\.js takes no arguments/);
+  assert.ok(wrongGlslc.unchanged);
 });
 
 /** Runs buildCopy with GLSLC set to a shell script made from `body`, in a directory of its own. */
@@ -140,6 +154,14 @@ test('build.js compiles with the GLSLC it checked, whatever GLSLANG says', async
     result.stderr,
     /^build\.js ignores GLSLANG and compiles through \S+glslang-shim\.sh/m
   );
+  const relativeShim = withGlslc(
+    directory =>
+      `if [ "$1" = --version ]; then echo '${GLSLC_VERSION}'; exit 0; fi\n` +
+      `echo "$@" >> ${directory}/calls; exit 3`,
+    {env: {GLSLANG: 'tools/moonlight/glslang-shim.sh'}}
+  );
+  assert.match(relativeShim.calls, /app\.vert\.spv$/m);
+  assert.doesNotMatch(relativeShim.stderr, /ignores GLSLANG/);
 });
 
 test('the package has no portable entry and no unlisted assets', async () => {
