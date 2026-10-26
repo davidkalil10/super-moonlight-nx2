@@ -31,7 +31,9 @@ const CHIP = {y: 64, height: 54, pad: 10, size: 26};
 const LEGEND = {y: 984, size: 26, height: 40};
 const CARDS = {y: 300, width: 840, height: 96, gapX: 48, gapY: 32, pad: 32};
 const LABEL = {size: 22, tracking: 22 * 0.08};
-const MAX_HOSTS = 20;
+const HEADING = {y: 200, status: 340, kicker: 24, size: 72};
+const BUTTON = {y: 640, width: 400, gap: 48};
+const MAX_HOSTS = 6;
 /** Strips kept across pages, by text, size, width and alignment. */
 const CACHE_LIMIT = 512;
 
@@ -159,33 +161,114 @@ function createPages(raster) {
   }
 
   /**
-   * A status page: a headline, a line under it, no cursor.
-   * @param {string} title @param {string} headline @param {string | null} line @param {string} hint
+   * The Horizon frame: chips top left, a note top right, button hints and a footer at the bottom.
+   * @param {{chips?: [string | undefined, number, number][], note?: string,
+   *   keys?: [string, string][], footer?: string, background?: number, cursorHome?: number,
+   *   flags?: number}} frame
    */
-  function status(title, headline, line, hint) {
-    const page = framed(title, hint);
-    page.text(160, 400, headline, 48, 1600, COLOR.ink, 'center');
-    if (line) page.text(160, 480, line, 32, 1600, COLOR.muted, 'center');
-    return page.build().then(built => ({...built, flags: PAGE_FLAG.hideCursor}));
+  function horizon({
+    chips = [],
+    note = '',
+    keys = [],
+    footer = '',
+    background = COLOR.background,
+    cursorHome = 0,
+    flags = 0
+  }) {
+    const page = compose({background, cursorHome, ...(flags && {flags})});
+    let x = SIDE;
+    for (const [label, color, width] of chips) {
+      if (!label) continue;
+      page.solid(x, CHIP.y, width, CHIP.height, COLOR.card);
+      page.text(x, CHIP.y + CHIP.pad, label, CHIP.size, width, color, 'center');
+      x += width + 16;
+    }
+    if (note) page.text(1920 - SIDE - 700, CHIP.y + CHIP.pad, note, 26, 700, COLOR.muted, 'right');
+    if (keys.length) page.legend(SIDE, LEGEND.y, keys);
+    if (footer)
+      page.text(1920 - SIDE - 700, LEGEND.y + 5, footer, 24, 700, COLOR.grey, 'right', {
+        weight: 500
+      });
+    return page;
+  }
+
+  /** @param {Model} model @returns {[string | undefined, number, number][]} */
+  function hostChips(model) {
+    return [
+      [model.host?.name, COLOR.ink, 300],
+      [model.host?.address, COLOR.muted, 300]
+    ];
+  }
+
+  /**
+   * A kicker in the accent, a big title and a line under it, left aligned.
+   * @param {ReturnType<typeof compose>} page @param {string} kicker @param {string} title
+   * @param {string | null} line
+   * @param {{y?: number, size?: number, color?: number, tracking?: number}} [style]
+   */
+  function heading(page, kicker, title, line, style = {}) {
+    const {y = HEADING.y, size = HEADING.size, color = COLOR.ink, tracking = 0} = style;
+    const width = 1920 - 2 * SIDE;
+    page.text(SIDE, y, kicker.toUpperCase(), HEADING.kicker, width, COLOR.accent, 'left', {
+      tracking: HEADING.kicker * 0.1
+    });
+    page.text(SIDE, y + 44, title, size, width, color, 'left', {weight: 700, tracking});
+    if (line) page.text(SIDE, y + 148, line, 28, width, COLOR.muted, 'left', {weight: 500});
+  }
+
+  /**
+   * A card the cursor can land on, its label centred.
+   * @param {ReturnType<typeof compose>} page @param {number} id @param {number} x @param {number} y
+   * @param {number} width @param {string} label
+   */
+  function button(page, id, x, y, width, label) {
+    page.item({id, x, y, w: width, h: CARDS.height});
+    page.solid(x, y, width, CARDS.height, COLOR.card);
+    page.text(x, y + 28, label, 32, width, COLOR.ink, 'center', {weight: 700});
+  }
+
+  /**
+   * A status page: no cursor, the heading says what is happening.
+   * @param {Model} model @param {string} kicker @param {string} title @param {string | null} line
+   * @param {[string, string][]} keys
+   */
+  function status(model, kicker, title, line, keys) {
+    const page = horizon({chips: hostChips(model), keys, flags: PAGE_FLAG.hideCursor});
+    heading(page, kicker, title, line, {y: HEADING.status});
+    return page.build();
   }
 
   /** @param {Model} model */
   function hosts(model) {
-    const page = framed('Moonlight', 'A  Open      X  Settings      Y  Refresh');
     const shown = model.hosts.slice(0, MAX_HOSTS);
-    page.text(
-      TITLE.x,
-      140,
-      shown.length ? 'Choose a PC' : 'No hosts yet: add one to hosts.json on the PC',
-      28,
-      1400,
-      COLOR.muted
-    );
+    const page = horizon({
+      chips: [['Moonlight', COLOR.ink, 240]],
+      note: model.hosts.length > MAX_HOSTS ? `${MAX_HOSTS} of ${model.hosts.length} PCs shown` : '',
+      keys: [
+        ['A', 'Open'],
+        ['X', 'Settings'],
+        ['Y', 'Refresh']
+      ]
+    });
+    if (!shown.length)
+      heading(page, 'No PCs yet', 'Add a PC to hosts.json', 'The service reads it on this PC');
+    else
+      heading(
+        page,
+        'Moonlight',
+        'Choose a PC',
+        `${model.hosts.length} ${model.hosts.length === 1 ? 'PC' : 'PCs'} in hosts.json`
+      );
     shown.forEach((host, i) => {
-      const y = 220 + i * 84;
-      page.item({id: ITEM.host + i, x: 100, y, w: 1720, h: 72});
-      page.text(140, y + 14, host.name, 36, 900);
-      page.text(1040, y + 22, host.address, 28, 740, COLOR.muted, 'right');
+      const x = SIDE + (i % 2) * (CARDS.width + CARDS.gapX),
+        y = 430 + Math.floor(i / 2) * (CARDS.height + CARDS.gapY),
+        inner = CARDS.width - 2 * CARDS.pad;
+      page.item({id: ITEM.host + i, x, y, w: CARDS.width, h: CARDS.height});
+      page.solid(x, y, CARDS.width, CARDS.height, COLOR.card);
+      page.text(x + CARDS.pad, y + 12, host.name, 36, inner, COLOR.ink, 'left', {weight: 700});
+      page.text(x + CARDS.pad, y + 60, host.address, 24, inner, COLOR.muted, 'left', {
+        weight: 500
+      });
     });
     return page.build();
   }
@@ -269,38 +352,44 @@ function createPages(raster) {
 
   /** @param {Model} model */
   function pairing(model) {
-    const page = framed('Moonlight', 'B  Cancel');
-    page.text(160, 240, model.host?.name ?? '', 40, 1600, COLOR.ink, 'center');
+    const page = horizon({
+      chips: hostChips(model),
+      keys: [['B', 'Cancel']],
+      flags: PAGE_FLAG.hideCursor
+    });
     if (model.pin) {
-      page.text(160, 320, model.pin, 80, 1600, COLOR.accent, 'center');
-      page.text(160, 460, model.url ?? '', 30, 1600, COLOR.muted, 'center');
-      page.text(160, 540, 'Enter this PIN on the PC', 36, 1600, COLOR.ink, 'center');
-    } else page.text(160, 400, 'Waiting for a PIN…', 36, 1600, COLOR.muted, 'center');
-    return page.build().then(built => ({...built, flags: PAGE_FLAG.hideCursor}));
+      heading(page, 'Pairing', model.pin, 'Enter this PIN on the PC', {
+        y: HEADING.status,
+        color: COLOR.accent,
+        tracking: HEADING.size * 0.2
+      });
+      if (model.url)
+        page.text(SIDE, HEADING.status + 196, model.url, 26, 1920 - 2 * SIDE, COLOR.grey, 'left', {
+          weight: 500
+        });
+    } else
+      heading(page, 'Pairing', 'Waiting for a PIN…', 'The PC is starting the pairing', {
+        y: HEADING.status,
+        size: 56
+      });
+    return page.build();
   }
 
   /** @param {Model} model */
   function settings(model) {
-    const page = compose({background: COLOR.background, cursorHome: 0});
-    let x = SIDE;
-    for (const [label, width, color] of [
-      [model.host?.name, 300, COLOR.ink],
-      ['Settings', 180, COLOR.muted]
-    ]) {
-      if (!label) continue;
-      page.solid(x, CHIP.y, width, CHIP.height, COLOR.card);
-      page.text(x, CHIP.y + CHIP.pad, label, CHIP.size, width, color, 'center');
-      x += width + 16;
-    }
-    page.text(
-      1920 - SIDE - 700,
-      CHIP.y + CHIP.pad,
-      'Applies to the next launch',
-      26,
-      700,
-      COLOR.muted,
-      'right'
-    );
+    const page = horizon({
+      chips: [
+        [model.host?.name, COLOR.ink, 300],
+        ['Settings', COLOR.muted, 180]
+      ],
+      note: 'Applies to the next launch',
+      keys: [
+        ['◂▸', 'Change'],
+        ['B', 'Back'],
+        ['Y', 'Reset']
+      ],
+      footer: '1080p60 is the reference shape'
+    });
     uiSettings.rows(model.settings).forEach((row, i) => {
       const x = SIDE + (i % 2) * (CARDS.width + CARDS.gapX),
         y = CARDS.y + Math.floor(i / 2) * (CARDS.height + CARDS.gapY),
@@ -333,62 +422,60 @@ function createPages(raster) {
         weight: 700
       });
     });
-    page.legend(SIDE, LEGEND.y, [
-      ['◂▸', 'Change'],
-      ['B', 'Back'],
-      ['Y', 'Reset']
-    ]);
-    page.text(
-      1920 - SIDE - 700,
-      LEGEND.y + 5,
-      '1080p60 is the reference shape',
-      24,
-      700,
-      COLOR.grey,
-      'right',
-      {weight: 500}
-    );
     return page.build();
   }
 
   /** @param {Model} model */
   function quitConfirm(model) {
-    const page = framed('Moonlight', 'A  Choose      B  Back');
-    const running = model.apps.find(app => app.id === model.currentGame);
-    page.text(
-      160,
-      360,
-      `Quit ${running ? running.name : 'the running app'} on ${model.host?.name ?? ''}?`,
-      40,
-      1600,
-      COLOR.ink,
-      'center'
+    const page = horizon({
+      chips: hostChips(model),
+      keys: [
+        ['A', 'Choose'],
+        ['B', 'Back']
+      ],
+      cursorHome: 1
+    });
+    const running = model.apps.find(app => app.id === model.currentGame)?.name ?? 'the running app';
+    heading(
+      page,
+      'Quit host app',
+      `Quit ${running}?`,
+      `The stream ends and the app closes on the PC`,
+      {
+        y: HEADING.status
+      }
     );
-    page.item({id: ITEM.confirmQuit, x: 760, y: 500, w: 400, h: 72});
-    page.text(760, 514, 'Quit', 36, 400, COLOR.ink, 'center');
-    page.item({id: ITEM.cancel, x: 760, y: 600, w: 400, h: 72});
-    page.text(760, 614, 'Cancel', 36, 400, COLOR.ink, 'center');
-    return page.build().then(built => ({...built, cursorHome: 1}));
+    button(page, ITEM.confirmQuit, SIDE, BUTTON.y, BUTTON.width, 'Quit');
+    button(page, ITEM.cancel, SIDE + BUTTON.width + BUTTON.gap, BUTTON.y, BUTTON.width, 'Cancel');
+    return page.build();
   }
 
   /** @param {Model} model */
   function overlay(model) {
-    const page = compose({background: COLOR.clear, cursorHome: 0, flags: PAGE_FLAG.overlay});
-    page.text(160, 300, model.app?.name ?? 'Streaming', 40, 1600, COLOR.ink, 'center');
-    page.item({id: ITEM.returnToApps, x: 660, y: 420, w: 600, h: 80});
-    page.text(660, 438, 'Return to apps', 36, 600, COLOR.ink, 'center');
-    page.item({id: ITEM.quitHost, x: 660, y: 540, w: 600, h: 80});
-    page.text(660, 558, 'Quit host app', 36, 600, COLOR.ink, 'center');
-    page.text(160, 700, 'B  Hide', 26, 1600, COLOR.muted, 'center');
+    const page = horizon({
+      background: COLOR.clear,
+      flags: PAGE_FLAG.overlay,
+      keys: [
+        ['A', 'Choose'],
+        ['B', 'Hide']
+      ]
+    });
+    heading(page, 'Streaming', model.app?.name ?? 'Moonlight', model.host?.name ?? null, {
+      y: HEADING.status
+    });
+    button(page, ITEM.returnToApps, SIDE, BUTTON.y, 520, 'Return to apps');
+    button(page, ITEM.quitHost, SIDE + 520 + BUTTON.gap, BUTTON.y, 520, 'Quit host app');
     return page.build();
   }
 
   /** @param {Model} model */
   function error(model) {
-    const page = framed('Moonlight', 'A  Back');
-    page.text(160, 400, model.message ?? 'Something went wrong', 36, 1600, COLOR.ink, 'center');
-    page.item({id: ITEM.back, x: 760, y: 540, w: 400, h: 72});
-    page.text(760, 554, 'Back', 36, 400, COLOR.ink, 'center');
+    const page = horizon({chips: hostChips(model), keys: [['A', 'Back']]});
+    heading(page, 'Something went wrong', model.message ?? 'Something went wrong', null, {
+      y: HEADING.status,
+      size: 48
+    });
+    button(page, ITEM.back, SIDE, BUTTON.y, BUTTON.width, 'Back');
     return page.build();
   }
 
@@ -406,7 +493,7 @@ function createPages(raster) {
         case 'hosts':
           return hosts(model);
         case 'connecting':
-          return status('Moonlight', host, 'Connecting…', 'B  Cancel');
+          return status(model, 'Connecting', host, model.host?.address ?? null, [['B', 'Cancel']]);
         case 'pairing':
           return pairing(model);
         case 'apps':
@@ -417,15 +504,16 @@ function createPages(raster) {
           return settings(model);
         case 'launching':
           return status(
-            'Moonlight',
+            model,
+            'Launching',
             model.app?.name ?? '',
             model.message ?? 'Starting the stream…',
-            'B  Cancel'
+            [['B', 'Cancel']]
           );
         case 'streaming':
           return overlay(model);
         case 'quitting':
-          return status('Moonlight', host, 'Quitting the host app…', '');
+          return status(model, 'Quitting', host, 'Closing the app on the PC…', []);
         case 'error':
           return error(model);
         default:
