@@ -37,6 +37,7 @@ const hello = (name, frames) =>
 test('hello-world-idle-first-frame', {skip}, async t => {
   const result = await hello('idle', script([[]]));
   assert.equal(result.selected, 'desktop.vulkan');
+  assert.ok(fs.existsSync(path.join(scratch, 'idle/package/hello-world/src/time.glsl')));
   const {state} = result;
   assert.equal(state.buttons, 0);
   assert.equal(state.connected, 1);

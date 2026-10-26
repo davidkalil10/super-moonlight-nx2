@@ -11,6 +11,7 @@ import path from 'node:path';
 import {createRequire} from 'node:module';
 import {STATE_BYTES} from '../../../hbl-platform/sdk/host/state-layout.js';
 import {headers, compile} from '../../../hbl-platform/sdk/build.js';
+import {INTERFACE_HEADERS} from '../../../hbl-platform/sdk/package/lint.js';
 import {MAX_DATA_BYTES, checkData, checkState, clockProvider, loadFrameScript} from './state.js';
 
 const require = createRequire(import.meta.url);
@@ -188,15 +189,15 @@ const backend = {
 
 /**
  * Compiles the package's entry sources into backends/desktop.vulkan/app.<stage>.spv, with the
- * service-interface headers copied into src/ first. State and data are the package's own build
- * step; this only makes the shaders.
+ * service-interface headers, time.glsl included, copied into src/ first. State and data are the
+ * package's own build step; this only makes the shaders.
  * @param {Package} pkg
  * @returns {Promise<Record<string, string>>} Section stage to SPIR-V path.
  */
 async function build(pkg) {
   check(pkg.manifest.entry, 'Package has no entry to build');
   const output = path.join(pkg.root, SECTION_DIR);
-  await headers(path.join(pkg.root, 'src'));
+  await headers(path.join(pkg.root, 'src'), INTERFACE_HEADERS);
   await fs.promises.mkdir(output, {recursive: true});
   /** @type {Record<string, string>} */
   const shaders = {};
