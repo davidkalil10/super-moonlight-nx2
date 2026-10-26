@@ -47,6 +47,7 @@ const PLAN_DECODE_MS = 13;
 const R3_DECODE_MS = 6.85;
 // staggered-live.js rereads a late gate status back to back; it paused 5 ms before.
 const STAGGERED = {retryWaitMs: 0, audioIntervalMs: 1000};
+const GATE_WAITER = {progressPollMs: 0.5, bridgeWaitMs: 1};
 
 // Step 3a device baselines at 1080p30, revision 8805924 (R1B-CONCURRENCY-RESULTS.md).
 const BASELINE = {
@@ -489,14 +490,16 @@ function createConsole(
 
 // R(N) reads one status snapshot, W(N) is one writeAndCall that opens decode gate N
 // and fetch gate N-1. A late receive, acquire or renderer ack costs one extra read
-// after an off-bridge wait; retryRate spreads those rereads evenly over the frames.
+// after an off-bridge wait. With a modeled host wait, retryRate injects a
+// retryInputSlot RPC after the first eligible status and one follow-up read.
+// Without a host wait, retryRate retains the older one-extra-read estimate.
 // With barrier set the console orders each submit as in cb183ad: gate N releases the
 // held output first (fetchMs), then N is submitted once output N-1 is acquired. The
 // host side is unchanged.
-// With hostWait set the host reads the status the way staggered-live.js does instead
-// of waking exactly when the frame is ready: back to back while receive or decode is
-// pending, and for a pending present either back to back ('poll') or through the
-// present pacer ('pacer').
+// With hostWait set the host reads status instead of waking exactly when the frame
+// is ready. The waiter arms with the gate write, samples GPU-applied status every
+// 0.5 ms, and pairs a bounded event wait with one status copy in one bridge request.
+// Its hint still needs the same host-side status check before the next gate opens.
 async function simulateStaggered({
   frames = 120,
   warmup = 4,
@@ -511,9 +514,8 @@ async function simulateStaggered({
   maxSkips = 4,
   model = MODEL
 }) {
-  if (hostWait && !['poll', 'pacer'].includes(hostWait))
+  if (hostWait && !['poll', 'pacer', 'waiter'].includes(hostWait))
     throw Error('Unknown staggered host wait ' + hostWait);
-  if (hostWait && retryRate) throw Error('A modeled host wait makes its own rereads');
   const timing = {...model, vsyncMs: 1000 / presentHz};
   const clock = createClock();
   return clock.run(async () => {
@@ -533,16 +535,18 @@ async function simulateStaggered({
     let retryDebt = 0;
     let nextAudio = origin;
     let rereads = 0;
+    let inputSlotRetryRpcs = 0;
+    let waiterBridgeMs = 0;
     let fetchOpened = null;
     const pacer = presentPacer.create({
       periodMs: timing.vsyncMs,
       now: clock.now,
       sleep: clock.sleep
     });
-    const request = async () => {
-      busyUntil = Math.max(clock.now(), busyUntil) + timing.requestMs;
+    const request = async (waitMs = 0) => {
+      busyUntil = Math.max(clock.now(), busyUntil) + timing.requestMs + waitMs;
       exchanges++;
-      bridgeMs += timing.requestMs;
+      bridgeMs += timing.requestMs + waitMs;
       await clock.sleep(busyUntil - clock.now());
     };
     const applied = [];
@@ -562,6 +566,7 @@ async function simulateStaggered({
         skipped = 0;
         retryDebt = 0;
         rereads = 0;
+        inputSlotRetryRpcs = 0;
         started = clock.now();
         nextAudio = started;
       }
@@ -575,22 +580,43 @@ async function simulateStaggered({
         await request();
       }
       retryDebt += retryRate;
+      const inputSlotRetry = hostWait && retryDebt >= 1;
       if (retryDebt >= 1) {
         retryDebt -= 1;
-        await request();
-        await clock.sleep(retryWaitMs);
+        if (!hostWait) {
+          await request();
+          await clock.sleep(retryWaitMs);
+        }
       }
       const acked = frame > lag && !offScreen.has(frame - lag - 1);
       if (hostWait) {
-        if (hostWait === 'pacer' && acked) await pacer.beforeRead(fetchOpened);
+        let retriedInputSlot = false;
+        if (hostWait !== 'poll' && acked) await pacer.beforeRead(fetchOpened);
+        const sampledPresentReady = acked
+          ? Math.ceil((presentReady + 1e-6) / GATE_WAITER.progressPollMs) *
+            GATE_WAITER.progressPollMs
+          : 0;
+        const waiterReady = Math.max(inputReady, sampledPresentReady);
         for (;;) {
           const startedAt = clock.now();
-          await request();
+          const waitMs = hostWait === 'waiter'
+            ? Math.max(0, Math.min(GATE_WAITER.bridgeWaitMs, waiterReady - startedAt))
+            : 0;
+          await request(waitMs);
+          waiterBridgeMs += waitMs;
           const at = clock.now();
           if (acked) pacer.observe(startedAt, presentReady <= at);
-          if (inputReady <= at && presentReady <= at) break;
+          if (inputSlotRetry && !retriedInputSlot && inputReady <= at) {
+            await request();
+            inputSlotRetryRpcs++;
+            retriedInputSlot = true;
+            rereads++;
+            continue;
+          }
+          const generationReady = hostWait !== 'waiter' || waiterReady <= at;
+          if (generationReady && inputReady <= at && presentReady <= at) break;
           rereads++;
-          if (inputReady <= at && hostWait === 'pacer') await pacer.pending();
+          if (inputReady <= at && hostWait !== 'poll') await pacer.pending();
         }
       } else await request();
       await request();
@@ -629,6 +655,8 @@ async function simulateStaggered({
       retryWaitMs,
       hostWait,
       rereadsPerFrame: perFrame(rereads),
+      inputSlotRetryRpcsPerFrame: perFrame(inputSlotRetryRpcs),
+      waiterBridgeMsPerFrame: perFrame(waiterBridgeMs),
       skipBacklog,
       skipped,
       requestsPerFrame: perFrame(exchanges),
@@ -1012,7 +1040,7 @@ async function budget({frames = 120, model = MODEL} = {}) {
   const staggeredHostWait = {};
   for (const presentHz of [60, 120]) {
     for (const paced of [true, false]) {
-      for (const hostWait of ['poll', 'pacer']) {
+      for (const hostWait of ['poll', 'pacer', 'waiter']) {
         const result = await simulate({
           mode: 'staggered',
           frames,
@@ -1025,10 +1053,41 @@ async function budget({frames = 120, model = MODEL} = {}) {
         });
         staggeredHostWait[`${presentHz}Hz-${paced ? 'paced' : 'unpaced'}-${hostWait}`] = {
           requestsPerFrame: result.requestsPerFrame,
+          bridgeMsPerFrame: result.bridgeMsPerFrame,
           rereadsPerFrame: result.rereadsPerFrame,
           fps: result.fps
         };
       }
+    }
+  }
+  const staggered120HzGateWaiter = {};
+  for (const decodeMs of [R3_DECODE_MS, MODEL.decodeMs]) {
+    for (const retryRate of [0, 0.1, 0.3]) {
+      const options = {
+        mode: 'staggered',
+        frames,
+        presentHz: 120,
+        lag: 2,
+        barrier: true,
+        paced: false,
+        retryRate,
+        model: {...model, decodeMs, sourceFps: 120}
+      };
+      const current = await simulate({...options, hostWait: 'pacer'});
+      const waiter = await simulate({...options, hostWait: 'waiter'});
+      staggered120HzGateWaiter[`decode${decodeMs}-retry${retryRate * 100}`] = {
+        current: {
+          fps: current.fps,
+          requestsPerFrame: current.requestsPerFrame,
+          bridgeMsPerFrame: current.bridgeMsPerFrame
+        },
+        waiter: {
+          fps: waiter.fps,
+          requestsPerFrame: waiter.requestsPerFrame,
+          bridgeMsPerFrame: waiter.bridgeMsPerFrame,
+          waiterBridgeMsPerFrame: waiter.waiterBridgeMsPerFrame
+        }
+      };
     }
   }
   return {
@@ -1036,7 +1095,9 @@ async function budget({frames = 120, model = MODEL} = {}) {
     model,
     assumptions: [
       'Requests, bridge-ms and byStage are at the paced source rate; predictedFps is the same loop with every access unit already waiting.',
-      'The loop mirrors native-h264.js steady state, including the split send-before-gate path; native-decoder.js adds no request while the tail AcquireInput returns an index.'
+      'The loop mirrors native-h264.js steady state, including the split send-before-gate path; native-decoder.js adds no request while the tail AcquireInput returns an index.',
+      'The 120 Hz gate-waiter matrix uses unpaced 120 fps source, two decodes in flight, the acquire barrier, one paired status request and one gate write per normal AU. A waiter event is a hint; the model requires the same status readiness before opening the next gate.',
+      'Retry 10/30% in the 120 Hz comparison means one retryInputSlot RPC plus its follow-up status read on that fraction of frames, after the first ready input status. The waiter adds up to 1 ms of serialized bridge wait per status request and samples GPU-applied status at 0.5 ms intervals.'
     ],
     modes,
     paired,
@@ -1045,6 +1106,7 @@ async function budget({frames = 120, model = MODEL} = {}) {
     staggeredBarrier,
     staggeredRetryWait,
     staggeredHostWait,
+    staggered120HzGateWaiter,
     planDecodeMs: {decodeMs: PLAN_DECODE_MS, ...planDecode}
   };
 }
@@ -1065,4 +1127,4 @@ if (require.main === module) {
   );
 }
 
-module.exports = {MODEL, BASELINE, STAGGERED, createClock, simulate, budget};
+module.exports = {MODEL, BASELINE, STAGGERED, GATE_WAITER, createClock, simulate, budget};
