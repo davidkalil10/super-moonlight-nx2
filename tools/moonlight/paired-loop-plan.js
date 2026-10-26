@@ -14,12 +14,12 @@
  * The host reads each stage's native results and job stamp from the control page; a stage's
  * results are only meaningful once its stamp matches the job the host wrote.
  */
-import {build} from '../../../hbl-platform/smilebasic/engine/shared/frames.js';
 import {
+  build,
   CALL4_X19,
   CONTEXT_X30,
   CONTEXT_SP
-} from '../../../hbl-platform/smilebasic/engine/shared/gadgets.js';
+} from '../../../hbl-platform/smilebasic/engine/shared/frames.js';
 import {CODE, IPC_COPY} from '../../../hbl-platform/sdk/native/thread.js';
 import SYNC from '../../../hbl-platform/sdk/native/os-sync-functions.json' with {type: 'json'};
 import * as ring from './ring.js';

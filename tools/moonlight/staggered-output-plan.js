@@ -11,8 +11,7 @@
  * fetch status. Like the input frames, each fetch frame restores both of its slot's frames from
  * their snapshots and jumps through a dispatch word to the other frame.
  */
-import {build} from '../../../hbl-platform/smilebasic/engine/shared/frames.js';
-import {CALL4_X19} from '../../../hbl-platform/smilebasic/engine/shared/gadgets.js';
+import {build, CALL4_X19} from '../../../hbl-platform/smilebasic/engine/shared/frames.js';
 import {CODE, IPC_COPY} from '../../../hbl-platform/sdk/native/thread.js';
 import SYNC from '../../../hbl-platform/sdk/native/os-sync-functions.json' with {type: 'json'};
 import {metadata} from './paired-output-frame.js';

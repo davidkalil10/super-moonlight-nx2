@@ -22,8 +22,7 @@
  * unit N's descriptor and signals the gate when N arrives, so the gate write for N no longer
  * needs N+1 and can go out as soon as N is received. Its next descriptor is a placeholder.
  */
-import {build} from '../../../hbl-platform/smilebasic/engine/shared/frames.js';
-import {CALL4_X19} from '../../../hbl-platform/smilebasic/engine/shared/gadgets.js';
+import {build, CALL4_X19} from '../../../hbl-platform/smilebasic/engine/shared/frames.js';
 import {CODE, IPC_COPY} from '../../../hbl-platform/sdk/native/thread.js';
 import SYNC from '../../../hbl-platform/sdk/native/os-sync-functions.json' with {type: 'json'};
 import * as status from './staggered-status.js';

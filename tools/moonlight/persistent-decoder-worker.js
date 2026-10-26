@@ -15,12 +15,12 @@
  * locate a stall on the console. Whenever the thread may still be running, or its creation
  * is uncertain, the decoder and events are retained: nothing is finalized.
  */
-import {build} from '../../../hbl-platform/smilebasic/engine/shared/frames.js';
 import {
+  build,
   CALL4_X19,
   CONTEXT_X30,
   CONTEXT_SP
-} from '../../../hbl-platform/smilebasic/engine/shared/gadgets.js';
+} from '../../../hbl-platform/smilebasic/engine/shared/frames.js';
 import {allocate} from '../../../hbl-platform/sdk/native/allocate.js';
 import {verify} from '../../../hbl-platform/sdk/native/symbols.js';
 import {
