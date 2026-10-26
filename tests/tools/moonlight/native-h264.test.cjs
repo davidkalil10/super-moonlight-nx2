@@ -1351,3 +1351,29 @@ test(
     });
   }
 );
+
+test('--output-lag reaches the staggered scheduler and takes 1 or 2', {timeout: 5000}, async () => {
+  const f = await fixture({units: pairedUnits(4)});
+  const created = [];
+  const fake = staggeredFake(f.events);
+  f.options.createStaggered = options => {
+    created.push(options);
+    return fake();
+  };
+  f.options.args.push('--staggered', '--output-lag', '1');
+  await exercise(f, async () => {
+    const summary = await run(f.options);
+    assert.equal(created[0].lag, 1);
+    assert.equal(summary.outputLag, 1);
+  });
+  for (const [args, message] of [
+    [['--staggered', '--output-lag', '3'], /--output-lag takes 1 or 2/],
+    [['--output-lag', '1'], /--output-lag applies to --staggered/]
+  ]) {
+    const g = await fixture();
+    await exercise(g, async () => {
+      g.options.args.push(...args);
+      await assert.rejects(run(g.options), message);
+    });
+  }
+});

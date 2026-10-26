@@ -96,3 +96,19 @@ test('bootstrap writes sequence tags without opening an unchecked fetch', () => 
   assert.equal(bytes.readUInt32LE(output.CONTROL.descriptors[1] - offset), 2);
   assert.equal(bytes.readBigUInt64LE(output.CONTROL.descriptors[0] - offset + 8), 0n);
 });
+
+test('at lag 1 the write fetches the output one behind decode', () => {
+  const lagOne = snapshot();
+  lagOne.acquire = {...lagOne.acquire, sequence: 4, pts: 4n};
+  lagOne.fetch = {...lagOne.fetch, sequence: 3};
+  const expected = {...request.expected, acquire: {sequence: 4, pts: 4n}, fetch: {sequence: 3}};
+  const {offset, bytes} = gate.gateWrite({snapshot: lagOne, ...request, expected, lag: 1});
+  const outputSlot0 = output.CONTROL.descriptors[0] - offset;
+  const outputSlot1 = output.CONTROL.descriptors[1] - offset;
+  assert.equal(bytes.readUInt32LE(outputSlot1), 4);
+  assert.equal(bytes.readBigUInt64LE(outputSlot1 + 8), BigInt(destination.address));
+  assert.equal(bytes.readUInt32LE(outputSlot0), 5);
+  assert.equal(bytes.readBigUInt64LE(outputSlot0 + 8), 0n);
+  assert.throws(() => gate.gateWrite({snapshot: snapshot(), ...request, lag: 1}), /one AU behind/);
+  assert.throws(() => gate.gateWrite({snapshot: snapshot(), ...request, lag: 3}), /lag is 1 or 2/);
+});

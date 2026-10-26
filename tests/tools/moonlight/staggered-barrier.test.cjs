@@ -415,3 +415,61 @@ test('stopping a worker parked on the length gate submits nothing more', async (
   );
   await d.worker.finalize();
 });
+
+async function fetchedAtPush(d, live, units) {
+  const fetched = [];
+  for (let sequence = 1; sequence <= units; sequence++) {
+    await live.push(unitAt(sequence), {sink: d.sink});
+    for (let poll = 0; poll < 5; poll++) await d.worker.readStatus();
+    fetched.push((await d.worker.readStatus()).fetch.sequence);
+  }
+  return fetched;
+}
+
+test('by default each output is fetched two gates after its decode opened', async () => {
+  const d = device();
+  const live = await d.live();
+  assert.deepEqual(await fetchedAtPush(d, live, 9), [0, 0, 0, 1, 2, 3, 4, 5, 6]);
+  await live.finish({sink: d.sink});
+  await live.stop();
+  await d.worker.finalize();
+});
+
+test(
+  'at lag 1 each output is fetched one gate after its decode opened',
+  {timeout: 2000},
+  async () => {
+    const d = device();
+    const live = await d.live(undefined, {lag: 1});
+    assert.deepEqual(await fetchedAtPush(d, live, 9), [0, 0, 1, 2, 3, 4, 5, 6, 7]);
+    assert.deepEqual(await live.finish({sink: d.sink}), {drained: 1});
+    const counts = withoutPacer(live.counts);
+    assert.equal(counts.decoded, 9);
+    assert.equal(counts.presented, 9);
+    assert.equal(counts.tailDrained, 1);
+    assert.equal(d.decoder.coalesced, 0);
+    assert.equal(d.decoder.maxReady, 1);
+    submittedAfterAcquired(d.log);
+    assert.deepEqual(
+      d.log.filter(entry => entry.startsWith('acquire')),
+      Array.from({length: 9}, (_, index) => `acquire ${index + 1}`)
+    );
+    await live.stop();
+    await d.worker.finalize();
+    assert.equal(live.retained, false);
+  }
+);
+
+test('lag 1 and gate on receive together keep the barrier', {timeout: 2000}, async () => {
+  const d = device();
+  const live = await d.live(undefined, {lag: 1, gateOnReceive: true});
+  assert.deepEqual(await fetchedAtPush(d, live, 9), [0, 1, 2, 3, 4, 5, 6, 7, 8]);
+  assert.deepEqual(await live.finish({sink: d.sink}), {drained: 1});
+  assert.equal(withoutPacer(live.counts).presented, 9);
+  assert.equal(d.decoder.coalesced, 0);
+  assert.equal(d.decoder.maxReady, 1);
+  submittedAfterAcquired(d.log);
+  await live.stop();
+  await d.worker.finalize();
+  assert.equal(live.retained, false);
+});

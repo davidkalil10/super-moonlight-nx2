@@ -24,7 +24,8 @@ const {
 const {
   create,
   RESTART,
-  TRIM_FRAMES
+  TRIM_FRAMES,
+  expectedFor
 } = require('../../../hbl-moonlight/tools/moonlight/staggered-live.js');
 
 const layout = {width: 1920, height: 1080, stride: 1920, sliceHeight: 1088};
@@ -957,4 +958,41 @@ test('gate on receive primes, sends and gates each unit in its own push', async 
   assert.equal(counts.presented, 24);
   assert.equal(device.applied(), 24);
   await live.stop();
+});
+
+test('lag 1 times out, bounded, on a decoder that holds an output back', async () => {
+  const device = simulatedDevice();
+  const live = await liveOn(device, noPause, null, {lag: 1, timeoutMs: 100});
+  await assert.rejects(stream(device, live, 6), /checked status timed out/);
+  assert.equal(device.applied(), 0);
+  await live.stop();
+});
+
+test('the output lag is 1 or 2', () => {
+  assert.throws(() => create({createWorker, lag: 3}), /output lag is 1 or 2/);
+});
+
+test('at lag 1 a gate expects the output one behind and the fetch before it', () => {
+  const units = new Map(
+    [1, 2, 3, 4, 5].map(sequence => [sequence, {length: 10, pts: BigInt(sequence)}])
+  );
+  const destinations = new Map([[3, {sequence: 7, index: 1}]]);
+  assert.deepEqual(expectedFor(5, units, destinations, 1), {
+    receive: {sequence: 5, bytes: 10},
+    input: {sequence: 4},
+    acquire: {sequence: 4, pts: 4n},
+    fetch: {sequence: 3},
+    ack: {sequence: 7, index: 1}
+  });
+  assert.deepEqual(expectedFor(2, units, destinations, 1), {
+    receive: {sequence: 2, bytes: 10},
+    input: {sequence: 1},
+    acquire: {sequence: 1, pts: 1n}
+  });
+  assert.deepEqual(Object.keys(expectedFor(5, units, new Map([[2, {skip: true}]]))), [
+    'receive',
+    'input',
+    'acquire',
+    'fetch'
+  ]);
 });
