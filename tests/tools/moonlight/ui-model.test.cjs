@@ -38,6 +38,7 @@ test('attach shows the hosts, A opens one, a list lands on the apps page', () =>
   assert.equal(model.host, HOSTS[1]);
   assert.deepEqual(model.apps, APPS);
   assert.equal(model.currentGame, 1217);
+  assert.equal(model.message, null);
   assert.deepEqual(
     intents.map(intent => intent.type),
     ['list', 'covers']
@@ -167,10 +168,15 @@ test('quit host app asks first, then quits and lists again', () => {
   const listed = reduce(reduce(quit.model, {type: 'quitDone'}).model, {
     type: 'listed',
     apps: APPS,
-    currentGame: 0
+    currentGame: 0,
+    message: 'Quit confirmed'
   });
   assert.equal(listed.model.screen, 'apps');
   assert.equal(listed.model.currentGame, 0);
+  assert.equal(listed.model.message, 'Quit confirmed', 'the quit result rides on the list');
+  assert.equal(reduce(listed.model, command('b')).model.message, 'Quit confirmed');
+  const reopened = reduce(reduce(listed.model, command('b')).model, command('a', ITEM.host));
+  assert.equal(reopened.model.message, null, 'opening a host clears it');
 });
 
 test('settings open with X from hosts or apps, adjust, reset and go back where they came from', () => {

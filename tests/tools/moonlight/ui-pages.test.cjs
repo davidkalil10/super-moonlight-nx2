@@ -126,6 +126,21 @@ test('the apps grid pages covers and letter tiles with the current app marked', 
   assert.equal(third.parsed.items.find(item => item.id === ITEM.next).flags, ITEM_FLAG.greyed);
   assert.equal(third.parsed.items.find(item => item.id === ITEM.previous).flags, 0);
   assert.equal(raster.calls.letters, 24, 'letter tiles are cached by name');
+  const painted = raster.calls.text;
+  const quit = reduce(
+    reduce(reduce(apps, command('y')).model, command('a', ITEM.confirmQuit)).model,
+    {type: 'quitDone'}
+  ).model;
+  const marked = reduce(quit, {
+    type: 'listed',
+    apps: APPS,
+    currentGame: 0,
+    message: 'Quit confirmed'
+  }).model;
+  assert.equal(marked.message, 'Quit confirmed');
+  const status = await roundTrip(await pages.page(marked, covers));
+  assert.equal(status.summary.texts, first.summary.texts, 'the status joins the subtitle strip');
+  assert.equal(raster.calls.text, painted + 1, 'only the subtitle is painted again');
 });
 
 test('settings rows are adjustable unless locked or unbacked', async () => {
