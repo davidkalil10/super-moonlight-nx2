@@ -9,7 +9,8 @@
  * other refresh (a 1/60 s cadence on a 120 Hz panel). Then every second predicted read misses
  * and its hit comes one periodMs later; enough of those in a row of predicted reads and the
  * pacer moves to twice the period. On the long period one predicted read in PROBE_EVERY aims at
- * the midpoint instead; MID_HITS hits there in a row bring the short period back.
+ * the midpoint instead; MID_HITS hits there in a row bring the short period back. A probe read
+ * that only starts at the next long-period vsync would see that apply, so it counts for nothing.
  *
  * windowMs must cover marginMs plus one status read, or a slightly early estimate sleeps a whole
  * frame (request-budget.cjs staggeredHostWait).
@@ -65,6 +66,8 @@ function create({
   let probes = 0;
   /** The current gate's predicted read aims at the midpoint. */
   let probing = false;
+  /** The long-period vsync after the probed midpoint; a read from there on tells nothing. */
+  let probeSlot = null;
   /** Midpoint probes that found the publication applied, in a row. */
   let midHits = 0;
   /** A vsync bracketed within one poll, which the drift never moves; the probe's reference. */
@@ -112,8 +115,12 @@ function create({
       if (midpoint !== null && midpoint > openedAt && ++probes % PROBE_EVERY === 0) {
         due = midpoint + marginMs;
         probing = true;
+        probeSlot = midpoint + periodMs;
       }
-      if (due <= now()) return;
+      if (due <= now()) {
+        probing = false;
+        return;
+      }
       predicted = true;
       await sleepUntil(due);
     },
@@ -131,11 +138,14 @@ function create({
         return;
       }
       if (probing) {
-        midHits = missed ? 0 : midHits + 1;
-        if (missed) anchor(startedAt);
+        if (missed) {
+          midHits = 0;
+          anchor(startedAt);
+        } else if (startedAt < probeSlot) midHits++;
         if (midHits >= MID_HITS) {
           grid = 1;
           midHits = 0;
+          halfMisses = [];
           phase = startedAt;
         }
       } else if (missed) {

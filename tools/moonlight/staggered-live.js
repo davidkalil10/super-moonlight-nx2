@@ -326,9 +326,10 @@ function create({
         decode.observe(watch.unit, now(), watch.acquired, watch);
         watch.pendingSeen ||= !watch.acquired;
       }
-      if (expected.ack)
+      if (expected.ack) {
         pacer.observe(startedAt, isApplied(snapshot.nativeApplied, expected.ack.sequence));
         counts.appliedPeriodMs = pacer.periodMs;
+      }
     },
     onReread: pending => {
       counts.rereads++;
