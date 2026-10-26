@@ -299,7 +299,7 @@ test('the streaming overlay, the quit question and the error page carry their it
     reduce(reduce(makeModel(HOSTS), {type: 'attached'}).model, command('a', ITEM.host)).model,
     {type: 'listed', apps: APPS.slice(0, 2), currentGame: 1001}
   ).model;
-  const streaming = reduce(reduce(apps, command('a', ITEM.app)).model, {
+  const streaming = reduce(reduce(apps, command('a', ITEM.app + 1)).model, {
     type: 'streamStarted'
   }).model;
   const overlay = await roundTrip(await pages.page(streaming));
@@ -335,7 +335,7 @@ test('the streaming overlay, the quit question and the error page carry their it
     error.parsed.items.map(item => item.id),
     [ITEM.back]
   );
-  const launching = reduce(apps, command('a', ITEM.app)).model;
+  const launching = reduce(apps, command('a', ITEM.app + 1)).model;
   const staged = reduce(launching, {type: 'stage', message: 'RTSP handshake'}).model;
   assert.equal((await roundTrip(await pages.page(staged))).parsed.flags, PAGE_FLAG.hideCursor);
   assert.equal(await pages.page(makeModel(HOSTS)), null, 'splash is the static atlas');

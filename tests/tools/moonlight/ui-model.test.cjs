@@ -290,3 +290,20 @@ test('results for another screen are ignored and the app going away stops the se
   assert.equal(gone.model.screen, 'stopped');
   assert.deepEqual(gone.intents, [{type: 'exit'}]);
 });
+
+test('a different app waits until the running one is quit, since the PC would resume it', () => {
+  const apps = walk(makeModel(HOSTS), [
+    {type: 'attached'},
+    command('a', ITEM.host),
+    {type: 'listed', apps: APPS, currentGame: 1217}
+  ]).model;
+  const blocked = reduce(apps, command('a', ITEM.app));
+  assert.equal(blocked.model.screen, 'apps');
+  assert.deepEqual(blocked.intents, []);
+  assert.equal(blocked.model.message, 'Steam is still running on the PC; press Y to quit it first');
+  const resumed = reduce(apps, command('a', ITEM.app + 1));
+  assert.equal(resumed.model.screen, 'launching');
+  assert.equal(resumed.model.app.id, 1217);
+  const unknown = reduce({...apps, currentGame: 42}, command('a', ITEM.app)).model;
+  assert.match(unknown.message, /^Another app is still running/);
+});
