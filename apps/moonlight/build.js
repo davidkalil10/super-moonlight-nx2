@@ -45,7 +45,8 @@ function refusal() {
     const from = target => {
       const absolute = path.join(import.meta.dirname, target);
       const relative = path.relative(process.cwd(), absolute) || '.';
-      return relative.length < absolute.length ? relative : absolute;
+      const atRoot = process.cwd() === path.parse(absolute).root;
+      return relative.length < absolute.length && !atRoot ? relative : absolute;
     };
     return (
       'build.js takes no arguments and rewrites the package in place; to check it, run node ' +
@@ -121,7 +122,7 @@ function initialState() {
 }
 
 async function main() {
-  if (process.env.GLSLANG && process.env.GLSLANG !== SHIM)
+  if (process.env.GLSLANG && path.resolve(process.env.GLSLANG) !== SHIM)
     console.error('build.js ignores GLSLANG and compiles through ' + SHIM + '; GLSLC picks glslc');
   process.env.GLSLANG = SHIM;
   const output = name => path.join(import.meta.dirname, name);
