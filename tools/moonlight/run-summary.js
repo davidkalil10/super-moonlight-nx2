@@ -1,7 +1,8 @@
 /**
  * Scores a native H.264 live run from its one-second stats rows: `summarize` averages the
  * steady rows after a warmup, `parseExpect` reads the `--expect` limits and `verdict` checks
- * the summary against them.
+ * the summary against them. Dropped frames and IDR requests fail a run unless `--expect`
+ * allows some.
  */
 
 /** Steady-state rows start after this many seconds by default. */
@@ -17,6 +18,8 @@ const LIMITS = {
   resyncs: (summary, value) => summary.resyncs <= value,
   requests: (summary, value) => summary.requestsPerFrame <= value
 };
+/** Limits that apply when `--expect` leaves them out. */
+const DEFAULT_LIMITS = {dropped: 0, idr: 0};
 
 /**
  * Parses `name=value,name=value` into limits.
@@ -96,13 +99,15 @@ function summarize(rows, {warmup = DEFAULT_WARMUP} = {}) {
 }
 
 /**
- * Checks a summary against the limits; a run with no steady rows always fails.
+ * Checks a summary against the limits and the defaults; a run with no steady rows always fails.
  * @param {ReturnType<typeof summarize>} summary
  * @param {Record<string, number>} expect
  * @returns {{pass: boolean, failures: string[]}}
  */
 function verdict(summary, expect) {
-  const failures = Object.entries(expect)
+  const limits = {...expect};
+  for (const [name, value] of Object.entries(DEFAULT_LIMITS)) limits[name] ??= value;
+  const failures = Object.entries(limits)
     .filter(([name, value]) => !LIMITS[name](summary, value))
     .map(([name, value]) => name + ' ' + value);
   if (!summary.seconds) failures.unshift('no steady rows');
