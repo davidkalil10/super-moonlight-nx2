@@ -17,7 +17,7 @@ const {
   encodeFrames,
   checkFrames
 } = require('./state.js');
-const {STATE, STATE_BYTES, DATA_OFFSET} = require('../../../hbl-platform/sdk/host/state-layout.js');
+const {STATE, STATE_BYTES, DATA_OFFSET} = require('../../../hbl-platform/sdk/host/layout.js');
 const {builds} = require('../../../hbl-platform/sdk/build.js');
 const {gpuStatus, run} = require('./run.cjs');
 const {preparePackage} = require('./hello-world.cjs');

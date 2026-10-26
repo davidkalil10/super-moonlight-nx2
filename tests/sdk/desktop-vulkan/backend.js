@@ -9,7 +9,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import {createRequire} from 'node:module';
-import {STATE_BYTES} from '../../../hbl-platform/sdk/host/state-layout.js';
+import {STATE_BYTES} from '../../../hbl-platform/sdk/host/layout.js';
 import {headers, compile} from '../../../hbl-platform/sdk/build.js';
 import {INTERFACE_HEADERS} from '../../../hbl-platform/sdk/package/lint.js';
 import {MAX_DATA_BYTES, checkData, checkState, clockProvider, loadFrameScript} from './state.js';

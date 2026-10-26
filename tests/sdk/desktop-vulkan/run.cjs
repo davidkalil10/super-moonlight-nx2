@@ -10,7 +10,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const {spawnSync} = require('node:child_process');
 const {checkFrames, decodeState, encodeFrames} = require('./state.js');
-const {STATE_BYTES} = require('../../../hbl-platform/sdk/host/state-layout.js');
+const {STATE_BYTES} = require('../../../hbl-platform/sdk/host/layout.js');
 
 const SOURCE = path.resolve(__dirname, '../../tools/moonlight/desktop-vulkan-run.c');
 const RUNNER = 'desktop-vulkan-run';

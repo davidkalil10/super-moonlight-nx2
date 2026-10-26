@@ -7,10 +7,10 @@
  * app owns. The clock is a provider: `host` (the default, time service 2) writes the fixed-step
  * clock t(N) in whole milliseconds at +48 and the frame index N at +52 before each dispatch;
  * `none` writes nothing. Neither touches time (+64) or frames (+88), which the current
- * hello-world shader advances itself. Other offsets come from state-layout.js.
+ * hello-world shader advances itself. Other offsets come from layout.js.
  */
 import fs from 'node:fs';
-import {STATE, STATE_BYTES, CONNECTED_BIT} from '../../../hbl-platform/sdk/host/state-layout.js';
+import {STATE, STATE_BYTES, CONNECTED_BIT} from '../../../hbl-platform/sdk/host/layout.js';
 import {NPAD} from '../../../hbl-platform/sdk/host/npad.js';
 
 const SCRIPT_FORMAT = 'hb-desktop-frame-script';
