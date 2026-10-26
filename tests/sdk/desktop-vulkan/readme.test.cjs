@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const {execFileSync} = require('node:child_process');
 const {gpuStatus} = require('./run.cjs');
-const {builds} = require('../../../hbl-platform/scripts/toolchain.js');
+const {builds} = require('../../../hbl-platform/sdk/build.js');
 
 const README = fs.readFileSync(path.join(__dirname, 'README.md'), 'utf8');
 const ROOT = path.resolve(__dirname, '../..');

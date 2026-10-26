@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const {gpuStatus, WIDTH, HEIGHT} = require('./run.cjs');
 const {runHelloWorld} = require('./hello-world.cjs');
-const {builds} = require('../../../hbl-platform/scripts/toolchain.js');
+const {builds} = require('../../../hbl-platform/sdk/build.js');
 
 fs.mkdirSync(builds('desktop-vulkan'), {recursive: true});
 const scratch = fs.mkdtempSync(path.join(builds('desktop-vulkan'), 'hello-'));

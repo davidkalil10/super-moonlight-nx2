@@ -14,7 +14,7 @@ const {
 } = require('../../sdk/desktop-vulkan/backend.js');
 const {preparePackage} = require('../../sdk/desktop-vulkan/hello-world.cjs');
 const {readPackage} = require('../../../hbl-platform/sdk/package/manifest.js');
-const {builds} = require('../../../hbl-platform/scripts/toolchain.js');
+const {builds} = require('../../../hbl-platform/sdk/build.js');
 
 fs.mkdirSync(builds('desktop-vulkan'), {recursive: true});
 const scratch = fs.mkdtempSync(path.join(builds('desktop-vulkan'), 'runner-'));

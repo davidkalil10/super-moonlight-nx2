@@ -7,7 +7,7 @@ const crypto = require('node:crypto');
 const {run, WIDTH, HEIGHT} = require('./run.cjs');
 const {checkFrames, clockProvider, initialState, loadFrameScript} = require('./state.js');
 const {SCRIPT} = require('./hello-world.cjs');
-const {builds} = require('../../../hbl-platform/scripts/toolchain.js');
+const {builds} = require('../../../hbl-platform/sdk/build.js');
 
 fs.mkdirSync(builds('desktop-vulkan'), {recursive: true});
 const scratch = fs.mkdtempSync(path.join(builds('desktop-vulkan'), 'run-'));
