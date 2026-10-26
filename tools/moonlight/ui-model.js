@@ -137,6 +137,13 @@ function onCommand(model, command) {
         });
       const app = model.apps[item - ITEM.app];
       if (!app) return same(model);
+      if (model.currentGame && app.id !== model.currentGame) {
+        const running = model.apps.find(entry => entry.id === model.currentGame)?.name;
+        return next(model, {
+          message:
+            (running ?? 'Another app') + ' is still running on the PC; press Y to quit it first'
+        });
+      }
       const appIndex = item - ITEM.app;
       return next(model, {screen: 'launching', app, appIndex, message: null, overlay: false}, [
         {type: 'launch', host: model.host, app, settings: model.settings}
