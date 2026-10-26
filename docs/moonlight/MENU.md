@@ -1,6 +1,6 @@
 # Moonlight on-device menu
 
-`tools/moonlight/menu.cjs` gives the Switch 2 Moonlight app a menu driven
+`tools/moonlight/menu.js` gives the Switch 2 Moonlight app a menu driven
 entirely from the PC host: pick a PC, pair with a PIN, see its games, launch one,
 and quit, without typing a command for normal use.
 
@@ -13,12 +13,12 @@ console.
 ```
 menu-render.py  (PIL) -> 1920x1080 RGB24 screen
    -> HBV2 encoder     -> one keyframe slot
-   -> rpc.write         -> app ring slot (sequence % 8), exactly like live.cjs
+   -> rpc.write         -> app ring slot (sequence % 8), exactly like live.js
 Switch 2 app.frag/app.comp: decode the ring, show the frame  (unchanged)
 ```
 
-Input comes back the same way video input already does: `controller.cjs` and
-`touch.cjs` read the app's binding-0 state buffer (the `mapped` address in
+Input comes back the same way video input already does: `controller.js` and
+`touch.js` read the app's binding-0 state buffer (the `mapped` address in
 `game-audio-source.json`) and move a selection. So the whole display and input
 path is reused with zero console-side change — the app shaders, `app.comp`,
 `app.frag` and the ring format are all untouched.
@@ -31,17 +31,17 @@ path is reused with zero console-side change — the app shaders, `app.comp`,
                    |  ^          A on host (paired)                             |
          A on Exit |  | B / Back  ------------------------------------------->  |  A on game
                    v  |                                                         v
-            exitRequest=1                                             streaming (live.cjs)
+            exitRequest=1                                             streaming (live.js)
             (launcher tears                                                     |
              the app down)                                   hold L+R ~1 s  /  child exits
                                                                                |
                                                                       back to games
 ```
 
-Pure transitions live in `menu.cjs` and are unit-tested in `menu.test.cjs`:
+Pure transitions live in `menu.js` and are unit-tested in `menu.test.cjs`:
 `navigate` (up/down/wrap), `activate` (A), `back` (B), `hostListed`,
 `pinReceived`, `toGames`, `streamEnded`, `errored`. `main()` only carries out the
-side effects (spawn `hbmoonlight`, spawn `live.cjs`, write the ring) and folds
+side effects (spawn `hbmoonlight`, spawn `live.js`, write the ring) and folds
 their results back into the model.
 
 ### Screens
@@ -52,25 +52,25 @@ their results back into the model.
   `hosts.json` (seeded with the default Sunshine host `192.168.8.245`). Pairing
   state is not stored per host (libgamestream keeps only client-side keys), so it
   is queried live on open.
-- **pair** — shown when `hbmoonlight list HOST` reports `not paired`. `menu.cjs`
+- **pair** — shown when `hbmoonlight list HOST` reports `not paired`. `menu.js`
   runs `hbmoonlight pair HOST`, reads the `{"event":"pin"}` line and draws the PIN
   big with "enter this at https://HOST:47990/pin". On `{"event":"paired"}` it
   lists the games.
 - **games** — the app list from `hbmoonlight list HOST`, plus a **Back** row.
-- **streaming** — menu rendering is paused and `live.cjs` owns the ring.
+- **streaming** — menu rendering is paused and `live.js` owns the ring.
 
 ## Launch and return
 
 Selecting a game spawns:
 
 ```
-node tools/moonlight/live.cjs <session> --moonlight HOST "GAME" --codec hbv2 --budget 96
+node tools/moonlight/live.js <session> --moonlight HOST "GAME" --codec hbv2 --budget 96
 ```
 
 which already does video + input + audio. The menu pauses its ring writes while
-it runs. During streaming `menu.cjs` polls the controller at ~10 Hz for a
+it runs. During streaming `menu.js` polls the controller at ~10 Hz for a
 **RETURN chord — hold L + R together for ~1 s** — and on it sends SIGINT to the
-`live.cjs` child, waits for its `exit` (so no trailing P-frame lands after the
+`live.js` child, waits for its `exit` (so no trailing P-frame lands after the
 menu keyframe), resyncs the ring sequence and resumes the menu.
 
 Two exits exist, by design:
@@ -92,7 +92,7 @@ clobbered and survives to the next batch boundary.
 
 ## Rendering cost
 
-Menu screens are near-static. `menu.cjs` encodes a screen **once, when it
+Menu screens are near-static. `menu.js` encodes a screen **once, when it
 changes**, and then only **re-stamps** that cached keyframe with a fresh sequence
 and rewrites it at a low heartbeat rate (`--rate`, default 2 Hz). The heartbeat
 exists only so a reopened app — whose ring is wiped by `assets/memory.bin` —
@@ -106,7 +106,7 @@ a static screen, so it is avoided.
 ```
 # On the console: start.sh --app moonlight  (the HBV2 build; see LIVE-TEST.md)
 # On m5, once the app shows its test card:
-node tools/moonlight/menu.cjs
+node tools/moonlight/menu.js
 ```
 
 Flags: `[runs/launcher-XXXX]` (default: newest), `--host IP` (add to hosts.json),
@@ -126,7 +126,7 @@ cancels the pairing wait.
   binary needed:
 
   ```
-  node tools/moonlight/menu.cjs tools/moonlight/fake-console --js --no-input --script a,down,down,up
+  node tools/moonlight/menu.js tools/moonlight/fake-console --js --no-input --script a,down,down,up
   ```
 
   `applied` advances to the menu's keyframe sequence, proving the write path.
@@ -137,5 +137,5 @@ cancels the pairing wait.
   buffer (the launcher loop does; the app path is unverified — see INPUT.md).
 - Confirm the menu keyframe shows, selection moves from the pad, the PIN pairs,
   a game launches, L + R returns, and **Exit to HBLauncher** tears the app down.
-- Both `menu.cjs` (chord poll) and `live.cjs`'s input-feeder read the state
+- Both `menu.js` (chord poll) and `live.js`'s input-feeder read the state
   buffer while streaming; the extra reads compete for exchanges — watch for jitter.

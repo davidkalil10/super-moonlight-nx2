@@ -8,8 +8,8 @@ research live in `moonlight-dev`.
 
 Phase 1 keeps the original HBLauncher paths, so history and file names line up:
 
-- `apps/moonlight/`: the console app (shaders, assets, `build.cjs`).
-- `tools/moonlight/`: the PC host (`live.cjs`, `native-h264.cjs`, staggered workers,
+- `apps/moonlight/`: the console app (shaders, assets, `build.js`).
+- `tools/moonlight/`: the PC host (`live.js`, `native-h264.js`, staggered workers,
   ring/HBV formats) and `helper/` (`hbmoonlight`, C, GPLv3 upstreams).
 - `sdk/native/*-functions.json`: the native symbols only Moonlight uses.
 
