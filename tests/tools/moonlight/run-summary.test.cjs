@@ -56,3 +56,20 @@ test('a run with no steady rows fails', () => {
   assert.equal(summary.seconds, 0);
   assert.deepEqual(verdict(summary, {}), {pass: false, failures: ['no steady rows']});
 });
+
+test('staggered rows report decoded fps, skipped presents and the deepest queue', () => {
+  const rows = [
+    row(10),
+    row(60, {decoded: 120, skipped: 60, queued: 2}),
+    row(60, {decoded: 118, skipped: 58, queued: 3})
+  ];
+  const summary = summarize(rows, {warmup: 1});
+  assert.equal(summary.decodedFps, 119);
+  assert.equal(summary.skipped, 118);
+  assert.equal(summary.maxQueued, 3);
+  assert.deepEqual(parseExpect('decoded=115,queued=2'), {decoded: 115, queued: 2});
+  assert.deepEqual(verdict(summary, {fps: 59, decoded: 115, queued: 2}), {
+    pass: false,
+    failures: ['queued 2']
+  });
+});

@@ -911,3 +911,31 @@ test(
     });
   }
 );
+
+test('--present-hz and --skip-backlog reach the staggered scheduler', {timeout: 5000}, async () => {
+  const f = await fixture({units: pairedUnits(6)});
+  const created = [];
+  const fake = staggeredFake(f.events);
+  f.options.createStaggered = options => {
+    created.push(options);
+    return fake();
+  };
+  f.options.args.push('--staggered', '--present-hz', '120', '--skip-backlog', 'off');
+  await exercise(f, async () => {
+    const summary = await run(f.options);
+    assert.deepEqual(created, [{presentHz: 120, skipBacklog: Infinity}]);
+    assert.equal(summary.presentHz, 120);
+    assert.equal(summary.skipBacklog, 'off');
+  });
+  for (const [extra, message] of [
+    [['--staggered', '--present-hz', '90'], /--present-hz takes 60 or 120/],
+    [['--staggered', '--skip-backlog', '-1'], /--skip-backlog takes/],
+    [['--present-hz', '120'], /apply to --staggered/]
+  ]) {
+    const g = await fixture();
+    await exercise(g, async () => {
+      g.options.args.push(...extra);
+      await assert.rejects(run(g.options), message);
+    });
+  }
+});

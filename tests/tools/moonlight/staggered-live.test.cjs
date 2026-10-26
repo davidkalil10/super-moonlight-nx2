@@ -219,10 +219,11 @@ function simulatedDevice({late = new Set(), clock = null} = {}) {
   };
 }
 
-async function liveOn(device, pause = noPause, clock = null) {
+async function liveOn(device, pause = noPause, clock = null, options = {}) {
   const live = create({
     createWorker,
     pause,
+    ...options,
     ...(clock ? {now: () => clock.now, presentHz: 1000 / clock.vsyncMs} : {})
   });
   const worker = await live.factory({
@@ -508,5 +509,20 @@ test('a gate waiting for present sleeps to the vsync instead of polling', async 
   assert.ok(live.counts.waiting.applied > 0, 'the stream waited for present');
   assert.ok((clock.now / 1000) * 60 <= 62, `${clock.now} ms for 60 frames`);
   await live.finish({sink: device.sink});
+  await live.stop();
+});
+
+test('skipBacklog Infinity presents every unit under a backlog', async () => {
+  const device = simulatedDevice();
+  const live = await liveOn(device, noPause, null, {skipBacklog: Infinity});
+  for (let sequence = 1; sequence <= 12; sequence++) {
+    const unit = unitAt(sequence);
+    device.pts.set(sequence, BigInt(unit.pts));
+    await live.push(unit, {sink: device.sink, backlog: 5});
+  }
+  await live.finish({sink: device.sink});
+  assert.equal(live.counts.skipped, 0);
+  assert.equal(live.counts.presented, 12);
+  assert.equal(device.applied(), 12);
   await live.stop();
 });
