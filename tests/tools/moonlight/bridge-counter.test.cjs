@@ -64,3 +64,33 @@ test('failed requests still count and an invalid transfer does not mask its erro
   });
   assert.equal(requestsFor('write', [0, Buffer.alloc(0x100001)]), 3);
 });
+
+test('silentMs is how long the console has left a call unanswered', async () => {
+  let clock = 50;
+  const answers = [];
+  const counter = instrument(
+    {request: () => new Promise(resolve => answers.push(resolve))},
+    () => 'unit',
+    () => clock
+  );
+  assert.equal(counter.silentMs(), 0, 'nothing pending is not silence');
+  const first = counter.rpc.request();
+  clock = 1250;
+  const second = counter.rpc.request();
+  clock = 6050;
+  assert.equal(counter.silentMs(), 6000);
+  clock = 6100;
+  answers[0]();
+  await first;
+  clock = 6600;
+  assert.equal(counter.silentMs(), 500, 'any answer restarts the count');
+  answers[1]();
+  await second;
+  assert.equal(counter.silentMs(), 0);
+  clock = 9000;
+  const third = counter.rpc.request();
+  clock = 9200;
+  assert.equal(counter.silentMs(), 200, 'an idle bridge is not counted');
+  answers[2]();
+  await third;
+});
