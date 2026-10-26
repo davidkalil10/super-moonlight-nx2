@@ -1,0 +1,118 @@
+# moonlight-dev
+
+Tests, simulators and offline tools for `hbl-moonlight`. Nothing here ships to users. The
+runtime, its flags and the console/host contract are documented in `hbl-moonlight/README.md`.
+
+## Checkouts
+
+Everything runs against the runtime code by relative path:
+
+```
+<dir>/moonlight-dev
+<dir>/hbl-moonlight      the code under test
+<dir>/hbl-platform       bridge, sdk/host, sdk/native, sdk/package
+<dir>/hbl-platform-dev   sdk/tests mocks (recording-rpc, audio-out-mock, gate-worker-mock)
+<dir>/HBLauncher         sdk/host/package-backend.js, the hello-world template
+```
+
+## Test
+
+```sh
+npm install                        # once: TypeScript and @types/node
+npm test                           # node --test over every tracked *.test.cjs, 365 tests
+npm run typecheck                  # tsc --checkJs over the modules listed in tsconfig.json
+node apps/moonlight/check.cjs [CLIP]
+```
+
+`check.cjs` renders the real Moonlight shaders on desktop Vulkan through
+`tools/moonlight/gpu-check.c` (compute and draw per frame, like the launcher): exit handling,
+the waiting screen, the HBV2 test card, an HBV1 slot, and an HBV2 P chain with a torn slot, a
+stray reference and a catch-up dispatch, all bit-exact against the JS decoder. With CLIP it
+also streams the clip through the native encoder. It builds under
+`$HB_MOONLIGHT_CHECK_BUILDS` (default `~/claude-builds/HBLauncher/gpu-check`) and needs a GPU,
+`cc`, the Vulkan headers, `glslangValidator` and `spirv-val`. A test clip:
+
+```sh
+ffmpeg -f lavfi -i testsrc2=size=1280x720:rate=60 -t 3 -pix_fmt yuv420p -c:v libx264 -crf 12 testsrc2.mp4
+```
+
+GPU and PIL tests skip with the reason when their tools are missing. `sdk/desktop-vulkan/` is
+HB package backend two (offscreen Vulkan); its README is read by `readme.test.cjs`.
+
+## Tools
+
+- `tools/moonlight/request-budget.cjs`: offline request budget for the native H.264 host loop.
+  The real workers and sink run against a modelled console on a virtual clock, with the stage
+  labels of `native-h264.js`. Run it before any device run.
+- `tools/moonlight/encode.cjs CLIP OUT.hbv [--size 640x352] [--frames N]`: the HBV1 slot stream
+  the host would write; `hbl-moonlight/tools/moonlight/feed.js` replays it into a live ring.
+- `tools/moonlight/desktop-scenes.py SCENE FRAMES OUT`: synthetic 1920x1080 desktop sequences
+  (typing, scroll, drag, pan) as raw RGB24.
+- `tools/moonlight/controller-watch.cjs [RUN_DIR] [--hz 60] [--labels] [--sources]`: prints
+  the console controller as Moonlight gamepad state.
+- `tools/moonlight/helper/`: `bench.c` (`hbmoonlight-bench FILE h264|hevc WxH [--software]
+  [--raw-fd FD] [--rgb]` pushes an Annex B file through the helper's video callbacks),
+  `encode-check.c` and `tests/input.c`, built by the hbl-moonlight helper CMake project.
+
+## Fake console
+
+`tools/moonlight/fake-console` stands in for a running Moonlight app, so `live.js` and
+`feed.js` can be developed and their resync tested without a console. `shared/rpc.cjs`
+simulates the bridge: one serial link of 32 KiB exchanges whose concurrent writes interleave at
+random, and a 60 Hz dispatch that runs the JS HBV2 decoder over the ring and writes back
+`applied`.
+
+```sh
+# steady state on the measured 5.7 MB/s link
+node ../hbl-moonlight/tools/moonlight/live.js tools/moonlight/fake-console \
+  --input clip.mp4 --codec hbv2 --budget 64
+# a 1.5 s stall at t=4 s; the sender resyncs with a keyframe
+STALL=1500@4000 node ../hbl-moonlight/tools/moonlight/live.js tools/moonlight/fake-console \
+  --input clip.mp4 --codec hbv2 --budget 64
+```
+
+Env: `RATE` (link bytes/s, default 5.7e6), `STALL=ms@at` (pause the dispatch once), `DECODE=1`
+(full pixel decode instead of the light apply).
+
+`bridge.cjs DIR [--pad]` serves the same fake console through the real
+`hbl-platform/smilebasic/engine/lib/bridge.js` and writes a run directory, so `live.js`,
+`input-feeder.js` or `hbmoonlight-host` pay the same HTTP, JSON and base64 costs as on a
+console. It also simulates the sound-memory allocation and an AudioOut that plays appended
+buffers in real time (underruns counted); `--pad` cycles a scripted controller and touch state
+every 500 ms. `HB_PIPELINE` works as on the launcher.
+
+```sh
+HB_PIPELINE=2 RATE=12e6 node tools/moonlight/fake-console/bridge.cjs /tmp/fake --pad &
+node ../hbl-moonlight/tools/moonlight/live.js /tmp/fake --input clip.mp4 --codec hbv2 --budget 64
+```
+
+`shared/console.cjs` is a separate byte-level model of the `bootstrap.bas` `RPC()` loop for
+protocols 1, 2 and 3 (header and data recv, response framing, memmove/read/QueryMemory) over a
+flat memory buffer; `protocol3.test.cjs` round-trips the real `native.js` through it.
+
+## Live test pass
+
+Only with the user at the console (DEVICE-RULES.md). From `hbl-moonlight`, against a fresh
+`./start.sh --app moonlight` session showing the HBV2 test card, in order:
+
+1. Video: `node tools/moonlight/live.js --moonlight 192.168.8.245 Desktop --codec hbv2 --budget 96 --no-input --no-audio`.
+   Desktop text is sharp; about 59 fps on the wired link.
+2. Input: drop `--no-input`. Sticks and taps move the host cursor; touch is native multi-touch.
+3. Audio: drop `--no-audio`. If `OpenDefaultAudioOut` fails, the audio process prints a hint
+   and exits while video and input keep running.
+4. A real game from `hbmoonlight list 192.168.8.245` in place of `Desktop`; raise `--budget`
+   or `--cap` for sharper stills at the cost of fps on a slower link.
+5. Console decode: `--codec h264` (see the h264 flags in `hbl-moonlight/README.md`).
+
+After a launch or resync the picture sharpens over about 8 s as refresh chunks heal static
+blocks; raise `--refresh` to speed it.
+
+## Protocol 3 write test
+
+To tell whether the console loop is bound by per-exchange overhead or by the byte copy, start
+two sessions with `HB_WRITE_CHUNK=32768 ./start.sh` and `HB_WRITE_CHUNK=258048 ./start.sh`
+(the latter is the protocol 3 default). In each, the gap in
+`runs/<session>/launcher-auto-operations.jsonl` between `vkMapMemory2` and the next
+`vkCreateBuffer` is the launcher's startup write (8 MiB of zeros, the state, the text atlas and
+the catalog raster: 14,681,088 bytes in the 2026-10-24 sessions); divide to get MB/s. Capture a
+protocol 2 session too if small exchanges dominate the workload.
