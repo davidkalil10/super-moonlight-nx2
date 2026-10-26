@@ -10,8 +10,8 @@ has one.
   {"kind":"text","text":"Desktop","size":36,"width":960,"weight":600,"tracking":0}
                                                                   -> alpha strip, width x line height
   {"kind":"legend","keys":[["A","Launch"]],"size":26,"width":1200} -> alpha strip, ringed keys + labels
-  {"kind":"tile","png":"/path/cover.png","width":160,"height":90} -> RGBA tile, cover fitted inside
-  {"kind":"letters","text":"Desktop","width":160,"height":90}    -> RGBA tile, initials on a hue
+  {"kind":"tile","png":"/path/cover.png","width":240,"height":135} -> RGBA tile, cover over its blur
+  {"kind":"letters","text":"Desktop","width":240,"height":135}  -> RGBA tile, initials on a hue
 """
 import colorsys
 import hashlib
@@ -20,7 +20,7 @@ import struct
 import sys
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageFont, ImageOps
+from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageOps
 
 SORA = Path(__file__).resolve().parent / "fonts" / "Sora.ttf"
 FALLBACKS = [
@@ -40,6 +40,7 @@ UNMAPPED = "͸"
 MAX_STRIP_HEIGHT = 96
 MAX_COVER_SIDE = 4096
 ELLIPSIS = "…"
+FILL_LEVEL = 0.35
 KEY_GAP = 12
 ENTRY_GAP = 44
 fonts = {}
@@ -158,16 +159,21 @@ def legend(request):
 
 
 def tile(request):
+    """The cover fitted whole inside the tile, over a blurred, darkened fill of itself."""
     width, height = int(request["width"]), int(request["height"])
-    out = Image.new("RGBA", (width, height), (0, 0, 0, 0))
     try:
         with Image.open(request["png"]) as source:
             if source.format != "PNG" or max(source.size) > MAX_COVER_SIDE:
                 return None
-            cover = ImageOps.contain(source.convert("RGBA"), (width, height), Image.LANCZOS)
+            art = source.convert("RGBA")
     except (OSError, ValueError, Image.DecompressionBombError):
         return None
-    out.paste(cover, ((width - cover.width) // 2, (height - cover.height) // 2))
+    out = ImageOps.fit(art, (width, height), Image.LANCZOS)
+    out = out.filter(ImageFilter.GaussianBlur(height / 12))
+    out = Image.blend(Image.new("RGBA", out.size, (0, 0, 0, 255)), out, FILL_LEVEL)
+    out.putalpha(255)
+    cover = ImageOps.contain(art, (width, height), Image.LANCZOS)
+    out.alpha_composite(cover, ((width - cover.width) // 2, (height - cover.height) // 2))
     return out
 
 
