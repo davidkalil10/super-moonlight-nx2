@@ -189,6 +189,8 @@ async function run({
     throw Error('--present-hz, --skip-backlog and --skip-rule apply to --staggered');
   if (!staggered && trimBacklogMs !== null) throw Error('--trim-backlog-ms applies to --staggered');
   if (!staggered && gateOnReceive) throw Error('--gate-on-receive applies to --staggered');
+  if (gateOnReceive && presentHz === 120)
+    throw Error('--gate-on-receive is untested at --present-hz 120');
   if (outputLag !== null && outputLag !== 1 && outputLag !== 2)
     throw Error('--output-lag takes 1 or 2');
   if (!staggered && outputLag !== null) throw Error('--output-lag applies to --staggered');
