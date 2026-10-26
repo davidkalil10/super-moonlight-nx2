@@ -62,9 +62,13 @@ def chain(size, weight):
     """The faces tried in order for each character: Sora, DejaVu, then CJK if present."""
     faces = [font(size, weight), font(size, None)]
     if CJK_PATH:
-        key = (size, "cjk")
+        key = (size, "cjk", weight)
         if key not in fonts:
             fonts[key] = ImageFont.truetype(CJK_PATH, size)
+            try:
+                fonts[key].set_variation_by_axes([weight or 400])
+            except OSError:
+                pass
         faces.append(fonts[key])
     return faces
 
