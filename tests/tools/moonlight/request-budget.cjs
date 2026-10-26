@@ -14,6 +14,7 @@ const {CODE} = require('../../../hbl-platform/sdk/native/thread.js');
 const PAIRED = require('../../../hbl-moonlight/tools/moonlight/paired-loop-plan.js').CONTROL;
 const presentPacer = require('../../../hbl-moonlight/tools/moonlight/present-pacer.js');
 const decodeWaits = require('../../../hbl-moonlight/tools/moonlight/decode-wait.js');
+const receiveWaits = require('../../../hbl-moonlight/tools/moonlight/receive-wait.js');
 
 const SDK = 0x40000000;
 const MODULE = 0x50000000;
@@ -48,6 +49,8 @@ const PLAN_DECODE_MS = 13;
 const R3_DECODE_MS = 6.85;
 // staggered-live.js rereads a late gate status back to back; it paused 5 ms before.
 const STAGGERED = {retryWaitMs: 0, audioIntervalMs: 1000};
+// A 1080p120 access unit on the QXCfhS live run averaged this size.
+const UNIT_BYTES = 24576;
 const GATE_WAITER = {progressPollMs: 0.5, bridgeWaitMs: 1};
 
 // Step 3a device baselines at 1080p30, revision 8805924 (R1B-CONCURRENCY-RESULTS.md).
@@ -508,7 +511,8 @@ function createConsole(
 // for the pending publication only while no more than skipBacklog units are queued, or once it
 // has been pending for two vsync periods. presented counts applied publications.
 // decodeWait (vsync rule only) sleeps to the acquire decode-wait.js predicts instead of
-// rereading while the input is pending.
+// rereading while the input is pending; receiveWait does the same for a pending receive with
+// receive-wait.js.
 async function simulateStaggered({
   frames = 120,
   warmup = 4,
@@ -523,6 +527,7 @@ async function simulateStaggered({
   maxSkips = 4,
   skipRule = 'backlog',
   decodeWait = false,
+  receiveWait = false,
   model = MODEL
 }) {
   if (hostWait && !['poll', 'pacer', 'waiter'].includes(hostWait))
@@ -572,6 +577,10 @@ async function simulateStaggered({
       await clock.sleep(busyUntil - clock.now());
     };
     const decode = decodeWait ? decodeWaits.create({now: clock.now, sleep: clock.sleep}) : null;
+    const receive = receiveWait
+      ? receiveWaits.create({now: clock.now, sleep: clock.sleep})
+      : null;
+    receive?.sent(0, UNIT_BYTES, sent);
     const applied = [];
     const apply = (frame, fetchDone, skip) => {
       if (skip) {
@@ -594,7 +603,8 @@ async function simulateStaggered({
         nextAudio = started;
       }
       const arrival = paced ? origin + frame * interval : origin;
-      const inputReady = Math.max(sent + timing.receiveMs, frame >= lag ? decoded[frame - lag] : 0);
+      const receiveReady = sent + timing.receiveMs;
+      const inputReady = Math.max(receiveReady, frame >= lag ? decoded[frame - lag] : 0);
       const presentReady = frame > lag ? applied[frame - lag - 1] : 0;
       const ready = hostWait ? arrival : Math.max(arrival, inputReady, presentReady);
       if (ready > clock.now()) await clock.sleep(ready - clock.now());
@@ -622,7 +632,12 @@ async function simulateStaggered({
         let at;
         let inputSeen = false;
         let pendingSeen = false;
+        let receiveSeen = false;
+        let receivePendingSeen = false;
         for (;;) {
+          const linkWaited = receive && !receiveSeen
+            ? await receive.beforeRead(frame, receivePendingSeen, timing.requestMs)
+            : false;
           const waited = decode
             ? await decode.beforeRead(frame - lag, pendingSeen, timing.requestMs)
             : false;
@@ -630,6 +645,12 @@ async function simulateStaggered({
           await request();
           at = clock.now();
           if (pending) pacer.observe(startedAt, due <= at);
+          if (receive && !receiveSeen) {
+            receiveSeen = receiveReady <= at;
+            receive.observe(frame, at, receiveSeen,
+              {waited: linkWaited, pendingSeen: receivePendingSeen});
+            receivePendingSeen ||= !receiveSeen;
+          }
           if (!inputSeen) decode?.observe(frame - lag, at, inputReady <= at, {waited, pendingSeen});
           inputSeen ||= inputReady <= at;
           pendingSeen ||= !inputSeen && frame >= lag;
@@ -656,7 +677,12 @@ async function simulateStaggered({
             GATE_WAITER.progressPollMs
           : 0;
         const waiterReady = Math.max(inputReady, sampledPresentReady);
+        let receiveSeen = false;
+        let receivePendingSeen = false;
         for (;;) {
+          const linkWaited = receive && !receiveSeen
+            ? await receive.beforeRead(frame, receivePendingSeen, timing.requestMs)
+            : false;
           const startedAt = clock.now();
           const waitMs = hostWait === 'waiter'
             ? Math.max(0, Math.min(GATE_WAITER.bridgeWaitMs, waiterReady - startedAt))
@@ -665,6 +691,12 @@ async function simulateStaggered({
           waiterBridgeMs += waitMs;
           const at = clock.now();
           if (acked) pacer.observe(startedAt, presentReady <= at);
+          if (receive && !receiveSeen) {
+            receiveSeen = receiveReady <= at;
+            receive.observe(frame, at, receiveSeen,
+              {waited: linkWaited, pendingSeen: receivePendingSeen});
+            receivePendingSeen ||= !receiveSeen;
+          }
           if (inputSlotRetry && !retriedInputSlot && inputReady <= at) {
             await request();
             inputSlotRetryRpcs++;
@@ -697,6 +729,7 @@ async function simulateStaggered({
           pending = {at: clock.now(), applied: vsync};
         }
         sent = clock.now();
+        receive?.sent(frame + 1, UNIT_BYTES, sent);
         continue;
       }
       const skip =
@@ -708,6 +741,7 @@ async function simulateStaggered({
       if (skip) offScreen.add(frame - lag);
       if (frame >= lag) apply(frame - lag, clock.now() + timing.fetchMs, skip);
       sent = clock.now();
+      receive?.sent(frame + 1, UNIT_BYTES, sent);
       if (frame >= lag && skip) skipped++;
       else if (frame >= lag) presented++;
     }
@@ -730,6 +764,7 @@ async function simulateStaggered({
       skipBacklog,
       skipRule,
       decodeWait,
+      receiveWait,
       skipped,
       requestsPerFrame: perFrame(exchanges),
       bridgeMsPerFrame: perFrame(bridgeMs),
@@ -758,6 +793,7 @@ async function simulate({
   maxSkips,
   skipRule,
   decodeWait,
+  receiveWait,
   model = MODEL
 }) {
   if (mode === 'staggered')
@@ -775,6 +811,7 @@ async function simulate({
       maxSkips,
       skipRule,
       decodeWait,
+      receiveWait,
       model
     });
   const paired = mode === 'paired';

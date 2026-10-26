@@ -25,13 +25,15 @@ const unitAt = sequence => ({data: Buffer.alloc(100 + sequence), pts: sequence *
 // bridge read takes clock.readMs, like the renderer and bridge on the console. A stalled
 // renderer never applies a publication, and the discard calls in noFreeSurface find no
 // free surface. With decodeMs set as well, a gated unit is acquirable decodeMs after both its
-// gate and the previous unit's decode.
+// gate and the previous unit's decode, and with receiveMs a sent unit lands in the receive
+// status receiveMs after its send.
 function simulatedDevice({
   late = new Set(),
   clock = null,
   stalled = false,
   noFreeSurface = new Set(),
-  decodeMs = 0
+  decodeMs = 0,
+  receiveMs = 0
 } = {}) {
   const sdk = 0x40000000;
   const moduleBase = 0x50000000;
@@ -48,6 +50,7 @@ function simulatedDevice({
   const decodeDone = [];
   const onScreenWrites = [];
   let staleReceive = null;
+  let slowReceive = null;
   const presents = [];
   const regionAt = address =>
     regions.find(region => address >= region.base && address < region.base + region.bytes.length);
@@ -83,6 +86,8 @@ function simulatedDevice({
       transport.sent.push(data.length);
       received++;
       if (late.has(received)) staleReceive = [data.length, received];
+      else if (clock && receiveMs)
+        slowReceive = {count: data.length, sequence: received, at: clock.now + receiveMs};
       else setReceive(data.length, received);
     },
     abort() {
@@ -148,6 +153,10 @@ function simulatedDevice({
       requests.push('read');
       if (clock) {
         clock.now += clock.readMs;
+        if (slowReceive && slowReceive.at <= clock.now) {
+          setReceive(slowReceive.count, slowReceive.sequence);
+          slowReceive = null;
+        }
         while (!stalled && presents.length && presents[0].at <= clock.now)
           presents.shift().present();
         if (decodeMs) acquireNext();
@@ -695,4 +704,53 @@ test('the decode wait changes nothing while decode keeps up', async () => {
 
 test('the decode wait needs the vsync skip rule', () => {
   assert.throws(() => create({decodeWait: true}), /decode wait needs the vsync skip rule/);
+});
+
+async function receiveBound(receiveWait, {receiveMs = 7, frames = 60} = {}) {
+  const clock = vsyncClock();
+  const device = simulatedDevice({clock, receiveMs});
+  const live = await liveOn(device, clockPause(clock), clock, {
+    skipRule: 'vsync',
+    skipBacklog: 1,
+    receiveWait
+  });
+  const requests = [];
+  for (let sequence = 1; sequence <= frames; sequence++) {
+    const unit = unitAt(sequence);
+    device.pts.set(sequence, BigInt(unit.pts));
+    const before = device.requests.length;
+    await live.push(unit, {sink: device.sink, backlog: 5});
+    requests.push(device.requests.slice(before));
+  }
+  const elapsed = clock.now;
+  await live.finish({sink: device.sink});
+  await live.stop();
+  return {counts: live.counts, requests, elapsed};
+}
+
+// A receive-bound loop gets faster without the rereads, so it sees fewer vsyncs for the same
+// units; what must hold is the presented share of those vsyncs.
+test('the receive wait sleeps through a slow receive instead of rereading', async () => {
+  const reread = await receiveBound(false);
+  const waited = await receiveBound(true);
+  assert.ok(reread.counts.waiting.receive > 60, `${reread.counts.waiting.receive} receive rereads`);
+  assert.ok(
+    waited.counts.waiting.receive < reread.counts.waiting.receive / 4,
+    `${waited.counts.waiting.receive} receive rereads with the wait`
+  );
+  assert.equal(waited.counts.decoded, reread.counts.decoded);
+  assert.ok(waited.elapsed <= reread.elapsed, `${waited.elapsed}/${reread.elapsed} ms`);
+  const perVsync = run => (run.counts.presented * (1000 / 60)) / run.elapsed;
+  assert.ok(
+    Math.abs(perVsync(waited) - perVsync(reread)) <= 0.05,
+    `${perVsync(waited)}/${perVsync(reread)} presented per vsync`
+  );
+});
+
+test('the receive wait changes nothing while the receive keeps up', async () => {
+  const reread = await receiveBound(false, {receiveMs: 0});
+  const waited = await receiveBound(true, {receiveMs: 0});
+  assert.deepEqual(waited.requests, reread.requests);
+  assert.deepEqual(waited.counts, reread.counts);
+  assert.equal(waited.elapsed, reread.elapsed);
 });

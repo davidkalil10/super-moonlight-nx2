@@ -414,6 +414,34 @@ test('the decode wait sleeps through a pending acquire instead of rereading', as
   }
 });
 
+test('the receive wait sleeps through a slow receive instead of rereading', async () => {
+  const run = (receiveWait, receiveMs) =>
+    simulate({
+      mode: 'staggered',
+      frames: 600,
+      presentHz: 120,
+      lag: 2,
+      barrier: true,
+      hostWait: 'pacer',
+      skipBacklog: 1,
+      skipRule: 'vsync',
+      receiveWait,
+      model: {...MODEL, sourceFps: 120, decodeMs: 6.85, receiveMs}
+    });
+  const reread = await run(false, 7);
+  const waited = await run(true, 7);
+  assert.ok(reread.rereadsPerFrame > 0.5, `${reread.rereadsPerFrame} rereads/frame`);
+  assert.ok(
+    waited.rereadsPerFrame < reread.rereadsPerFrame / 4,
+    `${waited.rereadsPerFrame} rereads/frame with the wait`
+  );
+  assert.ok(waited.fps >= reread.fps * 0.97, `${waited.fps}/${reread.fps} fps`);
+  const quick = await run(false, 2);
+  const quickWaited = await run(true, 2);
+  for (const key of ['requestsPerFrame', 'rereadsPerFrame', 'fps', 'skipped'])
+    assert.equal(quickWaited[key], quick[key], key);
+});
+
 test('the decode wait needs the vsync skip rule', async () => {
   const options = {mode: 'staggered', frames: 10, presentHz: 60, lag: 2, barrier: true};
   await assert.rejects(
