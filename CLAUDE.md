@@ -11,8 +11,10 @@ Phase 1 keeps the original HBLauncher paths, so history and file names line up:
 - `apps/moonlight/`: the console app as an HB package (`manifest.json`, `assets/`,
   `backends/hblauncher.gpu-app/`, `build.js`).
 - `tools/moonlight/`: the PC host (`live.js`, `native-h264.js`, staggered workers,
-  ring/HBV formats, `ui-page.js` for the console UI pages) and `helper/` (`hbmoonlight`, C,
-  GPLv3 upstreams).
+  ring/HBV formats, `ui-page.js` for the console UI pages, `ui-service.js` and its `ui-*`
+  pieces for the console UI host, see `docs/moonlight/UI-SERVICE.md`) and `helper/`
+  (`hbmoonlight`, C, GPLv3 upstreams; `build.sh` builds the bench and checks only when
+  `moonlight-dev` sits beside this checkout, see `DEV_DIR` in its CMakeLists).
 - `sdk/native/*-functions.json`: the native symbols only Moonlight uses.
 
 ## Sibling checkouts
