@@ -923,7 +923,9 @@ test('--present-hz, --skip-backlog and --skip-rule reach the staggered scheduler
   f.options.args.push('--staggered', '--present-hz', '120', '--skip-backlog', 'off');
   await exercise(f, async () => {
     const summary = await run(f.options);
-    assert.deepEqual(created, [{presentHz: 120, skipBacklog: Infinity, skipRule: 'backlog'}]);
+    assert.deepEqual(created, [
+      {presentHz: 120, skipBacklog: Infinity, skipRule: 'backlog', decodeWait: false}
+    ]);
     assert.equal(summary.presentHz, 120);
     assert.equal(summary.skipBacklog, 'off');
     assert.equal(summary.skipRule, 'backlog');
@@ -935,11 +937,21 @@ test('--present-hz, --skip-backlog and --skip-rule reach the staggered scheduler
     vsync.push(options);
     return vsyncFake();
   };
-  v.options.args.push('--staggered', '--present-hz', '120', '--skip-rule', 'vsync');
+  v.options.args.push(
+    '--staggered',
+    '--present-hz',
+    '120',
+    '--skip-rule',
+    'vsync',
+    '--decode-wait'
+  );
   await exercise(v, async () => {
     const summary = await run(v.options);
-    assert.deepEqual(vsync, [{presentHz: 120, skipBacklog: 1, skipRule: 'vsync'}]);
+    assert.deepEqual(vsync, [
+      {presentHz: 120, skipBacklog: 1, skipRule: 'vsync', decodeWait: true}
+    ]);
     assert.equal(summary.skipRule, 'vsync');
+    assert.equal(summary.decodeWait, true);
   });
   for (const [extra, message] of [
     [['--staggered', '--present-hz', '90'], /--present-hz takes 60 or 120/],
@@ -947,6 +959,7 @@ test('--present-hz, --skip-backlog and --skip-rule reach the staggered scheduler
     [['--staggered', '--skip-rule', 'newest'], /--skip-rule takes backlog or vsync/],
     [['--staggered', '--skip-rule', 'vsync', '--skip-backlog', 'off'], /needs a --skip-backlog/],
     [['--skip-rule', 'vsync'], /apply to --staggered/],
+    [['--staggered', '--decode-wait'], /--decode-wait needs --skip-rule vsync/],
     [['--present-hz', '120'], /apply to --staggered/]
   ]) {
     const g = await fixture();

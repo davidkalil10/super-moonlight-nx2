@@ -24,12 +24,14 @@ const unitAt = sequence => ({data: Buffer.alloc(100 + sequence), pts: sequence *
 // With clock set, a fetched frame is applied on the next vsync of clock.vsyncMs and every
 // bridge read takes clock.readMs, like the renderer and bridge on the console. A stalled
 // renderer never applies a publication, and the discard calls in noFreeSurface find no
-// free surface.
+// free surface. With decodeMs set as well, a gated unit is acquirable decodeMs after both its
+// gate and the previous unit's decode.
 function simulatedDevice({
   late = new Set(),
   clock = null,
   stalled = false,
-  noFreeSurface = new Set()
+  noFreeSurface = new Set(),
+  decodeMs = 0
 } = {}) {
   const sdk = 0x40000000;
   const moduleBase = 0x50000000;
@@ -42,6 +44,8 @@ function simulatedDevice({
   let decoded = 0;
   let fetched = 0;
   let applied = 0;
+  let acquired = 0;
+  const decodeDone = [];
   const onScreenWrites = [];
   let staleReceive = null;
   const presents = [];
@@ -86,8 +90,11 @@ function simulatedDevice({
     }
   };
   function acquireNext() {
-    const sequence = Math.min(fetched + 1, transport.aborted ? decoded : decoded - 1);
-    if (sequence < 1) return;
+    let sequence = Math.min(fetched + 1, transport.aborted ? decoded : decoded - 1);
+    if (clock && decodeMs)
+      while (sequence > acquired && decodeDone[sequence] > clock.now) sequence--;
+    if (sequence < 1 || sequence < acquired) return;
+    acquired = sequence;
     ringWord(status.STATUS.acquire, 8, 0);
     ringWord(status.STATUS.acquire + 8, 4, sequence % 4);
     ringWord(status.STATUS.acquire + 16, 8, pts.get(sequence));
@@ -143,6 +150,7 @@ function simulatedDevice({
         clock.now += clock.readMs;
         while (!stalled && presents.length && presents[0].at <= clock.now)
           presents.shift().present();
+        if (decodeMs) acquireNext();
       }
       const bytes = read(address, length);
       if (staleReceive && address === mapped + status.READ_START) {
@@ -160,6 +168,8 @@ function simulatedDevice({
       write(address, bytes);
       if (bytes.length === gates.WRITE_BYTES) {
         decoded = received;
+        if (clock && decodeMs)
+          decodeDone[decoded] = Math.max(clock.now, decodeDone[decoded - 1] ?? 0) + decodeMs;
         ringWord(status.STATUS.input, 8, 0);
         ringWord(status.STATUS.input + 8, 8, 0);
         ringWord(status.STATUS.input + 16, 4, decoded % 3);
@@ -635,4 +645,54 @@ test('the vsync rule waits for the pending publication when no surface is free',
   assert.equal(device.applied(), counts.presented);
   assert.ok(!device.unapplied.includes(true), 'never two publications pending');
   await live.stop();
+});
+
+async function decodeBound(decodeWait, {decodeMs = 8.5, frames = 60} = {}) {
+  const clock = vsyncClock();
+  const device = simulatedDevice({clock, decodeMs});
+  const live = await liveOn(device, clockPause(clock), clock, {
+    skipRule: 'vsync',
+    skipBacklog: 1,
+    decodeWait
+  });
+  const requests = [];
+  for (let sequence = 1; sequence <= frames; sequence++) {
+    const unit = unitAt(sequence);
+    device.pts.set(sequence, BigInt(unit.pts));
+    const before = device.requests.length;
+    await live.push(unit, {sink: device.sink, backlog: 5});
+    requests.push(device.requests.slice(before));
+  }
+  const elapsed = clock.now;
+  await live.finish({sink: device.sink});
+  await live.stop();
+  return {counts: live.counts, requests, elapsed};
+}
+
+test('the decode wait sleeps through a pending acquire instead of rereading', async () => {
+  const reread = await decodeBound(false);
+  const waited = await decodeBound(true);
+  assert.ok(reread.counts.waiting.acquire > 60, `${reread.counts.waiting.acquire} acquire rereads`);
+  assert.ok(
+    waited.counts.waiting.acquire < reread.counts.waiting.acquire / 4,
+    `${waited.counts.waiting.acquire} acquire rereads with the wait`
+  );
+  assert.equal(waited.counts.decoded, reread.counts.decoded);
+  assert.ok(waited.elapsed <= reread.elapsed * 1.03, `${waited.elapsed}/${reread.elapsed} ms`);
+  assert.ok(
+    Math.abs(waited.counts.presented - reread.counts.presented) <= 2,
+    `${waited.counts.presented}/${reread.counts.presented} presented`
+  );
+});
+
+test('the decode wait changes nothing while decode keeps up', async () => {
+  const reread = await decodeBound(false, {decodeMs: 0});
+  const waited = await decodeBound(true, {decodeMs: 0});
+  assert.deepEqual(waited.requests, reread.requests);
+  assert.deepEqual(waited.counts, reread.counts);
+  assert.equal(waited.elapsed, reread.elapsed);
+});
+
+test('the decode wait needs the vsync skip rule', () => {
+  assert.throws(() => create({decodeWait: true}), /decode wait needs the vsync skip rule/);
 });
