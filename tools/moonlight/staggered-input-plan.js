@@ -88,7 +88,13 @@ function gateWrite({snapshot, expected, input, current, next, fetchGate, ignored
     descriptors.writeBigUInt64LE(BigInt(signal), offset + DESCRIPTOR.fetchGate);
   };
   const currentSlot = (current.sequence - 1) % 2;
-  put(currentSlot, current, input.address, input.index, expected.acquire ? fetchGate : ignoredFetchGate);
+  put(
+    currentSlot,
+    current,
+    input.address,
+    input.index,
+    expected.acquire ? fetchGate : ignoredFetchGate
+  );
   put(1 - currentSlot, next, 0, 0, ignoredFetchGate);
   return descriptors;
 }
@@ -156,9 +162,7 @@ function plan({
       {function: sync('waitLightEvent'), args: [acquireAck, 0, 0, 0]},
       {function: jump, args: [{u64: at(CONTROL.sendDispatch[slot])}, 1, 0, 0]}
     ];
-    receive.push(
-      frame(loc.receive[slot], receiveCalls, {0: status.STATUS.receive})
-    );
+    receive.push(frame(loc.receive[slot], receiveCalls, {0: status.STATUS.receive}));
     calls.receive.push(receiveCalls);
   }
   for (let slot = 0; slot < 2; slot++) {
@@ -196,21 +200,11 @@ function plan({
       },
       {
         function: functions.acquireInput,
-        args: [
-          decoder,
-          ringAt(status.STATUS.input + 16),
-          ringAt(status.STATUS.input + 24),
-          0
-        ]
+        args: [decoder, ringAt(status.STATUS.input + 16), ringAt(status.STATUS.input + 24), 0]
       },
       {
         function: copy,
-        args: [
-          ringAt(status.STATUS.input + 20),
-          descriptor + DESCRIPTOR.sequence,
-          4,
-          0
-        ]
+        args: [ringAt(status.STATUS.input + 20), descriptor + DESCRIPTOR.sequence, 4, 0]
       },
       ...restore,
       {function: jump, args: [{u64: at(CONTROL.receiveDispatch[slot])}, 1, 0, 0]}

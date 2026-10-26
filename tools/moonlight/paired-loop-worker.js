@@ -271,11 +271,16 @@ async function create({
       const resultAt = c.acquireResults - offset;
       const acquired = [];
       for (let index = 0; index < active.count; index++) {
-        const slot = (c.acquired[index] - offset);
+        const slot = c.acquired[index] - offset;
         const value = state.readBigUInt64LE(resultAt + index * 8);
         const outputIndex = state.readInt32LE(slot);
         const pts = state.readBigUInt64LE(slot + 8);
-        if (value === SENTINEL || status(value) !== 0 || outputIndex < 0 || pts !== expectedPts[index])
+        if (
+          value === SENTINEL ||
+          status(value) !== 0 ||
+          outputIndex < 0 ||
+          pts !== expectedPts[index]
+        )
           throw Error(`Paired loop output ${index} acquisition failed or PTS differs`);
         acquired.push({index: outputIndex, pts});
       }

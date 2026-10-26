@@ -137,7 +137,12 @@ function plan({sdk, base, control, mapped, event, acquireAck, functions, decoder
     const fetchCalls = [
       {
         function: functions.bufferSetData,
-        args: [output, {u64: descriptor + DESCRIPTOR.address}, {u64: descriptor + DESCRIPTOR.bytes}, 0]
+        args: [
+          output,
+          {u64: descriptor + DESCRIPTOR.address},
+          {u64: descriptor + DESCRIPTOR.bytes},
+          0
+        ]
       },
       {
         function: functions.getOutput,

@@ -101,8 +101,7 @@ async function run({
     throw Error('--native-publish requires --split-decoder');
   if (autoOutputQueue && !nativePublish)
     throw Error('--auto-output-queue requires --native-publish');
-  if (linkedGates && !autoOutputQueue)
-    throw Error('--linked-gates requires --auto-output-queue');
+  if (linkedGates && !autoOutputQueue) throw Error('--linked-gates requires --auto-output-queue');
   const duration = cli.number(args, '--duration', null);
   const warmup = cli.number(args, '--warmup', 3);
   const queue = cli.number(args, '--queue', staggered ? STAGGERED_QUEUE : 3);

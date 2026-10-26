@@ -15,7 +15,7 @@ async function create(rpc, storage, {cancelled = () => false, color = 1} = {}) {
   const reserved = new Map();
   let workerStarted = false;
 
-  const reached = (applied, submitted) => ((applied - submitted) >>> 0) < 0x80000000;
+  const reached = (applied, submitted) => (applied - submitted) >>> 0 < 0x80000000;
   const currentState = async () => {
     const state = await rpc.read(storage.mapped + ring.CONTROL.current, 24);
     return {current: state.readUInt32LE(0), applied: state.readUInt32LE(20)};
@@ -105,8 +105,7 @@ async function create(rpc, storage, {cancelled = () => false, color = 1} = {}) {
         await new Promise(resolve => setTimeout(resolve, 5));
         presentation = await currentState();
       }
-      if (target === null || cancelled())
-        throw Error('No free native presentation surface');
+      if (target === null || cancelled()) throw Error('No free native presentation surface');
       const destination = await writable(target, Infinity);
       sequence = (sequence + 1) >>> 0 || 1;
       reserved.set(sequence, target);

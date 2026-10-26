@@ -60,8 +60,7 @@ function frameOffset(index) {
 
 function nativeChecksum(sequence, fields) {
   let checksum = 2166136261;
-  for (const value of [sequence, ...fields])
-    checksum = Math.imul(checksum ^ value, 16777619) >>> 0;
+  for (const value of [sequence, ...fields]) checksum = Math.imul(checksum ^ value, 16777619) >>> 0;
   return checksum;
 }
 

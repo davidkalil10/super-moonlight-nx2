@@ -216,9 +216,10 @@ async function create({
   async function stopWorker(worker) {
     if (!worker.thread || worker.joined) return;
     try {
-      const offsets = worker === workers[0]
-        ? [...inputPlan.CONTROL.sendDispatch, ...inputPlan.CONTROL.receiveDispatch]
-        : [...outputPlan.CONTROL.fetchDispatch, ...outputPlan.CONTROL.acquireDispatch];
+      const offsets =
+        worker === workers[0]
+          ? [...inputPlan.CONTROL.sendDispatch, ...inputPlan.CONTROL.receiveDispatch]
+          : [...outputPlan.CONTROL.fetchDispatch, ...outputPlan.CONTROL.acquireDispatch];
       for (const offset of offsets) {
         const destination = Buffer.alloc(8);
         destination.writeBigUInt64LE(BigInt(worker.plan.locations.exit));
@@ -417,14 +418,7 @@ async function create({
       return slot;
     },
     async retryInputSlot(sequence) {
-      if (
-        !started ||
-        stopped ||
-        closed ||
-        retained ||
-        !Number.isInteger(sequence) ||
-        sequence < 1
-      )
+      if (!started || stopped || closed || retained || !Number.isInteger(sequence) || sequence < 1)
         throw Error('Staggered input slot retry is unavailable');
       const prior = await rpc.read(publication.mapped + status.STATUS.input + 8, 16);
       const priorStatus = prior.readBigUInt64LE(0);

@@ -98,14 +98,4 @@ async function readController(rpc, mapped, {sources = false} = {}) {
   return decode(selected, extra);
 }
 
-export {
-  FLAG,
-  NPAD,
-  NPAD_BYTES,
-  PAD_SOURCES,
-  NEUTRAL,
-  decode,
-  toMoonlight,
-  same,
-  readController
-};
+export {FLAG, NPAD, NPAD_BYTES, PAD_SOURCES, NEUTRAL, decode, toMoonlight, same, readController};
