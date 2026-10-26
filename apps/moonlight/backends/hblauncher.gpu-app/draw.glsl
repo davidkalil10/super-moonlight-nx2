@@ -1,3 +1,4 @@
+// hb-abi 1
 const vec3 INK=vec3(.10,.27,.40);
 const vec3 BLUE=vec3(.02,.57,.88);
 float box(vec2 p,vec2 center,vec2 halfSize,float radius) {

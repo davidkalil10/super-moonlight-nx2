@@ -1,3 +1,4 @@
+// hb-abi 1
 #ifndef HB_SDK_GLSL
 #define HB_SDK_GLSL
 // Include state.glsl first. Compute owns writes; define STATE_ACCESS readonly in fragment.
