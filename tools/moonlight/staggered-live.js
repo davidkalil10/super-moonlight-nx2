@@ -15,6 +15,8 @@
  * screen. A gate waits for the pending publication only with at most skipBacklog units
  * queued, or once it has been pending for two vsync periods (request-budget.cjs). With
  * no free surface to discard into, the gate waits for the pending publication first.
+ * decodeWait (vsync rule only) sleeps through a pending acquire to the time decode-wait.js
+ * predicts instead of rereading back to back.
  *
  * Rereads: a gate late on receive, input, acquire or fetch reads the status again right away,
  * since a pause costs the frame its vsync slot (request-budget.cjs staggeredRetryWait). A gate
@@ -23,6 +25,7 @@
  */
 import * as checked from './staggered-status.js';
 import * as presentPacer from './present-pacer.js';
+import * as decodeWaits from './decode-wait.js';
 import {create as createStaggeredWorker} from './staggered-worker.js';
 
 const RESTART = 'Staggered worker native objects retained; restart SmileBASIC';
@@ -85,6 +88,7 @@ function isApplied(nativeApplied, sequence) {
  * @property {number} [timeoutMs]
  * @property {(ms: number, pending?: string | null) => Promise<unknown>} [pause] Between reads;
  *   `pending` is what the last retryable check waited for.
+ * @property {() => Promise<unknown>} [beforeRead] Before each read.
  * @property {(pending: string | null) => void} [onReread] After each retryable check.
  * @property {(snapshot: Snapshot, startedAt: number) => void} [onRead] After each read.
  * @property {() => number} [now] Clock for onRead's startedAt.
@@ -105,6 +109,7 @@ async function waitChecked(
   {
     timeoutMs = DEFAULT_TIMEOUT_MS,
     pause = delay,
+    beforeRead = async () => {},
     onReread = () => {},
     onRead = () => {},
     now = Date.now
@@ -114,6 +119,7 @@ async function waitChecked(
   let nextInputRetry = 0;
   let pending = null;
   while (Date.now() < until) {
+    await beforeRead();
     const startedAt = now();
     const snapshot = await worker.readStatus();
     onRead(snapshot, startedAt);
@@ -217,6 +223,7 @@ function jsonSafe(value) {
  * @param {number} [options.presentHz]
  * @param {number} [options.skipBacklog] host backlog above which an output is skipped
  * @param {'backlog' | 'vsync'} [options.skipRule]
+ * @param {boolean} [options.decodeWait] sleep through a pending acquire (vsync rule only)
  * @param {() => number} [options.now]
  */
 function create({
@@ -226,10 +233,12 @@ function create({
   presentHz = DEFAULT_PRESENT_HZ,
   skipBacklog = SKIP_BACKLOG,
   skipRule = 'backlog',
+  decodeWait = false,
   now = Date.now
 } = {}) {
   if (!SKIP_RULES.includes(skipRule)) throw Error('Unknown staggered skip rule ' + skipRule);
   const vsyncRule = skipRule === 'vsync';
+  if (decodeWait && !vsyncRule) throw Error('The decode wait needs the vsync skip rule');
   const periodMs = 1000 / presentHz;
   let worker = null;
   let transport = null;
@@ -255,17 +264,39 @@ function create({
   const waiting = {};
   const waits = {timeoutMs, pause};
   const pacer = presentPacer.create({periodMs, now, sleep: ms => pause(ms)});
+  const decode = decodeWait ? decodeWaits.create({now, sleep: ms => pause(ms)}) : null;
+  /** How long the last status read took, for the decode wait. */
+  let readMs = 0;
   /** When the last gate opened a fetch, for the pacer's vsync prediction. */
   let fetchOpened = null;
   /**
+   * One per gate: the acquire it expects and what its reads have seen of it.
    * @param {Expected} expected
+   */
+  const acquireWatch = expected =>
+    decode && expected.acquire
+      ? {unit: expected.acquire.sequence, pendingSeen: false, acquired: false, waited: false}
+      : null;
+  /**
+   * @param {Expected} expected
+   * @param {ReturnType<typeof acquireWatch>} [watch]
    * @returns {WaitOptions}
    */
-  const rereadsFor = expected => ({
+  const rereadsFor = (expected, watch = null) => ({
     timeoutMs,
     now,
     pause: (_ms, pending) => (pending === 'applied' ? pacer.pending() : immediate()),
+    beforeRead: async () => {
+      if (watch && !watch.acquired)
+        watch.waited = await decode.beforeRead(watch.unit, watch.pendingSeen, readMs);
+    },
     onRead: (snapshot, startedAt) => {
+      readMs = now() - startedAt;
+      if (watch && !watch.acquired) {
+        watch.acquired = snapshot.acquire.sequence >= watch.unit;
+        decode.observe(watch.unit, now(), watch.acquired, watch);
+        watch.pendingSeen ||= !watch.acquired;
+      }
       if (expected.ack)
         pacer.observe(startedAt, isApplied(snapshot.nativeApplied, expected.ack.sequence));
     },
@@ -352,7 +383,8 @@ function create({
     if (vsyncRule) pendingAck(expected, backlog);
     if (expected.ack && !expected.ack.optional)
       await pacer.beforeRead(vsyncRule ? pending.openedAt : fetchOpened);
-    let snapshot = await waitChecked(worker, expected, rereadsFor(expected));
+    const watch = acquireWatch(expected);
+    let snapshot = await waitChecked(worker, expected, rereadsFor(expected, watch));
     if (expected.acquire) {
       counts.decoded++;
       onDecoded?.(1);
@@ -375,7 +407,7 @@ function create({
       if (!destination && vsyncRule) {
         expected.ack = {sequence: pending.sequence, index: pending.index};
         await pacer.beforeRead(pending.openedAt);
-        snapshot = await waitChecked(worker, expected, rereadsFor(expected));
+        snapshot = await waitChecked(worker, expected, rereadsFor(expected, watch));
         confirm(snapshot, onPresented);
         destination = await target(sink, snapshot, backlog);
       }
@@ -392,6 +424,7 @@ function create({
       published,
       frame: layout
     });
+    decode?.opened(sequence, now());
     if (destination) fetchOpened = now();
     if (pending && destination === published) pending.openedAt = fetchOpened;
   }

@@ -109,6 +109,7 @@ async function run({
   const inputHz = cli.number(args, '--input-hz', 60);
   const presentHz = cli.number(args, '--present-hz', 60);
   const skipRule = cli.option(args, '--skip-rule') ?? 'backlog';
+  const decodeWait = args.includes('--decode-wait');
   const skipBacklog =
     cli.option(args, '--skip-backlog') === 'off'
       ? Infinity
@@ -126,6 +127,7 @@ async function run({
   if (!['backlog', 'vsync'].includes(skipRule)) throw Error('--skip-rule takes backlog or vsync');
   if (skipRule === 'vsync' && skipBacklog === Infinity)
     throw Error('--skip-rule vsync needs a --skip-backlog unit count');
+  if (decodeWait && skipRule !== 'vsync') throw Error('--decode-wait needs --skip-rule vsync');
   if (
     !staggered &&
     ['--present-hz', '--skip-backlog', '--skip-rule'].some(name => args.includes(name))
@@ -251,7 +253,8 @@ async function run({
     const makeDecoder = async () => {
       transport = await createTransport({rpc, host: rpc.host});
       if (pairedLoop) paired = createPaired({rpc, publication: sink.workerPublication});
-      if (staggered) staggeredLive = createStaggered({presentHz, skipBacklog, skipRule});
+      if (staggered)
+        staggeredLive = createStaggered({presentHz, skipBacklog, skipRule, decodeWait});
       try {
         return await createDecoder({
           rpc,
@@ -761,6 +764,7 @@ async function run({
           presentHz,
           skipBacklog: skipBacklog === Infinity ? 'off' : skipBacklog,
           skipRule,
+          decodeWait,
           staggered: {...(staggeredLive?.counts ?? {}), tail}
         }
       : {}),
