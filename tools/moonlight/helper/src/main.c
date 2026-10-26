@@ -27,6 +27,7 @@
 #include <string.h>
 #include <sys/random.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <uuid/uuid.h>
 #include <time.h>
 #include <unistd.h>
@@ -82,8 +83,6 @@ static int pair(char *host, int timeout) {
 #define COVER_TIMEOUT 5
 #define QUIT_TIMEOUT 30
 
-static void cover_alarm(int signal) {}
-
 static bool read_unique_id(char *out, size_t size) {
   char path[4096];
   if (!session_key_directory(path, sizeof(path)))
@@ -98,13 +97,9 @@ static bool read_unique_id(char *out, size_t size) {
   return got > 0;
 }
 
-/* Box art through /appasset, as Moonlight Qt fetches it, cached under DIRECTORY by host and
- * app id. A slow host costs at most COVER_TIMEOUT seconds per cover, not the whole list. */
-static bool fetch_cover(SERVER_DATA *server, const char *unique_id, int app_id,
-                        const char *directory, char *path, size_t size) {
-  snprintf(path, size, "%s/%s-%d.png", directory, server->serverInfo.address, app_id);
-  if (access(path, R_OK) == 0)
-    return true;
+/* Box art through /appasset, as Moonlight Qt fetches it, into PATH. */
+static bool download_cover(SERVER_DATA *server, const char *unique_id, int app_id,
+                           const char *path) {
   uuid_t uuid;
   char uuid_text[37];
   uuid_generate_random(uuid);
@@ -116,14 +111,9 @@ static bool fetch_cover(SERVER_DATA *server, const char *unique_id, int app_id,
   PHTTP_DATA data = http_create_data();
   if (!data)
     return false;
-  struct sigaction interrupt = {.sa_handler = cover_alarm}, previous;
-  sigaction(SIGALRM, &interrupt, &previous);
-  alarm(COVER_TIMEOUT);
-  int result = http_request(url, data);
-  alarm(0);
-  sigaction(SIGALRM, &previous, NULL);
   bool saved = false;
-  if (result == GS_OK && data->size > 8 && memcmp(data->memory, "\x89PNG", 4) == 0) {
+  if (http_request(url, data) == GS_OK && data->size > 8 &&
+      memcmp(data->memory, "\x89PNG", 4) == 0) {
     char partial[4200];
     snprintf(partial, sizeof(partial), "%s.part", path);
     FILE *file = fopen(partial, "wb");
@@ -135,6 +125,30 @@ static bool fetch_cover(SERVER_DATA *server, const char *unique_id, int app_id,
   }
   http_free_data(data);
   return saved;
+}
+
+/* One cover, cached under DIRECTORY by host and app id. The fetch runs in a forked child
+ * under a plain alarm, since libcurl keeps going through EINTR and the pinned http.c sets no
+ * timeout of its own: a slow /appasset costs COVER_TIMEOUT seconds and that cover, never the
+ * list. */
+static bool fetch_cover(SERVER_DATA *server, const char *unique_id, int app_id,
+                        const char *directory, char *path, size_t size) {
+  snprintf(path, size, "%s/%s-%d.png", directory, server->serverInfo.address, app_id);
+  if (access(path, R_OK) == 0)
+    return true;
+  fflush(stdout);
+  pid_t child = fork();
+  if (child < 0)
+    return false;
+  if (child == 0) {
+    signal(SIGALRM, SIG_DFL);
+    alarm(COVER_TIMEOUT);
+    _exit(download_cover(server, unique_id, app_id, path) ? 0 : 1);
+  }
+  int result;
+  if (waitpid(child, &result, 0) < 0)
+    return false;
+  return WIFEXITED(result) && WEXITSTATUS(result) == 0;
 }
 
 static int list(int argc, char **argv) {
