@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const {
   ITEM,
   APPS_PER_PAGE,
+  HOSTS_PER_PAGE,
   makeModel,
   reduce
 } = require('../../../hbl-moonlight/tools/moonlight/ui-model.js');
@@ -208,18 +209,20 @@ test('settings open with X from hosts or apps, adjust, reset and go back where t
   assert.equal(reduce(fromApps, command('b')).model.screen, 'apps');
 });
 
-test('the apps grid pages past twenty apps and a shorter list pulls the page back', () => {
+test('the apps grid pages past ten apps and a shorter list pulls the page back', () => {
   const many = Array.from({length: 45}, (_, i) => ({id: i + 1, name: 'App ' + (i + 1)}));
   const apps = walk(makeModel(HOSTS), [
     {type: 'attached'},
     command('a', ITEM.host),
     {type: 'listed', apps: many, currentGame: 0}
   ]).model;
-  assert.equal(APPS_PER_PAGE, 20);
+  assert.equal(APPS_PER_PAGE, 10);
   const second = reduce(apps, command('a', ITEM.next)).model;
   assert.equal(second.appPage, 1);
-  const third = reduce(second, command('a', ITEM.next)).model;
-  const launch = reduce(third, command('a', ITEM.app + 44));
+  const last = [2, 3, 4, 5].reduce(model => reduce(model, command('a', ITEM.next)).model, second);
+  assert.equal(last.appPage, 4, 'next stops at the last page');
+  const third = {...last, appPage: 2};
+  const launch = reduce(last, command('a', ITEM.app + 44));
   assert.equal(launch.model.screen, 'launching');
   assert.equal(launch.model.app.id, 45);
   assert.equal(
@@ -233,6 +236,25 @@ test('the apps grid pages past twenty apps and a shorter list pulls the page bac
     {type: 'listed', apps: APPS, currentGame: 0}
   );
   assert.equal(shorter.model.appPage, 0);
+});
+
+test('hosts page by six and the opened host is remembered for the way back', () => {
+  const eight = Array.from({length: 8}, (_, i) => ({name: 'PC ' + i, address: '10.0.0.' + i}));
+  const hosts = reduce(makeModel(eight), {type: 'attached'}).model;
+  assert.equal(HOSTS_PER_PAGE, 6);
+  const second = reduce(hosts, command('a', ITEM.next)).model;
+  assert.equal(second.hostPage, 1);
+  assert.equal(reduce(second, command('a', ITEM.next)).model.hostPage, 1, 'stops at the last');
+  const opened = reduce(second, command('a', ITEM.host + 7));
+  assert.equal(opened.model.host, eight[7]);
+  assert.equal(opened.model.hostIndex, 7);
+  const listed = reduce(opened.model, {type: 'listed', apps: APPS, currentGame: 0}).model;
+  const back = reduce(listed, command('b')).model;
+  assert.equal(back.screen, 'hosts');
+  assert.equal(back.hostPage, 1, 'back on the page of the host it left');
+  assert.equal(back.hostIndex, 7);
+  const fewer = reduce(back, {type: 'hosts', hosts: eight.slice(0, 3)}).model;
+  assert.equal(fewer.hostPage, 0, 'a shorter list pulls the page back');
 });
 
 test('results for another screen are ignored and the app going away stops the service', () => {
