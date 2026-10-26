@@ -21,6 +21,7 @@ omitted). The service refuses an app whose private storage is smaller than `MEMO
 | `ui-pages.js` | One layout per screen as items, text strips and images; strips and tiles cached by text and size. |
 | `ui-raster.js` + `ui-text.py` | A long-lived PIL child painting alpha-8 strips, cover tiles and letter tiles. |
 | `ui-page.js` | Serializer, validator and parser of the page format, shared with the console shader. |
+| `ui-discover.js` | mDNS query, DNS answer parser, host candidates and the merge into the manual list. |
 | `ui-service.js` | Attach, publish, command poll, children (helper `list`/`pair`/`quit`, `live.js` for the stream), exit. |
 
 ## Host rules
@@ -42,6 +43,10 @@ omitted). The service refuses an app whose private storage is smaller than `MEMO
 - Covers come from `hbmoonlight list HOST --covers DIR` (`/appasset`, cached under
   `$XDG_CACHE_HOME/hblauncher/moonlight/covers` by host and app id); apps without one get a
   letter tile.
+- Hosts: `hosts.json` is the manual source. At attach and on Y the service asks for
+  `_nvstream._tcp.local` over mDNS (`ui-discover.js`, Node dgram, 1.5 s window) and appends
+  hosts it did not know, saved once through a rename; manual names and addresses are never
+  touched and nothing is removed for being absent from one scan.
 - The service exits when `app-runtime.json` names another active app, or on SIGINT/SIGTERM,
   and writes magic 0 last so the console shows the static splash.
 
@@ -56,6 +61,7 @@ code), `app-gone`, `detach`.
 ## Tests
 
 `moonlight-dev/tools/moonlight/ui-*.test.cjs` and `input-feeder.test.cjs`: the model, the
+discovery parser against a recorded Sunshine answer (`fixtures/mdns-sunshine.bin`), the
 settings, the pages through serialize/validate/parse, the rasteriser (PIL tests skip without
 PIL) and the service against a fake console that applies pages like the shader, with fake
 children for the helper and `live.js`.
