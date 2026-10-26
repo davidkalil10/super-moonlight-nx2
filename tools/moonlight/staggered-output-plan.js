@@ -1,16 +1,25 @@
-// Output worker frames for the staggered lag-2 path. The acquire frame waits once on the
-// auto-clear decoder output event, acquires one output, stamps its status and sequence, then
-// signals the input worker's acquisition acknowledgement before it parks on the fetch gate.
-// The acknowledgement comes only after the stamps, so the input worker's next SendInput can
-// never race the host-visible acquire status. The fetch frame copies the held output into the
-// descriptor's ring surface, releases it and stamps the fetch status.
+/**
+ * Output worker frames for the staggered lag-2 path.
+ *
+ * The acquire frame waits once on the auto-clear decoder output event, acquires one output,
+ * stamps its status and sequence, then signals the input worker's acquisition acknowledgement
+ * before it parks on the fetch gate. The acknowledgement comes only after the stamps, so the
+ * input worker's next SendInput can never race the host-visible acquire status.
+ *
+ * The fetch frame copies the held output into the descriptor's ring surface, releases it,
+ * publishes the descriptor's metadata to the shader (the native sequence last) and stamps the
+ * fetch status. Like the input frames, each fetch frame restores both of its slot's frames from
+ * their snapshots and jumps through a dispatch word to the other frame.
+ */
 import {build} from '../../../hbl-platform/smilebasic/engine/shared/frames.js';
+import {CALL4_X19} from '../../../hbl-platform/smilebasic/engine/shared/gadgets.js';
 import {CODE, IPC_COPY} from '../../../hbl-platform/sdk/native/thread.js';
 import SYNC from '../../../hbl-platform/sdk/native/os-sync-functions.json' with {type: 'json'};
 import {metadata} from './paired-output-frame.js';
 import * as status from './staggered-status.js';
 import * as ring from './ring.js';
 
+/** Offsets in the shared control page owned by the output worker. */
 const CONTROL = {
   fetchGate: 0x20,
   fetchDispatch: [0x60, 0x68],
@@ -18,6 +27,10 @@ const CONTROL = {
   descriptors: [0x200, 0x280]
 };
 
+/**
+ * Field offsets of an output descriptor: the access unit sequence, the destination surface's
+ * address and size, and the publication metadata the shader reads; `size` is its size.
+ */
 const DESCRIPTOR = {
   sequence: 0,
   address: 8,
@@ -26,25 +39,81 @@ const DESCRIPTOR = {
   size: 0x80
 };
 
+/** Offsets in the worker's allocation of each slot's frames, their snapshots and the exit. */
+const REGIONS = {
+  acquire: [0x10000, 0x210000],
+  acquireSnapshot: [0x80000, 0x280000],
+  fetch: [0x110000, 0x300000],
+  fetchSnapshot: [0x180000, 0x380000],
+  exit: 0x3f0000
+};
+/** Room for one frame before the next region starts. */
+const MAX_FRAME_BYTES = 0x70000;
+/** Outputs alternate between this many descriptor and frame slots by sequence. */
+const SLOTS = 2;
+
+/**
+ * Ring offsets of the status words the output worker stamps (see staggered-status.js), plus
+ * AcquireOutputBufferIndex's flags and count, which only the worker uses.
+ */
+const STAMP = {
+  acquireStatus: status.STATUS.acquire,
+  outputIndex: status.STATUS.acquire + 8,
+  pts: status.STATUS.acquire + 16,
+  acquireSequence: status.STATUS.acquire + 24,
+  flags: status.STATUS.acquire + 32,
+  outputCount: status.STATUS.acquire + 36,
+  setStatus: status.STATUS.fetch,
+  getStatus: status.STATUS.fetch + 8,
+  releaseStatus: status.STATUS.fetch + 16,
+  fetchSequence: status.STATUS.fetch + 24
+};
+const SEQUENCE_BYTES = 4;
+/** The metadata the shader reads from ring.CONTROL.nativeIndex through nativeCommit. */
+const PUBLICATION_BYTES = ring.CONTROL.nativeCommit + 4 - ring.CONTROL.nativeIndex;
+const MAX_SEQUENCE = 0xffffffff;
+
+/**
+ * @param {number} base
+ * @returns {{acquire: number[], acquireSnapshot: number[], fetch: number[],
+ *   fetchSnapshot: number[], exit: number}}
+ */
 function locations(base) {
   return {
-    acquire: [base + 0x10000, base + 0x210000],
-    acquireSnapshot: [base + 0x80000, base + 0x280000],
-    fetch: [base + 0x110000, base + 0x300000],
-    fetchSnapshot: [base + 0x180000, base + 0x380000],
-    exit: base + 0x3f0000
+    acquire: REGIONS.acquire.map(offset => base + offset),
+    acquireSnapshot: REGIONS.acquireSnapshot.map(offset => base + offset),
+    fetch: REGIONS.fetch.map(offset => base + offset),
+    fetchSnapshot: REGIONS.fetchSnapshot.map(offset => base + offset),
+    exit: base + REGIONS.exit
   };
 }
 
+/**
+ * @param {number} auSequence
+ * @returns {boolean}
+ */
+function isSequence(auSequence) {
+  return Number.isInteger(auSequence) && auSequence >= 1 && auSequence <= MAX_SEQUENCE;
+}
+
+/**
+ * The descriptor that fetches output `auSequence` into `destination` and publishes
+ * `published`, which is the destination itself unless the output is being skipped.
+ * @param {object} options
+ * @param {number} options.auSequence
+ * @param {any} options.destination A ring surface of the publication.
+ * @param {any} options.frame The decoded frame layout.
+ * @param {{mapped: number, color: number}} options.publication
+ * @param {any} [options.published]
+ * @returns {Buffer}
+ */
 function outputDescriptor({auSequence, destination, frame, publication, published = destination}) {
   const target = surface =>
     surface &&
     surface.address === publication.mapped + ring.frameOffset(surface.index) &&
     surface.color === publication.color;
   if (
-    !Number.isInteger(auSequence) ||
-    auSequence < 1 ||
-    auSequence > 0xffffffff ||
+    !isSequence(auSequence) ||
     !Number.isSafeInteger(publication?.mapped) ||
     !target(destination) ||
     !target(published)
@@ -58,14 +127,55 @@ function outputDescriptor({auSequence, destination, frame, publication, publishe
   return bytes;
 }
 
+/**
+ * A descriptor that only carries the sequence, for an output not acquired yet.
+ * @param {number} auSequence
+ * @returns {Buffer}
+ */
 function placeholderDescriptor(auSequence) {
-  if (!Number.isInteger(auSequence) || auSequence < 1 || auSequence > 0xffffffff)
-    throw Error('Invalid staggered output sequence');
+  if (!isSequence(auSequence)) throw Error('Invalid staggered output sequence');
   const bytes = Buffer.alloc(DESCRIPTOR.size);
   bytes.writeUInt32LE(auSequence, DESCRIPTOR.sequence);
   return bytes;
 }
 
+/**
+ * Builds one frame and points each listed native result at its ring status word.
+ * @param {number} address
+ * @param {number} sdk
+ * @param {any[]} calls
+ * @param {Set<number>} verified
+ * @param {number} mapped
+ * @param {Record<number, number>} results Logical call index to ring offset.
+ */
+function buildFrame(address, sdk, calls, verified, mapped, results) {
+  const built = build(address, sdk, calls, CODE, false, verified);
+  for (const [logical, destination] of Object.entries(results)) {
+    const native = built.proof.logicalResultIndices[Number(logical)];
+    built.frame.writeBigUInt64LE(
+      BigInt(mapped + destination),
+      built.proof.stackOffsets[native] + CALL4_X19
+    );
+  }
+  if (built.frame.length > MAX_FRAME_BYTES)
+    throw Error('Staggered output frame exceeds its region');
+  return built;
+}
+
+/**
+ * Plans both slots' acquire and fetch frames.
+ * @param {object} options
+ * @param {number} options.sdk
+ * @param {number} options.base The worker's allocation.
+ * @param {number} options.control The shared control page.
+ * @param {number} options.mapped The mapped ring.
+ * @param {number} options.event The auto-clear decoder output event.
+ * @param {number} options.acquireAck The acquisition acknowledgement the input worker awaits.
+ * @param {Record<string, number>} options.functions Movie decoder function addresses.
+ * @param {number} options.decoder
+ * @param {number} options.output The movie Buffer GetOutputBuffer fills.
+ * @param {number} options.format The MediaData GetOutputBuffer fills.
+ */
 function plan({sdk, base, control, mapped, event, acquireAck, functions, decoder, output, format}) {
   const addresses = [sdk, base, control, mapped, event, acquireAck, decoder, output, format];
   if (
@@ -82,22 +192,12 @@ function plan({sdk, base, control, mapped, event, acquireAck, functions, decoder
   const jump = sdk + CODE.longjmp.offset;
   const sync = name => sdk + SYNC[name].offset;
   const verified = new Set(Object.values(functions));
-  const frame = (address, calls, results = {}) => {
-    const built = build(address, sdk, calls, CODE, false, verified);
-    for (const [logical, destination] of Object.entries(results)) {
-      const native = built.proof.logicalResultIndices[Number(logical)];
-      built.frame.writeBigUInt64LE(
-        BigInt(ringAt(destination)),
-        built.proof.stackOffsets[native] + 0x118
-      );
-    }
-    if (built.frame.length > 0x70000) throw Error('Staggered output frame exceeds its region');
-    return built;
-  };
+  const frame = (address, calls, results = {}) =>
+    buildFrame(address, sdk, calls, verified, mapped, results);
   const acquire = [];
   const fetch = [];
   const calls = {acquire: [], fetch: []};
-  for (let slot = 0; slot < 2; slot++) {
+  for (let slot = 0; slot < SLOTS; slot++) {
     const descriptor = at(CONTROL.descriptors[slot]);
     const acquireCalls = [
       {function: sync('waitEvent'), args: [event, 0, 0, 0]},
@@ -105,24 +205,24 @@ function plan({sdk, base, control, mapped, event, acquireAck, functions, decoder
         function: functions.acquireOutput,
         args: [
           decoder,
-          ringAt(status.STATUS.acquire + 8),
-          ringAt(status.STATUS.acquire + 16),
-          ringAt(status.STATUS.acquire + 32),
-          ringAt(status.STATUS.acquire + 36)
+          ringAt(STAMP.outputIndex),
+          ringAt(STAMP.pts),
+          ringAt(STAMP.flags),
+          ringAt(STAMP.outputCount)
         ]
       },
       {
         function: copy,
-        args: [ringAt(status.STATUS.acquire + 24), descriptor + DESCRIPTOR.sequence, 4, 0]
+        args: [ringAt(STAMP.acquireSequence), descriptor + DESCRIPTOR.sequence, SEQUENCE_BYTES, 0]
       },
       {function: sync('signalLightEvent'), args: [acquireAck, 0, 0, 0]},
       {function: sync('waitLightEvent'), args: [at(CONTROL.fetchGate), 0, 0, 0]},
       {function: jump, args: [{u64: at(CONTROL.fetchDispatch[slot])}, 1, 0, 0]}
     ];
-    acquire.push(frame(loc.acquire[slot], acquireCalls, {1: status.STATUS.acquire}));
+    acquire.push(frame(loc.acquire[slot], acquireCalls, {1: STAMP.acquireStatus}));
     calls.acquire.push(acquireCalls);
   }
-  for (let slot = 0; slot < 2; slot++) {
+  for (let slot = 0; slot < SLOTS; slot++) {
     const descriptor = at(CONTROL.descriptors[slot]);
     const restore = [
       {
@@ -146,39 +246,41 @@ function plan({sdk, base, control, mapped, event, acquireAck, functions, decoder
       },
       {
         function: functions.getOutput,
-        args: [decoder, {u32: ringAt(status.STATUS.acquire + 8)}, output, format]
+        args: [decoder, {u32: ringAt(STAMP.outputIndex)}, output, format]
       },
       {
         function: functions.releaseOutput,
-        args: [decoder, {u32: ringAt(status.STATUS.acquire + 8)}, 0, 0]
+        args: [decoder, {u32: ringAt(STAMP.outputIndex)}, 0, 0]
       },
       {
         function: copy,
-        args: [ringAt(ring.CONTROL.nativeIndex), descriptor + DESCRIPTOR.metadata, 28, 0]
+        args: [
+          ringAt(ring.CONTROL.nativeIndex),
+          descriptor + DESCRIPTOR.metadata,
+          PUBLICATION_BYTES,
+          0
+        ]
       },
       {
         function: copy,
-        args: [ringAt(ring.CONTROL.nativeSequence), descriptor + DESCRIPTOR.metadata + 28, 4, 0]
+        args: [
+          ringAt(ring.CONTROL.nativeSequence),
+          descriptor + DESCRIPTOR.metadata + PUBLICATION_BYTES,
+          SEQUENCE_BYTES,
+          0
+        ]
       },
       {
         function: copy,
-        args: [ringAt(status.STATUS.fetch + 24), descriptor + DESCRIPTOR.sequence, 4, 0]
+        args: [ringAt(STAMP.fetchSequence), descriptor + DESCRIPTOR.sequence, SEQUENCE_BYTES, 0]
       },
       ...restore,
       {function: jump, args: [{u64: at(CONTROL.acquireDispatch[slot])}, 1, 0, 0]}
     ];
-    let built = frame(loc.fetch[slot], fetchCalls, {
-      0: status.STATUS.fetch,
-      1: status.STATUS.fetch + 8,
-      2: status.STATUS.fetch + 16
-    });
-    restore[1].args[2] = built.frame.length;
-    built = frame(loc.fetch[slot], fetchCalls, {
-      0: status.STATUS.fetch,
-      1: status.STATUS.fetch + 8,
-      2: status.STATUS.fetch + 16
-    });
-    fetch.push(built);
+    const results = {0: STAMP.setStatus, 1: STAMP.getStatus, 2: STAMP.releaseStatus};
+    const sized = frame(loc.fetch[slot], fetchCalls, results);
+    restore[1].args[2] = sized.frame.length;
+    fetch.push(frame(loc.fetch[slot], fetchCalls, results));
     calls.fetch.push(fetchCalls);
   }
   return {control: CONTROL, descriptor: DESCRIPTOR, locations: loc, acquire, fetch, calls};
