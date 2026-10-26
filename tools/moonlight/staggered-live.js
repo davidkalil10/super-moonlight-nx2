@@ -327,7 +327,8 @@ function create({
         watch.pendingSeen ||= !watch.acquired;
       }
       if (expected.ack) {
-        pacer.observe(startedAt, isApplied(snapshot.nativeApplied, expected.ack.sequence));
+        const applied = isApplied(snapshot.nativeApplied, expected.ack.sequence);
+        pacer.observe(startedAt, applied, expected.ack.openedAt ?? null);
         counts.appliedPeriodMs = pacer.periodMs;
       }
     },
@@ -360,7 +361,12 @@ function create({
     delete expected.ack;
     if (!pending) return;
     const optional = backlog > skipBacklog && now() - pending.openedAt <= 2 * pacer.periodMs;
-    expected.ack = {sequence: pending.sequence, index: pending.index, ...(optional && {optional})};
+    expected.ack = {
+      sequence: pending.sequence,
+      index: pending.index,
+      openedAt: pending.openedAt,
+      ...(optional && {optional})
+    };
   }
 
   function confirm(snapshot, onPresented) {
@@ -437,7 +443,11 @@ function create({
       enter('destination');
       destination = await target(sink, snapshot, backlog);
       if (!destination && vsyncRule) {
-        expected.ack = {sequence: pending.sequence, index: pending.index};
+        expected.ack = {
+          sequence: pending.sequence,
+          index: pending.index,
+          openedAt: pending.openedAt
+        };
         await pacer.beforeRead(pending.openedAt);
         snapshot = await waitChecked(worker, expected, rereadsFor(expected, watch, link));
         confirm(snapshot, onPresented);
@@ -598,7 +608,7 @@ function create({
     },
 
     get counts() {
-      return {...counts, waiting: {...waiting}};
+      return {...counts, pacer: pacer.counters, waiting: {...waiting}};
     },
 
     get retained() {

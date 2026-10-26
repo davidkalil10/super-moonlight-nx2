@@ -65,8 +65,9 @@ const NO_INPUT_SLOT = [0x100en, 0x1011n];
  * @property {{sequence: number}} [input]
  * @property {{sequence: number, pts: number | bigint}} [acquire]
  * @property {{sequence: number}} [fetch]
- * @property {{sequence: number, index: number, optional?: boolean}} [ack] The publication that
- *   must be applied; an optional one only has to match its surface once it is.
+ * @property {{sequence: number, index: number, openedAt?: number | null, optional?: boolean}} [ack]
+ *   The publication that must be applied, with the time its fetch opened for the pacer; an
+ *   optional one only has to match its surface once it is.
  */
 
 /**

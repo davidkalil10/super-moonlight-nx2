@@ -3,26 +3,30 @@
  * sleeps off the bridge instead of polling the status. The phase is learned from status reads:
  * a read that finds the publication applied right after one that did not brackets a vsync.
  * While reads keep succeeding on the first try the phase is pulled earlier by driftMs, so a late
- * estimate does not add latency for long.
+ * estimate does not add latency for long. A read far from any bracket still nudges the phase a
+ * little toward what it saw, so sparse reads keep the estimate honest.
  *
  * The period starts at periodMs, the display's refresh, but the console may apply only every
- * other refresh (a 1/60 s cadence on a 120 Hz panel). Then every second predicted read misses
- * and its hit comes one periodMs later; enough of those in a row of predicted reads and the
- * pacer moves to twice the period. On the long period one predicted read in PROBE_EVERY aims at
- * the midpoint instead; MID_HITS hits there in a row bring the short period back. A probe read
- * that only starts at the next long-period vsync would see that apply, so it counts for nothing.
+ * other refresh (a 1/60 s cadence on a 120 Hz panel). Every read that checks a publication
+ * votes once per publication, whether the pacer timed the read or not: a read that starts past
+ * the refresh the publication should have applied on and finds it not applied says the console
+ * skipped that refresh; a read that finds it applied before the next even refresh says the
+ * console used the odd one. Enough skipped-refresh votes move the pacer to twice the period;
+ * MID_HITS odd-refresh votes in a row bring the short period back. On the long period one timed
+ * read in PROBE_EVERY aims at the odd refresh so that vote gets a chance when the host reads only
+ * when it must.
  *
  * windowMs must cover marginMs plus one status read, or a slightly early estimate sleeps a whole
  * frame (request-budget.cjs staggeredHostWait).
  */
 
-/** Predicted first reads remembered for the half-period test. */
+/** Votes remembered for the long-period test. */
 const HALF_WINDOW = 16;
-/** Half-period misses among them that move the pacer to the long period. */
+/** Skipped-refresh votes among them that move the pacer to the long period. */
 const HALF_MISSES = 6;
-/** On the long period, one predicted read in this many with a midpoint ahead probes it. */
+/** On the long period, one timed read in this many with an odd refresh ahead probes it. */
 const PROBE_EVERY = 16;
-/** Midpoint hits in a row that bring the short period back. */
+/** Odd-refresh votes in a row that bring the short period back. */
 const MID_HITS = 4;
 
 /**
@@ -38,6 +42,7 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
  * @param {number} [options.pollMs] short sleep when the prediction is in doubt
  * @param {number} [options.windowMs] how long after a predicted vsync to keep polling
  * @param {number} [options.driftMs] how far each first-try success pulls the phase earlier
+ * @param {number} [options.nudgeMs] how far a read outside a bracket may move the phase
  * @param {() => number} [options.now]
  * @param {(ms: number) => Promise<unknown>} [options.sleep]
  */
@@ -47,55 +52,70 @@ function create({
   pollMs = 2,
   windowMs = 5,
   driftMs = 0.1,
+  nudgeMs = 0.5,
   now = Date.now,
   sleep = delay
 } = {}) {
   /** Time of a past vsync, or null until one has been bracketed. */
   let phase = null;
-  /** A read since the last success found the publication not applied. */
+  /** A read since the last success found the publication not applied, and when it started. */
   let missed = false;
+  let missStartedAt = null;
   /** The last beforeRead slept until a predicted vsync. */
   let predicted = false;
   /** Refresh periods per apply: 1, or 2 once the console is seen applying every other one. */
   let grid = 1;
-  /** Start of the first missing read of a predicted gate. */
-  let missAt = null;
-  /** Whether each recent predicted gate missed by half a long period. */
-  let halfMisses = [];
-  /** Predicted reads on the long period, for the midpoint probe. */
+  /** The publication the reads are judging: when its fetch opened, what they saw, its vote. */
+  let judging = null;
+  /** Recent votes while on the short period: true for a skipped refresh. */
+  let votes = [];
+  /** Timed reads on the long period, for the odd-refresh probe. */
   let probes = 0;
-  /** The current gate's predicted read aims at the midpoint. */
-  let probing = false;
-  /** The long-period vsync after the probed midpoint; a read from there on tells nothing. */
-  let probeSlot = null;
-  /** Midpoint probes that found the publication applied, in a row. */
+  /** Odd-refresh votes in a row on the long period. */
   let midHits = 0;
-  /** A vsync bracketed within one poll, which the drift never moves; the probe's reference. */
-  let bracketed = null;
-  /** Start of the latest read that found the publication not applied. */
-  let lastMissAt = null;
+  const counters = {reads: 0, predicted: 0, probes: 0, lateVotes: 0, earlyVotes: 0, flips: 0};
 
   const period = () => grid * periodMs;
-  const nextVsync = at => phase + Math.ceil((at - phase) / period()) * period();
-  const anchor = at => {
-    phase = at;
-    if (at - lastMissAt <= 2 * pollMs) bracketed = at;
-  };
-  const midpointAfter = at =>
-    bracketed === null
-      ? null
-      : bracketed + Math.ceil((at - bracketed) / period()) * period() - periodMs;
+  const vsyncAfter = (at, step) => phase + Math.ceil((at - phase) / step) * step;
+  const nextVsync = at => vsyncAfter(at, period());
   const sleepUntil = async at => {
     const ms = at - now();
     if (ms > 0) await sleep(ms);
   };
-  const remember = half => {
-    halfMisses.push(half);
-    if (halfMisses.length > HALF_WINDOW) halfMisses.shift();
-    if (grid === 1 && halfMisses.filter(Boolean).length >= HALF_MISSES) {
-      grid = 2;
-      halfMisses = [];
-    }
+  /** Moves the phase a little toward a vsync seen at `at`, by the shorter way round the grid. */
+  const nudgeToward = at => {
+    const residual = at - (nextVsync(at) - period());
+    if (residual < period() / 2) phase += Math.min(residual, nudgeMs);
+    else phase -= Math.min(period() - residual, nudgeMs);
+  };
+  const judge = openedAt => {
+    if (judging === null || judging.openedAt !== openedAt)
+      judging = {openedAt, lateMiss: false, voted: false};
+    return judging;
+  };
+  const flip = to => {
+    grid = to;
+    votes = [];
+    midHits = 0;
+    counters.flips++;
+  };
+  /**
+   * One vote per publication. 'skipped': the console let the refresh it was due on pass.
+   * 'odd': it applied on a refresh the long period would skip. 'onTime': applied on its refresh,
+   * which says nothing against the long period when that refresh is an even one.
+   * @param {'skipped' | 'odd' | 'onTime'} kind
+   */
+  const vote = kind => {
+    judging.voted = true;
+    if (kind === 'skipped') counters.lateVotes++;
+    else if (kind === 'odd') counters.earlyVotes++;
+    if (grid === 1) {
+      votes.push(kind === 'skipped');
+      if (votes.length > HALF_WINDOW) votes.shift();
+      if (votes.filter(Boolean).length >= HALF_MISSES) flip(2);
+    } else if (kind === 'odd') {
+      if (++midHits >= MID_HITS) flip(1);
+    } else if (kind === 'skipped') midHits = 0;
   };
 
   return {
@@ -107,61 +127,59 @@ function create({
     async beforeRead(openedAt) {
       missed = false;
       predicted = false;
-      probing = false;
-      missAt = null;
       if (phase === null || openedAt === null || openedAt === undefined) return;
+      judge(openedAt);
       let due = nextVsync(openedAt) + marginMs;
-      const midpoint = grid === 2 ? midpointAfter(openedAt) : null;
-      if (midpoint !== null && midpoint > openedAt && ++probes % PROBE_EVERY === 0) {
-        due = midpoint + marginMs;
-        probing = true;
-        probeSlot = midpoint + periodMs;
+      const odd = grid === 2 ? nextVsync(openedAt) - periodMs : null;
+      if (odd !== null && odd > openedAt && ++probes % PROBE_EVERY === 0) {
+        due = odd + marginMs;
+        counters.probes++;
       }
-      if (due <= now()) {
-        probing = false;
-        return;
-      }
+      if (due <= now()) return;
       predicted = true;
+      counters.predicted++;
       await sleepUntil(due);
     },
 
     /**
-     * After each read that checked the publication, with the time the read started.
+     * After each read that checked the publication, with the time the read started. openedAt
+     * names the publication when the gate did not go through beforeRead for it.
      * @param {number} startedAt
      * @param {boolean} applied
+     * @param {number | null} [openedAt]
      */
-    observe(startedAt, applied) {
+    observe(startedAt, applied, openedAt = judging?.openedAt ?? null) {
+      const endedAt = now();
+      counters.reads++;
+      if (phase !== null && openedAt !== null) {
+        const current = judge(openedAt);
+        const refresh = vsyncAfter(openedAt, periodMs);
+        const even = vsyncAfter(openedAt, 2 * periodMs);
+        const expected = nextVsync(openedAt);
+        if (!applied) {
+          if (startedAt >= refresh + marginMs + pollMs) current.lateMiss = true;
+          else if (startedAt - expected >= marginMs)
+            phase += Math.min(startedAt - expected, nudgeMs);
+        } else {
+          if (!current.voted) {
+            if (current.lateMiss) vote(endedAt - refresh >= periodMs / 2 ? 'skipped' : 'onTime');
+            else if (even > refresh && endedAt < even - marginMs) vote('odd');
+            else if (endedAt < refresh + periodMs / 2) vote('onTime');
+          }
+          if (expected > endedAt && !missed) phase -= Math.min(expected - endedAt, nudgeMs);
+        }
+      }
       if (!applied) {
-        if (!missed && predicted) missAt = startedAt;
+        if (!missed) missStartedAt = startedAt;
         missed = true;
-        lastMissAt = startedAt;
         return;
       }
-      if (probing) {
-        if (missed) {
-          midHits = 0;
-          anchor(startedAt);
-        } else if (startedAt < probeSlot) midHits++;
-        if (midHits >= MID_HITS) {
-          grid = 1;
-          midHits = 0;
-          halfMisses = [];
-          phase = startedAt;
-        }
-      } else if (missed) {
-        anchor(startedAt);
-        if (missAt !== null) {
-          const late = (startedAt - missAt) / periodMs;
-          remember(late >= 0.75 && late <= 1.25);
-        }
-      } else if (predicted) {
-        phase -= driftMs;
-        remember(false);
-      }
+      if (missed) {
+        if (phase === null || startedAt - missStartedAt <= period()) phase = startedAt;
+        else nudgeToward(startedAt);
+      } else if (predicted) phase -= driftMs;
       missed = false;
       predicted = false;
-      probing = false;
-      missAt = null;
     },
 
     /**
@@ -183,6 +201,11 @@ function create({
     /** The period applies are expected on: the refresh, or twice it. */
     get periodMs() {
       return period();
+    },
+
+    /** Reads seen, reads the pacer timed, odd-refresh probes, votes each way, period flips. */
+    get counters() {
+      return {...counters, grid};
     }
   };
 }
