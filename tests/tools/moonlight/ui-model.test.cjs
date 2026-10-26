@@ -306,4 +306,12 @@ test('a different app waits until the running one is quit, since the PC would re
   assert.equal(resumed.model.app.id, 1217);
   const unknown = reduce({...apps, currentGame: 42}, command('a', ITEM.app)).model;
   assert.match(unknown.message, /^Another app is still running/);
+  const quit = walk(blocked.model, [
+    command('y'),
+    command('a', ITEM.confirmQuit),
+    {type: 'quitDone'}
+  ]);
+  const relisted = reduce(quit.model, {type: 'listed', apps: APPS, currentGame: 0}).model;
+  assert.equal(relisted.message, null, 'the block message clears once the app is quit');
+  assert.equal(reduce(relisted, command('a', ITEM.app)).model.screen, 'launching');
 });
