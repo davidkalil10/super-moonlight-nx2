@@ -48,7 +48,7 @@ function buildCopy(args, {cwd = '', env = {}} = {}) {
   const fs = require('node:fs');
   const os = require('node:os');
   const {spawnSync} = require('node:child_process');
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'moonlight-build-'));
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'moonlight-build-')));
   try {
     const copy = path.join(root, 'hbl-moonlight');
     for (const part of ['apps/moonlight', 'tools/moonlight'])
