@@ -24,7 +24,13 @@ test('gate on receive at 120 Hz is refused, however the flags were added', () =>
   const r4a = [...ladder.base('h'), ...ladder.rungFlags('R4a')];
   assert.equal(ladder.refusal(r4a), null);
   assert.match(ladder.refusal([...r4a, '--present-hz', '120']), /--gate-on-receive/);
-  assert.equal(ladder.refusal([...ladder.base('h'), '--present-hz', '120']), null);
+});
+
+test('present-hz 120 is refused, and the estimate is labelled 60 Hz', () => {
+  assert.match(ladder.refusal([...ladder.base('h'), '--present-hz', '120']), /60 Hz model/);
+  assert.equal(ladder.refusal([...ladder.base('h'), '--present-hz', '60']), null);
+  assert.match(ladder.tsv([]), /estimate60HzMs/);
+  assert.match(ladder.table([]), /estimate60HzMs/);
 });
 
 test('R1 needs R0 first or an explicit ms', () => {
