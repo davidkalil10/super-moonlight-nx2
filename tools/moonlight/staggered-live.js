@@ -10,6 +10,12 @@
  * replay of the last applied publication, so the shader keeps it off screen and the next gate
  * does not wait for a present. At most MAX_SKIPS outputs in a row are skipped this way.
  *
+ * skipRule 'vsync' instead keeps at most one publication pending: the newest output is
+ * published once the previous publication is applied and the outputs in between go off
+ * screen. A gate waits for the pending publication only with at most skipBacklog units
+ * queued, or once it has been pending for two vsync periods (request-budget.cjs). With
+ * no free surface to discard into, the gate waits for the pending publication first.
+ *
  * Rereads: a gate late on receive, input, acquire or fetch reads the status again right away,
  * since a pause costs the frame its vsync slot (request-budget.cjs staggeredRetryWait). A gate
  * waiting for the renderer to apply a publication sleeps to the vsync present-pacer predicts
@@ -24,6 +30,7 @@ const RESTART = 'Staggered worker native objects retained; restart SmileBASIC';
 const SKIP_BACKLOG = 2;
 /** Most outputs skipped in a row before one is presented again. */
 const MAX_SKIPS = 4;
+const SKIP_RULES = ['backlog', 'vsync'];
 /** AcquireInputBufferIndex results that only mean no input slot is free yet. */
 const PENDING_INPUT = [0x100en, 0x1011n];
 const DEFAULT_TIMEOUT_MS = 5000;
@@ -209,6 +216,7 @@ function jsonSafe(value) {
  * @param {(ms: number) => Promise<unknown>} [options.pause]
  * @param {number} [options.presentHz]
  * @param {number} [options.skipBacklog] host backlog above which an output is skipped
+ * @param {'backlog' | 'vsync'} [options.skipRule]
  * @param {() => number} [options.now]
  */
 function create({
@@ -217,8 +225,12 @@ function create({
   pause = delay,
   presentHz = DEFAULT_PRESENT_HZ,
   skipBacklog = SKIP_BACKLOG,
+  skipRule = 'backlog',
   now = Date.now
 } = {}) {
+  if (!SKIP_RULES.includes(skipRule)) throw Error('Unknown staggered skip rule ' + skipRule);
+  const vsyncRule = skipRule === 'vsync';
+  const periodMs = 1000 / presentHz;
   let worker = null;
   let transport = null;
   let firstInput = null;
@@ -238,10 +250,11 @@ function create({
     rereads: 0
   };
   let published = null;
+  let pending = null;
   let skips = 0;
   const waiting = {};
   const waits = {timeoutMs, pause};
-  const pacer = presentPacer.create({periodMs: 1000 / presentHz, now, sleep: ms => pause(ms)});
+  const pacer = presentPacer.create({periodMs, now, sleep: ms => pause(ms)});
   /** When the last gate opened a fetch, for the pacer's vsync prediction. */
   let fetchOpened = null;
   /**
@@ -280,12 +293,34 @@ function create({
     }
   }
 
+  /** The pending publication as this gate's ack, optional while the host has a backlog. */
+  function pendingAck(expected, backlog) {
+    delete expected.ack;
+    if (!pending) return;
+    const optional = backlog > skipBacklog && now() - pending.openedAt <= 2 * periodMs;
+    expected.ack = {sequence: pending.sequence, index: pending.index, ...(optional && {optional})};
+  }
+
+  function confirm(snapshot, onPresented) {
+    if (!pending || !isApplied(snapshot.nativeApplied, pending.sequence)) return;
+    pending = null;
+    counts.presented++;
+    onPresented?.(1);
+  }
+
   /**
    * Picks the surface the next output is fetched into: a discard surface while the backlog
-   * calls for a skip and the skip run is short enough, else a published one.
+   * calls for a skip and the skip run is short enough, else a published one. Under the vsync
+   * rule it is a discard surface while a publication is pending.
    */
   async function target(sink, snapshot, backlog) {
     const presentation = {current: snapshot.current, applied: snapshot.nativeApplied};
+    if (vsyncRule) {
+      if (pending) return sink.discardDestination(presentation);
+      published = await sink.workerDestination(presentation);
+      pending = {sequence: published.sequence, index: published.index, openedAt: null};
+      return published;
+    }
     if (published && backlog > skipBacklog && skips < MAX_SKIPS) {
       const discard = await sink.discardDestination(presentation);
       if (discard) {
@@ -314,13 +349,21 @@ function create({
   ) {
     enter('staggered-status');
     const expected = expectedFor(sequence, units, destinations);
-    if (expected.ack) await pacer.beforeRead(fetchOpened);
-    const snapshot = await waitChecked(worker, expected, rereadsFor(expected));
+    if (vsyncRule) pendingAck(expected, backlog);
+    if (expected.ack && !expected.ack.optional)
+      await pacer.beforeRead(vsyncRule ? pending.openedAt : fetchOpened);
+    let snapshot = await waitChecked(worker, expected, rereadsFor(expected));
     if (expected.acquire) {
       counts.decoded++;
       onDecoded?.(1);
     }
-    shown(expected, onPresented, onSkipped);
+    if (vsyncRule) {
+      if (expected.fetch && destinations.get(sequence - 3).skip) {
+        counts.skipped++;
+        onSkipped?.(1);
+      }
+      confirm(snapshot, onPresented);
+    } else shown(expected, onPresented, onSkipped);
     enter('staggered-input');
     const inputSlot = await worker.inputSlot(
       sequence === 1 ? firstInput.index : snapshot.input.nextIndex
@@ -329,6 +372,13 @@ function create({
     if (sequence >= 3) {
       enter('destination');
       destination = await target(sink, snapshot, backlog);
+      if (!destination && vsyncRule) {
+        expected.ack = {sequence: pending.sequence, index: pending.index};
+        await pacer.beforeRead(pending.openedAt);
+        snapshot = await waitChecked(worker, expected, rereadsFor(expected));
+        confirm(snapshot, onPresented);
+        destination = await target(sink, snapshot, backlog);
+      }
       destinations.set(sequence - 2, destination);
     }
     enter('staggered-gate');
@@ -343,6 +393,7 @@ function create({
       frame: layout
     });
     if (destination) fetchOpened = now();
+    if (pending && destination === published) pending.openedAt = fetchOpened;
   }
 
   /**
@@ -428,6 +479,7 @@ function create({
         counts.decoded++;
         onDecoded?.(1);
         shown(expected, onPresented, onSkipped);
+        if (expected.ack) pending = null;
         enter('destination');
         const destination = await target(sink, snapshot, 0);
         enter('staggered-tail');
