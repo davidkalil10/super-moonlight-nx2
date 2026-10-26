@@ -1,4 +1,12 @@
-// Scores a native H.264 live run from its one-second stats rows.
+/**
+ * Scores a native H.264 live run from its one-second stats rows: `summarize` averages the
+ * steady rows after a warmup, `parseExpect` reads the `--expect` limits and `verdict` checks
+ * the summary against them.
+ */
+
+/** Steady-state rows start after this many seconds by default. */
+const DEFAULT_WARMUP = 3;
+/** Each `--expect` name and the test its limit must pass. */
 const LIMITS = {
   fps: (summary, value) => summary.fps >= value,
   minFps: (summary, value) => summary.minFps >= value,
@@ -8,8 +16,14 @@ const LIMITS = {
   requests: (summary, value) => summary.requestsPerFrame <= value
 };
 
+/**
+ * Parses `name=value,name=value` into limits.
+ * @param {string | undefined} text
+ * @returns {Record<string, number>}
+ */
 function parseExpect(text) {
   if (text === undefined) return {};
+  /** @type {Record<string, number>} */
   const expect = {};
   for (const part of text.split(',')) {
     const [name, value] = part.split('=');
@@ -20,11 +34,13 @@ function parseExpect(text) {
   return expect;
 }
 
-function summarize(rows, {warmup = 3} = {}) {
-  const steady = rows.slice(warmup);
-  const sum = key => steady.reduce((total, row) => total + (row[key] || 0), 0);
-  const presented = sum('presented');
-  const perFrame = value => (presented ? +(value / presented).toFixed(2) : null);
+/**
+ * Totals the bridge counts and wall time of each stage over the steady rows.
+ * @param {object[]} steady
+ * @returns {Record<string, {exchanges: number, bridgeMs: number, wallMs: number}>}
+ */
+function stageTotals(steady) {
+  /** @type {Record<string, {exchanges: number, bridgeMs: number, wallMs: number}>} */
   const stages = {};
   const stageOf = name => (stages[name] ||= {exchanges: 0, bridgeMs: 0, wallMs: 0});
   for (const row of steady) {
@@ -35,6 +51,20 @@ function summarize(rows, {warmup = 3} = {}) {
     }
     for (const [name, value] of Object.entries(row.ms || {})) stageOf(name).wallMs += value;
   }
+  return stages;
+}
+
+/**
+ * Summarizes the rows after the warmup, with per-frame figures rounded to two decimals.
+ * @param {object[]} rows
+ * @param {{warmup?: number}} [options]
+ */
+function summarize(rows, {warmup = DEFAULT_WARMUP} = {}) {
+  const steady = rows.slice(warmup);
+  const sum = key => steady.reduce((total, row) => total + (row[key] || 0), 0);
+  const presented = sum('presented');
+  const perFrame = value => (presented ? +(value / presented).toFixed(2) : null);
+  const stages = stageTotals(steady);
   return {
     seconds: steady.length,
     warmup: Math.min(warmup, rows.length),
@@ -60,6 +90,12 @@ function summarize(rows, {warmup = 3} = {}) {
   };
 }
 
+/**
+ * Checks a summary against the limits; a run with no steady rows always fails.
+ * @param {ReturnType<typeof summarize>} summary
+ * @param {Record<string, number>} expect
+ * @returns {{pass: boolean, failures: string[]}}
+ */
 function verdict(summary, expect) {
   const failures = Object.entries(expect)
     .filter(([name, value]) => !LIMITS[name](summary, value))
