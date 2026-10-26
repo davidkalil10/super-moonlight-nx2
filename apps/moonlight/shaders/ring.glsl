@@ -13,7 +13,7 @@ const uint MODE_HBV1 = 1u;
 const uint MODE_HBV2 = 2u;
 const uint MODE_NATIVE = 3u;
 const uint NATIVE_ABI = 1213093427u;
-#define HBV2_LOCAL_SIZE 1024
+#define HBV2_LOCAL_SIZE 512
 const uint CONTROL_APPLIED = 0u;
 const uint CONTROL_APPLY_COUNT = 1u;
 const uint CONTROL_MODE = 2u;
