@@ -14,7 +14,7 @@ import net from 'node:net';
 import crypto from 'node:crypto';
 import {allocate} from '../../../hbl-platform/sdk/native/allocate.js';
 import {verify} from '../../../hbl-platform/sdk/native/symbols.js';
-import {create as createFinite} from '../../../hbl-platform/sdk/native/finite.js';
+import {createFinite} from '../../../hbl-platform/sdk/native/jobs.js';
 import definitions from '../../../hbl-platform/sdk/native/socket-functions.json' with {type: 'json'};
 
 /** Largest access unit send() accepts. */

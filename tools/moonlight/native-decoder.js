@@ -23,7 +23,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import definitions from '../../sdk/native/movie-functions.json' with {type: 'json'};
 import {create as createModule} from '../../../hbl-platform/sdk/native/module.js';
-import {create as createFinite} from '../../../hbl-platform/sdk/native/finite.js';
+import {createFinite} from '../../../hbl-platform/sdk/native/jobs.js';
 import {builds} from '../../../hbl-platform/scripts/toolchain.js';
 import {create as createPersistentWorker} from './persistent-decoder-worker.js';
 import {create as createSplitWorker} from './split-decoder-worker.js';

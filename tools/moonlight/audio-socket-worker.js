@@ -16,8 +16,7 @@
  */
 import {allocate} from '../../../hbl-platform/sdk/native/allocate.js';
 import {sdkResolver, verify} from '../../../hbl-platform/sdk/native/symbols.js';
-import {create as createFinite} from '../../../hbl-platform/sdk/native/finite.js';
-import * as repeating from '../../../hbl-platform/sdk/native/repeating.js';
+import {createFinite, prepareRepeating} from '../../../hbl-platform/sdk/native/jobs.js';
 import {
   CODE,
   verifyCode,
@@ -290,7 +289,7 @@ async function create({
       const cycle = audioSocket.cycle(options);
       cycleRows = cycle.rows;
       cycleCallCount = cycle.calls.length;
-      program = await repeating.prepare(rpc, {
+      program = await prepareRepeating(rpc, {
         base: workerBase,
         code: CODE,
         calls: cycle.calls,

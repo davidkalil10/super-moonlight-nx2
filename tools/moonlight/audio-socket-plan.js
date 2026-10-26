@@ -9,7 +9,7 @@
  * receive never reaches AudioOut.
  */
 import {build, SENTINEL} from '../../../hbl-platform/smilebasic/engine/shared/frames.js';
-import * as repeating from '../../../hbl-platform/sdk/native/repeating.js';
+import {repeatingFrame} from '../../../hbl-platform/sdk/native/jobs.js';
 import {CODE} from '../../../hbl-platform/sdk/native/thread.js';
 import SYNC from '../../../hbl-platform/sdk/native/os-sync-functions.json' with {type: 'json'};
 
@@ -190,7 +190,7 @@ function primeAppend({sdk, base, receivedCounts, ...options}) {
  * The repeating recycle frame: per slot, wait for a release, take the released buffer,
  * receive the next chunk into it and append it.
  * @param {PlanAddresses & SocketAudioOptions} options
- * @returns {{program: ReturnType<typeof repeating.frame>, rows: CycleRow[], calls: object[],
+ * @returns {{program: ReturnType<typeof repeatingFrame>, rows: CycleRow[], calls: object[],
  *   verified: Set<number>}} rows hold each slot's call indices into calls.
  */
 function cycle({sdk, base, ...options}) {
@@ -210,7 +210,7 @@ function cycle({sdk, base, ...options}) {
     });
   }
   const verified = new Set([recv, append, getReleased]);
-  const program = repeating.frame({base, sdk, calls, code: CODE, verified});
+  const program = repeatingFrame({base, sdk, calls, code: CODE, verified});
   return {program, rows, calls, verified};
 }
 
