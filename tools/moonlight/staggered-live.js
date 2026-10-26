@@ -1,6 +1,6 @@
 /**
- * Host scheduler for the staggered lag-2 live path. The input worker receives each access
- * unit over native TCP and the output worker fetches the unit two behind it, so a steady
+ * Host scheduler for the staggered live path. The input worker receives each access unit over
+ * native TCP and the output worker fetches the unit two behind it (one with lag 1), so a steady
  * frame costs one checked status read and one combined gate write. Every gate goes through
  * the worker's checked writes (staggered-gate / staggered-status); call order, the odd tail
  * drain and stop are the ones the removed probe-staggered-ladder.cjs proved on the console.

@@ -108,9 +108,9 @@ hbv2 prints one stats line per second with `kib`, `qp`, `encodeMs` and `applied`
 | `--skip-backlog N\|off` | `2`, `1` with vsync | staggered: units queued before outputs go off screen |
 | `--skip-rule backlog\|vsync` | `backlog` | staggered: skip by backlog, or keep one publication pending per vsync |
 | `--decode-wait` | off | sleep to the predicted acquire (needs `--skip-rule vsync`) |
-| `--trim-backlog-ms N` | off | staggered, backlog rule: skip one output once the unit in hand is N ms old at 3 gates in a row; counted as `trimmed` |
-| `--gate-on-receive` | off | staggered: open decode N when unit N arrives instead of on N+1 |
-| `--output-lag 1` | `2` | staggered: fetch each output one gate after its decode |
+| `--trim-backlog-ms N` | off | staggered, backlog rule: skip one output once the unit in hand is N ms old with a unit queued, at 3 gates in a row, at most once per 6 gates; counted as `trimmed`. Pick N above the default run's `au.gateAgeMs` plus a margin |
+| `--gate-on-receive` | off | staggered, 60 Hz only: open decode N when unit N arrives instead of on N+1 |
+| `--output-lag 1\|2` | `2` | staggered: fetch each output 1 or 2 gates after its decode |
 | `--receive-wait` | off | sleep to the predicted receive |
 | `--avoid-window B-A` | off | keep status reads out of B ms before to A ms after a predicted event (needs a wait flag) |
 | `--queue N` | `3`, `8` staggered | host access-unit queue, 1 to 16 |
@@ -118,7 +118,7 @@ hbv2 prints one stats line per second with `kib`, `qp`, `encodeMs` and `applied`
 | `--audio-frames N` | `960` on protocol 3, else `1920` | AudioOut buffer, multiple of 240 (up to 3840 with socket audio) |
 | `--socket-audio` / `--socket-audio-tone` | off | PCM, or a 500 Hz tone, over native TCP to a console audio worker |
 | `--duration S` / `--warmup S` | none / `3` | run length; rows skipped before scoring |
-| `--expect fps=30,dropped=0,idr=0` | dropped and IDR fail | limits for the PASS/FAIL verdict |
+| `--expect fps=30,dropped=0,idr=0,trimmed=0` | dropped and IDR fail | limits for the PASS/FAIL verdict |
 | `--ab` | | run without, then with `--split-decoder` (needs `--duration`) |
 
 The native route needs `--moonlight` and a launcher session from the current revision (the
