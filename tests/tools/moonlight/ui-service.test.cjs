@@ -329,6 +329,11 @@ test('launch streams with the chosen settings; the chord is free; return relists
   assert.equal(service.model().message, null);
   assert.equal(service.model().currentGame, 1217, 'the host game keeps running');
   assert.ok(fixture.events.some(event => event.event === 'stream-stats'));
+  assert.ok(
+    fixture.events.some(
+      event => event.event === 'stream-event' && event.message === 'RTSP handshake'
+    )
+  );
 });
 
 test('quit stops the stream first, cancels on the host and confirms on the list', async () => {
@@ -361,6 +366,12 @@ test('quit stops the stream first, cancels on the host and confirms on the list'
   children.last('list').finish({out: list(0)});
   await until(() => service.model().screen === 'apps', 'apps');
   assert.equal(service.model().message, 'Quit confirmed');
+  assert.deepEqual(
+    fixture.events
+      .filter(event => event.event === 'quit')
+      .map(event => [event.cancelled, event.code]),
+    [[true, 0]]
+  );
   console.press('y');
   await service.poll();
   console.press('a', ITEM.confirmQuit);
