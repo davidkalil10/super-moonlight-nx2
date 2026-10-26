@@ -24,6 +24,17 @@ Code outside this repo is required by relative path from sibling checkouts:
 
 The paths become package imports with the ESM switch in Phase 2.
 
+## Pacing results (2026-10-26, session DjIU1L, 60 Hz panel, m5 quiet)
+
+| Run | Presented fps | Requests/frame | Bridge ms/frame |
+| --- | ---: | ---: | ---: |
+| Control, 1080p60 | 59.4 | 2.1 | 4.2 |
+| `--present-hz 120 --receive-wait` | 28.9 | 9.3 | 23.6 |
+| Applied pacing: vsync rule, skip-backlog 1, decode and receive wait | 30.3 | 3.5 | 24.4 |
+
+Requests per frame fell by about two thirds, but bridge ms/frame stayed flat; large unit exchanges dominate, giving a roughly 40 fps ceiling at 120 present.
+The pacer stayed at 8.33 ms and did not learn the panel's 16.67 ms apply grid in 40 s; that remains open.
+
 ## Rules
 
 - The frozen reference is the 1080p60 worker at HBLauncher 4bdeb1a and its records
