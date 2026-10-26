@@ -12,7 +12,7 @@ the console's native movie API into NV12 surfaces. Audio, controller and touch
 remain enabled. Setup, DUT results and performance limits are documented in
 moonlight-dev [CLAUDE.md](../../../moonlight-dev/CLAUDE.md) (Native H.264).
 
-The app is an HB package (`manifest.json`, see hbl-platform `docs/hb-package.md`):
+The app is an HB package (`manifest.json`, see the package spec in hbl-platform's README):
 `assets/` holds the icon and text atlas and `backends/hblauncher.gpu-app/` the shaders
 with their includes, the SPIR-V and the state and memory images. The compute and fragment
 shaders read the frame ring, so the package has no portable entry and no `src/` yet.
