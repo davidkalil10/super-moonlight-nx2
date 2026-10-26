@@ -481,6 +481,24 @@ test('a helper timeout logs the step the helper names', async () => {
   );
 });
 
+test('a console that stops answering mid-stream ends on the error page', async () => {
+  const fixture = await setup();
+  const {console, children, service} = fixture;
+  await service.attach();
+  await openHost(fixture);
+  console.press('a', ITEM.app);
+  await service.poll();
+  const stream = children.last('stream');
+  stream.line('stderr', '{"event":"connected"}');
+  await until(() => service.model().screen === 'streaming', 'streaming');
+  stream.line('stderr', '{"event":"console-stalled","silentMs":5000}');
+  await until(() => service.model().screen === 'error', 'error page');
+  assert.match(service.model().message, /console stopped answering/);
+  stream.finish({code: 1});
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(service.model().screen, 'error', 'the stream exit keeps the reason on screen');
+});
+
 test('a stream that dies before connecting is an error; the service leaves with the app', async () => {
   let active = 'moonlight';
   const fixture = await setup({activeApp: () => active});
