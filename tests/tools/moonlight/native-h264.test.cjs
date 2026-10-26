@@ -63,6 +63,7 @@ test('backlog IDR requests recover within 100 ms and coalesce dropped frames', (
 });
 
 async function fixture({
+  hangSubmit = 0,
   audioFailure = false,
   emptyPolls = 0,
   units = [{hex: accessUnit.toString('hex'), keyframe: true, pts: 123456}]
@@ -81,7 +82,14 @@ async function fixture({
   const options = {
     args: ['--moonlight', 'host', 'Desktop'],
     directory,
-    rpc: {a: {session: 'test-session', protocol: 3}, host: '192.0.2.10'},
+    rpc: {
+      a: {session: 'test-session', protocol: 3},
+      host: '192.0.2.10',
+      request: () =>
+        new Promise((resolve, reject) =>
+          setTimeout(() => reject(Error('Console response timed out')), hangSubmit)
+        )
+    },
     storage: {},
     helperPath: 'test-helper',
     sourceRevision: '049e2efe32799194a16c2f2f871025c1961aaade',
@@ -138,6 +146,7 @@ async function fixture({
           events.push({type: 'configure', sps, pps, fps});
         },
         async submit(unit) {
+          if (hangSubmit) await config.rpc.request();
           events.push({type: 'submit', unit});
           pipeline++;
         },
@@ -535,6 +544,29 @@ test('the persistent decoder gets its own TCP transport', {timeout: 5000}, async
     assert.equal(f.events.filter(event => event.type === 'finish-persistent').length, 1);
   });
 });
+
+test(
+  'a console that stops answering is reported and stops the stream',
+  {timeout: 5000},
+  async () => {
+    const f = await fixture({hangSubmit: 2500});
+    await exercise(f, async () => {
+      const summary = await run({...f.options, consoleStallMs: 300});
+      assert.equal(summary.stopReason, 'console-stalled');
+      assert.equal(summary.pass, false);
+      assert.ok(summary.failures.includes('console stopped answering'));
+      const events = (await fs.readFile(path.join(f.directory, 'logs', 'events.jsonl'), 'utf8'))
+        .trim()
+        .split('\n')
+        .map(JSON.parse);
+      const stalled = events.find(event => event.event === 'console-stalled');
+      assert.ok(stalled && stalled.silentMs >= 300, 'the stall is reported before the timeout');
+      assert.ok(
+        events.some(event => event.event === 'native-stop' && event.reason === 'console-stalled')
+      );
+    });
+  }
+);
 
 test('a scored run writes summary.json and rejects a bare --expect', {timeout: 5000}, async () => {
   const f = await fixture();
