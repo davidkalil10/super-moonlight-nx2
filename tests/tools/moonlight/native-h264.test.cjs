@@ -568,6 +568,60 @@ test(
   }
 );
 
+test(
+  'stopping signals the helper before its video pipe closes and keeps draining it',
+  {timeout: 5000},
+  async () => {
+    const f = await fixture();
+    const seen = {};
+    const spawnProcess = f.options.spawnProcess;
+    f.options.spawnProcess = (command, args, options) => {
+      const child = spawnProcess(command, args, options);
+      if (command !== 'test-helper') return child;
+      child.stdin.removeAllListeners('data');
+      child.stdin.resume();
+      child.stdio[3].end(pcm);
+      const unit = (seq, keyframe) => {
+        child.stdio[4].write(accessUnit, error => {
+          if (error) seen.writeError = error.code;
+        });
+        child.stderr.write(
+          JSON.stringify({
+            type: 'au',
+            seq,
+            frame: seq + 1,
+            bytes: accessUnit.length,
+            pts: seq,
+            keyframe
+          }) + '\n'
+        );
+      };
+      setImmediate(() => unit(0, true));
+      child.kill = signal => {
+        if (child.exitCode !== null) return true;
+        seen.signal = signal;
+        seen.destroyedAtSignal = child.stdio[4].destroyed;
+        unit(1, false);
+        child.stdio[4].end();
+        child.stderr.end();
+        child.exitCode = 0;
+        setImmediate(() => child.emit('exit', 0, null));
+        return true;
+      };
+      return child;
+    };
+    f.options.args.push('--duration', '0.3');
+    await exercise(f, async () => {
+      const summary = await run(f.options);
+      assert.equal(summary.stopReason, 'duration');
+      assert.equal(seen.signal, 'SIGINT');
+      assert.equal(seen.destroyedAtSignal, false, 'the helper is signalled before the pipe closes');
+      await new Promise(resolve => setImmediate(resolve));
+      assert.equal(seen.writeError, undefined, 'late helper output is drained, not cut off');
+    });
+  }
+);
+
 test('a scored run writes summary.json and rejects a bare --expect', {timeout: 5000}, async () => {
   const f = await fixture();
   await exercise(f, async () => {
