@@ -383,7 +383,9 @@ async function uiCheck(dir) {
   assert.equal(word(raised, 'cmdOp'), UI_OP.chord, 'L+R held one second');
   assert.equal(word(raised, 'uiOverlay'), 1);
   assert.deepEqual(pixel(raised, 124, 214), [255, 255, 255], 'overlay text over the video');
-  console.log('Console UI: page apply, cursor, commands, torn page, overlay passed');
+  console.log(
+    `Console UI: page apply, cursor, commands, torn page, overlay passed; draw ${shown.report.frames[0].drawMs} ms (test card ${rejected.report.frames[0].drawMs} ms)`
+  );
 }
 
 async function main() {
