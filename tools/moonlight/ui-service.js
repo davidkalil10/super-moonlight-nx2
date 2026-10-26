@@ -16,7 +16,7 @@ import path from 'node:path';
 import readline from 'node:readline';
 import {spawn, execFileSync} from 'node:child_process';
 import {UI, UI_MAGIC, UI_OP, MEMORY_BYTES} from './ring.js';
-import {COMMAND_READ, serialize, pageAddress, hostWords, readCommand} from './ui-page.js';
+import {MAGIC, COMMAND_READ, serialize, pageAddress, hostWords, readCommand} from './ui-page.js';
 import {makeModel, reduce} from './ui-model.js';
 import {createPages} from './ui-pages.js';
 import {createRaster} from './ui-raster.js';
@@ -105,7 +105,8 @@ function createChildren({
  * @param {object} options.settings
  * @param {string | null} [options.coversDir] Where the helper caches box art; null for letter tiles only.
  * @param {(event: object) => void} [options.log]
- * @param {number} [options.epoch]
+ * @param {number} [options.epoch] Start time in seconds, at least one above the epoch of the page
+ *   the console still shows, so a restart inside one second still resets cursor and overlay.
  * @param {() => string | null} [options.activeApp] The app the console runs, null when unknown.
  * @param {{apply?: number, helper?: number, stop?: number}} [options.timeouts]
  */
@@ -244,8 +245,13 @@ function createService({
     if (result.code === 0) {
       const listed = parseList(result.out);
       let message = null;
-      if (quitResult && listed.currentGame === 0) message = 'Quit confirmed';
-      else if (quitResult === 'cancelled') message = 'Quit failed: the host game is still running';
+      if (quitResult === 'cancelled')
+        message =
+          listed.currentGame === 0
+            ? 'Quit confirmed'
+            : 'Quit failed: the host game is still running';
+      else if (quitResult && listed.currentGame === 0)
+        message = 'Host closed the game on its own; the quit request failed';
       else if (quitResult) message = quitResult;
       quitResult = null;
       await dispatch({type: 'listed', ...listed, message});
@@ -413,6 +419,10 @@ function createService({
   async function attach() {
     const block = await transfer(() => memory.read(mapped + UI.uiMagic, 72));
     const stale = block.readUInt32LE(UI.uiApplied - UI.uiMagic);
+    const shown = block.readUInt32LE(UI.uiShown - UI.uiMagic) & 1;
+    const header = await transfer(() => memory.read(pageAddress(mapped, shown), 8));
+    if (header.readUInt32LE(0) === MAGIC)
+      epoch = Math.max(epoch, (header.readUInt32LE(4) + 1) >>> 0) || 1;
     seen = block.readUInt32LE(UI.cmdSequence - UI.uiMagic);
     applied = stale;
     await transfer(() =>
