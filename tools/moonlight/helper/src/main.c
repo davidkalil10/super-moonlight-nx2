@@ -71,9 +71,9 @@ static int pair(char *host, int timeout) {
          host, timeout);
   fflush(stdout);
 
-  alarm(timeout);
+  session_deadline(timeout, "pair");
   int result = gs_pair(&server, pin);
-  alarm(0);
+  session_deadline(0, NULL);
   if (result != GS_OK)
     return session_fail("pairing failed", gs_error);
   printf("{\"event\":\"paired\",\"already\":false}\n");
@@ -236,9 +236,9 @@ static int quit(char *host) {
     printf("{\"event\":\"quit\",\"cancelled\":false,\"already\":true,\"currentGame\":0}\n");
     return 0;
   }
-  alarm(QUIT_TIMEOUT);
+  session_deadline(QUIT_TIMEOUT, "cancel");
   int result = gs_quit_app(&server);
-  alarm(0);
+  session_deadline(0, NULL);
   if (result != GS_OK)
     return session_fail("quit failed", gs_error);
   SERVER_DATA after;

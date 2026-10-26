@@ -43,6 +43,7 @@ bool input_handle_line(const char *line);
 
 struct _SERVER_DATA;
 void session_on_alarm(int signal);
+void session_deadline(unsigned seconds, const char *stage);
 int session_fail(const char *message, const char *detail);
 int session_connect(struct _SERVER_DATA *server, char *host);
 bool session_key_directory(char *path, size_t size);

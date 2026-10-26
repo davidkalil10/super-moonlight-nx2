@@ -25,10 +25,21 @@ void http_cleanup(void);
 static atomic_bool started;
 static atomic_bool terminated;
 
+static char alarm_message[96] = "{\"event\":\"error\",\"message\":\"timed out\"}\n";
+
 void session_on_alarm(int signal) {
-  static const char message[] = "{\"event\":\"error\",\"message\":\"timed out\"}\n";
-  write(STDERR_FILENO, message, sizeof(message) - 1);
+  write(STDERR_FILENO, alarm_message, strlen(alarm_message));
   _exit(3);
+}
+
+/* Arms the deadline for one step; its timeout line names the step. Zero seconds disarms. */
+void session_deadline(unsigned seconds, const char *stage) {
+  alarm(0);
+  if (seconds == 0)
+    return;
+  snprintf(alarm_message, sizeof(alarm_message),
+           "{\"event\":\"error\",\"message\":\"timed out\",\"stage\":\"%s\"}\n", stage);
+  alarm(seconds);
 }
 
 int session_fail(const char *message, const char *detail) {
@@ -66,6 +77,7 @@ bool session_key_directory(char *path, size_t size) {
  * connection open, and Sunshine answers no other HTTPS request until it closes. */
 int session_connect(SERVER_DATA *server, char *host) {
   static bool initialised;
+  const char *stage = initialised ? "reconnect" : "connect";
   if (initialised)
     http_cleanup();
   initialised = true;
@@ -75,9 +87,9 @@ int session_connect(SERVER_DATA *server, char *host) {
   fflush(stdout);
   int saved_stdout = dup(STDOUT_FILENO);
   dup2(STDERR_FILENO, STDOUT_FILENO);
-  alarm(CONNECT_TIMEOUT);
+  session_deadline(CONNECT_TIMEOUT, stage);
   int result = gs_init(server, host, HTTP_PORT, keys, 0, true);
-  alarm(0);
+  session_deadline(0, NULL);
   fflush(stdout);
   dup2(saved_stdout, STDOUT_FILENO);
   close(saved_stdout);
