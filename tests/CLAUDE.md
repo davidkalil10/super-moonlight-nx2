@@ -18,10 +18,12 @@ Everything runs against the runtime code by relative path:
 ## Test
 
 ```
-npm test                                     # 362 tests
+npm test                                     # 428 tests
 npm run typecheck                            # tsc --checkJs (npm install once)
 node apps/moonlight/check.cjs                # desktop Vulkan check, needs a GPU
 ```
+
+`sdk/desktop-vulkan/` is HB package backend two (offscreen Vulkan); see its README.md.
 
 `tsconfig.json` lists the hbl-moonlight modules that went through the readability rewrite; add each
 component as it lands. TypeScript is a dev dependency only, hbl-moonlight itself has no build step.
