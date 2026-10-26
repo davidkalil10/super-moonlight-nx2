@@ -153,6 +153,26 @@ test('a stream that ends by itself returns to a fresh app list', () => {
   assert.deepEqual(ended.intents, [{type: 'list', host: HOSTS[0]}]);
 });
 
+test('id groups leave room for long lists; leaving a host forgets its app place', () => {
+  assert.ok(ITEM.host + 9999 < ITEM.app && ITEM.app + 9999 < ITEM.setting);
+  const many = Array.from({length: 150}, (_, i) => ({id: 5000 + i, name: 'App ' + i}));
+  const apps = walk(makeModel(HOSTS), [
+    {type: 'attached'},
+    command('a', ITEM.host),
+    {type: 'listed', apps: many, currentGame: 0}
+  ]).model;
+  const launched = reduce(apps, command('a', ITEM.app + 120)).model;
+  assert.equal(launched.app.id, 5120);
+  assert.equal(launched.appIndex, 120);
+  const left = reduce(
+    walk(launched, [{type: 'streamEnded'}, {type: 'listed', apps: many, currentGame: 5120}]).model,
+    command('b')
+  ).model;
+  assert.equal(left.screen, 'hosts');
+  assert.equal(left.appIndex, 0);
+  assert.equal(left.appPage, 0);
+});
+
 test('quit host app asks first, then quits and lists again', () => {
   const apps = walk(makeModel(HOSTS), [
     {type: 'attached'},

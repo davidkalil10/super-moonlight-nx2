@@ -127,6 +127,14 @@ test('the apps grid pages covers and letter tiles with the current app marked', 
   assert.equal(items[3].id, ITEM.app + 3);
   assert.equal(items[3].flags, ITEM_FLAG.current);
   assert.equal(items[0].flags, 0);
+  const tag = first.parsed.texts.filter(t => t.x === items[3].x + 8 && t.y === items[3].y + 8);
+  assert.equal(tag.length, 1, 'the running tag sits on the cover corner');
+  assert.ok(
+    first.parsed.texts.some(
+      t => t.x === items[3].x && t.y === items[3].y + COVER.height + 16 && t.w === COVER.width
+    ),
+    'the running app keeps its name'
+  );
   const previous = items.find(item => item.id === ITEM.previous),
     next = items.find(item => item.id === ITEM.next);
   assert.equal(previous.flags, ITEM_FLAG.greyed, 'no page before the first');
@@ -154,10 +162,30 @@ test('the apps grid pages covers and letter tiles with the current app marked', 
   const status = await roundTrip(await pages.page(marked, covers));
   assert.equal(
     status.summary.texts,
-    first.summary.texts - 1,
-    'the status joins the subtitle strip; the quit app loses its running tag'
+    first.summary.texts - 2,
+    'the status joins the subtitle strip; the quit app loses its tag and its card'
   );
-  assert.equal(raster.calls.text, painted + 2, 'the subtitle and the untagged name are painted');
+  assert.equal(raster.calls.text, painted + 1, 'only the subtitle is painted; the name is cached');
+});
+
+test('back from a stream, the cursor starts on the app that streamed', async () => {
+  const pages = createPages(fakeRaster());
+  const apps = reduce(
+    reduce(reduce(makeModel(HOSTS), {type: 'attached'}).model, command('a', ITEM.host)).model,
+    {type: 'listed', apps: APPS, currentGame: 0}
+  ).model;
+  const second = reduce(apps, command('a', ITEM.next)).model;
+  const ended = [
+    command('a', ITEM.app + 12),
+    {type: 'streamStarted'},
+    {type: 'streamEnded'},
+    {type: 'listed', apps: APPS, currentGame: 1012}
+  ].reduce((model, event) => reduce(model, event).model, second);
+  assert.equal(ended.appPage, 1);
+  const {parsed} = await roundTrip(await pages.page(ended));
+  assert.equal(parsed.items[parsed.cursorHome].id, ITEM.app + 12);
+  const fresh = await roundTrip(await pages.page(apps));
+  assert.equal(fresh.parsed.cursorHome, 0, 'a host opened afresh starts on its first app');
 });
 
 test('settings rows are adjustable unless locked or unbacked', async () => {
