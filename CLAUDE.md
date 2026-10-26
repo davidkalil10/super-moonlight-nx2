@@ -11,7 +11,8 @@ Phase 1 keeps the original HBLauncher paths, so history and file names line up:
 - `apps/moonlight/`: the console app as an HB package (`manifest.json`, `assets/`,
   `backends/hblauncher.gpu-app/`, `build.js`).
 - `tools/moonlight/`: the PC host (`live.js`, `native-h264.js`, staggered workers,
-  ring/HBV formats) and `helper/` (`hbmoonlight`, C, GPLv3 upstreams).
+  ring/HBV formats, `ui-page.js` for the console UI pages) and `helper/` (`hbmoonlight`, C,
+  GPLv3 upstreams).
 - `sdk/native/*-functions.json`: the native symbols only Moonlight uses.
 
 ## Sibling checkouts

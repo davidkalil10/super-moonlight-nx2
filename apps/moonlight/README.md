@@ -25,6 +25,11 @@ node apps/moonlight/build.js           # needs glslangValidator and spirv-val
 node ../moonlight-dev/apps/moonlight/check.cjs [CLIP]  # desktop Vulkan decode check, bit-exact against hbv2.js
 ```
 
+Private memory (`manifest.json` `memory.bytes`, layout in `tools/moonlight/ring.js`) holds the
+control page, the HBV ring, three native frames and, since 1.1.0, two 4 MiB console UI page
+buffers the host UI service publishes into (`tools/moonlight/ui-page.js`; design in the team
+note `research/moonlight-ui-design.md`).
+
 `build.js` regenerates `hbv.glsl`, `hbv2-tables.glsl`, `ring.glsl`, `state.bin` and
 `memory.bin` under `backends/hblauncher.gpu-app/`, and `assets.py` the icon, the text atlas
 and `text.glsl`; do not edit those by hand.
