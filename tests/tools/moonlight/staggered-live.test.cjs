@@ -28,6 +28,8 @@ const {
 
 const layout = {width: 1920, height: 1080, stride: 1920, sliceHeight: 1088};
 const noPause = async () => {};
+/** sha256 of every write, gate payload, request and send of defaultStreamDigest() on a2f22ab. */
+const DEFAULT_STREAM_DIGEST = 'a1a04bafef4771fcdd4cedcea9e2466fe0b49598972df79293e9c9540419af34';
 const unitAt = sequence => ({data: Buffer.alloc(100 + sequence), pts: sequence * 1000});
 
 // A console stand-in for the real staggered worker: TCP sends land in the receive status,
@@ -903,4 +905,32 @@ test('the backlog trim needs the backlog skip rule', () => {
     () => create({skipRule: 'vsync', skipBacklog: 1, trimBacklogMs: 20}),
     /backlog trim needs the backlog rule/
   );
+});
+
+async function defaultStreamDigest() {
+  const device = simulatedDevice();
+  const hash = require('node:crypto').createHash('sha256');
+  const {write, writeAndCall} = device.rpc;
+  device.rpc.write = async (address, bytes) => {
+    hash.update(`write ${address} `).update(bytes);
+    return write(address, bytes);
+  };
+  device.rpc.writeAndCall = async (address, bytes, ...rest) => {
+    hash.update(`gate ${address} `).update(bytes);
+    return writeAndCall(address, bytes, ...rest);
+  };
+  const live = await liveOn(device);
+  for (let sequence = 1; sequence <= 16; sequence++) {
+    const unit = {...unitAt(sequence), arrivedAt: Date.now() - 1000};
+    device.pts.set(sequence, BigInt(unit.pts));
+    await live.push(unit, {sink: device.sink, backlog: [6, 7, 8].includes(sequence) ? 5 : 0});
+  }
+  await live.finish({sink: device.sink});
+  await live.stop();
+  hash.update(device.requests.join(',')).update(device.transport.sent.join(','));
+  return hash.digest('hex');
+}
+
+test('with every flag off a stream writes the same bytes as before the latency cuts', async () => {
+  assert.equal(await defaultStreamDigest(), DEFAULT_STREAM_DIGEST);
 });
