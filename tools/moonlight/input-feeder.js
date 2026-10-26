@@ -13,12 +13,14 @@
  *
  * Usage: node tools/moonlight/input-feeder.js [runs/launcher-XXXX] [--hz 60] [--labels]
  */
+import fs from 'node:fs';
+import path from 'node:path';
 import * as session from '../../../hbl-platform/sdk/host/session.js';
 import * as cli from '../../../hbl-platform/sdk/cli.js';
 import {STATE} from '../../../hbl-platform/sdk/host/state-layout.js';
 import {NEUTRAL, decode, toMoonlight, same, NPAD_BYTES} from './controller.js';
 import {TOUCH_BYTES, parseTouch, createTracker, step, flush, touchLine} from './touch.js';
-import {UI} from './ring.js';
+import {UI, UI_MAGIC} from './ring.js';
 
 /** One read from the start of the state buffer to the end of the touch block. */
 const READ_BYTES = STATE.touch + TOUCH_BYTES;
@@ -54,17 +56,42 @@ function frame(previous, bytes, tracker, layout) {
   return {lines, controller};
 }
 
+/** The UI block words the gate reads in one go: uiMagic through uiOverlay. */
+const OVERLAY_READ = {offset: UI.uiMagic, bytes: UI.uiOverlay + 4 - UI.uiMagic};
+
 /**
  * Whether this frame's input reaches the host: the console UI raises uiOverlay while its
- * overlay page covers the stream, and the game must not see the presses that drive it. The
- * frame the overlay goes up releases what is held.
+ * overlay page covers the stream, and the game must not see the presses that drive it. Only
+ * an attached service counts (uiMagic set); the frame the overlay goes up releases what is
+ * held.
  * @param {boolean} paused
- * @param {number} overlay the uiOverlay word
+ * @param {Buffer} block OVERLAY_READ bytes of the app's private storage
  * @returns {{paused: boolean, release: boolean}}
  */
-function gate(paused, overlay) {
-  const raised = overlay !== 0;
+function gate(paused, block) {
+  const raised =
+    block.readUInt32LE(0) === UI_MAGIC && block.readUInt32LE(UI.uiOverlay - UI.uiMagic) !== 0;
   return {paused: raised, release: raised && !paused};
+}
+
+/**
+ * The private storage of the newest Moonlight app report, where the UI block lives (the
+ * source file maps the launcher's controls buffer, not the app's storage).
+ * @param {string} directory
+ * @returns {{mapped: number, bytes: number} | null}
+ */
+function readStorage(directory) {
+  try {
+    const reports = fs
+      .readdirSync(directory)
+      .filter(name => /^app-moonlight-.*\.json$/.test(name))
+      .map(name => JSON.parse(fs.readFileSync(path.join(directory, name), 'utf8')))
+      .filter(report => report.privateStorage)
+      .sort((a, b) => b.started.localeCompare(a.started));
+    return reports[0]?.privateStorage ?? null;
+  } catch {
+    return null;
+  }
 }
 
 async function main() {
@@ -78,6 +105,7 @@ async function main() {
   let stopping = false;
   let previous = null;
   let source = null;
+  let storage = null;
   let sourceChecked = -Infinity;
   let overlayChecked = -Infinity;
   let paused = false;
@@ -97,14 +125,15 @@ async function main() {
     const started = performance.now();
     if (started - sourceChecked > SOURCE_CHECK_MS) {
       source = session.readSource(directory);
+      storage = readStorage(directory);
       sourceChecked = started;
     }
     if (source?.package?.id === 'moonlight') {
       try {
-        if (started - overlayChecked > OVERLAY_CHECK_MS) {
+        if (storage && started - overlayChecked > OVERLAY_CHECK_MS) {
           overlayChecked = started;
-          const overlay = (await rpc.read(source.mapped + UI.uiOverlay, 4)).readUInt32LE(0);
-          const next = gate(paused, overlay);
+          const block = await rpc.read(storage.mapped + OVERLAY_READ.offset, OVERLAY_READ.bytes);
+          const next = gate(paused, block);
           paused = next.paused;
           if (next.release) release();
         }
@@ -126,7 +155,7 @@ async function main() {
   release();
 }
 
-export {frame, gate, READ_BYTES};
+export {frame, gate, readStorage, OVERLAY_READ, READ_BYTES};
 
 if (cli.isMain(import.meta))
   main().catch(error => {
