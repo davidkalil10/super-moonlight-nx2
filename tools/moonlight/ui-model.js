@@ -171,7 +171,15 @@ function reduce(model, event) {
       const page = Math.min(model.appPage, Math.max(0, Math.ceil(apps.length / APPS_PER_PAGE) - 1));
       return next(
         model,
-        {screen: 'apps', apps, currentGame: event.currentGame, appPage: page, pin: null, url: null},
+        {
+          screen: 'apps',
+          apps,
+          currentGame: event.currentGame,
+          appPage: page,
+          pin: null,
+          url: null,
+          message: event.message ?? null
+        },
         [{type: 'covers', host: model.host, apps}]
       );
     }
