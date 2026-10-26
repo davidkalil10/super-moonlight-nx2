@@ -21,7 +21,7 @@ Build and check from the project root:
 
 ```sh
 tools/moonlight/build-hbv2enc.sh       # native encoder, used by check.cjs CLIP and live.js
-node apps/moonlight/build.js           # needs glslangValidator and spirv-val
+node apps/moonlight/build.js           # needs glslc 2026.1 (Fedora 44) and spirv-val
 node ../hbl-platform/sdk/build.js --check apps/moonlight  # checks the package, writes nothing
 node ../moonlight-dev/apps/moonlight/check.cjs [CLIP]  # desktop Vulkan decode check, bit-exact against hbv2.js
 ```
@@ -46,15 +46,14 @@ together still exit to HBLauncher from any screen.
 [moonlight-qt](https://github.com/moonlight-stream/moonlight-qt) at commit ac29686,
 GPL-3.0 like the helper's upstreams, exported as RGBA PNG with Pillow and otherwise unchanged.
 
-Without glslangValidator, build through `tools/moonlight/glslang-shim.sh`,
-which maps the `-V ... SRC -o OUT` call onto `glslc -Os --target-env=vulkan1.0`:
-
-```sh
-GLSLANG=tools/moonlight/glslang-shim.sh node apps/moonlight/build.js
-```
-
-The committed SPIR-V under `backends/hblauncher.gpu-app/` is that build; rebuilding
-through the shim reproduces all three files byte for byte.
+`build.js` always compiles through `tools/moonlight/glslang-shim.sh`, which maps the
+platform's `glslangValidator -V ... SRC -o OUT` call onto `glslc -Os --target-env=vulkan1.0`.
+The committed SPIR-V under `backends/hblauncher.gpu-app/` is the build of glslc
+`shaderc v2026.1`, `spirv-tools v2026.1`, `glslang 301b4ede` (Fedora 44 `glslc-2026.1-1`);
+it reproduces all three files byte for byte, which the package test pins. glslangValidator
+16.2.0 builds different bytes, so `build.js` refuses before writing anything when `glslc`
+(or `GLSLC`) prints another version. Moving to a new glslc means changing `GLSLC_VERSION` in
+`build.js` and the pinned hashes in `moonlight-dev` together.
 
 Stream to a running app (the newest `runs/launcher-*` session):
 

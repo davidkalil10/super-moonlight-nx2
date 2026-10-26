@@ -36,7 +36,11 @@ argument and uses the newest one when it is omitted.
 tools/moonlight/helper/build.sh [BUILD]   # hbmoonlight into BUILD/build/ (default ~/claude-builds/HBLauncher/moonlight-helper)
 tools/moonlight/build-hbv2enc.sh          # native HBV2 encoder, $HBV2_BUILD or ~/claude-builds/HBLauncher/hbv2enc
 node apps/moonlight/build.js              # package shaders and memory image
+node ../hbl-platform/sdk/build.js --check apps/moonlight  # check the package, write nothing
 ```
+
+`build.js` rewrites the package in place, so it refuses any argument, and it refuses a glslc
+other than the 2026.1 build behind the committed SPIR-V; both refusals write nothing.
 
 `build.sh` compiles natively when the -devel packages are present, otherwise inside a rootless
 podman `quay.io/fedora/fedora:44` image (`helper/Containerfile`); rig and m5 run the same

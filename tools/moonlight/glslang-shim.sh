@@ -9,4 +9,4 @@ while [ $# -gt 0 ]; do
     *) src=$1; shift ;;
   esac
 done
-exec glslc -Os --target-env=vulkan1.0 "$src" -o "$out"
+exec "${GLSLC:-glslc}" -Os --target-env=vulkan1.0 "$src" -o "$out"

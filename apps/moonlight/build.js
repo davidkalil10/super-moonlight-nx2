@@ -30,6 +30,42 @@ const TEST_CARD_QP = 6;
 const STATE_BYTES = 1024;
 /** Backend one's section of the package: its shaders, SPIR-V and memory images. */
 const BACKEND = 'backends/hblauncher.gpu-app';
+/** The glslc whose SPIR-V is committed and pinned; another version builds different bytes. */
+const GLSLC_VERSION =
+  'shaderc v2026.1 2026-01-23spirv-tools v2026.1 2026-02-03glslang 301b4ede53d59b68bf55f95bb26412d9233c8187';
+const SHIM = path.join(import.meta.dirname, '../../tools/moonlight/glslang-shim.sh');
+
+/**
+ * Why this run must not build, or null: build.js takes no arguments, and only the glslc behind
+ * the pins (GLSLC, or glslc on the PATH) reproduces the committed SPIR-V.
+ * @returns {string | null}
+ */
+function refusal() {
+  if (process.argv.length > 2) {
+    const from = target => path.relative(process.cwd(), path.join(import.meta.dirname, target));
+    return (
+      'build.js takes no arguments and rewrites the package in place; to check it, run node ' +
+      from('../../../hbl-platform/sdk/build.js') +
+      ' --check ' +
+      (from('.') || '.')
+    );
+  }
+  let found;
+  try {
+    found = execFileSync(process.env.GLSLC || 'glslc', ['--version'], {encoding: 'utf8'});
+  } catch (error) {
+    found = 'none (' + error.message + ')';
+  }
+  found = found.split('\n')[0];
+  if (found === GLSLC_VERSION) return null;
+  return (
+    'build.js compiles with glslc ' +
+    GLSLC_VERSION +
+    ' (Fedora 44 glslc-2026.1), found ' +
+    found +
+    '; install it or point GLSLC at it. Nothing was written.'
+  );
+}
 
 /**
  * RGB24 test card: colour bars over a full-range grey ramp in the bottom third.
@@ -79,11 +115,7 @@ function initialState() {
 }
 
 async function main() {
-  if (process.argv.length > 2)
-    throw Error(
-      'build.js takes no arguments and rewrites the package in place; to check it, run ' +
-        'node ../hbl-platform/sdk/build.js --check apps/moonlight'
-    );
+  process.env.GLSLANG = SHIM;
   const output = name => path.join(import.meta.dirname, name);
   const backend = name => output(path.join(BACKEND, name));
   await fs.writeFile(backend('state.bin'), initialState());
@@ -98,10 +130,16 @@ async function main() {
     compile(backend('app.' + stage), backend('app.' + stage + '.spv'));
 }
 
-if (isMain(import.meta))
-  main().catch(error => {
-    console.error(error);
+if (isMain(import.meta)) {
+  const refused = refusal();
+  if (refused) {
+    console.error(refused);
     process.exitCode = 1;
-  });
+  } else
+    main().catch(error => {
+      console.error(error);
+      process.exitCode = 1;
+    });
+}
 
 export {testCard};

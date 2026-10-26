@@ -33,9 +33,11 @@ Package `exports` replace the relative paths later in Phase 2.
   checkout (`DEV_DIR` in `helper/CMakeLists.txt`).
 - Package: `node apps/moonlight/build.js`. It regenerates `hbv.glsl`, `hbv2-tables.glsl`,
   `ring.glsl`, `state.bin` and `memory.bin`; `assets.py` regenerates the text atlas and
-  `text.glsl`. Never edit those by hand. Without glslangValidator use
-  `GLSLANG=tools/moonlight/glslang-shim.sh` (glslc); the committed SPIR-V is that build, byte
-  for byte.
+  `text.glsl`. Never edit those by hand. It compiles through `tools/moonlight/glslang-shim.sh`
+  with glslc 2026.1 (Fedora 44) only and refuses another version: the committed SPIR-V is
+  that build byte for byte, and glslangValidator builds different bytes. It also refuses any
+  argument; the check that writes nothing is `node ../hbl-platform/sdk/build.js --check
+  apps/moonlight`.
 - Tests: none here. Run `npm test` and `npm run typecheck` in `moonlight-dev`, plus
   `node apps/moonlight/check.cjs` there for shader changes.
 
