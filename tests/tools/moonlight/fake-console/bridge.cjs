@@ -7,7 +7,7 @@
 // report and game-audio-source.json) and serves until SIGINT. Natives are
 // simulated: the sound-memory allocation, the heartbeat copy, and an AudioOut
 // that plays appended buffers in real time and counts underruns.
-// verify-function checks the bytes against smilebasic/reference/sdk-checks.
+// verify-function checks the bytes against smilebasic/reference/sdk-checks.json.
 //   --pad  cycles a scripted controller + touch state every 500 ms
 // Env: RATE, STALL, DECODE as in shared/rpc.cjs; HB_PIPELINE as on the launcher.
 // Usage: node tools/moonlight/fake-console/bridge.cjs DIR [--pad]
@@ -15,7 +15,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const {serve} = require('../../../../hbl-platform/smilebasic/engine/lib/bridge.js');
 const symbols = require('../../../../hbl-platform/sdk/native/audio-symbols.json');
-const sdkImage = require('../../../../hbl-platform/smilebasic/reference/sdk-checks.js');
+const {referenceBytes} = require('../../../../hbl-platform/smilebasic/engine/lib/sdk.js');
 const fake = require('./shared/rpc.cjs');
 const {ALLOCATE} = require('../../../../hbl-platform/sdk/native/allocate.js');
 const report = require('./app-moonlight-1.json');
@@ -123,7 +123,7 @@ const native = {
   },
   async verifyFunction(address, expected) {
     const {offset, size} = symbolAt(address);
-    if (!expected.equals(sdkImage.bytes(offset, Math.min(32, size))))
+    if (!expected.equals(referenceBytes(offset, Math.min(32, size))))
       throw Error('Native function bytes do not match');
     this.verified.add(address);
   },
