@@ -579,9 +579,7 @@ async function simulateStaggered({
       await clock.sleep(busyUntil - clock.now());
     };
     const decode = decodeWait ? decodeWaits.create({now: clock.now, sleep: clock.sleep}) : null;
-    const receive = receiveWait
-      ? receiveWaits.create({now: clock.now, sleep: clock.sleep})
-      : null;
+    const receive = receiveWait ? receiveWaits.create({now: clock.now, sleep: clock.sleep}) : null;
     receive?.sent(0, UNIT_BYTES, sent);
     const applied = [];
     const apply = (frame, fetchDone, skip) => {
@@ -637,20 +635,23 @@ async function simulateStaggered({
         let receiveSeen = false;
         let receivePendingSeen = false;
         for (;;) {
-          const linkWaited = receive && !receiveSeen
-            ? await receive.beforeRead(frame, receivePendingSeen, timing.requestMs)
-            : false;
+          const linkWaited =
+            receive && !receiveSeen
+              ? await receive.beforeRead(frame, receivePendingSeen, timing.requestMs)
+              : false;
           const waited = decode
             ? await decode.beforeRead(frame - lag, pendingSeen, timing.requestMs)
             : false;
           const startedAt = clock.now();
           await request();
           at = clock.now();
-          if (pending) pacer.observe(startedAt, due <= at);
+          if (pending) pacer.observe(startedAt, due <= at, pending.at);
           if (receive && !receiveSeen) {
             receiveSeen = receiveReady <= at;
-            receive.observe(frame, at, receiveSeen,
-              {waited: linkWaited, pendingSeen: receivePendingSeen});
+            receive.observe(frame, at, receiveSeen, {
+              waited: linkWaited,
+              pendingSeen: receivePendingSeen
+            });
             receivePendingSeen ||= !receiveSeen;
           }
           if (!inputSeen) decode?.observe(frame - lag, at, inputReady <= at, {waited, pendingSeen});
@@ -682,21 +683,25 @@ async function simulateStaggered({
         let receiveSeen = false;
         let receivePendingSeen = false;
         for (;;) {
-          const linkWaited = receive && !receiveSeen
-            ? await receive.beforeRead(frame, receivePendingSeen, timing.requestMs)
-            : false;
+          const linkWaited =
+            receive && !receiveSeen
+              ? await receive.beforeRead(frame, receivePendingSeen, timing.requestMs)
+              : false;
           const startedAt = clock.now();
-          const waitMs = hostWait === 'waiter'
-            ? Math.max(0, Math.min(GATE_WAITER.bridgeWaitMs, waiterReady - startedAt))
-            : 0;
+          const waitMs =
+            hostWait === 'waiter'
+              ? Math.max(0, Math.min(GATE_WAITER.bridgeWaitMs, waiterReady - startedAt))
+              : 0;
           await request(waitMs);
           waiterBridgeMs += waitMs;
           const at = clock.now();
           if (acked) pacer.observe(startedAt, presentReady <= at);
           if (receive && !receiveSeen) {
             receiveSeen = receiveReady <= at;
-            receive.observe(frame, at, receiveSeen,
-              {waited: linkWaited, pendingSeen: receivePendingSeen});
+            receive.observe(frame, at, receiveSeen, {
+              waited: linkWaited,
+              pendingSeen: receivePendingSeen
+            });
             receivePendingSeen ||= !receiveSeen;
           }
           if (inputSlotRetry && !retriedInputSlot && inputReady <= at) {
@@ -757,6 +762,7 @@ async function simulateStaggered({
       presentHz,
       appliedHz,
       appliedPeriodMs: pacer.periodMs,
+      pacer: pacer.counters,
       retryRate,
       lag,
       barrier,

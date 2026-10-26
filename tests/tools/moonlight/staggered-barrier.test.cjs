@@ -3,6 +3,9 @@
 // The host side is the real staggered-live scheduler and the ladder's held-fetch checks.
 const test = require('node:test');
 const assert = require('node:assert/strict');
+
+/** The staggered counts without the pacer's read counters, which the fake device does not pin. */
+const withoutPacer = ({pacer, ...counts}) => (assert.equal(typeof pacer.reads, 'number'), counts);
 const {ADDRESS} = require('../../../hbl-platform-dev/sdk/tests/recording-rpc.cjs');
 const {gateConsole, BLOCK} = require('../../../hbl-platform-dev/sdk/tests/gate-worker-mock.cjs');
 const definitions = require('../../../hbl-moonlight/sdk/native/movie-functions.json');
@@ -205,7 +208,7 @@ test('every submit waits for the previous acquisition, so no output wake is lost
   const live = await d.live();
   await stream(live, d.sink, 9);
   assert.deepEqual(await live.finish({sink: d.sink}), {drained: 2});
-  assert.deepEqual(live.counts, {
+  assert.deepEqual(withoutPacer(live.counts), {
     submitted: 9,
     decoded: 9,
     presented: 9,
@@ -257,7 +260,7 @@ test('a delayed N-2 fetch keeps decode N closed until N-1 is acquired', async ()
   assert.equal(observed.parked.gates, 4);
   assert.equal(observed.released.acquire, 3);
   assert.deepEqual(await live.finish({sink: d.sink}), {drained: 2});
-  assert.deepEqual(live.counts, {
+  assert.deepEqual(withoutPacer(live.counts), {
     submitted: 7,
     decoded: 7,
     presented: 7,

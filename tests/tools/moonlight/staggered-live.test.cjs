@@ -1,5 +1,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+
+/** The staggered counts without the pacer's read counters, which the fake device does not pin. */
+const withoutPacer = ({pacer, ...counts}) => (assert.equal(typeof pacer.reads, 'number'), counts);
 const definitions = require('../../../hbl-moonlight/sdk/native/movie-functions.json');
 const registration =
   require('../../../hbl-moonlight/sdk/native/movie-event-functions.json').registerClientEvents;
@@ -313,7 +316,7 @@ test('a short stream drains its lag-2 tail and stops both workers before finaliz
     ['gate', 'drain', 'drain']
   );
   assert.equal(device.transport.aborted, true);
-  assert.deepEqual(live.counts, {
+  assert.deepEqual(withoutPacer(live.counts), {
     submitted: 5,
     decoded: 5,
     presented: 5,

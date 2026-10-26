@@ -18,7 +18,7 @@ Everything runs against the runtime code by relative path:
 ## Test
 
 ```
-npm test                                     # 336 tests
+npm test                                     # 337 tests
 npm run typecheck                            # tsc --checkJs (npm install once)
 node apps/moonlight/check.cjs                # desktop Vulkan check, needs a GPU
 ```

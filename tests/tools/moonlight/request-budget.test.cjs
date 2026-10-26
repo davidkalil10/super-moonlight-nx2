@@ -413,6 +413,36 @@ test('the vsync rule learns a console applying every other refresh', async () =>
   );
 });
 
+test('the pacer learns the apply grid from a host whose backlog keeps the ack optional', async () => {
+  const run = (appliedHz, paced) =>
+    simulate({
+      mode: 'staggered',
+      frames: 600,
+      presentHz: 120,
+      appliedHz,
+      paced,
+      lag: 2,
+      barrier: true,
+      hostWait: 'pacer',
+      skipBacklog: 1,
+      skipRule: 'vsync',
+      decodeWait: true,
+      model: {...MODEL, sourceFps: 120, decodeMs: 6.85}
+    });
+  const backlog = await run(60, false);
+  assert.equal(backlog.appliedPeriodMs, 1000 / 60, 'learned with the acks optional');
+  assert.ok(backlog.pacer.predicted < 10, `${backlog.pacer.predicted} timed reads with a backlog`);
+  assert.ok(backlog.pacer.lateVotes >= 50, `${backlog.pacer.lateVotes} skipped-refresh votes`);
+  assert.equal(backlog.pacer.flips, 1);
+  const every = await run(120, false);
+  assert.equal(every.appliedPeriodMs, 1000 / 120);
+  assert.equal(every.pacer.flips, 0);
+  assert.ok(
+    every.pacer.lateVotes <= 5,
+    `${every.pacer.lateVotes} skipped-refresh votes on a 120 grid`
+  );
+});
+
 test('the decode wait sleeps through a pending acquire instead of rereading', async () => {
   const run = (presentHz, decodeMs, decodeWait, retryRate = 0) =>
     simulate({
