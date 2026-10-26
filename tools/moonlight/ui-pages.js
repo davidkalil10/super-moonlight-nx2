@@ -4,7 +4,7 @@
  * given, moves the cursor over the items and forwards presses with the item ids ui-model.js
  * assigns. Strips are painted once per text, size and width and kept.
  */
-import {ITEM, APPS_PER_PAGE} from './ui-model.js';
+import {ITEM, APPS_PER_PAGE, HOSTS_PER_PAGE} from './ui-model.js';
 import {PAGE_FLAG, ITEM_FLAG, MAX_ITEMS, MAX_TEXTS, MAX_IMAGES} from './ui-page.js';
 import * as uiSettings from './ui-settings.js';
 
@@ -22,10 +22,9 @@ const COLOR = {
   background: 0xff17191c,
   clear: 0x00000000
 };
-const COVER = {width: 160, height: 90};
-const GRID = {x: 120, y: 200, columns: 5, cellWidth: 340, cellHeight: 190};
-const TITLE = {x: 120, y: 56, size: 64};
-const FOOTER = 1024;
+const COVER = {width: 240, height: 135};
+/** Two rows of five covers, centred, a name under each. */
+const GRID = {y: 380, columns: 5, gap: 48, name: 16, row: 135 + 16 + 34 + 24};
 const SIDE = 96;
 const CHIP = {y: 64, height: 54, pad: 10, size: 26};
 const LEGEND = {y: 984, size: 26, height: 40};
@@ -33,7 +32,7 @@ const CARDS = {y: 300, width: 840, height: 96, gapX: 48, gapY: 32, pad: 32};
 const LABEL = {size: 22, tracking: 22 * 0.08};
 const HEADING = {y: 200, status: 340, kicker: 24, size: 72};
 const BUTTON = {y: 640, width: 400, gap: 48};
-const MAX_HOSTS = 6;
+const PAGER = {width: 300};
 /** Strips kept across pages, by text, size, width and alignment. */
 const CACHE_LIMIT = 512;
 
@@ -152,14 +151,6 @@ function createPages(raster) {
     return page;
   }
 
-  /** @param {string} label @param {string} [hint] */
-  function framed(label, hint) {
-    const page = compose({background: COLOR.background, cursorHome: 0});
-    page.text(TITLE.x, TITLE.y, label, TITLE.size, 1000, COLOR.accent);
-    if (hint) page.text(TITLE.x, FOOTER, hint, 26, 1680, COLOR.muted);
-    return page;
-  }
-
   /**
    * The Horizon frame: chips top left, a note top right, button hints and a footer at the bottom.
    * @param {{chips?: [string | undefined, number, number][], note?: string,
@@ -219,12 +210,33 @@ function createPages(raster) {
   /**
    * A card the cursor can land on, its label centred.
    * @param {ReturnType<typeof compose>} page @param {number} id @param {number} x @param {number} y
-   * @param {number} width @param {string} label
+   * @param {number} width @param {string} label @param {boolean} [greyed]
    */
-  function button(page, id, x, y, width, label) {
-    page.item({id, x, y, w: width, h: CARDS.height});
-    page.solid(x, y, width, CARDS.height, COLOR.card);
-    page.text(x, y + 28, label, 32, width, COLOR.ink, 'center', {weight: 700});
+  function button(page, id, x, y, width, label, greyed = false) {
+    page.item({id, x, y, w: width, h: CARDS.height, flags: greyed ? ITEM_FLAG.greyed : 0});
+    page.solid(x, y, width, CARDS.height, greyed ? COLOR.dim : COLOR.card);
+    page.text(x, y + 28, label, 32, width, greyed ? COLOR.grey : COLOR.ink, 'center', {
+      weight: 700
+    });
+  }
+
+  /**
+   * Previous and next page buttons at the bottom right, greyed at either end.
+   * @param {ReturnType<typeof compose>} page @param {number} y @param {number} at
+   * @param {number} count
+   */
+  function pager(page, y, at, count) {
+    const x = 1920 - SIDE - 2 * PAGER.width - BUTTON.gap;
+    button(page, ITEM.previous, x, y, PAGER.width, '‹  Previous', at === 0);
+    button(
+      page,
+      ITEM.next,
+      x + PAGER.width + BUTTON.gap,
+      y,
+      PAGER.width,
+      'Next  ›',
+      at >= count - 1
+    );
   }
 
   /**
@@ -240,15 +252,19 @@ function createPages(raster) {
 
   /** @param {Model} model */
   function hosts(model) {
-    const shown = model.hosts.slice(0, MAX_HOSTS);
+    const count = Math.max(1, Math.ceil(model.hosts.length / HOSTS_PER_PAGE));
+    const start = model.hostPage * HOSTS_PER_PAGE;
+    const shown = model.hosts.slice(start, start + HOSTS_PER_PAGE);
+    const slot = model.hostIndex - start;
     const page = horizon({
       chips: [['Moonlight', COLOR.ink, 240]],
-      note: model.hosts.length > MAX_HOSTS ? `${MAX_HOSTS} of ${model.hosts.length} PCs shown` : '',
+      note: count > 1 ? `Page ${model.hostPage + 1} of ${count}` : '',
       keys: [
         ['A', 'Open'],
         ['X', 'Settings'],
         ['Y', 'Refresh']
-      ]
+      ],
+      cursorHome: slot >= 0 && slot < shown.length ? slot : 0
     });
     if (!shown.length)
       heading(page, 'No PCs yet', 'Add a PC to hosts.json', 'The service reads it on this PC');
@@ -263,49 +279,61 @@ function createPages(raster) {
       const x = SIDE + (i % 2) * (CARDS.width + CARDS.gapX),
         y = 430 + Math.floor(i / 2) * (CARDS.height + CARDS.gapY),
         inner = CARDS.width - 2 * CARDS.pad;
-      page.item({id: ITEM.host + i, x, y, w: CARDS.width, h: CARDS.height});
+      page.item({id: ITEM.host + start + i, x, y, w: CARDS.width, h: CARDS.height});
       page.solid(x, y, CARDS.width, CARDS.height, COLOR.card);
       page.text(x + CARDS.pad, y + 12, host.name, 36, inner, COLOR.ink, 'left', {weight: 700});
       page.text(x + CARDS.pad, y + 60, host.address, 24, inner, COLOR.muted, 'left', {
         weight: 500
       });
     });
+    if (count > 1) pager(page, 430 + 3 * (CARDS.height + CARDS.gapY), model.hostPage, count);
     return page.build();
   }
 
   /**
+   * The host name over two rows of five covers; covers keep their apps' ids across pages.
    * @param {Model} model
    * @param {Map<number, Promise<Painted>>} covers Tiles by app id; apps without one get a letter tile.
    */
   function apps(model, covers) {
-    const page = framed(
-      'Moonlight',
-      'A  Launch      B  Hosts      X  Settings      Y  Quit host app'
-    );
-    const host = model.host?.name ?? '';
+    const count = Math.max(1, Math.ceil(model.apps.length / APPS_PER_PAGE));
     const start = model.appPage * APPS_PER_PAGE;
     const shown = model.apps.slice(start, start + APPS_PER_PAGE);
-    const pages = Math.max(1, Math.ceil(model.apps.length / APPS_PER_PAGE));
-    const note = model.message ? model.message + ' · ' : '';
-    page.text(
-      TITLE.x,
-      140,
-      `${note}${host} · ${model.apps.length} apps` +
-        (pages > 1 ? ` · page ${model.appPage + 1} of ${pages}` : ''),
-      28,
-      1400,
-      COLOR.muted
-    );
+    const shape = uiSettings
+      .rows(model.settings)
+      .filter(row => ['size', 'fps', 'bitrate'].includes(row.id))
+      .map(row => row.value)
+      .join(' · ');
+    const page = horizon({
+      chips: hostChips(model),
+      note: shape,
+      keys: [
+        ['A', 'Launch'],
+        ['B', 'PCs'],
+        ['X', 'Settings'],
+        ['Y', 'Quit host app']
+      ]
+    });
+    const line = [
+      model.message,
+      `${model.apps.length} ${model.apps.length === 1 ? 'app' : 'apps'}`,
+      count > 1 ? `page ${model.appPage + 1} of ${count}` : '',
+      'Press A to launch'
+    ]
+      .filter(Boolean)
+      .join(' · ');
+    heading(page, 'Apps', model.host?.name ?? 'Moonlight', line, {y: 150});
+    const left = (1920 - GRID.columns * COVER.width - (GRID.columns - 1) * GRID.gap) / 2;
     shown.forEach((app, i) => {
-      const x = GRID.x + (i % GRID.columns) * GRID.cellWidth,
-        y = GRID.y + Math.floor(i / GRID.columns) * GRID.cellHeight;
+      const x = left + (i % GRID.columns) * (COVER.width + GRID.gap),
+        y = GRID.y + Math.floor(i / GRID.columns) * GRID.row;
       const current = app.id === model.currentGame;
       page.item({
         id: ITEM.app + start + i,
         x,
         y,
-        w: GRID.cellWidth,
-        h: GRID.cellHeight - 4,
+        w: COVER.width,
+        h: COVER.height,
         flags: current ? ITEM_FLAG.current : 0
       });
       const letters = () =>
@@ -313,40 +341,28 @@ function createPages(raster) {
       const tile = covers.has(app.id)
         ? covers.get(app.id).then(painted => (painted.width ? painted : letters()), letters)
         : letters();
-      page.image(x + (GRID.cellWidth - COVER.width) / 2, y + 14, tile);
-      page.text(
-        x + 10,
-        y + 116,
-        app.name,
-        26,
-        GRID.cellWidth - 20,
-        current ? COLOR.accent : COLOR.ink,
-        'center'
-      );
+      page.image(x, y, tile);
+      const nameY = y + COVER.height + GRID.name;
+      if (current) {
+        page.solid(x, nameY, COVER.width, 34, COLOR.running);
+        page.text(
+          x,
+          nameY + 5,
+          `RUNNING · ${app.name}`,
+          20,
+          COVER.width,
+          COLOR.background,
+          'center',
+          {
+            weight: 700,
+            tracking: 1.2
+          }
+        );
+      } else page.text(x, nameY, app.name, 26, COVER.width, COLOR.ink, 'center');
     });
-    const footer = GRID.y + 4 * GRID.cellHeight + 10;
-    page.item({id: ITEM.back, x: 120, y: footer, w: 360, h: 56});
-    page.text(140, footer + 10, 'Back to hosts', 30, 320);
-    const first = model.appPage === 0,
-      last = model.appPage >= pages - 1;
-    page.item({
-      id: ITEM.previous,
-      x: 960,
-      y: footer,
-      w: 340,
-      h: 56,
-      flags: first ? ITEM_FLAG.greyed : 0
-    });
-    page.text(980, footer + 10, 'Previous page', 30, 300, first ? COLOR.grey : COLOR.ink);
-    page.item({
-      id: ITEM.next,
-      x: 1340,
-      y: footer,
-      w: 340,
-      h: 56,
-      flags: last ? ITEM_FLAG.greyed : 0
-    });
-    page.text(1360, footer + 10, 'Next page', 30, 300, last ? COLOR.grey : COLOR.ink);
+    const buttons = GRID.y + 2 * GRID.row + 8;
+    button(page, ITEM.back, SIDE, buttons, PAGER.width, '‹  PCs');
+    if (count > 1) pager(page, buttons, model.appPage, count);
     return page.build();
   }
 
