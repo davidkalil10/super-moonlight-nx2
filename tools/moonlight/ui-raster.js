@@ -64,8 +64,13 @@ function createRaster({spawnProcess = spawn} = {}) {
      * @param {number} size
      * @param {number} width
      * @param {'left' | 'center' | 'right'} [align]
+     * @param {{weight?: number, tracking?: number}} [style] Sora weight (500 to 700) and px
+     *   between letters
      */
-    text: (text, size, width, align = 'left') => paint({kind: 'text', text, size, width, align}, 1),
+    text: (text, size, width, align = 'left', {weight = 600, tracking = 0} = {}) =>
+      paint({kind: 'text', text, size, width, align, weight, tracking}, 1),
+    /** @param {[string, string][]} keys Button and label pairs @param {number} size @param {number} width */
+    legend: (keys, size, width) => paint({kind: 'legend', keys, size, width}, 1),
     /** A cover PNG fitted inside a width x height RGBA8 tile; 0 x 0 when the file is not usable. */
     tile: (png, width, height) => paint({kind: 'tile', png, width, height}, 4),
     /** An RGBA8 tile with the name's initials on a hue derived from the name. */
