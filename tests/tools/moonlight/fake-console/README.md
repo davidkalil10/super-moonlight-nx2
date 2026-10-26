@@ -8,11 +8,11 @@ real JS HBV2 decoder over the ring and writes back `applied`.
 
 ```sh
 # Steady state on the measured 5.7 MB/s link
-node tools/moonlight/live.js tools/moonlight/fake-console \
+node ../hbl-moonlight/tools/moonlight/live.js tools/moonlight/fake-console \
   --input clip.mp4 --codec hbv2 --budget 64
 
 # Force a 1.5 s stall at t=4 s and watch the sender resync with a keyframe
-STALL=1500@4000 node tools/moonlight/live.js tools/moonlight/fake-console \
+STALL=1500@4000 node ../hbl-moonlight/tools/moonlight/live.js tools/moonlight/fake-console \
   --input clip.mp4 --codec hbv2 --budget 64
 ```
 
@@ -38,5 +38,5 @@ are counted), and `--pad` cycles a scripted controller + touch state.
 
 ```sh
 HB_PIPELINE=2 RATE=12e6 node tools/moonlight/fake-console/bridge.cjs /tmp/fake --pad &
-node tools/moonlight/live.js /tmp/fake --input clip.mp4 --codec hbv2 --budget 64
+node ../hbl-moonlight/tools/moonlight/live.js /tmp/fake --input clip.mp4 --codec hbv2 --budget 64
 ```
