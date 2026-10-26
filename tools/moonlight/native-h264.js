@@ -9,7 +9,7 @@ import os from 'node:os';
 import {AccessUnits, parameterSets} from './h264-stream.js';
 import {instrument} from './bridge-counter.js';
 import * as cli from '../../../hbl-platform/sdk/cli.js';
-import {builds} from '../../../hbl-platform/scripts/toolchain.js';
+import {builds} from '../../../hbl-platform/sdk/build.js';
 import * as scoring from './run-summary.js';
 import {bitrate as streamBitrate} from './bitrate.js';
 import {create as createNativeDecoder} from './native-decoder.js';
