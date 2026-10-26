@@ -19,7 +19,7 @@ Everything runs against the runtime code by relative path:
 
 ```sh
 npm install                        # once: TypeScript and @types/node
-npm test                           # node --test over every tracked *.test.cjs, 413 tests
+npm test                           # node --test over every tracked *.test.cjs, 414 tests
 npm run typecheck                  # tsc --checkJs over the modules listed in tsconfig.json
 node apps/moonlight/check.cjs [CLIP]
 ```

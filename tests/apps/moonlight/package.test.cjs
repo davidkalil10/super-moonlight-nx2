@@ -39,6 +39,24 @@ test('the Moonlight package loads on backend one with the committed bytes', asyn
   assert.deepEqual(app.manifest.sdk, {version: 1, capabilities: []});
 });
 
+test('build.js refuses arguments before it writes the package', async () => {
+  const fs = require('node:fs');
+  const {spawnSync} = require('node:child_process');
+  const section = path.join(PACKAGE, 'backends/hblauncher.gpu-app');
+  const snapshot = () =>
+    Object.fromEntries(
+      fs.readdirSync(section).map(name => [name, sha256(fs.readFileSync(path.join(section, name)))])
+    );
+  const before = snapshot();
+  const result = spawnSync(process.execPath, [path.join(PACKAGE, 'build.js'), '--check'], {
+    cwd: moonlight,
+    encoding: 'utf8'
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /takes no arguments.*sdk\/build\.js --check apps\/moonlight/);
+  assert.deepEqual(snapshot(), before);
+});
+
 test('the package has no portable entry and no unlisted assets', async () => {
   const {readPackage} = await import(path.join(platform, 'sdk/package/manifest.js'));
   const pkg = await readPackage(PACKAGE);
