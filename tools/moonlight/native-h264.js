@@ -411,13 +411,16 @@ async function run({
         }
       );
       if (child.stdio?.[3])
-        readline.createInterface({input: child.stdio[3]}).on('line', line => {
-          try {
-            const counts = JSON.parse(line);
-            inputBridge.exchanges += counts.exchanges;
-            inputBridge.bridgeMs += counts.bridgeMs;
-          } catch {}
-        });
+        readline
+          .createInterface({input: child.stdio[3]})
+          .on('line', line => {
+            try {
+              const counts = JSON.parse(line);
+              inputBridge.exchanges += counts.exchanges;
+              inputBridge.bridgeMs += counts.bridgeMs;
+            } catch {}
+          })
+          .on('error', error => log({event: 'input-counts-error', message: error.message}));
       child.on('error', error => reader.fail(error));
       child.on('exit', (code, signal) => {
         if (!stopping && code !== 0)
