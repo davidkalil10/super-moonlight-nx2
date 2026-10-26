@@ -31,6 +31,8 @@ enum {
   MAX_DATA_BYTES = 7 << 20,
   MAX_FRAMES = 3600,
   MAX_WRITES = 64,
+  MAX_FRAMES_BYTES = MAX_FRAMES * (4 + 8 * MAX_WRITES),
+  MAX_SPIRV_BYTES = 16 << 20,
   SPIRV_MAGIC = 0x07230203,
   NO_DEVICE = 2
 };
@@ -49,13 +51,13 @@ typedef struct {
 static VkPhysicalDevice physical;
 static VkDevice device;
 
-static void *readFile(const char *name, size_t *size) {
+static void *readFile(const char *name, size_t *size, size_t max) {
   FILE *f = fopen(name, "rb");
   if (!f) fprintf(stderr, "desktop-vulkan-run: cannot read %s\n", name);
   CHECK(f);
   CHECK(!fseek(f, 0, SEEK_END));
   long end = ftell(f);
-  CHECK(end >= 0);
+  CHECK(end >= 0 && (unsigned long)end <= max);
   *size = (size_t)end;
   rewind(f);
   void *bytes = malloc(*size ? *size : 1);
@@ -89,7 +91,7 @@ static uint32_t checkFrames(const uint8_t *frames, size_t size) {
     CHECK(writes <= MAX_WRITES && at + (size_t)writes * 8 <= size);
     for (uint32_t i = 0; i < writes; i++, at += 8) {
       uint32_t offset = word(frames + at);
-      CHECK(offset % 4 == 0 && offset + 4 <= STATE_BYTES);
+      CHECK(offset % 4 == 0 && offset <= STATE_BYTES - 4);
     }
   }
   CHECK(count > 0 && count <= MAX_FRAMES);
@@ -142,7 +144,7 @@ static Buffer createBuffer(size_t size, VkBufferUsageFlags usage) {
 
 static VkShaderModule shader(const char *path) {
   size_t size;
-  uint32_t *code = readFile(path, &size);
+  uint32_t *code = readFile(path, &size, MAX_SPIRV_BYTES);
   if (size < 20 || size % 4 || code[0] != SPIRV_MAGIC)
     fprintf(stderr, "desktop-vulkan-run: not SPIR-V: %s\n", path);
   CHECK(size >= 20 && size % 4 == 0 && code[0] == SPIRV_MAGIC);
@@ -209,11 +211,11 @@ int main(int argc, char **argv) {
   size_t stateSize = 0, dataSize = 0, framesSize = 0;
   uint8_t *state = 0, *data = 0, *frames = 0;
   uint32_t frameCount = 0;
-  const char *outDir = argv[7];
+  const char *outDir = probe ? 0 : argv[7];
   if (!probe) {
-    state = readFile(argv[4], &stateSize);
-    data = readFile(argv[5], &dataSize);
-    frames = readFile(argv[6], &framesSize);
+    state = readFile(argv[4], &stateSize, STATE_BYTES);
+    data = readFile(argv[5], &dataSize, MAX_DATA_BYTES);
+    frames = readFile(argv[6], &framesSize, MAX_FRAMES_BYTES);
     CHECK(stateSize == STATE_BYTES);
     CHECK(dataSize > 0 && dataSize % 4 == 0 && dataSize <= MAX_DATA_BYTES);
     frameCount = checkFrames(frames, framesSize);
@@ -295,11 +297,20 @@ int main(int argc, char **argv) {
   VkSubpassDescription subpass = {.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS,
                                   .colorAttachmentCount = 1,
                                   .pColorAttachments = &colorReference};
+  // Orders the color writes and the move to TRANSFER_SRC before the readback copy.
+  VkSubpassDependency toCopy = {.srcSubpass = 0,
+                                .dstSubpass = VK_SUBPASS_EXTERNAL,
+                                .srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                                .dstStageMask = VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                .srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+                                .dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT};
   VkRenderPassCreateInfo renderPassInfo = {.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
                                            .attachmentCount = 1,
                                            .pAttachments = &attachment,
                                            .subpassCount = 1,
-                                           .pSubpasses = &subpass};
+                                           .pSubpasses = &subpass,
+                                           .dependencyCount = 1,
+                                           .pDependencies = &toCopy};
   VkRenderPass renderPass;
   VK(vkCreateRenderPass(device, &renderPassInfo, 0, &renderPass));
   VkFramebufferCreateInfo framebufferInfo = {.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,

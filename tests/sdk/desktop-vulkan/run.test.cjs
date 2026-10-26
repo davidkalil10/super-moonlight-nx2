@@ -50,6 +50,8 @@ function program(name) {
   fs.mkdirSync(dir, {recursive: true});
   fs.writeFileSync(path.join(dir, 'state.bin'), initialState());
   fs.writeFileSync(path.join(dir, 'text.bin'), Buffer.alloc(64, 1));
+  for (const stage of ['vert', 'frag', 'comp'])
+    fs.writeFileSync(path.join(dir, 'a.' + stage + '.spv'), stage);
   return {
     shaders: {
       vertex: path.join(dir, 'a.vert.spv'),
@@ -122,6 +124,15 @@ test('writes-run-json-and-frame-hash', () => {
   assert.equal(record.clock.provider, 'host-fixed-step');
   assert.equal(record.dataUnchanged, true);
   assert.equal(result.state.fade, 1);
+  const digest = file => crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+  assert.deepEqual(record.program, {
+    vertex: digest(options.shaders.vertex),
+    fragment: digest(options.shaders.fragment),
+    compute: digest(options.shaders.compute),
+    initialState: digest(options.initialState),
+    data: digest(options.data)
+  });
+  assert.notEqual(record.program.vertex, record.program.compute);
 });
 
 test('fails-closed-on-runner-error', () => {

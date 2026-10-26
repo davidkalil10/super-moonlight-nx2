@@ -2,8 +2,8 @@
  * Builds tools/moonlight/desktop-vulkan-run.c into a caller-selected build directory and runs a
  * desktop.vulkan program through it: writes the frame file, invokes the runner with one argv
  * entry per path (no shell), checks its outputs and writes run.json with the SHA-256 of
- * frame.rgba. Any compiler or runner failure throws with its exit code and stderr, and leaves
- * no run.json or frame.rgba behind.
+ * frame.rgba and of every program file the runner read. Any compiler or runner failure throws
+ * with its exit code and stderr, and leaves no run.json or frame.rgba behind.
  */
 const fs = require('node:fs');
 const path = require('node:path');
@@ -164,6 +164,13 @@ function run(options) {
       device: report.device,
       width: report.width,
       height: report.height,
+      program: {
+        vertex: sha256(shaders.vertex),
+        fragment: sha256(shaders.fragment),
+        compute: sha256(shaders.compute),
+        initialState: sha256(options.initialState),
+        data: sha256(options.data)
+      },
       clock: {...script.clock, provider: clock.mode},
       frameCount,
       input: script.inputs.map(({frame, connected, buttons}) => ({frame, connected, buttons})),

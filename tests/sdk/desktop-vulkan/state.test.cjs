@@ -158,4 +158,20 @@ test('rejects-short-input-state-and-atlas-buffers', () => {
       }),
     /one input per frame/
   );
+  const clocked = (originMs, rateHz, frameCount = 2) => () =>
+    parseFrameScript({
+      format: 'hb-desktop-frame-script',
+      version: 1,
+      frameCount,
+      clock: {mode: 'fixed-step', originMs, rateHz},
+      inputs: Array.from({length: frameCount}, (_, frame) => ({
+        frame,
+        connected: true,
+        buttons: []
+      }))
+    });
+  assert.throws(clocked(-1, 60), /Clock must stay within 0 and 2\^32 ms/);
+  assert.throws(clocked(2 ** 32 - 10, 60), /Clock must stay within/);
+  assert.throws(clocked(0, 1e-7), /Clock must stay within/);
+  clocked(2 ** 32 - 1000, 60)();
 });

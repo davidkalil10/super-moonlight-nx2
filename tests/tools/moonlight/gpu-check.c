@@ -202,11 +202,20 @@ int main(int argc, char **argv) {
   VkSubpassDescription subpass = {.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS,
                                   .colorAttachmentCount = 1,
                                   .pColorAttachments = &colorReference};
+  // Orders the color writes and the move to TRANSFER_SRC before the readback copy.
+  VkSubpassDependency toCopy = {.srcSubpass = 0,
+                                .dstSubpass = VK_SUBPASS_EXTERNAL,
+                                .srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                                .dstStageMask = VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                .srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+                                .dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT};
   VkRenderPassCreateInfo renderPassInfo = {.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
                                            .attachmentCount = 1,
                                            .pAttachments = &attachment,
                                            .subpassCount = 1,
-                                           .pSubpasses = &subpass};
+                                           .pSubpasses = &subpass,
+                                           .dependencyCount = 1,
+                                           .pDependencies = &toCopy};
   VkRenderPass renderPass;
   VK(vkCreateRenderPass(device, &renderPassInfo, 0, &renderPass));
   VkFramebufferCreateInfo framebufferInfo = {.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,

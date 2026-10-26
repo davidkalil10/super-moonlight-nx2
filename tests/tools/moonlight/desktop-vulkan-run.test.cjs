@@ -140,3 +140,21 @@ test('rejects-invalid-stage-or-output-buffer', {skip}, async () => {
   );
   assert.ok(!fs.existsSync(path.join(sneaky, 'run.json')));
 });
+
+test('rejects-frame-write-past-the-control-block', {skip}, async () => {
+  const {shaders, initialState, data} = await hello();
+  const outside = path.join(scratch, 'outside.bin');
+  fs.writeFileSync(outside, Buffer.from('01000000fcffffff41414141', 'hex'));
+  const wrapped = path.join(scratch, 'wrapped');
+  fs.mkdirSync(wrapped);
+  const past = spawnSync(
+    gpu.runner,
+    [shaders.vertex, shaders.fragment, shaders.compute, initialState, data, outside, wrapped],
+    {encoding: 'utf8'}
+  );
+  assert.equal(past.signal, null);
+  assert.equal(past.status, 1);
+  assert.match(past.stderr, /failed at \d+: offset % 4 == 0 && offset <= STATE_BYTES - 4/);
+  assert.equal(past.stdout, '');
+  assert.deepEqual(fs.readdirSync(wrapped), []);
+});

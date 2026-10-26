@@ -21,8 +21,10 @@ const MAX_DATA_BYTES = 7 * 1024 * 1024;
 const WORD_BYTES = 4;
 const MAX_WRITES = 64;
 /** Time service 2 words in raw[3].xy, unused by every ABI-1 shader and host. */
-const CLOCK_MS = 48;
-const FRAME_INDEX = 52;
+const CLOCK_MS = STATE.clockMs;
+const FRAME_INDEX = STATE.frameIndex;
+/** The clock word is a u32 of milliseconds; a script must stay below its wrap. */
+const CLOCK_LIMIT_MS = 2 ** 32;
 
 /** @typedef {[offset: number, value: number]} Write A u32 the host stores before a dispatch. */
 
@@ -118,6 +120,8 @@ function parseFrameScript(json) {
       clock.rateHz > 0,
     'Invalid clock'
   );
+  const lastMs = clock.originMs + ((frameCount - 1) * 1000) / clock.rateHz;
+  check(clock.originMs >= 0 && lastMs < CLOCK_LIMIT_MS, 'Clock must stay within 0 and 2^32 ms');
   check(Array.isArray(inputs) && inputs.length === frameCount, 'Need one input per frame');
   const snapshots = inputs.map((input, index) => {
     check(input && input.frame === index, 'Input ' + index + ' must be frame ' + index);

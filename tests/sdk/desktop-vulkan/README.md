@@ -31,9 +31,9 @@ Binding 0 is one persistent 8 MiB buffer: the state block, then the data at byte
 script (`hb-desktop-frame-script` v1, `fixtures/hello-world-input-time.json`) gives a full
 button and connected snapshot per frame. Before each compute dispatch the host writes buttons
 (+8), connected (+32) and the time 2 words: the fixed-step clock `originMs + N*1000/rateHz` in
-whole ms (+48) and the frame index N (+52). It never writes +64 time or +88 frames, which the
-hello-world shader advances itself. Each frame is compute, barrier, draw, submit and wait,
-readback, with GPU timestamps.
+whole ms (+48), which a script must keep within 0 and 2^32, and the frame index N (+52). It
+never writes +64 time or +88 frames, which the hello-world shader advances itself. Each frame is
+compute, barrier, draw, submit and wait, readback, with GPU timestamps.
 
 ## Requirements
 
@@ -51,7 +51,8 @@ not edited), compiles its entry into the desktop.vulkan section, runs the six-fr
 prints the selected backend, device, final state words and the frame hash as JSON (after the
 shader compiler's file names). `BUILD_DIR/output`
 then holds `frame.rgba` (last frame), `state.bin`, `states.bin` (state after every frame),
-`data.bin`, `frames.bin` and `run.json`.
+`data.bin`, `frames.bin` and `run.json`, which records the frame hash and the SHA-256 of each
+program file the runner read (the three SPIR-V stages, the state and the data).
 
 The hash is only compared between runs on the same device and driver; rasterization differs
 between GPUs, so there is no golden hash.
