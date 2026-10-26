@@ -159,13 +159,15 @@ vec3 uiDraw(vec2 p,vec3 under,float frames){
   vec4 ink=uiColor(uiWord(base+UI_TEXTS+i*8u+5u));
   color=mix(color,ink.rgb,ink.a*float(uiByte(base,(UI_BODY*4u)+offset))/255.0);
  }
- uint cursor=uiWord(CONTROL_UI_CURSOR);
+ uint cursor=uiWord(CONTROL_UI_CURSOR),command=uiWord(CONTROL_CMD_SEQUENCE);
+ // A press the host has not acknowledged on this page pulses the cursor; the host may also flag it.
+ bool waiting=command!=0u&&command!=uiWord(CONTROL_HOST_ACK)&&uiWord(CONTROL_CMD_PAGE)==uiWord(CONTROL_UI_APPLIED);
  for(uint i=0u;i<items;i++){
   uvec4 r=uiRect(base,UI_ITEMS,i,1u);uint itemFlags=uiWord(base+UI_ITEMS+i*8u+5u);
   vec2 center=vec2(r.xy)+vec2(r.zw)*0.5,extent=vec2(r.zw)*0.5;
   if((itemFlags&UI_ITEM_CURRENT)!=0u)color=mix(color,vec3(.45,.95,.60),fill(length(p-vec2(float(r.x)-14.0,center.y))-4.0));
   if(i==cursor&&(flags&UI_FLAG_HIDE_CURSOR)==0u){
-   float pulse=(itemFlags&UI_ITEM_PENDING)!=0u?.55+.45*sin(frames*.4):1.0;
+   float pulse=waiting||(itemFlags&UI_ITEM_PENDING)!=0u?.55+.45*sin(frames*.4):1.0;
    color=mix(color,vec3(.25,.85,.90),pulse*line(box(p,center,extent+4.0,8.0),2.0));
   }
  }
