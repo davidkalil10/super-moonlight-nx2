@@ -1328,7 +1328,7 @@ test(
 );
 
 test(
-  '--gate-on-receive reaches the staggered scheduler and needs --staggered',
+  '--gate-on-receive reaches the staggered scheduler, needs --staggered and refuses 120 Hz',
   {timeout: 5000},
   async () => {
     const f = await fixture({units: pairedUnits(4)});
@@ -1348,6 +1348,11 @@ test(
     await exercise(g, async () => {
       g.options.args.push('--gate-on-receive');
       await assert.rejects(run(g.options), /--gate-on-receive applies to --staggered/);
+    });
+    const h = await fixture();
+    await exercise(h, async () => {
+      h.options.args.push('--staggered', '--gate-on-receive', '--present-hz', '120');
+      await assert.rejects(run(h.options), /--gate-on-receive is untested at --present-hz 120/);
     });
   }
 );
