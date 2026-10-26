@@ -21,6 +21,10 @@ import {create as createStaggeredLive} from './staggered-live.js';
 import * as exchangeTiming from './exchange-timing.js';
 
 const IDR_COOLDOWN_MS = 100;
+// A backlog while the console is not answering is the console's, so asking Sunshine for a
+// keyframe cannot help; past CONSOLE_STALL_MS the stream reports the console and stops.
+const IDR_QUIET_MS = 1000;
+const CONSOLE_STALL_MS = 5000;
 // A staggered host runs at present pace, so it needs room for a source burst (batch C2).
 const STAGGERED_QUEUE = 8;
 
@@ -76,7 +80,8 @@ async function run({
   createSocketAudio = createSocketAudioSource,
   createPaired = pairedLive.create,
   createStaggered = createStaggeredLive,
-  spawnProcess = spawn
+  spawnProcess = spawn,
+  consoleStallMs = CONSOLE_STALL_MS
 }) {
   const at = args.indexOf('--moonlight');
   const host = args[at + 1],
@@ -249,7 +254,7 @@ async function run({
   process.on('SIGINT', onInterrupt);
   process.on('SIGTERM', onTerminate);
   function requestIdr() {
-    if (!stopping) idrRequester.request();
+    if (!stopping && bridge.silentMs() < IDR_QUIET_MS) idrRequester.request();
   }
   try {
     sink = await createSink(rpc, storage, {cancelled});
@@ -428,6 +433,15 @@ async function run({
     };
     const statsFile = path.join(output, 'stats.jsonl');
     printing = setInterval(() => {
+      const silent = bridge.silentMs();
+      if (silent >= consoleStallMs && !stopping) {
+        log({
+          event: 'console-stalled',
+          silentMs: Math.round(silent),
+          message: 'The console stopped answering'
+        });
+        stop('console-stalled');
+      }
       const row = {
         codec: 'h264',
         ...stats,
@@ -801,6 +815,7 @@ async function run({
   };
   const result = scoring.verdict(summary, expect);
   if (socketAudioReport?.error) result.failures.push('socket audio: ' + socketAudioReport.error);
+  if (stopReason === 'console-stalled') result.failures.push('console stopped answering');
   if (duration !== null && stopReason !== 'duration')
     result.failures.push('ended before duration: ' + stopReason);
   result.pass = result.failures.length === 0;
