@@ -93,11 +93,15 @@ function create({binMs = 1, windowMs = 10} = {}) {
  */
 function delayFor(at, events, avoid) {
   if (!avoid) return 0;
+  const known = events.filter(event => typeof event === 'number').sort((a, b) => a - b);
   let until = at;
-  for (const event of events) {
-    if (typeof event !== 'number') continue;
-    if (until >= event - avoid.beforeMs && until < event + avoid.afterMs)
-      until = event + avoid.afterMs;
+  for (let moved = true; moved; ) {
+    moved = false;
+    for (const event of known)
+      if (until >= event - avoid.beforeMs && until < event + avoid.afterMs) {
+        until = event + avoid.afterMs;
+        moved = true;
+      }
   }
   return until - at;
 }
