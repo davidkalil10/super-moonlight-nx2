@@ -1,6 +1,6 @@
 // The staggered workers' real frames on the gadget-level fake console, against a fake decoder
 // whose output event is auto-clear like the device's: one bit, however many outputs are ready.
-// The host side is the real staggered-live scheduler and the ladder's held-fetch checks.
+// The host side is the real staggered-live scheduler and the held-fetch checks below.
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
@@ -15,7 +15,6 @@ const {gateConsole, BLOCK} = require('../../../hbl-platform-dev/sdk/tests/gate-w
 const definitions = require('../../../hbl-moonlight/sdk/native/movie-functions.json');
 const registration =
   require('../../../hbl-moonlight/sdk/native/movie-event-functions.json').registerClientEvents;
-const {proveHeld, proveRelease} = require('../../sdk/tools/probe-staggered-ladder.cjs');
 const ring = require('../../../hbl-moonlight/tools/moonlight/ring.js');
 const inputPlan = require('../../../hbl-moonlight/tools/moonlight/staggered-input-plan.js');
 const outputPlan = require('../../../hbl-moonlight/tools/moonlight/staggered-output-plan.js');
@@ -28,6 +27,43 @@ const layout = {width: 1920, height: 1080, stride: 1920, sliceHeight: 1088};
 const noWait = async () => {};
 const RECV = ADDRESS.module + 0x800;
 const NO_OUTPUT = 0x2a0n;
+
+const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+// Decode N was gated with the fetch of output N-2 held back: for the whole window the input
+// worker must stay parked on the N-1 acquisition acknowledgement, so N stays unsubmitted and
+// output N-2 stays the acquired one.
+async function proveHeld(worker, sequence, {polls = 40, wait = pause} = {}) {
+  let snapshot = null;
+  for (let poll = 0; poll < polls; poll++) {
+    snapshot = await worker.readStatus();
+    if (snapshot.input.sequence !== sequence - 1 || snapshot.acquire.sequence !== sequence - 2)
+      throw Error(`Decode ${sequence} opened while output ${sequence - 2} was held`);
+    await wait(5);
+  }
+  return {polls, input: snapshot.input.sequence, acquire: snapshot.acquire.sequence};
+}
+
+// After the held fetch opens, every snapshot that shows decode N submitted must already show
+// output N-1 acquired.
+async function proveRelease(worker, sequence, {timeoutMs = 5000, wait = pause} = {}) {
+  const until = Date.now() + timeoutMs;
+  let polls = 0;
+  while (Date.now() < until) {
+    const snapshot = await worker.readStatus();
+    polls++;
+    if (snapshot.input.sequence >= sequence && snapshot.acquire.sequence < sequence - 1)
+      throw Error(`Decode ${sequence} was submitted before output ${sequence - 1} was acquired`);
+    if (snapshot.input.sequence === sequence) {
+      if (snapshot.input.sendStatus !== 0n) throw Error(`Decode ${sequence} submit failed`);
+      if (snapshot.fetch.sequence !== sequence - 2)
+        throw Error(`Output ${sequence - 2} fetch is missing after release`);
+      return {polls, acquire: snapshot.acquire.sequence};
+    }
+    await wait(5);
+  }
+  throw Error(`Decode ${sequence} did not open after output ${sequence - 2} was fetched`);
+}
 
 function device() {
   const log = [];
