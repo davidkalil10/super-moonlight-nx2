@@ -22,6 +22,7 @@ import {createPages} from './ui-pages.js';
 import {createRaster} from './ui-raster.js';
 import * as uiSettings from './ui-settings.js';
 import {hostsFile, loadHosts, seedHosts, saveHosts, parseList} from './menu.js';
+import {discover, merge} from './ui-discover.js';
 import {HELPER} from './helper.js';
 import {findPrivateStorage} from './feed.js';
 import * as session from '../../../hbl-platform/sdk/host/session.js';
@@ -98,6 +99,8 @@ function createChildren({
  * @param {ReturnType<typeof createChildren>} options.children
  * @param {string} options.directory The launcher run directory, for live.js and the exit watch.
  * @param {() => import('./ui-model.js').Host[]} options.readHosts
+ * @param {(hosts: import('./ui-model.js').Host[]) => void} [options.writeHosts] Saves a merged list.
+ * @param {() => Promise<{name: string, address: string}[]>} [options.discoverHosts] mDNS, bounded.
  * @param {(settings: object) => void} options.saveSettings
  * @param {object} options.settings
  * @param {string | null} [options.coversDir] Where the helper caches box art; null for letter tiles only.
@@ -113,6 +116,8 @@ function createService({
   children,
   directory,
   readHosts,
+  writeHosts = () => {},
+  discoverHosts = () => discover(),
   saveSettings,
   settings,
   coversDir = null,
@@ -366,7 +371,7 @@ function createService({
       case 'saveSettings':
         return saveSettings(model.settings);
       case 'refreshHosts':
-        return dispatch({type: 'hosts', hosts: readHosts()});
+        return refreshHosts();
       case 'pauseInput':
       case 'resumeInput':
         return log({event: intent.type});
@@ -376,6 +381,25 @@ function createService({
       default:
         return log({event: 'unknown-intent', type: intent.type});
     }
+  }
+
+  /**
+   * The manual list first, then what mDNS found: new hosts are appended and saved, nothing
+   * manual is touched, and the hosts page follows when the list changed.
+   */
+  async function refreshHosts() {
+    let found = [];
+    try {
+      found = await discoverHosts();
+    } catch (error) {
+      log({event: 'discover-failed', message: error.message});
+    }
+    const manual = readHosts();
+    const hosts = merge(manual, found);
+    log({event: 'discovered', found: found.length, added: hosts.length - manual.length});
+    if (hosts.length !== manual.length) writeHosts(hosts);
+    if (JSON.stringify(hosts) !== JSON.stringify(model.hosts))
+      await dispatch({type: 'hosts', hosts});
   }
 
   /** Covers arrive with the helper's `list --covers`; until then every app gets a letter tile. */
@@ -399,6 +423,7 @@ function createService({
     sequence = stale;
     log({event: 'attach', epoch, staleApplied: stale, seen});
     await dispatch({type: 'attached'});
+    refreshHosts().catch(error => log({event: 'discover-failed', message: error.message}));
   }
 
   async function poll() {
@@ -543,6 +568,7 @@ async function main() {
     children: createChildren(),
     directory,
     readHosts: () => seedHosts(loadHosts(hosts)),
+    writeHosts: list => saveHosts(hosts, list),
     saveSettings: settings => uiSettings.save(settingsFile, settings),
     settings: uiSettings.load(settingsFile),
     coversDir,
