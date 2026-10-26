@@ -67,7 +67,9 @@ function loadHosts(file) {
 
 function saveHosts(file, hosts) {
   fs.mkdirSync(path.dirname(file), {recursive: true});
-  fs.writeFileSync(file, JSON.stringify(hosts, null, 2) + '\n');
+  const partial = file + '.part';
+  fs.writeFileSync(partial, JSON.stringify(hosts, null, 2) + '\n');
+  fs.renameSync(partial, file);
 }
 
 // Keep the configured hosts, append any extra addresses, and make sure the
