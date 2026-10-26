@@ -22,6 +22,7 @@ const hbv = require(path.join(moonlight, 'tools/moonlight/hbv.js'));
 const hbv2 = require(path.join(moonlight, 'tools/moonlight/hbv2.js'));
 const {psnr} = require(path.join(moonlight, 'tools/moonlight/reference.js'));
 const {readFrames} = require(path.join(moonlight, 'tools/moonlight/frames.js'));
+const uiPage = () => import(path.join(moonlight, 'tools/moonlight/ui-page.js'));
 const builds =
   process.env.HB_MOONLIGHT_CHECK_BUILDS ||
   path.join(os.homedir(), 'claude-builds/HBLauncher/gpu-check');
@@ -289,6 +290,102 @@ async function clipCheck(dir, clip) {
   );
 }
 
+// A published page: the compute shader validates and applies it, moves the cursor on a press
+// and writes one command per press; the fragment shader draws strips, images and the cursor
+// over the background, or over the dimmed video for a raised overlay.
+async function uiCheck(dir) {
+  const {serialize, PAGE_FLAG, UI_OP} = await uiPage();
+  const UI = ring.UI,
+    EPOCH = 5;
+  const red = Buffer.alloc(16);
+  for (let i = 0; i < 4; i++) red.writeUInt32LE(0xff0000ff, i * 4);
+  const page = flags =>
+    serialize({
+      epoch: EPOCH,
+      sequence: 1,
+      flags,
+      background: flags ? 0x80000000 : 0xff201008,
+      cursorHome: 0,
+      items: [
+        {id: 7, x: 100, y: 200, w: 800, h: 60},
+        {id: 9, x: 100, y: 280, w: 800, h: 60},
+        {id: 11, x: 100, y: 360, w: 800, h: 60, flags: 1}
+      ],
+      texts: [{x: 120, y: 212, w: 8, h: 4, alpha: Buffer.alloc(32, 255), color: 0xffffffff}],
+      images: [{x: 1000, y: 200, w: 2, h: 2, rgba: red}]
+    });
+  const published = async (flags, torn = false) => {
+    const memory = Buffer.alloc(ring.MEMORY_BYTES);
+    (await fs.readFile(path.join(backend, 'memory.bin'))).copy(memory);
+    const bytes = page(flags);
+    if (torn) bytes.writeUInt32LE(0xdeadbeef, 64 + 4);
+    bytes.copy(memory, ring.UI_OFFSET);
+    for (const [field, value] of Object.entries({
+      uiMagic: ring.UI_MAGIC,
+      uiEpoch: EPOCH,
+      uiSequence: 1,
+      uiPage: 0
+    }))
+      memory.writeUInt32LE(value, UI[field]);
+    return memory;
+  };
+  const state = (buttons = 0, extra = {}) => {
+    const bytes = Buffer.alloc(1024);
+    bytes.writeUInt32LE(buttons, 8);
+    bytes.writeUInt32LE(1, STATE.connected);
+    for (const [offset, value] of Object.entries(extra)) bytes.writeUInt32LE(value, Number(offset));
+    return bytes;
+  };
+  const word = (result, field) => result.memory.readUInt32LE(UI[field]);
+  const pixel = (result, x, y) => [
+    ...result.rgb.subarray((y * 1920 + x) * 3, (y * 1920 + x) * 3 + 3)
+  ];
+
+  const shown = await run(dir, await published(0), [], state());
+  assert.equal(word(shown, 'uiApplied'), 1, 'page applied');
+  assert.equal(word(shown, 'uiShown'), 0);
+  assert.equal(word(shown, 'uiCursor'), 0);
+  assert.equal(word(shown, 'cmdSequence'), 0);
+  assert.deepEqual(pixel(shown, 50, 50), [8, 16, 32], 'page background replaces the video');
+  assert.deepEqual(pixel(shown, 124, 214), [255, 255, 255], 'text strip');
+  assert.deepEqual(pixel(shown, 1001, 201), [255, 0, 0], 'image');
+  assert.ok(pixel(shown, 96, 230)[2] > 150, 'cursor frame left of the first item');
+
+  const down = await run(dir, await published(0), [], state(NPAD.down));
+  assert.equal(word(down, 'uiCursor'), 1, 'down moves to the item below');
+  const up = await run(dir, await published(0), [], state(NPAD.up));
+  assert.equal(word(up, 'uiCursor'), 0, 'no wrap upwards');
+
+  const pressed = await run(dir, await published(0), [], state(NPAD.a));
+  assert.equal(word(pressed, 'cmdSequence'), 1);
+  assert.equal(word(pressed, 'cmdOp'), UI_OP.a);
+  assert.equal(word(pressed, 'cmdItem'), 7);
+  assert.equal(word(pressed, 'cmdPage'), 1);
+  assert.equal(word(pressed, 'cmdEpoch'), EPOCH);
+  const back = await run(dir, await published(0), [], state(NPAD.b));
+  assert.equal(word(back, 'cmdOp'), UI_OP.b);
+  assert.equal(word(back, 'cmdItem'), 0);
+
+  const rejected = await run(dir, await published(0, true), [], state());
+  assert.equal(word(rejected, 'uiApplied'), 0, 'torn page stays unapplied');
+  assert.notDeepEqual(pixel(rejected, 50, 50), [8, 16, 32], 'the test card stays up');
+
+  const overlay = await run(dir, await published(PAGE_FLAG.overlay), [], state());
+  assert.equal(word(overlay, 'uiApplied'), 1);
+  assert.equal(word(overlay, 'uiOverlay'), 0);
+  assert.notDeepEqual(pixel(overlay, 124, 214), [255, 255, 255], 'overlay hidden until raised');
+  const raised = await run(
+    dir,
+    await published(PAGE_FLAG.overlay),
+    [],
+    state(NPAD.l | NPAD.r, {788: 59})
+  );
+  assert.equal(word(raised, 'cmdOp'), UI_OP.chord, 'L+R held one second');
+  assert.equal(word(raised, 'uiOverlay'), 1);
+  assert.deepEqual(pixel(raised, 124, 214), [255, 255, 255], 'overlay text over the video');
+  console.log('Console UI: page apply, cursor, commands, torn page, overlay passed');
+}
+
 async function main() {
   run.binary = harness();
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'moonlight-check-'));
@@ -300,9 +397,10 @@ async function main() {
     await nativeCheck(dir);
     await hbv1Check(dir);
     await chainCheck(dir);
+    await uiCheck(dir);
     if (process.argv[2]) await clipCheck(dir, process.argv[2]);
     console.log(
-      'Passed: exit, waiting screen, native NV12, HBV2 test card, HBV1 slot, HBV2 P chain.'
+      'Passed: exit, waiting screen, native NV12, HBV2 test card, HBV1 slot, HBV2 P chain, console UI.'
     );
   } finally {
     await fs.rm(dir, {recursive: true, force: true});
