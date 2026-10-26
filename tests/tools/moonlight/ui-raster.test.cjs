@@ -54,7 +54,7 @@ test(
 );
 
 test(
-  'cover tiles keep the aspect ratio and the letter tile carries initials',
+  'cover tiles keep the whole art over its blur and the letter tile carries initials',
   {skip: !pil},
   async () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'hbraster-'));
@@ -69,10 +69,11 @@ test(
       assert.equal(tile.width, 160);
       assert.equal(tile.height, 90);
       assert.equal(tile.bytes.length, 160 * 90 * 4);
-      const alpha = x => tile.bytes[(45 * 160 + x) * 4 + 3];
-      assert.equal(alpha(2), 0, 'a portrait cover leaves the sides transparent');
-      assert.equal(alpha(80), 255, 'and fills the middle');
-      assert.equal(tile.bytes[(45 * 160 + 80) * 4], 200, 'red channel first');
+      const pixel = x => tile.bytes.subarray((45 * 160 + x) * 4, (45 * 160 + x) * 4 + 4);
+      assert.equal(pixel(2)[3], 255, 'a portrait cover fills the sides');
+      assert.ok(pixel(2)[0] > 30 && pixel(2)[0] < 120, 'with its own art, darkened');
+      assert.equal(pixel(80)[3], 255);
+      assert.equal(pixel(80)[0], 200, 'the art itself in the middle, red channel first');
       const letters = await raster.letters('Elden Ring', 160, 90);
       assert.equal(letters.bytes.length, 160 * 90 * 4);
       const light = [];
