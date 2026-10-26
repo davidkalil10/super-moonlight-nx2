@@ -260,7 +260,8 @@ function create({
     presented: 0,
     skipped: 0,
     tailDrained: 0,
-    rereads: 0
+    rereads: 0,
+    appliedPeriodMs: periodMs
   };
   let published = null;
   let pending = null;
@@ -327,6 +328,7 @@ function create({
       }
       if (expected.ack)
         pacer.observe(startedAt, isApplied(snapshot.nativeApplied, expected.ack.sequence));
+        counts.appliedPeriodMs = pacer.periodMs;
     },
     onReread: pending => {
       counts.rereads++;
@@ -356,7 +358,7 @@ function create({
   function pendingAck(expected, backlog) {
     delete expected.ack;
     if (!pending) return;
-    const optional = backlog > skipBacklog && now() - pending.openedAt <= 2 * periodMs;
+    const optional = backlog > skipBacklog && now() - pending.openedAt <= 2 * pacer.periodMs;
     expected.ack = {sequence: pending.sequence, index: pending.index, ...(optional && {optional})};
   }
 

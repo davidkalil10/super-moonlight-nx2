@@ -34,14 +34,14 @@ function create({
   now = Date.now,
   sleep = delay
 } = {}) {
-  /** @type {Map<number, {at: number, kb: number}>} */
+  /** @type {Map<number, {at: number, kb: number, grown?: boolean}>} */
   const sends = new Map();
   let perKbMs = startPerKbMs;
   let bound = false;
 
   /** @param {number} unit */
   const predicted = unit => {
-    const send = /** @type {{at: number, kb: number}} */ (sends.get(unit));
+    const send = /** @type {{at: number, kb: number, grown?: boolean}} */ (sends.get(unit));
     return send.at + baseMs + send.kb * perKbMs;
   };
 
@@ -83,7 +83,10 @@ function create({
       const send = sends.get(unit);
       if (!send) return;
       if (!received) {
-        if (at >= predicted(unit)) perKbMs += growMs / send.kb;
+        if (at >= predicted(unit) && !send.grown) {
+          perKbMs += growMs / send.kb;
+          send.grown = true;
+        }
         return;
       }
       if (waited) perKbMs = Math.max(0, perKbMs - shrinkMs / send.kb);
