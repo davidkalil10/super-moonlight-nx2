@@ -38,8 +38,12 @@ unless it is an overlay, which shows over the dimmed stream while raised. Plus a
 together still exit to HBLauncher from any screen.
 
 `build.js` regenerates `hbv.glsl`, `hbv2-tables.glsl`, `ring.glsl`, `state.bin` and
-`memory.bin` under `backends/hblauncher.gpu-app/`, and `assets.py` the icon, the text atlas
-and `text.glsl`; do not edit those by hand.
+`memory.bin` under `backends/hblauncher.gpu-app/`, and `assets.py` the text atlas and
+`text.glsl`; do not edit those by hand.
+
+`assets/icon.png` is the Moonlight logo: the 256x256 frame of `app/moonlight.ico` from
+[moonlight-qt](https://github.com/moonlight-stream/moonlight-qt) at commit ac29686,
+GPL-3.0 like the helper's upstreams, exported as RGBA PNG with Pillow and otherwise unchanged.
 
 Without glslangValidator, build through `tools/moonlight/glslang-shim.sh`,
 which maps the `-V ... SRC -o OUT` call onto `glslc -Os --target-env=vulkan1.0`:
