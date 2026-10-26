@@ -5,12 +5,12 @@ formats share the ring: HBV1 (`tools/moonlight/hbv.js`, fixed-size intra
 slots drawn straight from the ring) and HBV2 (`tools/moonlight/hbv2.js`,
 inter-coded variable-rate slots that the compute shader decodes into a
 persistent 1080p frame). Without a sender the app shows the built-in HBV2 test
-card. Design, format and measurements: [Moonlight design](../../../moonlight-dev/docs/moonlight/DESIGN.md).
+card. Design, format and measurements: the [repo README](../../README.md).
 
 `--codec h264` also accepts the helper's raw H.264 stream and decodes it through
 the console's native movie API into NV12 surfaces. Audio, controller and touch
 remain enabled. Setup, DUT results and performance limits are documented in
-[Native H.264](../../../moonlight-dev/docs/moonlight/NATIVE-H264.md).
+moonlight-dev [CLAUDE.md](../../../moonlight-dev/CLAUDE.md) (Native H.264).
 
 The app is an HB package (`manifest.json`, see hbl-platform `docs/hb-package.md`):
 `assets/` holds the icon and text atlas and `backends/hblauncher.gpu-app/` the shaders
@@ -28,7 +28,7 @@ node ../moonlight-dev/apps/moonlight/check.cjs [CLIP]  # desktop Vulkan decode c
 Private memory (`manifest.json` `memory.bytes`, layout in `tools/moonlight/ring.js`) holds the
 control page, the HBV ring, three native frames and, since 1.1.0, two 4 MiB console UI page
 buffers the host UI service publishes into (`tools/moonlight/ui-page.js`; format in
-[Console UI pages](../../../moonlight-dev/docs/moonlight/CONSOLE-UI.md)).
+the [repo README](../../README.md), Page format).
 
 The console UI (`ui.glsl`, included by `app.comp` and `app.frag`) draws the pages the host
 service publishes: text strips and images at the positions the host laid out, a cursor the
