@@ -18,9 +18,13 @@ Everything runs against the runtime code by relative path:
 ## Test
 
 ```
-node --test $(git ls-files '*.test.cjs')     # 314 tests, same names as HBLauncher 4bdeb1a
+npm test                                     # 314 tests, same names as HBLauncher 4bdeb1a
+npm run typecheck                            # tsc --checkJs (npm install once)
 node apps/moonlight/check.cjs                # desktop Vulkan check, needs a GPU
 ```
+
+`tsconfig.json` lists the hbl-moonlight modules that went through the readability rewrite; add each
+component as it lands. TypeScript is a dev dependency only, hbl-moonlight itself has no build step.
 
 `tools/moonlight/request-budget.cjs` is the offline cost model; run it before any
 device run. Probes in `sdk/tools` touch the console: the user runs them, one at a
