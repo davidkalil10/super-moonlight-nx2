@@ -26,7 +26,10 @@ The paths become package imports with the ESM switch in Phase 2.
 
 ## Rules
 
-- Behaviour is frozen: the bridge traffic must stay byte-identical. Prove it with the
-  `moonlight-dev` tests and request-sequence recordings before every change.
+- The frozen reference is the 1080p60 worker at HBLauncher 4bdeb1a and its records
+  (`native-h264/2026-10-25T17-20-16-026Z-4bdeb1a4`): they stay untouched and every change is
+  measured against them. Main may change exchange count and pacing for 120 fps. Prove each
+  change with the `moonlight-dev` tests, then a live pair before it lands: the 60 fps control
+  in the reference shape (fps=59, dropped=0, idr=0), then the 120 run.
 - Format, then rename/extract, never both in one commit.
 - No live console runs unless the user is at the console (DEVICE-RULES.md).
