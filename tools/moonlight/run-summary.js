@@ -2,7 +2,8 @@
  * Scores a native H.264 live run from its one-second stats rows: `summarize` averages the
  * steady rows after a warmup, `parseExpect` reads the `--expect` limits and `verdict` checks
  * the summary against them. Dropped frames and IDR requests fail a run unless `--expect`
- * allows some.
+ * allows some. Backlog trims are intended skips: they are counted apart from dropped frames
+ * and only fail a run through an explicit `--expect trimmed=N`.
  */
 
 /** Steady-state rows start after this many seconds by default. */
@@ -16,7 +17,8 @@ const LIMITS = {
   dropped: (summary, value) => summary.dropped <= value,
   idr: (summary, value) => summary.idr <= value,
   resyncs: (summary, value) => summary.resyncs <= value,
-  requests: (summary, value) => summary.requestsPerFrame <= value
+  requests: (summary, value) => summary.requestsPerFrame <= value,
+  trimmed: (summary, value) => (summary.trimmed ?? 0) <= value
 };
 /** Limits that apply when `--expect` leaves them out. */
 const DEFAULT_LIMITS = {dropped: 0, idr: 0};
@@ -104,6 +106,7 @@ function summarize(rows, {warmup = DEFAULT_WARMUP} = {}) {
     minFps: steady.length ? Math.min(...steady.map(row => row.presented)) : 0,
     decodedFps: steady.length ? +(sum('decoded') / steady.length).toFixed(2) : 0,
     skipped: sum('skipped'),
+    ...(steady.some(row => 'trimmed' in row) && {trimmed: sum('trimmed')}),
     maxQueued: steady.length ? Math.max(...steady.map(row => row.queued || 0)) : 0,
     dropped: sum('dropped'),
     idr: sum('idr'),

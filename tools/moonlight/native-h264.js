@@ -152,6 +152,7 @@ async function run({
   const inputHz = cli.number(args, '--input-hz', 60);
   const presentHz = cli.number(args, '--present-hz', 60);
   const skipRule = cli.option(args, '--skip-rule') ?? 'backlog';
+  const trimBacklogMs = cli.number(args, '--trim-backlog-ms', null);
   const decodeWait = args.includes('--decode-wait');
   const receiveWait = args.includes('--receive-wait');
   const avoidWindow = exchangeTiming.parseAvoid(cli.option(args, '--avoid-window') ?? undefined);
@@ -173,6 +174,10 @@ async function run({
   if (skipRule === 'vsync' && skipBacklog === Infinity)
     throw Error('--skip-rule vsync needs a --skip-backlog unit count');
   if (decodeWait && skipRule !== 'vsync') throw Error('--decode-wait needs --skip-rule vsync');
+  if (trimBacklogMs !== null && !(trimBacklogMs > 0))
+    throw Error('--trim-backlog-ms takes a unit age in milliseconds');
+  if (trimBacklogMs !== null && skipRule === 'vsync')
+    throw Error('--trim-backlog-ms needs --skip-rule backlog');
   if (avoidWindow && !(decodeWait || receiveWait))
     throw Error('--avoid-window needs --decode-wait or --receive-wait to predict the events');
   if (
@@ -180,6 +185,7 @@ async function run({
     ['--present-hz', '--skip-backlog', '--skip-rule'].some(name => args.includes(name))
   )
     throw Error('--present-hz, --skip-backlog and --skip-rule apply to --staggered');
+  if (!staggered && trimBacklogMs !== null) throw Error('--trim-backlog-ms applies to --staggered');
   if (!Number.isInteger(audioFrames) || audioFrames < 240 || audioFrames % 240)
     throw Error('--audio-frames takes a multiple of 240');
   if (socketAudio && audioFrames > 3840)
@@ -247,6 +253,7 @@ async function run({
   const rows = [];
   const children = [];
   let inputBridge = {exchanges: 0, bridgeMs: 0};
+  let trimmed = 0;
   let auSamples = [];
   const stats = {
     received: 0,
@@ -307,6 +314,7 @@ async function run({
           presentHz,
           skipBacklog,
           skipRule,
+          ...(trimBacklogMs !== null && {trimBacklogMs}),
           decodeWait,
           receiveWait,
           avoid: avoidWindow,
@@ -504,6 +512,7 @@ async function run({
         queued,
         ...(staggeredLive ? {waiting: countsSince(staggeredLive.counts.waiting, waited)} : {}),
         ...(staggered ? {au: auTiming(auSamples)} : {}),
+        ...(trimBacklogMs !== null ? {trimmed} : {}),
         ...withInputStage(bridge.take(), inputBridge),
         at: stage + '/' + (decoder?.step ?? '-'),
         ms: Object.fromEntries(Object.entries(stageMs).map(([k, v]) => [k, Math.round(v)]))
@@ -515,6 +524,7 @@ async function run({
       stageMs = {};
       inputBridge = {exchanges: 0, bridgeMs: 0};
       auSamples = [];
+      trimmed = 0;
       dropped = reader.dropped;
       queued = 0;
       waited = staggeredLive?.counts.waiting ?? {};
@@ -559,6 +569,10 @@ async function run({
               onSent: at => {
                 sample.sentAt = at;
                 auSamples.push(sample);
+              },
+              onTrimmed: ageMs => {
+                trimmed++;
+                log({event: 'backlog-trim', ageMs: tenths(ageMs), trimBacklogMs});
               },
               onSkipped: count => {
                 stats.skipped += count;
@@ -858,6 +872,7 @@ async function run({
           presentHz,
           skipBacklog: skipBacklog === Infinity ? 'off' : skipBacklog,
           skipRule,
+          ...(trimBacklogMs !== null && {trimBacklogMs}),
           decodeWait,
           receiveWait,
           avoidWindow,
@@ -898,6 +913,7 @@ async function run({
     fps: summary.fps,
     minFps: summary.minFps,
     dropped: summary.dropped,
+    ...(summary.trimmed !== undefined && {trimmed: summary.trimmed}),
     idr: summary.idr,
     requestsPerFrame: summary.requestsPerFrame,
     bridgeMsPerFrame: summary.bridgeMsPerFrame,

@@ -9,6 +9,9 @@
  * host, an output is still decoded, fetched and released but copied to a free surface behind a
  * replay of the last applied publication, so the shader keeps it off screen and the next gate
  * does not wait for a present. At most MAX_SKIPS outputs in a row are skipped this way.
+ * trimBacklogMs (backlog rule only) skips one output the same way once the unit in hand has
+ * been older than that at TRIM_FRAMES gates in a row, which drops a standing frame of delay
+ * that the queued count cannot see.
  *
  * skipRule 'vsync' instead keeps at most one publication pending: the newest output is
  * published once the previous publication is applied and the outputs in between go off
@@ -42,6 +45,8 @@ const RESTART = 'Staggered worker native objects retained; restart SmileBASIC';
 const SKIP_BACKLOG = 2;
 /** Most outputs skipped in a row before one is presented again. */
 const MAX_SKIPS = 4;
+/** Gates in a row the unit in hand must be stale at before one output is trimmed. */
+const TRIM_FRAMES = 3;
 const SKIP_RULES = ['backlog', 'vsync'];
 /** AcquireInputBufferIndex results that only mean no input slot is free yet. */
 const PENDING_INPUT = [0x100en, 0x1011n];
@@ -225,7 +230,8 @@ function jsonSafe(value) {
  * The staggered scheduler. push() and finish() take hooks: `sink` gives each output a
  * destination (workerDestination, or discardDestination when skipping), `enter` names each
  * step, and onDecoded, onPresented and onSkipped count outputs. push() also calls onGate with
- * the time its gate write starts and onSent with the time its unit went out.
+ * the time its gate write starts, onSent with the time its unit went out and onTrimmed with
+ * the age of the unit in hand when a trim skips an output.
  * @param {object} [options]
  * @param {(options: any) => Promise<any>} [options.createWorker]
  * @param {number} [options.timeoutMs]
@@ -233,6 +239,7 @@ function jsonSafe(value) {
  * @param {number} [options.presentHz]
  * @param {number} [options.skipBacklog] host backlog above which an output is skipped
  * @param {'backlog' | 'vsync'} [options.skipRule]
+ * @param {number | null} [options.trimBacklogMs] age of the unit in hand that counts as stale
  * @param {boolean} [options.decodeWait] sleep through a pending acquire (vsync rule only)
  * @param {boolean} [options.receiveWait] sleep through a pending receive
  * @param {{beforeMs: number, afterMs: number} | null} [options.avoid] span around a predicted
@@ -246,6 +253,7 @@ function create({
   presentHz = DEFAULT_PRESENT_HZ,
   skipBacklog = SKIP_BACKLOG,
   skipRule = 'backlog',
+  trimBacklogMs = null,
   decodeWait = false,
   receiveWait = false,
   avoid = null,
@@ -254,6 +262,7 @@ function create({
   if (!SKIP_RULES.includes(skipRule)) throw Error('Unknown staggered skip rule ' + skipRule);
   const vsyncRule = skipRule === 'vsync';
   if (decodeWait && !vsyncRule) throw Error('The decode wait needs the vsync skip rule');
+  if (trimBacklogMs !== null && vsyncRule) throw Error('The backlog trim needs the backlog rule');
   const periodMs = 1000 / presentHz;
   let worker = null;
   let transport = null;
@@ -272,11 +281,13 @@ function create({
     skipped: 0,
     tailDrained: 0,
     rereads: 0,
-    appliedPeriodMs: periodMs
+    appliedPeriodMs: periodMs,
+    ...(trimBacklogMs !== null && {trimmed: 0})
   };
   let published = null;
   let pending = null;
   let skips = 0;
+  let stale = 0;
   const waiting = {};
   const waits = {timeoutMs, pause};
   const pacer = presentPacer.create({periodMs, now, sleep: ms => pause(ms)});
@@ -412,11 +423,21 @@ function create({
   }
 
   /**
-   * Picks the surface the next output is fetched into: a discard surface while the backlog
-   * calls for a skip and the skip run is short enough, else a published one. Under the vsync
-   * rule it is a discard surface while a publication is pending.
+   * Whether the unit in hand has been stale at TRIM_FRAMES gates in a row.
+   * @param {number | undefined} arrivedAt
    */
-  async function target(sink, snapshot, backlog) {
+  function trimDue(arrivedAt) {
+    if (trimBacklogMs === null || arrivedAt === undefined) return false;
+    stale = now() - arrivedAt > trimBacklogMs ? stale + 1 : 0;
+    return stale >= TRIM_FRAMES;
+  }
+
+  /**
+   * Picks the surface the next output is fetched into: a discard surface while the backlog
+   * or a due trim calls for a skip and the skip run is short enough, else a published one.
+   * Under the vsync rule it is a discard surface while a publication is pending.
+   */
+  async function target(sink, snapshot, backlog, arrivedAt, onTrimmed) {
     const presentation = {current: snapshot.current, applied: snapshot.nativeApplied};
     if (vsyncRule) {
       if (pending) return sink.discardDestination(presentation);
@@ -424,10 +445,16 @@ function create({
       pending = {sequence: published.sequence, index: published.index, openedAt: null};
       return published;
     }
-    if (published && backlog > skipBacklog && skips < MAX_SKIPS) {
+    const trim = trimDue(arrivedAt);
+    if (published && (backlog > skipBacklog || trim) && skips < MAX_SKIPS) {
       const discard = await sink.discardDestination(presentation);
       if (discard) {
         skips++;
+        stale = 0;
+        if (backlog <= skipBacklog) {
+          counts.trimmed++;
+          onTrimmed?.(now() - arrivedAt);
+        }
         return discard;
       }
     }
@@ -448,7 +475,17 @@ function create({
     sequence,
     current,
     next,
-    {sink, enter = () => {}, onDecoded, onPresented, onSkipped, onGate, backlog = 0}
+    {
+      sink,
+      enter = () => {},
+      onDecoded,
+      onPresented,
+      onSkipped,
+      onGate,
+      onTrimmed,
+      arrivedAt,
+      backlog = 0
+    }
   ) {
     enter('staggered-status');
     const expected = expectedFor(sequence, units, destinations);
@@ -476,7 +513,7 @@ function create({
     let destination = null;
     if (sequence >= 3) {
       enter('destination');
-      destination = await target(sink, snapshot, backlog);
+      destination = await target(sink, snapshot, backlog, arrivedAt, onTrimmed);
       if (!destination && vsyncRule) {
         expected.ack = {
           sequence: pending.sequence,
@@ -548,7 +585,7 @@ function create({
     /**
      * Gates the held unit with `unit` as its next, or starts the workers with the first unit,
      * then sends `unit` and holds it.
-     * @param {{data: Buffer, pts: number | bigint}} unit
+     * @param {{data: Buffer, pts: number | bigint, arrivedAt?: number}} unit
      * @param {any} [hooks]
      */
     async push(unit, hooks = {}) {
@@ -559,7 +596,7 @@ function create({
       const enter = hooks.enter || (() => {});
       if (held) {
         if (!(next.pts > held.pts)) throw Error('Staggered loop needs increasing access-unit PTS');
-        await gate(held.sequence, held, next, hooks);
+        await gate(held.sequence, held, next, {...hooks, arrivedAt: unit.arrivedAt});
       } else {
         enter('staggered-start');
         await worker.start({sequence: 1, ...next});
@@ -658,4 +695,4 @@ function create({
   };
 }
 
-export {create, waitChecked, waitOutput, expectedFor, RESTART};
+export {create, waitChecked, waitOutput, expectedFor, RESTART, TRIM_FRAMES};
