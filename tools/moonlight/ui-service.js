@@ -34,6 +34,9 @@ const RUNS = process.env.HBL_UI_RUNS || '/media/storage2/builds/HBLauncher/ui-se
 const RELAYED = /^hbmoonlight /;
 const POLL_MS = {idle: 50, streaming: 250};
 const APPLY_TIMEOUT_MS = 5000;
+const HEADER_TRIES = 3;
+/** The host header and uiApplied, read together while waiting for the apply. */
+const HEADER_READ = UI.uiApplied - UI.uiMagic + 4;
 const HELPER_TIMEOUT_MS = 20000;
 const STOP_GRACE_MS = 10000;
 const RUNTIME_CHECK_MS = 500;
@@ -149,6 +152,26 @@ function createService({
   const transfer = work => (chain = chain.then(work, work));
   const writeWord = (address, value) => transfer(() => memory.write(mapped + address, u32(value)));
 
+  /**
+   * Reads the header back and writes it again while it differs. The console can write back the
+   * sector the header shares with its own words from an older copy, restoring the previous
+   * sequence before the shader applies the new one.
+   * @param {Buffer} header @param {number} since
+   */
+  async function keepHeader(header, since) {
+    for (let tries = 0; tries < HEADER_TRIES; tries++) {
+      const back = await transfer(() => memory.read(mapped + UI.uiMagic, header.length));
+      if (back.equals(header)) return;
+      log({
+        event: 'header-rewrite',
+        sequence: header.readUInt32LE(8),
+        reverted: [0, 4, 8, 12].map(offset => back.readUInt32LE(offset)),
+        ms: Date.now() - since
+      });
+      await transfer(() => memory.write(mapped + UI.uiMagic, header));
+    }
+  }
+
   /** Publishes the page of the model; `again` republishes one the console never applied. */
   async function publish(again = false) {
     const page = await pages.page(model, covers);
@@ -158,19 +181,21 @@ function createService({
     let next = (sequence + 1) >>> 0 || 1;
     if ((next & 1) === (applied & 1) && applied !== 0) next = (next + 1) >>> 0 || 1;
     const bytes = serialize({...page, epoch, sequence: next});
+    const header = hostWords({magic: UI_MAGIC, epoch, sequence: next, page: next & 1});
     await transfer(() => memory.write(pageAddress(mapped, next & 1), bytes));
-    await transfer(() =>
-      memory.write(
-        mapped + UI.uiMagic,
-        hostWords({magic: UI_MAGIC, epoch, sequence: next, page: next & 1})
-      )
-    );
+    await transfer(() => memory.write(mapped + UI.uiMagic, header));
+    const since = Date.now();
+    await keepHeader(header, since);
     sequence = next;
     published = bytes;
     stalled = false;
     log({event: 'published', screen: model.screen, sequence, bytes: bytes.length});
-    const deadline = Date.now() + apply;
-    while ((applied = await transfer(() => word(UI.uiApplied))) !== sequence) {
+    const deadline = since + apply;
+    for (;;) {
+      const block = await transfer(() => memory.read(mapped + UI.uiMagic, HEADER_READ));
+      applied = block.readUInt32LE(UI.uiApplied - UI.uiMagic);
+      if (applied === sequence) break;
+      if (!block.subarray(0, header.length).equals(header)) await keepHeader(header, since);
       if (Date.now() > deadline) {
         const header = await transfer(() => memory.read(mapped + UI.uiMagic, 72));
         log({

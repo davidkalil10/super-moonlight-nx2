@@ -55,7 +55,8 @@ omitted). The service refuses an app whose private storage is smaller than `MEMO
 
 Each run writes `/media/storage2/builds/HBLauncher/ui-service/<timestamp>-<session>/` with
 `manifest.json` (session, revision, builder, command) and `events.jsonl`: `attach`,
-`published`, `command`, `command-dropped`, `helper` (a failed one carries the helper's error
+`published`, `header-rewrite` (the header read back with an older sequence, its words and
+the ms since the write), `apply-timeout`, `command`, `command-dropped`, `helper` (a failed one carries the helper's error
 line; its `stage` names the step that timed out), `stream-event` (every JSON line the stream
 child relays: `log`, `connected`, `error`), `stream-exit`, `quit` (cancelled, exit code),
 `app-gone`, `detach`.
