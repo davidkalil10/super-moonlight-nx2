@@ -1,7 +1,7 @@
 // Prints the console controller as Moonlight gamepad state whenever it changes,
 // polled at frame rate while the moonlight app is open.
 // Each poll is one bridge read (two with --sources) and competes with the video
-// sender for console exchanges; DESIGN.md plans to fold it into the frame write.
+// sender for console exchanges.
 // Usage: node tools/moonlight/controller-watch.cjs [runs/launcher-XXXX] [--hz 60]
 //        [--labels] [--sources]
 const path = require('node:path');
