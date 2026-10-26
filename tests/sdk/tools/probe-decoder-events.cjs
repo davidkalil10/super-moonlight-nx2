@@ -289,7 +289,7 @@ async function main(
     encoding: 'utf8'
   }).trim();
   output ||= path.join(
-    '/media/storage2/builds/HBLauncher/native-h264',
+    require('../../../hbl-platform/scripts/toolchain.js').builds('native-h264'),
     new Date().toISOString().replace(/[:.]/g, '-') + '-' + revision.slice(0, 8)
   );
   await fs.mkdir(output, {recursive: true, mode: 0o700});
