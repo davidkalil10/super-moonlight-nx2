@@ -41,6 +41,9 @@ function fakeRaster() {
       const height = Math.min(96, Math.round(size * 1.2));
       return {width, height, bytes: Buffer.alloc(width * height, text.length % 251)};
     },
+    async legend(keys, size, width) {
+      return {width, height: 40, bytes: Buffer.alloc(width * 40, 200)};
+    },
     async letters(text, width, height) {
       return {width, height, bytes: Buffer.alloc(width * height * 4, 1)};
     },

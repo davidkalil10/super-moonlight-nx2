@@ -16,6 +16,11 @@ function fakeRaster() {
       const height = Math.min(96, Math.round(size * 1.17));
       return {width, height, bytes: Buffer.alloc(width * height, text.length ? 200 : 0)};
     },
+    async legend(keys, size, width) {
+      calls.text++;
+      const height = Math.round(size * 1.55);
+      return {width, height, bytes: Buffer.alloc(width * height, keys.length ? 200 : 0)};
+    },
     async letters(text, width, height) {
       calls.letters++;
       return {width, height, bytes: Buffer.alloc(width * height * 4, text.charCodeAt(0))};
@@ -162,6 +167,46 @@ test('settings rows are adjustable unless locked or unbacked', async () => {
     assert.equal(parsed.items[i].id, ITEM.setting + i);
     assert.equal((parsed.items[i].flags & ITEM_FLAG.adjustable) !== 0, row.adjustable, row.id);
     assert.equal((parsed.items[i].flags & ITEM_FLAG.greyed) !== 0, row.greyed, row.id);
+  });
+});
+
+test('settings are two columns of cards the cursor frame fits around', async () => {
+  const pages = createPages(fakeRaster());
+  const {MAX_TEXTS} = await uiPage();
+  const attached = reduce(makeModel(HOSTS), {type: 'attached'}).model;
+  const connected = reduce(attached, command('a', ITEM.host)).model;
+  const listed = reduce(connected, {type: 'listed', apps: APPS.slice(0, 2), currentGame: 0}).model;
+  const model = reduce(listed, command('x')).model;
+  assert.equal(model.screen, 'settings');
+  const {parsed} = await roundTrip(await pages.page(model));
+  assert.ok(parsed.texts.length < MAX_TEXTS, `${parsed.texts.length} strips`);
+  assert.deepEqual([...new Set(parsed.items.map(item => item.x))].length, 2, 'two columns');
+  const frame = 6;
+  parsed.items.forEach((item, i) => {
+    assert.ok(item.x - frame >= 16 && item.x + item.w + frame <= 1920 - 16, 'on screen');
+    const card = parsed.texts.find(
+      text => text.x === item.x && text.y === item.y && text.w === item.w && text.h === item.h
+    );
+    assert.ok(card && card.alpha.every(value => value === 255), 'a solid card under the item');
+    const index = parsed.texts.indexOf(card);
+    const inside = parsed.texts.filter(
+      text =>
+        text !== card &&
+        text.x >= item.x &&
+        text.x + text.w <= item.x + item.w &&
+        text.y >= item.y &&
+        text.y + text.h <= item.y + item.h
+    );
+    assert.ok(inside.length >= 2, 'label and value on the card');
+    assert.ok(
+      inside.every(text => parsed.texts.indexOf(text) > index),
+      'card drawn first'
+    );
+    parsed.items.slice(i + 1).forEach(other => {
+      const apartX = Math.max(other.x - (item.x + item.w), item.x - (other.x + other.w));
+      const apartY = Math.max(other.y - (item.y + item.h), item.y - (other.y + other.h));
+      assert.ok(Math.max(apartX, apartY) >= 2 * frame + 4, 'frames never touch');
+    });
   });
 });
 
