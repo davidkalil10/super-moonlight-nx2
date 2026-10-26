@@ -729,7 +729,10 @@ async function run({
             workerStarted = true;
             log({
               event: (staggered ? 'staggered' : pairedLoop ? 'paired' : workerMode) + '-worker',
-              started: true
+              started: true,
+              ...(trimBacklogMs !== null && {trimBacklogMs}),
+              ...(gateOnReceive && {gateOnReceive}),
+              ...(outputLag !== null && {outputLag})
             });
           }
         }
