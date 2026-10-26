@@ -18,12 +18,15 @@ import * as cli from '../../../hbl-platform/sdk/cli.js';
 import {STATE} from '../../../hbl-platform/sdk/host/state-layout.js';
 import {NEUTRAL, decode, toMoonlight, same, NPAD_BYTES} from './controller.js';
 import {TOUCH_BYTES, parseTouch, createTracker, step, flush, touchLine} from './touch.js';
+import {UI} from './ring.js';
 
 /** One read from the start of the state buffer to the end of the touch block. */
 const READ_BYTES = STATE.touch + TOUCH_BYTES;
 const DEFAULT_HZ = 60;
 /** How often the session's source file is re-read to see which app is running. */
 const SOURCE_CHECK_MS = 250;
+/** How often the console UI overlay word is read; input is dropped while it is raised. */
+const OVERLAY_CHECK_MS = 100;
 
 /**
  * @param {object} controller toMoonlight fields
@@ -51,6 +54,19 @@ function frame(previous, bytes, tracker, layout) {
   return {lines, controller};
 }
 
+/**
+ * Whether this frame's input reaches the host: the console UI raises uiOverlay while its
+ * overlay page covers the stream, and the game must not see the presses that drive it. The
+ * frame the overlay goes up releases what is held.
+ * @param {boolean} paused
+ * @param {number} overlay the uiOverlay word
+ * @returns {{paused: boolean, release: boolean}}
+ */
+function gate(paused, overlay) {
+  const raised = overlay !== 0;
+  return {paused: raised, release: raised && !paused};
+}
+
 async function main() {
   const args = process.argv.slice(2);
   const hz = cli.number(args, '--hz', DEFAULT_HZ);
@@ -63,6 +79,8 @@ async function main() {
   let previous = null;
   let source = null;
   let sourceChecked = -Infinity;
+  let overlayChecked = -Infinity;
+  let paused = false;
   const write = line => process.stdout.write(line + '\n');
   const release = () => {
     const ups = flush(tracker);
@@ -83,10 +101,19 @@ async function main() {
     }
     if (source?.package?.id === 'moonlight') {
       try {
-        const bytes = await rpc.read(source.mapped, READ_BYTES);
-        const result = frame(previous, bytes, tracker, layout);
-        previous = result.controller;
-        for (const line of result.lines) write(line);
+        if (started - overlayChecked > OVERLAY_CHECK_MS) {
+          overlayChecked = started;
+          const overlay = (await rpc.read(source.mapped + UI.uiOverlay, 4)).readUInt32LE(0);
+          const next = gate(paused, overlay);
+          paused = next.paused;
+          if (next.release) release();
+        }
+        if (!paused) {
+          const bytes = await rpc.read(source.mapped, READ_BYTES);
+          const result = frame(previous, bytes, tracker, layout);
+          previous = result.controller;
+          for (const line of result.lines) write(line);
+        }
       } catch (error) {
         process.stderr.write('Input read failed: ' + error.message + '\n');
       }
@@ -99,7 +126,7 @@ async function main() {
   release();
 }
 
-export {frame, READ_BYTES};
+export {frame, gate, READ_BYTES};
 
 if (cli.isMain(import.meta))
   main().catch(error => {
