@@ -379,3 +379,50 @@ test('the vsync skip rule needs a host wait and a threshold', async () => {
   );
   await assert.rejects(simulate({...options, skipRule: 'newest'}), /Unknown staggered skip rule/);
 });
+
+test('the decode wait sleeps through a pending acquire instead of rereading', async () => {
+  const run = (presentHz, decodeMs, decodeWait, retryRate = 0) =>
+    simulate({
+      mode: 'staggered',
+      frames: 600,
+      presentHz,
+      lag: 2,
+      barrier: true,
+      hostWait: 'pacer',
+      skipBacklog: 1,
+      skipRule: 'vsync',
+      retryRate,
+      decodeWait,
+      model: {...MODEL, sourceFps: 120, decodeMs}
+    });
+  for (const presentHz of [60, 120]) {
+    const reread = await run(presentHz, 8.5, false);
+    const waited = await run(presentHz, 8.5, true);
+    assert.ok(reread.requestsPerFrame > 3.5, `${reread.requestsPerFrame} requests/frame`);
+    assert.ok(waited.requestsPerFrame <= 2.3, `${waited.requestsPerFrame} requests/frame`);
+    assert.ok(waited.fps >= reread.fps * 0.97, `${presentHz} Hz ${waited.fps}/${reread.fps} fps`);
+  }
+  const reread = await run(120, 6.85, false);
+  const waited = await run(120, 6.85, true);
+  for (const key of ['requestsPerFrame', 'rereadsPerFrame', 'fps', 'skipped'])
+    assert.equal(waited[key], reread[key], key);
+  for (const retryRate of [0.1, 0.3]) {
+    const reread = await run(120, 6.85, false, retryRate);
+    const waited = await run(120, 6.85, true, retryRate);
+    assert.ok(waited.requestsPerFrame <= reread.requestsPerFrame, `retry ${retryRate}`);
+    assert.ok(waited.fps >= reread.fps, `retry ${retryRate}: ${waited.fps}/${reread.fps} fps`);
+  }
+});
+
+test('the decode wait needs the vsync skip rule', async () => {
+  const options = {mode: 'staggered', frames: 10, presentHz: 60, lag: 2, barrier: true};
+  await assert.rejects(
+    simulate({...options, hostWait: 'pacer', skipBacklog: 2, decodeWait: true}),
+    /decode wait needs the vsync skip rule/
+  );
+});
+
+test('budget reports the decode wait matrix', async () => {
+  const {staggeredDecodeWait} = await budget({frames: 60});
+  assert.equal(Object.keys(staggeredDecodeWait).length, 12);
+});

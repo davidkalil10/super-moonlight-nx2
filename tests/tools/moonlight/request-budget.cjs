@@ -48,6 +48,8 @@ const R3_DECODE_MS = 6.85;
 // staggered-live.js rereads a late gate status back to back; it paused 5 ms before.
 const STAGGERED = {retryWaitMs: 0, audioIntervalMs: 1000};
 const GATE_WAITER = {progressPollMs: 0.5, bridgeWaitMs: 1};
+// T58 decode-aware host wait: the starting decode estimate and how a waited read adjusts it.
+const DECODE_WAIT = {startMs: 6, growMs: 0.5, shrinkMs: 0.1};
 
 // Step 3a device baselines at 1080p30, revision 8805924 (R1B-CONCURRENCY-RESULTS.md).
 const BASELINE = {
@@ -506,6 +508,13 @@ function createConsole(
 // the newest output once that one is applied; until then outputs go off screen. A gate waits
 // for the pending publication only while no more than skipBacklog units are queued, or once it
 // has been pending for two vsync periods. presented counts applied publications.
+// decodeWait (vsync rule only) sleeps to the predicted acquire instead of rereading while the
+// input is pending. The first read of a gate waits too, but only after the previous gate found
+// its input pending, so a gate whose decode keeps up reads at once. The host predicts a unit done
+// at max(its gate, the previous unit done) + an estimate of the decode time, and the previous
+// unit done at the earlier of its prediction and the read that saw it. A read past the
+// prediction that still finds the input pending adds DECODE_WAIT.growMs to the estimate; a
+// waited read that lands takes DECODE_WAIT.shrinkMs off, so the reads track a faster decoder.
 async function simulateStaggered({
   frames = 120,
   warmup = 4,
@@ -519,6 +528,7 @@ async function simulateStaggered({
   skipBacklog = null,
   maxSkips = 4,
   skipRule = 'backlog',
+  decodeWait = false,
   model = MODEL
 }) {
   if (hostWait && !['poll', 'pacer', 'waiter'].includes(hostWait))
@@ -527,6 +537,7 @@ async function simulateStaggered({
     throw Error('Unknown staggered skip rule ' + skipRule);
   if (skipRule === 'vsync' && (!['poll', 'pacer'].includes(hostWait) || skipBacklog === null))
     throw Error('The vsync skip rule needs a poll or pacer host wait and a backlog threshold');
+  if (decodeWait && skipRule !== 'vsync') throw Error('The decode wait needs the vsync skip rule');
   const timing = {...model, vsyncMs: 1000 / presentHz};
   const clock = createClock();
   return clock.run(async () => {
@@ -550,6 +561,10 @@ async function simulateStaggered({
     let waiterBridgeMs = 0;
     let fetchOpened = null;
     let pending = null;
+    const gateAt = [];
+    const doneAt = [];
+    let decodeEstimate = DECODE_WAIT.startMs;
+    let decodeBound = false;
     const vsyncRule = skipRule === 'vsync';
     const queued = frame =>
       paced
@@ -565,6 +580,25 @@ async function simulateStaggered({
       exchanges++;
       bridgeMs += timing.requestMs + waitMs;
       await clock.sleep(busyUntil - clock.now());
+    };
+    const predictedDone = unit =>
+      Math.max(gateAt[unit], unit ? (doneAt[unit - 1] ?? 0) : 0) + decodeEstimate;
+    // Sleeps so the next read ends on the predicted acquire; true when it slept.
+    const awaitDecode = async (frame, inputPending) => {
+      if (!decodeWait || !inputPending) return false;
+      const start = predictedDone(frame - lag) - timing.requestMs;
+      if (start <= clock.now()) return false;
+      await clock.sleep(start - clock.now());
+      return true;
+    };
+    const sawInput = (frame, at, waited) => {
+      if (frame < lag) return;
+      const unit = frame - lag;
+      doneAt[unit] = Math.min(predictedDone(unit), at);
+      if (waited) decodeEstimate = Math.max(0, decodeEstimate - DECODE_WAIT.shrinkMs);
+    };
+    const stillPending = (frame, at) => {
+      if (frame >= lag && at >= predictedDone(frame - lag)) decodeEstimate += DECODE_WAIT.growMs;
     };
     const applied = [];
     const apply = (frame, fetchDone, skip) => {
@@ -614,11 +648,22 @@ async function simulateStaggered({
         const due = pending ? pending.applied : 0;
         if (acked) await pacer.beforeRead(pending.at);
         let at;
+        let inputSeen = false;
+        let inputPending = decodeBound;
+        let pendingSeen = false;
         for (;;) {
+          const waited = await awaitDecode(frame, inputPending);
           const startedAt = clock.now();
           await request();
           at = clock.now();
           if (pending) pacer.observe(startedAt, due <= at);
+          if (!inputSeen && inputReady <= at) {
+            sawInput(frame, at, waited);
+            if (frame >= lag) decodeBound = waited || pendingSeen;
+          } else if (!inputSeen && decodeWait) stillPending(frame, at);
+          inputSeen ||= inputReady <= at;
+          inputPending = !inputSeen && frame >= lag;
+          pendingSeen ||= inputPending;
           if (inputSlotRetry && !retriedInputSlot && inputReady <= at) {
             await request();
             inputSlotRetryRpcs++;
@@ -665,6 +710,7 @@ async function simulateStaggered({
         }
       } else await request();
       await request();
+      gateAt[frame] = clock.now();
       if (frame >= lag) fetchOpened = clock.now();
       let submit = clock.now();
       if (barrier && frame)
@@ -714,6 +760,7 @@ async function simulateStaggered({
       waiterBridgeMsPerFrame: perFrame(waiterBridgeMs),
       skipBacklog,
       skipRule,
+      decodeWait,
       skipped,
       requestsPerFrame: perFrame(exchanges),
       bridgeMsPerFrame: perFrame(bridgeMs),
@@ -741,6 +788,7 @@ async function simulate({
   skipBacklog,
   maxSkips,
   skipRule,
+  decodeWait,
   model = MODEL
 }) {
   if (mode === 'staggered')
@@ -757,6 +805,7 @@ async function simulate({
       skipBacklog,
       maxSkips,
       skipRule,
+      decodeWait,
       model
     });
   const paired = mode === 'paired';
@@ -1148,6 +1197,31 @@ async function budget({frames = 120, model = MODEL} = {}) {
       };
     }
   }
+  const staggeredDecodeWait = {};
+  for (const presentHz of [60, 120]) {
+    for (const decodeMs of [model.decodeMs, R3_DECODE_MS]) {
+      for (const retryRate of [0, 0.1, 0.3]) {
+        const options = {
+          mode: 'staggered',
+          frames,
+          presentHz,
+          lag: 2,
+          barrier: true,
+          hostWait: 'pacer',
+          skipBacklog: 1,
+          skipRule: 'vsync',
+          retryRate,
+          model: {...model, sourceFps: 120, decodeMs}
+        };
+        const reread = await simulate(options);
+        const waited = await simulate({...options, decodeWait: true});
+        staggeredDecodeWait[`${presentHz}Hz-decode${decodeMs}-retry${retryRate * 100}`] = {
+          requestsPerFrame: [reread.requestsPerFrame, waited.requestsPerFrame],
+          fps: [reread.fps, waited.fps]
+        };
+      }
+    }
+  }
   return {
     frames,
     model,
@@ -1165,6 +1239,7 @@ async function budget({frames = 120, model = MODEL} = {}) {
     staggeredRetryWait,
     staggeredHostWait,
     staggered120HzGateWaiter,
+    staggeredDecodeWait,
     planDecodeMs: {decodeMs: PLAN_DECODE_MS, ...planDecode}
   };
 }
