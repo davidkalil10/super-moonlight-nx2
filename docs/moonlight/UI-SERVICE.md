@@ -41,8 +41,9 @@ omitted). The service refuses an app whose private storage is smaller than `MEMO
   (`/cancel`) and relists; the result is the subtitle of the app grid ("Quit confirmed" or
   "Quit failed: ...") since the frozen UI block has no status word.
 - Covers come from `hbmoonlight list HOST --covers DIR` (`/appasset`, cached under
-  `$XDG_CACHE_HOME/hblauncher/moonlight/covers` by host and app id); apps without one get a
-  letter tile.
+  `$XDG_CACHE_HOME/hblauncher/moonlight/covers` by host and app id). The helper keeps only a
+  real PNG of at most 4 MiB and 4096 px a side, fetched under a 5 s alarm; a bad or missing
+  cover never fails the list, the app draws the letter tile for it.
 - Hosts: `hosts.json` is the manual source. At attach and on Y the service asks for
   `_nvstream._tcp.local` over mDNS (`ui-discover.js`, Node dgram, 1.5 s window) and appends
   hosts it did not know, saved once through a rename; manual names and addresses are never
