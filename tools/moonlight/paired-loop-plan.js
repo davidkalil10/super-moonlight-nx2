@@ -1,8 +1,35 @@
+/**
+ * Frames of the paired loop, the one long-lived console thread that acquires, fetches and
+ * publishes decoder outputs two at a time (or one, for an odd tail).
+ *
+ * Each pass parks in the gate frame on the start gate, then jumps through the dispatch words:
+ * the acquire frame waits on the decoder output event and acquires each output, stamps the job
+ * sequence and parks on the fetch gate; the first frame fetches, releases and publishes output
+ * 0, stamps the job and parks on the second gate; the second frame does the same for output 1,
+ * restores every frame of the pass from its snapshot and jumps back to the gate. The single
+ * frames do one output in the same shape, and the host picks a pair or a single pass by
+ * rewriting the first two dispatch words. Stopping points every dispatch word at the exit
+ * frame, a longjmp context into thread exit.
+ *
+ * The host reads each stage's native results and job stamp from the control page; a stage's
+ * results are only meaningful once its stamp matches the job the host wrote.
+ */
 import {build} from '../../../hbl-platform/smilebasic/engine/shared/frames.js';
+import {
+  CALL4_X19,
+  CONTEXT_X30,
+  CONTEXT_SP
+} from '../../../hbl-platform/smilebasic/engine/shared/gadgets.js';
 import {CODE, IPC_COPY} from '../../../hbl-platform/sdk/native/thread.js';
 import SYNC from '../../../hbl-platform/sdk/native/os-sync-functions.json' with {type: 'json'};
 import * as ring from './ring.js';
 
+/**
+ * Offsets in the control page: the start, fetch and second light events, the job sequence,
+ * the two acquired output slots (see SLOT), the two output descriptors (see DESCRIPTOR), the
+ * acquire, first and second results (see ACQUIRE_RESULTS and FETCH_RESULTS) and the dispatch
+ * words the gate, acquire, first and second frames jump through, in that order.
+ */
 const CONTROL = {
   startGate: 0x00,
   fetchGate: 0x10,
@@ -16,24 +43,119 @@ const CONTROL = {
   dispatch: [0x400, 0x408, 0x410, 0x418]
 };
 
+/** An acquired output slot: AcquireOutputBufferIndex's index, PTS, flags and count. */
+const SLOT = {
+  index: 0,
+  pts: 8,
+  flags: 16,
+  count: 20,
+  bytes: 32
+};
+
+/**
+ * An output descriptor the host writes before opening the fetch gate: the ring surface's
+ * address and size, then the publication metadata of paired-output-frame.js, whose sequence
+ * word is `commit`.
+ */
+const DESCRIPTOR = {
+  address: 0,
+  bytes: 8,
+  metadata: 16,
+  commit: 44,
+  size: 48
+};
+
+/** The acquire stage's results: each AcquireOutputBufferIndex status, then the job stamp. */
+const ACQUIRE_RESULTS = {
+  status: [0, 8],
+  sequence: 16
+};
+
+/** A fetch stage's results: SetData, GetOutputBuffer and ReleaseOutputBuffer, then the job. */
+const FETCH_RESULTS = {
+  set: 0,
+  get: 8,
+  release: 16,
+  sequence: 24
+};
+
+/** Offsets in the worker's allocation of each frame, its snapshot and the exit context. */
+const REGIONS = {
+  gate: 0x10000,
+  gateSnapshot: 0x80000,
+  singleAcquire: 0x9a000,
+  acquire: 0x110000,
+  acquireSnapshot: 0x180000,
+  singleAcquireSnapshot: 0x1a0000,
+  first: 0x210000,
+  firstSnapshot: 0x280000,
+  singleFirst: 0x2a0000,
+  second: 0x300000,
+  secondSnapshot: 0x380000,
+  singleFirstSnapshot: 0x3a0000,
+  exit: 0x3f0000
+};
+/** Room for one frame before the next region starts. */
+const MAX_FRAME_BYTES = 0x70000;
+/** The exit frame is a longjmp context into thread exit, on its own stack. */
+const EXIT_CONTEXT_BYTES = 0xb0;
+const EXIT_STACK_OFFSET = 0x370000;
+
+const SEQUENCE_BYTES = 4;
+/** The metadata the shader reads from ring.CONTROL.nativeIndex through nativeCommit. */
+const PUBLISHED_BYTES = ring.CONTROL.nativeCommit + SEQUENCE_BYTES - ring.CONTROL.nativeIndex;
+/** longjmp's return value; any nonzero value resumes the target frame. */
+const JUMP_VALUE = 1;
+
+/**
+ * @param {number} base The worker's allocation.
+ * @returns {Record<keyof typeof REGIONS, number>}
+ */
 function locations(base) {
+  return /** @type {any} */ (
+    Object.fromEntries(Object.entries(REGIONS).map(([name, offset]) => [name, base + offset]))
+  );
+}
+
+/**
+ * Logical call index to control offset for a fetch stage's three native results.
+ * @param {number} results
+ * @returns {Record<number, number>}
+ */
+function fetchResults(results) {
   return {
-    gate: base + 0x10000,
-    gateSnapshot: base + 0x80000,
-    singleAcquire: base + 0x9a000,
-    acquire: base + 0x110000,
-    acquireSnapshot: base + 0x180000,
-    singleAcquireSnapshot: base + 0x1a0000,
-    first: base + 0x210000,
-    firstSnapshot: base + 0x280000,
-    singleFirst: base + 0x2a0000,
-    second: base + 0x300000,
-    secondSnapshot: base + 0x380000,
-    singleFirstSnapshot: base + 0x3a0000,
-    exit: base + 0x3f0000
+    0: results + FETCH_RESULTS.set,
+    1: results + FETCH_RESULTS.get,
+    2: results + FETCH_RESULTS.release
   };
 }
 
+/**
+ * The longjmp context that enters thread exit.
+ * @param {number} sdk
+ * @param {number} base
+ * @returns {Buffer}
+ */
+function exitContext(sdk, base) {
+  const stop = Buffer.alloc(EXIT_CONTEXT_BYTES);
+  stop.writeBigUInt64LE(BigInt(sdk + CODE.exit.offset), CONTEXT_X30);
+  stop.writeBigUInt64LE(BigInt(base + EXIT_STACK_OFFSET), CONTEXT_SP);
+  return stop;
+}
+
+/**
+ * Plans every frame of the loop.
+ * @param {object} options
+ * @param {number} options.sdk
+ * @param {number} options.base The worker's allocation.
+ * @param {number} options.control The control page.
+ * @param {number} options.event The decoder output event.
+ * @param {Record<string, number>} options.functions Movie decoder function addresses.
+ * @param {number} options.decoder
+ * @param {number} options.output The movie Buffer GetOutputBuffer fills.
+ * @param {number} options.format The MediaData GetOutputBuffer fills.
+ * @param {{mapped: number}} options.publication
+ */
 function plan({sdk, base, control, event, functions, decoder, output, format, publication}) {
   if (
     !Number.isSafeInteger(sdk) ||
@@ -58,143 +180,151 @@ function plan({sdk, base, control, event, functions, decoder, output, format, pu
   const jump = sdk + CODE.longjmp.offset;
   const sync = name => sdk + SYNC[name].offset;
   const verified = new Set(Object.values(functions));
+
   const frame = (address, calls, results = {}) => {
     const built = build(address, sdk, calls, CODE, false, verified);
     for (const [logical, destination] of Object.entries(results)) {
       const native = built.proof.logicalResultIndices[Number(logical)];
       built.frame.writeBigUInt64LE(
         BigInt(at(destination)),
-        built.proof.stackOffsets[native] + 0x118
+        built.proof.stackOffsets[native] + CALL4_X19
       );
     }
-    if (built.frame.length > 0x70000) throw Error('Paired loop frame exceeds its region');
+    if (built.frame.length > MAX_FRAME_BYTES) throw Error('Paired loop frame exceeds its region');
     return built;
   };
-  const gateCalls = [
-    {function: sync('waitLightEvent'), args: [at(CONTROL.startGate), 0, 0, 0]},
-    {function: jump, args: [{u64: at(CONTROL.dispatch[0])}, 1, 0, 0]}
-  ];
-  const gate = frame(loc.gate, gateCalls);
-  const acquireCalls = [];
-  for (const slot of CONTROL.acquired) {
-    acquireCalls.push({function: sync('waitEvent'), args: [event, 0, 0, 0]});
-    acquireCalls.push({
-      function: functions.acquireOutput,
-      args: [decoder, at(slot), at(slot + 8), at(slot + 16), at(slot + 20)]
-    });
-  }
-  acquireCalls.push({
+  const restoringFrame = (address, calls, results) => {
+    const draft = frame(address, calls, results);
+    calls[calls.length - 2].args[2] = draft.frame.length;
+    return frame(address, calls, results);
+  };
+
+  const waitGate = gate => ({function: sync('waitLightEvent'), args: [at(gate), 0, 0, 0]});
+  const jumpThrough = dispatch => ({
+    function: jump,
+    args: [{u64: at(CONTROL.dispatch[dispatch])}, JUMP_VALUE, 0, 0]
+  });
+  const waitOutput = () => ({function: sync('waitEvent'), args: [event, 0, 0, 0]});
+  const acquireInto = slot => ({
+    function: functions.acquireOutput,
+    args: [
+      decoder,
+      at(slot + SLOT.index),
+      at(slot + SLOT.pts),
+      at(slot + SLOT.flags),
+      at(slot + SLOT.count)
+    ]
+  });
+  const stampJob = results => ({
     function: copy,
-    args: [at(CONTROL.acquireResults + 16), at(CONTROL.job), 4, 0]
+    args: [at(results), at(CONTROL.job), SEQUENCE_BYTES, 0]
   });
-  acquireCalls.push({function: sync('waitLightEvent'), args: [at(CONTROL.fetchGate), 0, 0, 0]});
-  acquireCalls.push({function: jump, args: [{u64: at(CONTROL.dispatch[1])}, 1, 0, 0]});
-  const acquire = frame(loc.acquire, acquireCalls, {
-    1: CONTROL.acquireResults,
-    3: CONTROL.acquireResults + 8
-  });
-  const singleAcquireCalls = [
-    {function: sync('waitEvent'), args: [event, 0, 0, 0]},
-    {
-      function: functions.acquireOutput,
-      args: [
-        decoder,
-        at(CONTROL.acquired[0]),
-        at(CONTROL.acquired[0] + 8),
-        at(CONTROL.acquired[0] + 16),
-        at(CONTROL.acquired[0] + 20)
-      ]
-    },
-    {function: copy, args: [at(CONTROL.acquireResults + 16), at(CONTROL.job), 4, 0]},
-    {function: sync('waitLightEvent'), args: [at(CONTROL.fetchGate), 0, 0, 0]},
-    {function: jump, args: [{u64: at(CONTROL.dispatch[1])}, 1, 0, 0]}
-  ];
-  const singleAcquire = frame(loc.singleAcquire, singleAcquireCalls, {
-    1: CONTROL.acquireResults
-  });
-  const fetchCalls = (index, resultOffset) => {
-    const destination = CONTROL.destinations[index];
+  const restoreCalls = restores =>
+    restores.map(([destination, source, bytes]) => ({
+      function: copy,
+      args: [destination, source, bytes, 0]
+    }));
+  const fetchCalls = (index, results) => {
+    const descriptor = CONTROL.destinations[index];
     const slot = CONTROL.acquired[index];
     return [
       {
         function: functions.bufferSetData,
-        args: [output, {u64: at(destination)}, {u64: at(destination + 8)}, 0]
+        args: [
+          output,
+          {u64: at(descriptor + DESCRIPTOR.address)},
+          {u64: at(descriptor + DESCRIPTOR.bytes)},
+          0
+        ]
       },
       {
         function: functions.getOutput,
-        args: [decoder, {u32: at(slot)}, output, format]
+        args: [decoder, {u32: at(slot + SLOT.index)}, output, format]
       },
-      {function: functions.releaseOutput, args: [decoder, {u32: at(slot)}, 0, 0]},
+      {function: functions.releaseOutput, args: [decoder, {u32: at(slot + SLOT.index)}, 0, 0]},
       {
         function: copy,
-        args: [publication.mapped + ring.CONTROL.nativeIndex, at(destination + 16), 28, 0]
+        args: [
+          publication.mapped + ring.CONTROL.nativeIndex,
+          at(descriptor + DESCRIPTOR.metadata),
+          PUBLISHED_BYTES,
+          0
+        ]
       },
       {
         function: copy,
-        args: [publication.mapped + ring.CONTROL.nativeSequence, at(destination + 44), 4, 0]
+        args: [
+          publication.mapped + ring.CONTROL.nativeSequence,
+          at(descriptor + DESCRIPTOR.commit),
+          SEQUENCE_BYTES,
+          0
+        ]
       },
-      {function: copy, args: [at(resultOffset + 24), at(CONTROL.job), 4, 0]}
+      stampJob(results + FETCH_RESULTS.sequence)
     ];
   };
+
+  const gateCalls = [waitGate(CONTROL.startGate), jumpThrough(0)];
+  const gate = frame(loc.gate, gateCalls);
+
+  const acquireCalls = [];
+  for (const slot of CONTROL.acquired) {
+    acquireCalls.push(waitOutput());
+    acquireCalls.push(acquireInto(slot));
+  }
+  acquireCalls.push(stampJob(CONTROL.acquireResults + ACQUIRE_RESULTS.sequence));
+  acquireCalls.push(waitGate(CONTROL.fetchGate));
+  acquireCalls.push(jumpThrough(1));
+  const acquire = frame(loc.acquire, acquireCalls, {
+    1: CONTROL.acquireResults + ACQUIRE_RESULTS.status[0],
+    3: CONTROL.acquireResults + ACQUIRE_RESULTS.status[1]
+  });
+
+  const singleAcquireCalls = [
+    waitOutput(),
+    acquireInto(CONTROL.acquired[0]),
+    stampJob(CONTROL.acquireResults + ACQUIRE_RESULTS.sequence),
+    waitGate(CONTROL.fetchGate),
+    jumpThrough(1)
+  ];
+  const singleAcquire = frame(loc.singleAcquire, singleAcquireCalls, {
+    1: CONTROL.acquireResults + ACQUIRE_RESULTS.status[0]
+  });
+
   const firstCalls = [
     ...fetchCalls(0, CONTROL.firstResults),
-    {function: sync('waitLightEvent'), args: [at(CONTROL.secondGate), 0, 0, 0]},
-    {function: jump, args: [{u64: at(CONTROL.dispatch[2])}, 1, 0, 0]}
+    waitGate(CONTROL.secondGate),
+    jumpThrough(2)
   ];
-  const first = frame(loc.first, firstCalls, {
-    0: CONTROL.firstResults,
-    1: CONTROL.firstResults + 8,
-    2: CONTROL.firstResults + 16
-  });
-  const restores = [
-    [loc.gate, loc.gateSnapshot, gate.frame.length],
-    [loc.acquire, loc.acquireSnapshot, acquire.frame.length],
-    [loc.first, loc.firstSnapshot, first.frame.length],
-    [loc.second, loc.secondSnapshot, 0]
-  ];
+  const first = frame(loc.first, firstCalls, fetchResults(CONTROL.firstResults));
+
   const secondCalls = [
     ...fetchCalls(1, CONTROL.secondResults),
-    ...restores.map(([destination, source, bytes]) => ({
-      function: copy,
-      args: [destination, source, bytes, 0]
-    })),
-    {function: jump, args: [{u64: at(CONTROL.dispatch[3])}, 1, 0, 0]}
+    ...restoreCalls([
+      [loc.gate, loc.gateSnapshot, gate.frame.length],
+      [loc.acquire, loc.acquireSnapshot, acquire.frame.length],
+      [loc.first, loc.firstSnapshot, first.frame.length],
+      [loc.second, loc.secondSnapshot, 0]
+    ]),
+    jumpThrough(3)
   ];
-  let second = frame(loc.second, secondCalls, {
-    0: CONTROL.secondResults,
-    1: CONTROL.secondResults + 8,
-    2: CONTROL.secondResults + 16
-  });
-  secondCalls[secondCalls.length - 2].args[2] = second.frame.length;
-  second = frame(loc.second, secondCalls, {
-    0: CONTROL.secondResults,
-    1: CONTROL.secondResults + 8,
-    2: CONTROL.secondResults + 16
-  });
-  const singleRestores = [
-    [loc.gate, loc.gateSnapshot, gate.frame.length],
-    [loc.singleAcquire, loc.singleAcquireSnapshot, singleAcquire.frame.length],
-    [loc.singleFirst, loc.singleFirstSnapshot, 0]
-  ];
+  const second = restoringFrame(loc.second, secondCalls, fetchResults(CONTROL.secondResults));
+
   const singleFirstCalls = [
     ...fetchCalls(0, CONTROL.firstResults),
-    ...singleRestores.map(([destination, source, bytes]) => ({
-      function: copy,
-      args: [destination, source, bytes, 0]
-    })),
-    {function: jump, args: [{u64: at(CONTROL.dispatch[3])}, 1, 0, 0]}
+    ...restoreCalls([
+      [loc.gate, loc.gateSnapshot, gate.frame.length],
+      [loc.singleAcquire, loc.singleAcquireSnapshot, singleAcquire.frame.length],
+      [loc.singleFirst, loc.singleFirstSnapshot, 0]
+    ]),
+    jumpThrough(3)
   ];
-  let singleFirst = frame(loc.singleFirst, singleFirstCalls, {
-    0: CONTROL.firstResults,
-    1: CONTROL.firstResults + 8,
-    2: CONTROL.firstResults + 16
-  });
-  singleFirstCalls[singleFirstCalls.length - 2].args[2] = singleFirst.frame.length;
-  singleFirst = frame(loc.singleFirst, singleFirstCalls, {
-    0: CONTROL.firstResults,
-    1: CONTROL.firstResults + 8,
-    2: CONTROL.firstResults + 16
-  });
+  const singleFirst = restoringFrame(
+    loc.singleFirst,
+    singleFirstCalls,
+    fetchResults(CONTROL.firstResults)
+  );
+
   if (
     loc.singleAcquire + singleAcquire.frame.length > loc.acquire ||
     loc.singleAcquireSnapshot + singleAcquire.frame.length > loc.first ||
@@ -202,9 +332,6 @@ function plan({sdk, base, control, event, functions, decoder, output, format, pu
     loc.singleFirstSnapshot + singleFirst.frame.length > loc.exit
   )
     throw Error('Paired single-output frame exceeds its reserved region');
-  const stop = Buffer.alloc(0xb0);
-  stop.writeBigUInt64LE(BigInt(sdk + CODE.exit.offset), 0x58);
-  stop.writeBigUInt64LE(BigInt(base + 0x370000), 0x68);
   return {
     control: CONTROL,
     locations: loc,
@@ -214,7 +341,7 @@ function plan({sdk, base, control, event, functions, decoder, output, format, pu
     first,
     second,
     singleFirst,
-    stop,
+    stop: exitContext(sdk, base),
     calls: {
       gate: gateCalls,
       acquire: acquireCalls,
@@ -226,4 +353,4 @@ function plan({sdk, base, control, event, functions, decoder, output, format, pu
   };
 }
 
-export {CONTROL, locations, plan};
+export {CONTROL, SLOT, DESCRIPTOR, ACQUIRE_RESULTS, FETCH_RESULTS, locations, plan};
