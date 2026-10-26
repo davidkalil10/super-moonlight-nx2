@@ -59,8 +59,8 @@ test('the hosts page lists hosts as items and round-trips', async () => {
   );
   assert.equal(
     summary.texts,
-    2 + 2 * HOSTS.length + 1,
-    'title, subtitle, name and address per host, hint'
+    2 + 3 + 3 * HOSTS.length + 1,
+    'chip, heading, a card with name and address per host, legend'
   );
   assert.equal(parsed.flags, 0, 'the cursor shows');
   assert.equal(parsed.background >>> 24, 0xff);
@@ -69,7 +69,7 @@ test('the hosts page lists hosts as items and round-trips', async () => {
     again.texts.map(text => text.alpha),
     page.texts.map(text => text.alpha)
   );
-  assert.equal(raster.calls.text, 2 + 2 * HOSTS.length + 1, 'strips are painted once');
+  assert.equal(raster.calls.text, 1 + 3 + 2 * HOSTS.length + 1, 'strips are painted once');
 });
 
 test('status pages hide the cursor and carry the host or app name', async () => {
@@ -208,6 +208,39 @@ test('settings are two columns of cards the cursor frame fits around', async () 
       assert.ok(Math.max(apartX, apartY) >= 2 * frame + 4, 'frames never touch');
     });
   });
+});
+
+test('every Horizon screen keeps its cursor frames on screen and apart', async () => {
+  const pages = createPages(fakeRaster());
+  const {MAX_TEXTS} = await uiPage();
+  const many = Array.from({length: 9}, (_, i) => ({name: 'PC ' + i, address: '10.0.0.' + i}));
+  const listed = reduce(
+    reduce(reduce(makeModel(many), {type: 'attached'}).model, command('a', ITEM.host)).model,
+    {type: 'listed', apps: APPS.slice(0, 2), currentGame: 1001}
+  ).model;
+  const screens = {
+    hosts: reduce(makeModel(many), {type: 'attached'}).model,
+    quitConfirm: reduce(listed, command('y')).model,
+    streaming: reduce(reduce(listed, command('a', ITEM.app)).model, {type: 'streamStarted'}).model,
+    error: reduce(listed, {type: 'failed', message: 'Cannot reach the PC'}).model
+  };
+  const frame = 6;
+  for (const [name, model] of Object.entries(screens)) {
+    const {parsed} = await roundTrip(await pages.page(model));
+    assert.ok(parsed.texts.length < MAX_TEXTS, name + ' strips');
+    assert.ok(parsed.items.length > 0, name + ' items');
+    parsed.items.forEach((item, i) => {
+      assert.ok(item.x - frame >= 16 && item.x + item.w + frame <= 1904, name + ' x');
+      assert.ok(item.y - frame >= 16 && item.y + item.h + frame <= 1064, name + ' y');
+      parsed.items.slice(i + 1).forEach(other => {
+        const apartX = Math.max(other.x - (item.x + item.w), item.x - (other.x + other.w));
+        const apartY = Math.max(other.y - (item.y + item.h), item.y - (other.y + other.h));
+        assert.ok(Math.max(apartX, apartY) >= 2 * frame + 4, name + ' frames apart');
+      });
+    });
+  }
+  const shown = (await roundTrip(await pages.page(screens.hosts))).parsed.items;
+  assert.equal(shown.length, 6, 'six PCs per page');
 });
 
 test('the streaming overlay, the quit question and the error page carry their items', async () => {
