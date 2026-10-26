@@ -9,7 +9,7 @@
  */
 import {CATALOG, adjust, defaults} from './ui-settings.js';
 
-/** First item id of each group; a row's id is its group base plus its index. */
+/** First item id of each group; a row's id is its group base plus its index, 10000 rows apart. */
 const ITEM = {
   back: 1,
   retry: 2,
@@ -19,9 +19,9 @@ const ITEM = {
   quitHost: 6,
   confirmQuit: 7,
   cancel: 8,
-  host: 100,
-  app: 200,
-  setting: 300
+  host: 10000,
+  app: 20000,
+  setting: 30000
 };
 /** Covers per apps page: two rows of five, within the page's 24 images and 4 MiB body. */
 const APPS_PER_PAGE = 10;
