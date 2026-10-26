@@ -39,22 +39,72 @@ test('the Moonlight package loads on backend one with the committed bytes', asyn
   assert.deepEqual(app.manifest.sdk, {version: 1, capabilities: []});
 });
 
-test('build.js refuses arguments before it writes the package', async () => {
+/**
+ * Runs build.js from a copy of the package and its tools beside the real hbl-platform, so a
+ * build that should have been refused never rewrites the real package. Returns the result and
+ * whether any file under the copied package changed.
+ */
+function buildCopy(args, {cwd = '', env = {}} = {}) {
   const fs = require('node:fs');
+  const os = require('node:os');
   const {spawnSync} = require('node:child_process');
-  const section = path.join(PACKAGE, 'backends/hblauncher.gpu-app');
-  const snapshot = () =>
-    Object.fromEntries(
-      fs.readdirSync(section).map(name => [name, sha256(fs.readFileSync(path.join(section, name)))])
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'moonlight-build-'));
+  try {
+    const copy = path.join(root, 'hbl-moonlight');
+    for (const part of ['apps/moonlight', 'tools/moonlight'])
+      fs.cpSync(path.join(moonlight, part), path.join(copy, part), {recursive: true});
+    fs.symlinkSync(platform, path.join(root, 'hbl-platform'));
+    const pkg = path.join(copy, 'apps/moonlight');
+    const snapshot = () =>
+      fs
+        .readdirSync(pkg, {recursive: true})
+        .filter(name => fs.statSync(path.join(pkg, name)).isFile())
+        .sort()
+        .map(name => name + ' ' + sha256(fs.readFileSync(path.join(pkg, name))));
+    const before = snapshot();
+    assert.ok(before.some(line => line.startsWith('assets/text.bin ')));
+    assert.ok(before.some(line => line.startsWith('backends/hblauncher.gpu-app/text.glsl ')));
+    const result = spawnSync(process.execPath, [path.join(pkg, 'build.js'), ...args], {
+      cwd: path.join(copy, cwd),
+      encoding: 'utf8',
+      env: {...process.env, ...env}
+    });
+    return {...result, unchanged: JSON.stringify(snapshot()) === JSON.stringify(before)};
+  } finally {
+    fs.rmSync(root, {recursive: true});
+  }
+}
+
+test('build.js refuses arguments before it writes the package', () => {
+  for (const [cwd, check] of [
+    ['', 'node ../hbl-platform/sdk/build.js --check apps/moonlight'],
+    ['apps/moonlight', 'node ../../../hbl-platform/sdk/build.js --check .']
+  ]) {
+    const result = buildCopy(['--check'], {cwd});
+    assert.equal(result.status, 1);
+    assert.equal(
+      result.stderr,
+      'build.js takes no arguments and rewrites the package in place; to check it, run ' +
+        check +
+        '\n'
     );
-  const before = snapshot();
-  const result = spawnSync(process.execPath, [path.join(PACKAGE, 'build.js'), '--check'], {
-    cwd: moonlight,
-    encoding: 'utf8'
-  });
+    assert.ok(result.unchanged);
+  }
+});
+
+test('build.js refuses another glslc before it writes the package', () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const glslc = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'glslc-')), 'glslc');
+  fs.writeFileSync(glslc, '#!/bin/sh\necho "shaderc v2025.2 2025-05-01"\n', {mode: 0o755});
+  const result = buildCopy([], {env: {GLSLC: glslc}});
+  fs.rmSync(path.dirname(glslc), {recursive: true});
   assert.equal(result.status, 1);
-  assert.match(result.stderr, /takes no arguments.*sdk\/build\.js --check apps\/moonlight/);
-  assert.deepEqual(snapshot(), before);
+  assert.match(
+    result.stderr,
+    /^build\.js compiles with glslc shaderc v2026\.1 .*found shaderc v2025\.2 .*Nothing was written\.\n$/
+  );
+  assert.ok(result.unchanged);
 });
 
 test('the package has no portable entry and no unlisted assets', async () => {
