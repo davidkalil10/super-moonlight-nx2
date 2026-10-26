@@ -335,3 +335,47 @@ test('a skipped present does not wait on the vsync pacer', async () => {
   assert.ok(result.decodedFps >= 95, `decoded ${result.decodedFps}/s`);
   assert.ok(result.requestsPerFrame < 4, `${result.requestsPerFrame} requests/frame`);
 });
+
+test('the vsync skip rule presents at the vsync rate while decode keeps up', async () => {
+  const run = (presentHz, decodeMs, skipRule) =>
+    simulate({
+      mode: 'staggered',
+      frames: 600,
+      presentHz,
+      lag: 2,
+      barrier: true,
+      hostWait: 'pacer',
+      skipBacklog: skipRule === 'vsync' ? 1 : 2,
+      skipRule,
+      model: {...MODEL, sourceFps: 120, decodeMs}
+    });
+  const collapsed = await run(60, 6.85, 'backlog');
+  const tracking = await run(60, 6.85, 'vsync');
+  assert.ok(collapsed.fps < 30, `T23 rule ${collapsed.fps} fps`);
+  assert.ok(tracking.fps >= 59.5, `vsync rule ${tracking.fps} fps`);
+  assert.ok(tracking.decodedFps >= 118, `decoded ${tracking.decodedFps}/s`);
+  assert.ok(tracking.requestsPerFrame <= 2.6, `${tracking.requestsPerFrame} requests/frame`);
+  const full = await run(120, 6.85, 'vsync');
+  assert.equal(full.fps, 120);
+  assert.equal(full.skipped, 0);
+  assert.ok(full.requestsPerFrame <= 2.05, `${full.requestsPerFrame} requests/frame`);
+  const slow = await run(120, 8.5, 'vsync');
+  assert.ok(slow.fps > 2 * (await run(120, 8.5, 'backlog')).fps, `vsync rule ${slow.fps} fps`);
+});
+
+test('the vsync skip rule needs a host wait and a threshold', async () => {
+  const options = {mode: 'staggered', frames: 10, presentHz: 60, lag: 2, barrier: true};
+  await assert.rejects(
+    simulate({...options, skipRule: 'vsync', skipBacklog: 1}),
+    /vsync skip rule/
+  );
+  await assert.rejects(
+    simulate({...options, skipRule: 'vsync', hostWait: 'pacer'}),
+    /vsync skip rule/
+  );
+  await assert.rejects(
+    simulate({...options, skipRule: 'vsync', hostWait: 'waiter', skipBacklog: 1}),
+    /vsync skip rule/
+  );
+  await assert.rejects(simulate({...options, skipRule: 'newest'}), /Unknown staggered skip rule/);
+});

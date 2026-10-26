@@ -500,6 +500,12 @@ function createConsole(
 // is ready. The waiter arms with the gate write, samples GPU-applied status every
 // 0.5 ms, and pairs a bounded event wait with one status copy in one bridge request.
 // Its hint still needs the same host-side status check before the next gate opens.
+// skipRule 'backlog' is the T23 rule: with more than skipBacklog units queued an output goes
+// off screen, at most maxSkips in a row, and every published output is waited for. skipRule
+// 'vsync' (poll or pacer host wait only) keeps at most one publication pending and publishes
+// the newest output once that one is applied; until then outputs go off screen. A gate waits
+// for the pending publication only while no more than skipBacklog units are queued, or once it
+// has been pending for two vsync periods. presented counts applied publications.
 async function simulateStaggered({
   frames = 120,
   warmup = 4,
@@ -512,10 +518,15 @@ async function simulateStaggered({
   hostWait = null,
   skipBacklog = null,
   maxSkips = 4,
+  skipRule = 'backlog',
   model = MODEL
 }) {
   if (hostWait && !['poll', 'pacer', 'waiter'].includes(hostWait))
     throw Error('Unknown staggered host wait ' + hostWait);
+  if (!['backlog', 'vsync'].includes(skipRule))
+    throw Error('Unknown staggered skip rule ' + skipRule);
+  if (skipRule === 'vsync' && (!['poll', 'pacer'].includes(hostWait) || skipBacklog === null))
+    throw Error('The vsync skip rule needs a poll or pacer host wait and a backlog threshold');
   const timing = {...model, vsyncMs: 1000 / presentHz};
   const clock = createClock();
   return clock.run(async () => {
@@ -538,6 +549,12 @@ async function simulateStaggered({
     let inputSlotRetryRpcs = 0;
     let waiterBridgeMs = 0;
     let fetchOpened = null;
+    let pending = null;
+    const vsyncRule = skipRule === 'vsync';
+    const queued = frame =>
+      paced
+        ? Math.min(warmup + frames, Math.floor((clock.now() - origin) / interval) + 1) - frame - 1
+        : warmup + frames - frame - 1;
     const pacer = presentPacer.create({
       periodMs: timing.vsyncMs,
       now: clock.now,
@@ -588,8 +605,36 @@ async function simulateStaggered({
           await clock.sleep(retryWaitMs);
         }
       }
-      const acked = frame > lag && !offScreen.has(frame - lag - 1);
-      if (hostWait) {
+      const acked = vsyncRule
+        ? pending !== null &&
+          (queued(frame) <= skipBacklog || clock.now() - pending.at > 2 * timing.vsyncMs)
+        : frame > lag && !offScreen.has(frame - lag - 1);
+      if (vsyncRule) {
+        let retriedInputSlot = false;
+        const due = pending ? pending.applied : 0;
+        if (acked) await pacer.beforeRead(pending.at);
+        let at;
+        for (;;) {
+          const startedAt = clock.now();
+          await request();
+          at = clock.now();
+          if (pending) pacer.observe(startedAt, due <= at);
+          if (inputSlotRetry && !retriedInputSlot && inputReady <= at) {
+            await request();
+            inputSlotRetryRpcs++;
+            retriedInputSlot = true;
+            rereads++;
+            continue;
+          }
+          if (inputReady <= at && (!acked || due <= at)) break;
+          rereads++;
+          if (inputReady <= at && hostWait === 'pacer') await pacer.pending();
+        }
+        if (pending && due <= at) {
+          if (frame >= warmup) presented++;
+          pending = null;
+        }
+      } else if (hostWait) {
         let retriedInputSlot = false;
         if (hostWait !== 'poll' && acked) await pacer.beforeRead(fetchOpened);
         const sampledPresentReady = acked
@@ -629,6 +674,16 @@ async function simulateStaggered({
       const arrived = paced
         ? Math.min(warmup + frames, Math.floor((clock.now() - origin) / interval) + 1)
         : warmup + frames;
+      if (vsyncRule) {
+        if (frame >= lag && pending) skipped++;
+        else if (frame >= lag) {
+          const fetchDone = clock.now() + timing.fetchMs;
+          const vsync = Math.ceil((fetchDone + 1e-6) / timing.vsyncMs) * timing.vsyncMs;
+          pending = {at: clock.now(), applied: vsync};
+        }
+        sent = clock.now();
+        continue;
+      }
       const skip =
         skipBacklog !== null &&
         frame > lag &&
@@ -642,7 +697,7 @@ async function simulateStaggered({
       else if (frame >= lag) presented++;
     }
     const elapsed = clock.now() - started;
-    const outputs = presented + skipped;
+    const outputs = vsyncRule ? frames : presented + skipped;
     const perFrame = value => Math.round((value / outputs) * 100) / 100;
     return {
       frames: presented,
@@ -658,6 +713,7 @@ async function simulateStaggered({
       inputSlotRetryRpcsPerFrame: perFrame(inputSlotRetryRpcs),
       waiterBridgeMsPerFrame: perFrame(waiterBridgeMs),
       skipBacklog,
+      skipRule,
       skipped,
       requestsPerFrame: perFrame(exchanges),
       bridgeMsPerFrame: perFrame(bridgeMs),
@@ -684,6 +740,7 @@ async function simulate({
   hostWait,
   skipBacklog,
   maxSkips,
+  skipRule,
   model = MODEL
 }) {
   if (mode === 'staggered')
@@ -699,6 +756,7 @@ async function simulate({
       hostWait,
       skipBacklog,
       maxSkips,
+      skipRule,
       model
     });
   const paired = mode === 'paired';
