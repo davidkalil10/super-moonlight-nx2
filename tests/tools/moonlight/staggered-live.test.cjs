@@ -30,7 +30,7 @@ const {
 
 const layout = {width: 1920, height: 1080, stride: 1920, sliceHeight: 1088};
 const noPause = async () => {};
-/** sha256 of every write, gate payload, request and send of defaultStreamDigest() on a2f22ab. */
+/** sha256 of every write, gate payload, request and send of defaultStreamDigest() on 14e29df. */
 const DEFAULT_STREAM_DIGEST = 'a1a04bafef4771fcdd4cedcea9e2466fe0b49598972df79293e9c9540419af34';
 const unitAt = sequence => ({data: Buffer.alloc(100 + sequence), pts: sequence * 1000});
 
