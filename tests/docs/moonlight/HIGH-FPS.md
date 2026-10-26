@@ -12,7 +12,7 @@ Short answer: to reach 120 fps end to end, three things have to hold together:
 3. The bridge feeds 120 slots per second.
 
 None of the three is true today, and only the second can be fixed in this tree
-without first running a probe. The probes in section 6 decide which branch
+without first running a probe. The probes in section 6 decided which branch
 of the plan applies.
 
 ## 1. Correction to RESEARCH.md Q3
@@ -32,8 +32,8 @@ builds the surface and swapchain itself:
   2 (FIFO). Present modes are never queried.
 
 So changing the present mode is a two-word change at creation time. Only the
-answer to "is anything but FIFO offered" is missing, and `probe-present.cjs`
-supplies it.
+answer to "is anything but FIFO offered" is missing; the retired display-120
+probes looked for it (hbl-notes `team/research/120hz-result.md`).
 
 ## 2. How a frame is paced today
 
@@ -58,7 +58,7 @@ That means:
   is only safe because WaitIdle drains the queue every frame. Removing WaitIdle
   needs per-image fences and semaphores (item 6 below).
 
-`sdk/tools/present-rate.cjs runs/` summarizes every recorded session:
+The loop heartbeats give, per recorded session:
 
 | Session  | What ran | min / p5 / median Hz | seconds < 59 Hz |
 | -------- | -------- | -------------------- | --------------- |
@@ -78,8 +78,8 @@ At 120 Hz the same mechanism drops to 60 as soon as a frame exceeds 8.3 ms.
 
 | Stage | Budget at 120 | Today | Source |
 | ----- | ------------- | ----- | ------ |
-| Present cadence | 8.33 ms | 16.7 ms (60 Hz in every idle session) | `present-rate.cjs` |
-| HBV2 decode, 1080p P frame | < ~7 ms (leave room for draw and present) | Console unknown; misses 16.7 ms in bXVJxN. Rig, LOCAL_SIZE 1024: 6.5-9.8 ms (Navi31), 16.7-17.5 ms (Raphael iGPU) | `check.cjs`, `probe-hbv2-decode.cjs` |
+| Present cadence | 8.33 ms | 16.7 ms (60 Hz in every idle session) | loop heartbeats |
+| HBV2 decode, 1080p P frame | < ~7 ms (leave room for draw and present) | Console unknown; misses 16.7 ms in bXVJxN. Rig, LOCAL_SIZE 1024: 6.5-9.8 ms (Navi31), 16.7-17.5 ms (Raphael iGPU) | `check.cjs` |
 | HBV2 catch-up (3 slots in one dispatch) | same frame | Rig: 15.4-17.9 ms (Navi31), 35.5 ms (Raphael) | `check.cjs` |
 | Preview copy, 1920x1080x4 per frame | 0 | 8.3 MB copy plus two layout transitions every frame, every app | `launcher.cjs:392-397`, `gpu-app.cjs:355-360` |
 | Bridge exchanges | about 470/s needed | about 412/s wired ceiling | `DESIGN.md:584-588`, `launcher-TJ2SqH` |
@@ -300,34 +300,9 @@ fits the coming refactor of `launcher-loop.js` better than a patch to it now.
 
 ## 6. Probes for the owner
 
-Run them in this order. All of them write their JSON report into the session
-directory (mode 600).
-
-```sh
-# 1. Host only: shown rate per session from loop heartbeats.
-node sdk/tools/present-rate.cjs runs/
-
-# 2. Read-only, loop may run: present modes, image counts, compute limits,
-#    timestampPeriod, extensions, the vi forwarding table and history state.
-node sdk/tools/probe-present.cjs runs/launcher-XXXX
-# Then the vi frame-number rate (skipped automatically if uninitialized):
-node sdk/tools/probe-present.cjs runs/launcher-XXXX --vi
-
-# 3. Loop running: the swap-interval dry run.
-node sdk/tools/probe-swap-interval.cjs runs/launcher-XXXX
-# Only if the dry run says "table callable: true". The pair is an example;
-# the meaning of the two ints is unknown, so record what each pair does.
-node sdk/tools/probe-swap-interval.cjs runs/launcher-XXXX --apply 1 2
-```
-
-What each answer decides:
-
-- `presentModes`, plus `images` max >= 3, gates item 3.
-- `maxComputeWorkGroupInvocations` and `timestampPeriod` confirm the 512 choice
-  and the item 1 sizing.
-- `viFramesPerSecond` above 60 proves a faster panel; about 60 proves nothing (see item 4).
-- `probe-swap-interval`'s `applied` row against `before` shows whether the vi
-  call does anything.
+The present-rate, probe-present and probe-swap-interval probes retired with
+the display-120 lane in lane Z. Their results are in
+hbl-notes `team/research/120hz-result.md`.
 
 GPU timestamps were not used: `vkGetQueryPoolResults` takes 8 arguments and the
 bridge passes 4.

@@ -65,7 +65,7 @@ instruction signatures before making native calls. It uses the current
 session's module base and retains allocations until the SmileBASIC session
 ends. Failed worker jobs are not reused or destructed while they may still run.
 The profile is in `sdk/native/movie-functions.json`; the full captured catalog
-is documented in [CATALOG.md](../../sdk/native/CATALOG.md).
+is documented in hbl-notes `team/research/hbl-platform-dev/CATALOG.md`.
 
 ## Validation and current limits
 

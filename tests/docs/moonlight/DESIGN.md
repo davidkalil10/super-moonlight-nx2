@@ -484,12 +484,13 @@ lost blocks heal without a full keyframe. The live sender polls the console's
 
 ### 6.5 Measured quality, bytes and speed
 
-Each 1080p sequence (120 frames) was replayed through a latest-wins sender on a
-32 KiB-per-exchange link, scoring what the screen shows at every 60 Hz vsync. `coded` is the luma PSNR of a delivered
-frame against its own source; `displayed` compares the frame on screen at each
-vsync with that vsync's source, so dropped frames count against it. HBV1 is the
-1080p fixed-rate slot (288 KiB). Encode is on an otherwise idle m5; under the
-user's live screencast session the same frames took about 6.5 ms.
+Each 1080p sequence (120 frames) was replayed through a latest-wins sender
+on a 32 KiB-per-exchange link, scoring what the screen shows at every 60 Hz
+vsync. `coded` is the luma PSNR of a delivered frame against its own source;
+`displayed` compares the frame on screen at each vsync with that vsync's
+source, so dropped frames count against it. HBV1 is the 1080p fixed-rate
+slot (288 KiB). Encode is on an otherwise idle m5; under the user's live
+screencast session the same frames took about 6.5 ms.
 
 Desktop, 5.7 MB/s (the measured link):
 
@@ -546,8 +547,9 @@ under `~/claude-builds/HBLauncher/hbv2-eval/`.
    invocations (`HBV2_LOCAL_SIZE`). First, the size: it was 1024, but at 1024
    the compiler caps each invocation at 64 registers and spills the private
    arrays (RADV: 983 spilled VGPRs on Raphael). 512 is bit-exact and 2.3x
-   faster there; see `HIGH-FPS.md` section 4. `probe-present.cjs` reports the
-   console's `maxComputeWorkGroupInvocations`.
+   faster there; see `HIGH-FPS.md` section 4. The console's
+   `maxComputeWorkGroupInvocations` was a probe-present question, and that
+   probe retired with the display-120 lane.
    Second, the time: desktop RADV (Strix Halo) runs the dispatch in 1-5 ms, but
    one workgroup is one CU, and the per-CU gap to the console could be several
    times that, so 10-25 ms per P frame is possible and would break 60 Hz.
