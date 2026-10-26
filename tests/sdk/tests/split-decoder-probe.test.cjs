@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const {temporary} = require('../../../hbl-platform-dev/sdk/tests/recording-rpc.cjs');
-const ring = require('../../../hbl-moonlight/tools/moonlight/ring.cjs');
+const ring = require('../../../hbl-moonlight/tools/moonlight/ring.js');
 const {main, verifyPublication} = require('../tools/probe-split-decoder.cjs');
 
 async function fixture(stage, {nativePublish = false, autoOutputQueue = false, linkedGates = false} = {}) {

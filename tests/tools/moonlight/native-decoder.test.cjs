@@ -7,7 +7,7 @@ const {NativeClient} = require('../../../hbl-platform/smilebasic/engine/lib/nati
 const definitions = require('../../../hbl-moonlight/sdk/native/movie-functions.json');
 const {
   create: createDecoder
-} = require('../../../hbl-moonlight/tools/moonlight/native-decoder.cjs');
+} = require('../../../hbl-moonlight/tools/moonlight/native-decoder.js');
 
 // A faithful in-process console: the real NativeClient frames exchanges onto a
 // fake connection that executes the two call records against a memory model and

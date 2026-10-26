@@ -5,8 +5,8 @@ const registration =
   require('../../../hbl-moonlight/sdk/native/movie-event-functions.json').registerClientEvents;
 const sync = require('../../../hbl-platform/sdk/native/os-sync-functions.json');
 const {CODE} = require('../../../hbl-platform/sdk/native/thread.js');
-const ring = require('../../../hbl-moonlight/tools/moonlight/ring.cjs');
-const {create} = require('../../../hbl-moonlight/tools/moonlight/split-decoder-worker.cjs');
+const ring = require('../../../hbl-moonlight/tools/moonlight/ring.js');
+const {create} = require('../../../hbl-moonlight/tools/moonlight/split-decoder-worker.js');
 
 const SDK = 0x40000000;
 const MODULE = 0x50000000;

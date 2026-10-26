@@ -1,6 +1,6 @@
-// Preload for live.cjs (node -r) that measures what hbmoonlight-host reports
+// Preload for live.js (node -r) that measures what hbmoonlight-host reports
 // as latencyMs: from a captured frame being complete to the bridge
-// acknowledging its ring write. It tags frame buffers as live.cjs copies them
+// acknowledging its ring write. It tags frame buffers as live.js copies them
 // out of the capture pipe, follows them through Encoder.encode and times the
 // matching rpc.write. Prints one JSON line to stderr on exit.
 const Module = require('node:module');
@@ -40,7 +40,7 @@ const load = Module._load;
 Module._load = function (request, parent, isMain) {
   const exports = load.apply(this, arguments);
   const name = path.basename(request);
-  if (name === 'hbv2-encoder.cjs' && !exports.Encoder.probed) {
+  if (name === 'hbv2-encoder.js' && !exports.Encoder.probed) {
     wrapEncoder(exports);
     exports.Encoder.probed = true;
   }

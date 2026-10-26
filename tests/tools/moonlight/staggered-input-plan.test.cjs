@@ -1,8 +1,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const input = require('../../../hbl-moonlight/tools/moonlight/staggered-input-plan.cjs');
-const status = require('../../../hbl-moonlight/tools/moonlight/staggered-status.cjs');
-const ring = require('../../../hbl-moonlight/tools/moonlight/ring.cjs');
+const input = require('../../../hbl-moonlight/tools/moonlight/staggered-input-plan.js');
+const status = require('../../../hbl-moonlight/tools/moonlight/staggered-status.js');
+const ring = require('../../../hbl-moonlight/tools/moonlight/ring.js');
 const SYNC = require('../../../hbl-platform/sdk/native/os-sync-functions.json');
 const {CODE} = require('../../../hbl-platform/sdk/native/thread.js');
 

@@ -7,11 +7,9 @@ const cli = require('../../../hbl-platform/sdk/cli.js');
 const session = require('../../../hbl-platform/sdk/host/session.js');
 const {allocate} = require('../../../hbl-platform/sdk/native/allocate.js');
 const {accessUnits} = require('./probe-decoder-events.cjs');
-const {parameterSets} = require('../../../hbl-moonlight/tools/moonlight/h264-stream.cjs');
-const {
-  create: createDecoder
-} = require('../../../hbl-moonlight/tools/moonlight/native-decoder.cjs');
-const {create: createTransport} = require('../../../hbl-moonlight/tools/moonlight/native-tcp.cjs');
+const {parameterSets} = require('../../../hbl-moonlight/tools/moonlight/h264-stream.js');
+const {create: createDecoder} = require('../../../hbl-moonlight/tools/moonlight/native-decoder.js');
+const {create: createTransport} = require('../../../hbl-moonlight/tools/moonlight/native-tcp.js');
 
 const STAGES = [
   'gate',

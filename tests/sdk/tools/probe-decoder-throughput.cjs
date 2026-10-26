@@ -33,7 +33,7 @@ const {
   read: consoleTickFrequency
 } = require('../../../hbl-platform-dev/sdk/tools/console-tick-frequency.cjs');
 const {accessUnits} = require('./probe-decoder-events.cjs');
-const {parameterSets} = require('../../../hbl-moonlight/tools/moonlight/h264-stream.cjs');
+const {parameterSets} = require('../../../hbl-moonlight/tools/moonlight/h264-stream.js');
 
 const CONTROL_BYTES = 0x4000;
 const OUTPUT_EVENT = 0x100;

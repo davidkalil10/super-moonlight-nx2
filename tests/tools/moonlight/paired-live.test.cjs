@@ -4,7 +4,7 @@ const {
   create,
   watchBridge,
   RESTART
-} = require('../../../hbl-moonlight/tools/moonlight/paired-live.cjs');
+} = require('../../../hbl-moonlight/tools/moonlight/paired-live.js');
 
 const layout = {width: 1920, height: 1080, stride: 1920, sliceHeight: 1088};
 const unit = pts => ({data: Buffer.from([pts]), pts});

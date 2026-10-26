@@ -1,6 +1,6 @@
 # Native H.264 decoding
 
-`live.cjs --codec h264` feeds Sunshine's compressed video to the console's
+`live.js --codec h264` feeds Sunshine's compressed video to the console's
 `movie::Decoder` API in the loaded `nnCompat` module. Its implementation is
 `movie::VideoDecoder`. These are the exported names found on the DUT; the public
 entry points do not have an `nn::` prefix.
@@ -8,7 +8,7 @@ entry points do not have an `nn::` prefix.
 Launch the rebuilt Moonlight app, then run from the repository root:
 
 ```sh
-HBMOONLIGHT=/path/to/current/hbmoonlight node tools/moonlight/live.cjs \
+HBMOONLIGHT=/path/to/current/hbmoonlight node tools/moonlight/live.js \
   runs/launcher-SESSION --moonlight HOST Desktop --codec h264 \
   --size 1920x1080 --fps 30 --bitrate 8000
 ```
@@ -24,8 +24,8 @@ The helper uses three independent channels:
 
 | Channel | Contents | Consumer |
 | --- | --- | --- |
-| FD 4 | Annex-B H.264 access units | `native-decoder.cjs` |
-| FD 3 | 48 kHz stereo s16le PCM | Existing `audio-stream.cjs` and console AudioOut |
+| FD 4 | Annex-B H.264 access units | `native-decoder.js` |
+| FD 3 | 48 kHz stereo s16le PCM | Existing `audio-stream.js` and console AudioOut |
 | stdin | Controller, touch and keyframe requests as JSON lines | Existing helper input handling |
 
 Audio, controller and touch are enabled by default. `--no-audio` and
@@ -239,7 +239,7 @@ under `runs/`:
 
 ```sh
 HBMOONLIGHT=/media/storage2/builds/HBLauncher/native-h264/20261024T152438Z-687a8f0/helper-build-final/hbmoonlight \
-  node tools/moonlight/live.cjs runs/launcher-SESSION \
+  node tools/moonlight/live.js runs/launcher-SESSION \
   --moonlight 192.168.8.245 Desktop --codec h264 \
   --size 1920x1080 --fps 30 --bitrate 8000
 ```
@@ -249,7 +249,7 @@ To rebuild the helper from the current source instead:
 ```sh
 build=/media/storage2/builds/HBLauncher/moonlight-helper/$(date -u +%Y%m%dT%H%M%SZ)
 bash tools/moonlight/helper/build.sh "$build"
-HBMOONLIGHT="$build/hbmoonlight" node tools/moonlight/live.cjs runs/launcher-SESSION \
+HBMOONLIGHT="$build/hbmoonlight" node tools/moonlight/live.js runs/launcher-SESSION \
   --moonlight 192.168.8.245 Desktop --codec h264 --size 1920x1080 --fps 30 --bitrate 8000
 ```
 
@@ -276,7 +276,7 @@ Test in this order; do not raise fps until the step before it is clean.
 
    ```sh
    HBMOONLIGHT=/media/storage2/builds/HBLauncher/native-h264/20261024T152438Z-687a8f0/helper-build-final/hbmoonlight \
-     node tools/moonlight/live.cjs runs/launcher-ItDehz \
+     node tools/moonlight/live.js runs/launcher-ItDehz \
      --moonlight 192.168.8.245 Desktop --codec h264 \
      --size 1920x1080 --fps 30 --bitrate 8000
    ```

@@ -11,8 +11,8 @@ const {
 } = require('../../../hbl-platform/sdk/native/thread.js');
 const SYNC = require('../../../hbl-platform/sdk/native/os-sync-functions.json');
 const acquireFrame = require('./paired-acquire-frame.cjs');
-const outputFrame = require('../../../hbl-moonlight/tools/moonlight/paired-output-frame.cjs');
-const ring = require('../../../hbl-moonlight/tools/moonlight/ring.cjs');
+const outputFrame = require('../../../hbl-moonlight/tools/moonlight/paired-output-frame.js');
+const ring = require('../../../hbl-moonlight/tools/moonlight/ring.js');
 
 const WORKER_BYTES = 0x400000;
 const FRAME_OFFSET = 0x10000;

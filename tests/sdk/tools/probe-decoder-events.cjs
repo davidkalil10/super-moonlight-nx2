@@ -23,7 +23,7 @@ const {
   wait,
   join
 } = require('../../../hbl-platform/sdk/native/thread.js');
-const {nals, parameterSets} = require('../../../hbl-moonlight/tools/moonlight/h264-stream.cjs');
+const {nals, parameterSets} = require('../../../hbl-moonlight/tools/moonlight/h264-stream.js');
 const SYNC = require('../../../hbl-platform/sdk/native/os-sync-functions.json');
 const MOVIE_EVENTS = require('../../../hbl-moonlight/sdk/native/movie-event-functions.json');
 const TIMING =
@@ -273,7 +273,7 @@ async function main(
     window = null,
     maxAus = null,
     output = process.env.HB_NATIVE_LOG_DIR,
-    createDecoder = require('../../../hbl-moonlight/tools/moonlight/native-decoder.cjs').create
+    createDecoder = require('../../../hbl-moonlight/tools/moonlight/native-decoder.js').create
   } = {}
 ) {
   if (!clip) throw Error('Expected --clip <file.h264>');

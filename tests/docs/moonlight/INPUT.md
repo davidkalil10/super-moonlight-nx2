@@ -5,11 +5,11 @@ stream of input events for `hbmoonlight`.
 
 ## Pieces
 
-- `tools/moonlight/controller.cjs` — console NpadState -> Moonlight gamepad
+- `tools/moonlight/controller.js` — console NpadState -> Moonlight gamepad
   fields (unchanged; reused).
-- `tools/moonlight/touch.cjs` — console touch screen -> normalized multi-touch,
+- `tools/moonlight/touch.js` — console touch screen -> normalized multi-touch,
   with a tracker that turns per-frame points into down/move/up transitions.
-- `tools/moonlight/input-feeder.cjs` — attaches to a session, reads the mapped
+- `tools/moonlight/input-feeder.js` — attaches to a session, reads the mapped
   state once per frame and writes tagged JSON lines to stdout.
 - `tools/moonlight/helper/src/input.c` — parses those lines and calls
   `LiSendMultiControllerEvent` / `LiSendTouchEvent`.
@@ -45,7 +45,7 @@ and `720*1.5 = 1080`, so the panel reports **1280x720** coordinates.
 refresh button the shader places at `(1660,179)` (`[1107,119]*1.5 ≈ (1660,179)`).
 
 `LiSendTouchEvent` wants normalized device coordinates (0.0 top-left to 1.0
-bottom-right of the video). `touch.cjs` normalizes `x/1280`, `y/720`, clamps to
+bottom-right of the video). `touch.js` normalizes `x/1280`, `y/720`, clamps to
 `[0,1]` and rounds to 4 decimals so float noise does not defeat change
 detection.
 
@@ -96,14 +96,14 @@ both out of it. That halves the console exchanges that compete with the video
 sender versus reading each field separately. `--sources` (the extra pad sources
 far outside that window) is intentionally not supported in the feeder.
 
-## Wiring into live.cjs (for the coordinator)
+## Wiring into live.js (for the coordinator)
 
-`live.cjs` spawns `hbmoonlight` in `moonlight()` with a free `stdin`. Pipe the
+`live.js` spawns `hbmoonlight` in `moonlight()` with a free `stdin`. Pipe the
 feeder into it by adding, right after `const helper = spawn(...)` in that
 function:
 
 ```js
-spawn(process.execPath, [path.join(__dirname, 'input-feeder.cjs')], {
+spawn(process.execPath, [path.join(__dirname, 'input-feeder.js')], {
   stdio: ['ignore', helper.stdin, 'inherit']
 });
 ```

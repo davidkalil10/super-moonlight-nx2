@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert');
-const hbv = require('../../../hbl-moonlight/tools/moonlight/hbv.cjs');
-const {psnr} = require('../../../hbl-moonlight/tools/moonlight/reference.cjs');
+const hbv = require('../../../hbl-moonlight/tools/moonlight/hbv.js');
+const {psnr} = require('../../../hbl-moonlight/tools/moonlight/reference.js');
 
 function gradient(width, height) {
   const rgb = Buffer.alloc(width * height * 3);

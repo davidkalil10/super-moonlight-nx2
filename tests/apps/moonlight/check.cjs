@@ -9,18 +9,18 @@ const fs = require('node:fs/promises'),
   os = require('node:os');
 const assert = require('node:assert/strict');
 const {execFileSync} = require('node:child_process');
-const {testCard} = require('../../../hbl-moonlight/apps/moonlight/build.cjs');
+const {testCard} = require('../../../hbl-moonlight/apps/moonlight/build.js');
 
 const moonlight = path.resolve(__dirname, '../../../hbl-moonlight');
 const app = path.join(moonlight, 'apps/moonlight');
 const platform = path.resolve(__dirname, '../../../hbl-platform');
-const ring = require(path.join(moonlight, 'tools/moonlight/ring.cjs'));
+const ring = require(path.join(moonlight, 'tools/moonlight/ring.js'));
 const {STATE} = require(path.join(platform, 'sdk/host/state-layout.js'));
 const {NPAD} = require(path.join(platform, 'sdk/host/npad.js'));
-const hbv = require(path.join(moonlight, 'tools/moonlight/hbv.cjs'));
-const hbv2 = require(path.join(moonlight, 'tools/moonlight/hbv2.cjs'));
-const {psnr} = require(path.join(moonlight, 'tools/moonlight/reference.cjs'));
-const {readFrames} = require(path.join(moonlight, 'tools/moonlight/frames.cjs'));
+const hbv = require(path.join(moonlight, 'tools/moonlight/hbv.js'));
+const hbv2 = require(path.join(moonlight, 'tools/moonlight/hbv2.js'));
+const {psnr} = require(path.join(moonlight, 'tools/moonlight/reference.js'));
+const {readFrames} = require(path.join(moonlight, 'tools/moonlight/frames.js'));
 const builds =
   process.env.HB_MOONLIGHT_CHECK_BUILDS ||
   path.join(os.homedir(), 'claude-builds/HBLauncher/gpu-check');
@@ -264,7 +264,7 @@ async function chainCheck(dir) {
 }
 
 async function clipCheck(dir, clip) {
-  const {Encoder} = require(path.join(moonlight, 'tools/moonlight/hbv2-encoder.cjs'));
+  const {Encoder} = require(path.join(moonlight, 'tools/moonlight/hbv2-encoder.js'));
   const encoder = new Encoder(),
     decoder = new hbv2.Decoder(),
     patches = [];

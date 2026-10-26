@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const {execFileSync} = require('node:child_process');
-const hbv2 = require('../../../hbl-moonlight/tools/moonlight/hbv2.cjs');
+const hbv2 = require('../../../hbl-moonlight/tools/moonlight/hbv2.js');
 
 function scene(width, height, shift = 0) {
   const rgb = Buffer.alloc(width * height * 3);
@@ -182,7 +182,7 @@ test(
         }
       );
       process.env.HBV2ENC = path.join(build, 'hbv2enc');
-      const {Encoder} = require('../../../hbl-moonlight/tools/moonlight/hbv2-encoder.cjs');
+      const {Encoder} = require('../../../hbl-moonlight/tools/moonlight/hbv2-encoder.js');
       const recon = path.join(build, 'recon.bin'),
         encoder = new Encoder({threads: 2, recon}),
         decoder = new hbv2.Decoder(),

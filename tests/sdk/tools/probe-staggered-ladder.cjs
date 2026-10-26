@@ -8,23 +8,23 @@ const session = require('../../../hbl-platform/sdk/host/session.js');
 const {accessUnits, clipFrameRate} = require('./probe-decoder-events.cjs');
 const {loggedRpc, verifyPublication} = require('./probe-split-decoder.cjs');
 const {requireNewPairedSession, waitForNativeReady} = require('./probe-paired-output.cjs');
-const {parameterSets} = require('../../../hbl-moonlight/tools/moonlight/h264-stream.cjs');
-const {findPrivateStorage} = require('../../../hbl-moonlight/tools/moonlight/feed.cjs');
+const {parameterSets} = require('../../../hbl-moonlight/tools/moonlight/h264-stream.js');
+const {findPrivateStorage} = require('../../../hbl-moonlight/tools/moonlight/feed.js');
 const {
   create: createDecoder
-} = require('../../../hbl-moonlight/tools/moonlight/native-decoder.cjs');
-const {create: createTransport} = require('../../../hbl-moonlight/tools/moonlight/native-tcp.cjs');
-const {create: createSink} = require('../../../hbl-moonlight/tools/moonlight/native-sink.cjs');
+} = require('../../../hbl-moonlight/tools/moonlight/native-decoder.js');
+const {create: createTransport} = require('../../../hbl-moonlight/tools/moonlight/native-tcp.js');
+const {create: createSink} = require('../../../hbl-moonlight/tools/moonlight/native-sink.js');
 const {
   create: createStaggered
-} = require('../../../hbl-moonlight/tools/moonlight/staggered-worker.cjs');
+} = require('../../../hbl-moonlight/tools/moonlight/staggered-worker.js');
 const {
   waitChecked,
   waitOutput
-} = require('../../../hbl-moonlight/tools/moonlight/staggered-live.cjs');
-const inputPlan = require('../../../hbl-moonlight/tools/moonlight/staggered-input-plan.cjs');
-const outputPlan = require('../../../hbl-moonlight/tools/moonlight/staggered-output-plan.cjs');
-const checked = require('../../../hbl-moonlight/tools/moonlight/staggered-status.cjs');
+} = require('../../../hbl-moonlight/tools/moonlight/staggered-live.js');
+const inputPlan = require('../../../hbl-moonlight/tools/moonlight/staggered-input-plan.js');
+const outputPlan = require('../../../hbl-moonlight/tools/moonlight/staggered-output-plan.js');
+const checked = require('../../../hbl-moonlight/tools/moonlight/staggered-status.js');
 
 const BUILD_ROOT = '/media/storage2/builds/HBLauncher/native-h264';
 const HELD_AU = 4;

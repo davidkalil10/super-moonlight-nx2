@@ -10,7 +10,7 @@ const {
   run,
   createIdrRequester,
   countsSince
-} = require('../../../hbl-moonlight/tools/moonlight/native-h264.cjs');
+} = require('../../../hbl-moonlight/tools/moonlight/native-h264.js');
 
 const accessUnit = Buffer.from('0000016742001eab00000168ce0100000165abcd', 'hex');
 const pcm = Buffer.from('0001020304050607', 'hex');
@@ -258,7 +258,7 @@ async function fixture({
             setImmediate(() => child.emit('exit', 0, null));
           }
         });
-      } else if (path.basename(args[0]) === 'input-feeder.cjs') {
+      } else if (path.basename(args[0]) === 'input-feeder.js') {
         setImmediate(() => {
           spawnOptions.stdio[1].write(
             JSON.stringify({type: 'controller', buttonFlags: 8192}) + '\n'
@@ -270,7 +270,7 @@ async function fixture({
             }) + '\n'
           );
         });
-      } else if (path.basename(args[0]) === 'audio-stream.cjs') {
+      } else if (path.basename(args[0]) === 'audio-stream.js') {
         if (audioFailure) {
           child.exitCode = 7;
           process.nextTick(() => child.emit('exit', 7, null));
@@ -598,7 +598,7 @@ test(
       };
       f.options.args.push('--socket-audio');
       const summary = await run(f.options);
-      assert.deepEqual(spawned, ['test-helper', 'input-feeder.cjs']);
+      assert.deepEqual(spawned, ['test-helper', 'input-feeder.js']);
       assert.deepEqual(Buffer.concat(received), pcm);
       assert.deepEqual(
         f.events.find(event => event.type === 'socket-audio'),

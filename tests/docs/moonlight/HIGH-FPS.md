@@ -85,7 +85,7 @@ At 120 Hz the same mechanism drops to 60 as soon as a frame exceeds 8.3 ms.
 | Bridge exchanges | about 470/s needed | about 412/s wired ceiling | `DESIGN.md:584-588`, `launcher-TJ2SqH` |
 | Host encode plus helper decode | 8.3 ms per stage (pipelined) | HBV2 encode 2.4-6.5 ms; helper decode 3-8 ms (VAAPI 6.4-7.6) | DESIGN.md |
 
-**Bridge arithmetic.** Each exchange is 32 KiB (`ring.cjs` `EXCHANGE_BYTES`).
+**Bridge arithmetic.** Each exchange is 32 KiB (`ring.js` `EXCHANGE_BYTES`).
 
 - Video: an HBV2 frame at `--budget 96` is 3 exchanges, so 120 fps needs 360/s.
 - Input: the input feeder reads about 60/s.

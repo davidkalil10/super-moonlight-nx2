@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const {
   instrument,
   requestsFor
-} = require('../../../hbl-moonlight/tools/moonlight/bridge-counter.cjs');
+} = require('../../../hbl-moonlight/tools/moonlight/bridge-counter.js');
 
 test('bridge counter attributes requests and elapsed time to the active stage', async () => {
   let clock = 0;

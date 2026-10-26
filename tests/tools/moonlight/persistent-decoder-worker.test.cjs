@@ -6,7 +6,7 @@ const registration =
 const sync = require('../../../hbl-platform/sdk/native/os-sync-functions.json');
 const {CODE} = require('../../../hbl-platform/sdk/native/thread.js');
 const {PREAMBLE} = require('../../../hbl-platform/smilebasic/engine/shared/frames.js');
-const {create} = require('../../../hbl-moonlight/tools/moonlight/persistent-decoder-worker.cjs');
+const {create} = require('../../../hbl-moonlight/tools/moonlight/persistent-decoder-worker.js');
 
 const SDK = 0x40000000;
 const MODULE = 0x50000000;

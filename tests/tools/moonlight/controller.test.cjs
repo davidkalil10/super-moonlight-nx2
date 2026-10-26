@@ -6,7 +6,7 @@ const {
   same,
   readController,
   NEUTRAL
-} = require('../../../hbl-moonlight/tools/moonlight/controller.cjs');
+} = require('../../../hbl-moonlight/tools/moonlight/controller.js');
 
 function npad({buttons = 0, lx = 0, ly = 0, rx = 0, ry = 0, connected = true} = {}) {
   const bytes = Buffer.alloc(64);

@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const ring = require('../../../hbl-moonlight/tools/moonlight/ring.cjs');
-const {plan, metadata} = require('../../../hbl-moonlight/tools/moonlight/paired-output-frame.cjs');
+const ring = require('../../../hbl-moonlight/tools/moonlight/ring.js');
+const {plan, metadata} = require('../../../hbl-moonlight/tools/moonlight/paired-output-frame.js');
 
 const sdk = 0x10000000;
 const decoder = 0x30000000;

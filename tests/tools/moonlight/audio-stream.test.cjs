@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 const {PassThrough} = require('node:stream');
 const {EventEmitter} = require('node:events');
-const {stream, ByteQueue} = require('../../../hbl-moonlight/tools/moonlight/audio-stream.cjs');
+const {stream, ByteQueue} = require('../../../hbl-moonlight/tools/moonlight/audio-stream.js');
 
 // one-shot input that delivers a whole buffer in a single data event, used to
 // exercise the host-ring overrun path deterministically (a PassThrough would

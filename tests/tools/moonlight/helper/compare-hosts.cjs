@@ -1,4 +1,4 @@
-// Runs one host (hbmoonlight-host or live.cjs --codec hbv2) against the fake
+// Runs one host (hbmoonlight-host or live.js --codec hbv2) against the fake
 // console bridge and prints what it cost: written fps, CPU per written frame
 // for the host process tree (encoder and ffmpeg included, bridge excluded),
 // encode and write times, and frame-to-ack latency percentiles.
@@ -100,7 +100,7 @@ async function main() {
           [
             '-r',
             path.join(__dirname, 'latency-probe.cjs'),
-            path.join(moonlight, 'live.cjs'),
+            path.join(moonlight, 'live.js'),
             directory,
             '--input',
             clip,

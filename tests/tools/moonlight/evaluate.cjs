@@ -2,15 +2,15 @@
 // with shader-equivalent math and reports bytes/frame, bridge exchanges per
 // frame and PSNR. Usage: node tools/moonlight/evaluate.cjs CLIP [--frames N] [--json OUT]
 const fs = require('node:fs/promises');
-const hbv = require('../../../hbl-moonlight/tools/moonlight/hbv.cjs');
+const hbv = require('../../../hbl-moonlight/tools/moonlight/hbv.js');
 const {
   bc1,
   yuv420,
   bilinear,
   psnr,
   changedFraction
-} = require('../../../hbl-moonlight/tools/moonlight/reference.cjs');
-const {readFrames} = require('../../../hbl-moonlight/tools/moonlight/frames.cjs');
+} = require('../../../hbl-moonlight/tools/moonlight/reference.js');
+const {readFrames} = require('../../../hbl-moonlight/tools/moonlight/frames.js');
 const cli = require('../../../hbl-platform/sdk/cli.js');
 
 const EXCHANGE_MS = 13;

@@ -171,7 +171,7 @@ Honest costs:
 - HBV1's weak spot is saturated chroma edges (testsrc2 Cb about 25 dB), because
   chroma gets only 6 coefficients per 16x16 block.
 - Keep BC1 320x180 as the fallback mode. The comparison code stays in
-  `tools/moonlight/reference.cjs`.
+  `tools/moonlight/reference.js`.
 
 Dirty tiles are rejected for now. On the pan clip 100% of blocks change on every
 frame, and that is the normal case for games. They would also need a persistent
@@ -326,7 +326,7 @@ Commands (status and errors are one JSON object per line on stderr):
 - Stop: SIGINT/SIGTERM or stdin EOF, then `LiStopConnection`; `--quit` also
   quits the app on the host. Once a second a `stats` line reports decoded,
   written, dropped, failed and average decode+convert ms.
-- `live.cjs --moonlight HOST APP` spawns it instead of a capture source
+- `live.js --moonlight HOST APP` spawns it instead of a capture source
   (`$HBMOONLIGHT` overrides the binary path) and keeps its stdin open for input.
 
 `hbmoonlight-bench FILE h264|hevc WxH [--software] [--raw-fd FD] [--rgb]`
@@ -368,13 +368,13 @@ not change. Raw mode reproduced the input byte for byte (600 units, SPS first).
 
 ## 5. Files
 
-- `tools/moonlight/hbv.cjs`: HBV1 constants, encoder, shader-equivalent decoder,
+- `tools/moonlight/hbv.js`: HBV1 constants, encoder, shader-equivalent decoder,
   and the GLSL generator (single source of truth).
-- `tools/moonlight/hbv2.cjs`: HBV2 reference decoder and encoder, the integer
+- `tools/moonlight/hbv2.js`: HBV2 reference decoder and encoder, the integer
   IDCT, and the generated GLSL/C tables (single source of truth).
-- `tools/moonlight/hbv2enc.c` + `hbv2-encoder.cjs`: the native OpenMP encoder
+- `tools/moonlight/hbv2enc.c` + `hbv2-encoder.js`: the native OpenMP encoder
   and its Node wrapper (built by `build-hbv2enc.sh`, run with passive OMP wait).
-- `tools/moonlight/reference.cjs`: BC1, YUV420, bilinear upscale, PSNR, changed
+- `tools/moonlight/reference.js`: BC1, YUV420, bilinear upscale, PSNR, changed
   blocks.
 - `tools/moonlight/evaluate.cjs CLIP [--frames N] [--json OUT]`: the HBV1 format
   tables in section 2.
@@ -382,18 +382,18 @@ not change. Raw mode reproduced the input byte for byte (600 units, SPS first).
   section 6.5. `desktop-scenes.py` renders the synthetic 1080p sequences.
 - `tools/moonlight/encode.cjs CLIP OUT.hbv [--size WxH]`: the slot stream the
   host would write.
-- `tools/moonlight/live.cjs [...] --codec hbv1|hbv2`: the live sender.
-- `tools/moonlight/ring.cjs`: the slot ring layout, source of `shaders/ring.glsl`.
-- `tools/moonlight/feed.cjs`: replays a recorded `.hbv` stream into the ring.
-- `tools/moonlight/frames.cjs`: ffmpeg raw-RGB reader and frame splitter.
-- `tools/moonlight/controller.cjs`, `touch.cjs`, `input-feeder.cjs`: console
+- `tools/moonlight/live.js [...] --codec hbv1|hbv2`: the live sender.
+- `tools/moonlight/ring.js`: the slot ring layout, source of `shaders/ring.glsl`.
+- `tools/moonlight/feed.js`: replays a recorded `.hbv` stream into the ring.
+- `tools/moonlight/frames.js`: ffmpeg raw-RGB reader and frame splitter.
+- `tools/moonlight/controller.js`, `touch.js`, `input-feeder.js`: console
   pad and touch state to the helper's tagged stdin (INPUT.md).
-- `tools/moonlight/audio-stream.cjs`: helper PCM to the console AudioOut
+- `tools/moonlight/audio-stream.js`: helper PCM to the console AudioOut
   (AUDIO.md).
-- `tools/moonlight/menu.cjs`: the console menu (MENU.md).
+- `tools/moonlight/menu.js`: the console menu (MENU.md).
 - `tools/moonlight/hbv.test.cjs`, `hbv2.test.cjs`: layout, bit extraction,
   torn-slot rejection, and a native-C cross-check that decodes bit-exactly.
-- `apps/moonlight/`: the app. `build.cjs` regenerates `shaders/hbv.glsl`,
+- `apps/moonlight/`: the app. `build.js` regenerates `shaders/hbv.glsl`,
   `shaders/hbv2.glsl`'s tables, `shaders/ring.glsl`, and the HBV2 test-card
   memory. `check.cjs` runs the desktop Vulkan check (test card, HBV1 slot, and
   the HBV2 P chain with catch-up, all bit-exact).
@@ -573,10 +573,10 @@ Live-test commands:
 
 ```
 tools/moonlight/build-hbv2enc.sh                       # native encoder on m5
-GLSLANG=tools/moonlight/glslang-shim.sh node apps/moonlight/build.cjs  # regenerate shaders + memory
-# apps/moonlight already lives under apps/ on the host; after build.cjs tap
+GLSLANG=tools/moonlight/glslang-shim.sh node apps/moonlight/build.js  # regenerate shaders + memory
+# apps/moonlight already lives under apps/ on the host; after build.js tap
 # Refresh in the launcher and relaunch the Moonlight app on the console, then:
-node tools/moonlight/live.cjs --screen --codec hbv2 --budget 96
+node tools/moonlight/live.js --screen --codec hbv2 --budget 96
 node apps/moonlight/check.cjs CLIP                      # offline bit-exact re-check
 ```
 
@@ -585,7 +585,7 @@ console against `tools/moonlight/fake-console` (see its README).
 
 ## Live results (2026-10-24)
 
-640x352 HBV1, one 32 KiB slot per frame, `tools/moonlight/feed.cjs`, 20 s at a 60 fps target.
+640x352 HBV1, one 32 KiB slot per frame, `tools/moonlight/feed.js`, 20 s at a 60 fps target.
 
 | Session         | Protocol          | Depth | Ping                       | Delivered     | p50 / p90 ms         |
 | --------------- | ----------------- | ----- | -------------------------- | ------------- | -------------------- |

@@ -7,13 +7,13 @@ const cli = require('../../../hbl-platform/sdk/cli.js');
 const session = require('../../../hbl-platform/sdk/host/session.js');
 const {allocate} = require('../../../hbl-platform/sdk/native/allocate.js');
 const {accessUnits, clipFrameRate} = require('./probe-decoder-events.cjs');
-const {parameterSets} = require('../../../hbl-moonlight/tools/moonlight/h264-stream.cjs');
+const {parameterSets} = require('../../../hbl-moonlight/tools/moonlight/h264-stream.js');
 const {
   create: createDecoder
-} = require('../../../hbl-moonlight/tools/moonlight/native-decoder.cjs');
-const {create: createTransport} = require('../../../hbl-moonlight/tools/moonlight/native-tcp.cjs');
-const {create: createSink} = require('../../../hbl-moonlight/tools/moonlight/native-sink.cjs');
-const ring = require('../../../hbl-moonlight/tools/moonlight/ring.cjs');
+} = require('../../../hbl-moonlight/tools/moonlight/native-decoder.js');
+const {create: createTransport} = require('../../../hbl-moonlight/tools/moonlight/native-tcp.js');
+const {create: createSink} = require('../../../hbl-moonlight/tools/moonlight/native-sink.js');
+const ring = require('../../../hbl-moonlight/tools/moonlight/ring.js');
 
 const STAGES = ['one', 'two', 'stop-input', 'stop-output', 'short-recv'];
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));

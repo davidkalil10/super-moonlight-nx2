@@ -1,7 +1,7 @@
 # Moonlight live-console test pass
 
 Everything below is the PC-decode route: `hbmoonlight` decodes the Sunshine
-stream on m5, `live.cjs` re-encodes to HBV2 and writes the ring, and the app
+stream on m5, `live.js` re-encodes to HBV2 and writes the ring, and the app
 on the console shows it. The implemented console decoder path has its own
 [native H.264 guide and validation results](NATIVE-H264.md).
 
@@ -12,13 +12,13 @@ on the console shows it. The implemented console decoder path has its own
 - HBV2 encoder: `~/claude-builds/HBLauncher/hbv2enc/hbv2enc`
   — rebuild: `ssh rig 'cd /media/storage/own/HBLauncher && bash tools/moonlight/build-hbv2enc.sh'`
 - App shaders (HBV2): `apps/moonlight/*.spv`, memory 8,695,808 bytes
-  — rebuild: `ssh rig 'cd /media/storage/own/HBLauncher && SPIRV_VAL=true GLSLANG=tools/moonlight/glslang-shim.sh node apps/moonlight/build.cjs'`
+  — rebuild: `ssh rig 'cd /media/storage/own/HBLauncher && SPIRV_VAL=true GLSLANG=tools/moonlight/glslang-shim.sh node apps/moonlight/build.js'`
 
 ## On the console
 
 1. Fully close and reopen SmileBASIC, then `./start.sh --app moonlight`
    (optionally `HB_PIPELINE=4`). The app now needs 8.5 MB of private memory;
-   `live.cjs` refuses the session if it sees the old smaller app, which means
+   `live.js` refuses the session if it sees the old smaller app, which means
    the console is still running a pre-HBV2 build — tap **Refresh** in the
    launcher and relaunch, or reinstall the app.
 2. Wait for the HBV2 test card, then the steps below from m5.
@@ -27,7 +27,7 @@ on the console shows it. The implemented console decoder path has its own
 
 ### 1. HBV2 video, desktop
 ```
-node tools/moonlight/live.cjs --moonlight 192.168.8.245 Desktop --codec hbv2 --budget 96 --no-input --no-audio
+node tools/moonlight/live.js --moonlight 192.168.8.245 Desktop --codec hbv2 --budget 96 --no-input --no-audio
 ```
 Look at the console. Desktop text should be sharp (not the HBV1 blur). Per-second
 stats print `kib`, `qp`, `encodeMs`, `applied`. Expected ~59 fps on the wired link.
@@ -36,14 +36,14 @@ stats print `kib`, `qp`, `encodeMs`, `applied`. Expected ~59 fps on the wired li
 shader uses `HBV2_LOCAL_SIZE=1024`, which may exceed the console's
 `maxComputeWorkGroupInvocations`. Rebuild the app with 512 and relaunch:
 ```
-ssh rig 'cd /media/storage/own/HBLauncher && SPIRV_VAL=true GLSLANG=tools/moonlight/glslang-shim.sh HBV2_LOCAL_SIZE=512 node apps/moonlight/build.cjs'
+ssh rig 'cd /media/storage/own/HBLauncher && SPIRV_VAL=true GLSLANG=tools/moonlight/glslang-shim.sh HBV2_LOCAL_SIZE=512 node apps/moonlight/build.js'
 ```
-(the build reads `HBV2_LOCAL_SIZE` from ring.cjs; set it in the env or edit
+(the build reads `HBV2_LOCAL_SIZE` from ring.js; set it in the env or edit
 `apps/moonlight/shaders/ring.glsl` line 13.)
 
 ### 2. Add input (controller + touch)
 ```
-node tools/moonlight/live.cjs --moonlight 192.168.8.245 Desktop --codec hbv2 --budget 96 --no-audio
+node tools/moonlight/live.js --moonlight 192.168.8.245 Desktop --codec hbv2 --budget 96 --no-audio
 ```
 Move the sticks / tap the screen; the cursor on the host desktop should follow.
 Touch is sent as native multi-touch. B and Minus reach the game; hold Plus and
@@ -51,7 +51,7 @@ Minus together for one second to return to the launcher.
 
 ### 3. Add audio
 ```
-node tools/moonlight/live.cjs --moonlight 192.168.8.245 Desktop --codec hbv2 --budget 96
+node tools/moonlight/live.js --moonlight 192.168.8.245 Desktop --codec hbv2 --budget 96
 ```
 Sound should play. `game-audio.js` opens AudioOut only for a package with
 effects and closes it otherwise, so the stream owns the device while Moonlight
@@ -70,6 +70,6 @@ and swap it for `Desktop` above. Expect ~59 fps at a steady budget; raise
 
 ## Console native decode
 
-`live.cjs --moonlight HOST APP --codec h264` connects raw H.264 on FD 4 to the
+`live.js --moonlight HOST APP --codec h264` connects raw H.264 on FD 4 to the
 console movie decoder. PCM audio stays on FD 3 and controller/touch JSON stays
 on stdin. See [NATIVE-H264.md](NATIVE-H264.md) for setup and current limits.

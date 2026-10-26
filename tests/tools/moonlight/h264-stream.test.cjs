@@ -5,7 +5,7 @@ const {once} = require('node:events');
 const {
   AccessUnits,
   parameterSets
-} = require('../../../hbl-moonlight/tools/moonlight/h264-stream.cjs');
+} = require('../../../hbl-moonlight/tools/moonlight/h264-stream.js');
 
 const metadata = (seq, bytes, fields = {}) => ({
   type: 'au',

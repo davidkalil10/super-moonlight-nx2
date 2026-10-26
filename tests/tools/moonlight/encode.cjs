@@ -2,8 +2,8 @@
 // would write into the app's frame ring (one slot per frame).
 // Usage: node tools/moonlight/encode.cjs CLIP OUT.hbv [--size 640x352] [--frames N]
 const fs = require('node:fs');
-const hbv = require('../../../hbl-moonlight/tools/moonlight/hbv.cjs');
-const {readFrames} = require('../../../hbl-moonlight/tools/moonlight/frames.cjs');
+const hbv = require('../../../hbl-moonlight/tools/moonlight/hbv.js');
+const {readFrames} = require('../../../hbl-moonlight/tools/moonlight/frames.js');
 const cli = require('../../../hbl-platform/sdk/cli.js');
 
 async function main() {

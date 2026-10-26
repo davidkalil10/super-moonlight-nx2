@@ -1,18 +1,18 @@
 // Offline request budget for the native H.264 host loop. The real persistent and
 // split workers and the real sink run against a modeled console on a virtual clock;
-// the per-frame loop mirrors native-h264.cjs, including its stage labels.
+// the per-frame loop mirrors native-h264.js, including its stage labels.
 const {
   instrument,
   requestsFor
-} = require('../../../hbl-moonlight/tools/moonlight/bridge-counter.cjs');
-const ring = require('../../../hbl-moonlight/tools/moonlight/ring.cjs');
+} = require('../../../hbl-moonlight/tools/moonlight/bridge-counter.js');
+const ring = require('../../../hbl-moonlight/tools/moonlight/ring.js');
 const definitions = require('../../../hbl-moonlight/sdk/native/movie-functions.json');
 const registration =
   require('../../../hbl-moonlight/sdk/native/movie-event-functions.json').registerClientEvents;
 const SYNC = require('../../../hbl-platform/sdk/native/os-sync-functions.json');
 const {CODE} = require('../../../hbl-platform/sdk/native/thread.js');
-const PAIRED = require('../../../hbl-moonlight/tools/moonlight/paired-loop-plan.cjs').CONTROL;
-const presentPacer = require('../../../hbl-moonlight/tools/moonlight/present-pacer.cjs');
+const PAIRED = require('../../../hbl-moonlight/tools/moonlight/paired-loop-plan.js').CONTROL;
+const presentPacer = require('../../../hbl-moonlight/tools/moonlight/present-pacer.js');
 
 const SDK = 0x40000000;
 const MODULE = 0x50000000;
@@ -45,7 +45,7 @@ const MODEL = {
 };
 const PLAN_DECODE_MS = 13;
 const R3_DECODE_MS = 6.85;
-// staggered-live.cjs rereads a late gate status back to back; it paused 5 ms before.
+// staggered-live.js rereads a late gate status back to back; it paused 5 ms before.
 const STAGGERED = {retryWaitMs: 0, audioIntervalMs: 1000};
 
 // Step 3a device baselines at 1080p30, revision 8805924 (R1B-CONCURRENCY-RESULTS.md).
@@ -493,7 +493,7 @@ function createConsole(
 // With barrier set the console orders each submit as in cb183ad: gate N releases the
 // held output first (fetchMs), then N is submitted once output N-1 is acquired. The
 // host side is unchanged.
-// With hostWait set the host reads the status the way staggered-live.cjs does instead
+// With hostWait set the host reads the status the way staggered-live.js does instead
 // of waking exactly when the frame is ready: back to back while receive or decode is
 // pending, and for a pending present either back to back ('poll') or through the
 // present pacer ('pacer').
@@ -697,7 +697,7 @@ async function simulate({
     const bridge = instrument(machine.rpc, () => stage, clock.now);
     const rpc = bridge.rpc;
     const pairedLive = paired
-      ? require('../../../hbl-moonlight/tools/moonlight/paired-live.cjs').create({
+      ? require('../../../hbl-moonlight/tools/moonlight/paired-live.js').create({
           rpc,
           publication: {mapped: MAPPED, color: 1}
         })
@@ -706,8 +706,8 @@ async function simulate({
       ? pairedLive.factory
       : require(
           mode === 'split'
-            ? '../../../hbl-moonlight/tools/moonlight/split-decoder-worker.cjs'
-            : '../../../hbl-moonlight/tools/moonlight/persistent-decoder-worker.cjs'
+            ? '../../../hbl-moonlight/tools/moonlight/split-decoder-worker.js'
+            : '../../../hbl-moonlight/tools/moonlight/persistent-decoder-worker.js'
         ).create;
     const worker = await create({
       rpc,
@@ -736,7 +736,7 @@ async function simulate({
     await worker.register();
     await worker.start();
     if (paired) await pairedLive.start();
-    const sink = await require('../../../hbl-moonlight/tools/moonlight/native-sink.cjs').create(
+    const sink = await require('../../../hbl-moonlight/tools/moonlight/native-sink.js').create(
       rpc,
       machine.storage
     );
@@ -1036,7 +1036,7 @@ async function budget({frames = 120, model = MODEL} = {}) {
     model,
     assumptions: [
       'Requests, bridge-ms and byStage are at the paced source rate; predictedFps is the same loop with every access unit already waiting.',
-      'The loop mirrors native-h264.cjs steady state, including the split send-before-gate path; native-decoder.cjs adds no request while the tail AcquireInput returns an index.'
+      'The loop mirrors native-h264.js steady state, including the split send-before-gate path; native-decoder.js adds no request while the tail AcquireInput returns an index.'
     ],
     modes,
     paired,

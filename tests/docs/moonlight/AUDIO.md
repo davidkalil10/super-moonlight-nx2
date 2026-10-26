@@ -1,7 +1,7 @@
 # Moonlight audio: continuous PCM to the console AudioOut
 
-`tools/moonlight/audio-stream.cjs` plays the Moonlight helper's audio on the
-console. It is the audio counterpart of `live.cjs` (video) and lives beside it
+`tools/moonlight/audio-stream.js` plays the Moonlight helper's audio on the
+console. It is the audio counterpart of `live.js` (video) and lives beside it
 in `tools/moonlight/` as a manual tool driven against a session dir, not a
 `start-launcher.js` stage. See `DESIGN.md` section 4 item 5 for the live check
 this feeds.
@@ -21,16 +21,16 @@ continuously fed from a byte stream.
 ## Interface
 
 ```
-node tools/moonlight/audio-stream.cjs [runs/launcher-XXXX] [--fd N | --file PATH]
+node tools/moonlight/audio-stream.js [runs/launcher-XXXX] [--fd N | --file PATH]
      [--buffer-frames 3840] [--queue 3] [--prime 2]
 ```
 
 - Session dir: first positional arg, else the newest `runs/launcher-*`.
 - Input (interleaved 48 kHz stereo s16le): `--fd N` reads an inherited fd,
   `--file PATH` reads a file (offline test), default is stdin. stdin is the
-  simplest fit for how `live.cjs` spawns a child, so it is the default.
+  simplest fit for how `live.js` spawns a child, so it is the default.
 - On exit it writes `moonlight-audio-<ts>.json` in the session dir with the
-  stat counters below (feed.cjs-style timestamped name, so it is re-runnable).
+  stat counters below (feed.js-style timestamped name, so it is re-runnable).
 
 Programmatic: `stream({rpc, input, bufferFrames, queue, prime, maxPending,
 sleep, now})` returns `{done, stop, stats}`. `done` resolves with the stats when
@@ -70,14 +70,14 @@ receivedBytes`.
 
 ## Spawning alongside the helper
 
-`live.cjs` already spawns `hbmoonlight` for video. Audio is a sibling process.
-Do not edit `live.cjs`; the intended wiring (an audio pipe on an extra stdio
+`live.js` already spawns `hbmoonlight` for video. Audio is a sibling process.
+Do not edit `live.js`; the intended wiring (an audio pipe on an extra stdio
 slot, piped to this module's stdin) is:
 
 ```js
 const helper = spawn(HELPER, ['stream', host, app, '--audio-fd', '3', /* ... */],
   {stdio: ['pipe', 'pipe', 'pipe', 'pipe']});
-spawn(process.execPath, ['tools/moonlight/audio-stream.cjs', dir],
+spawn(process.execPath, ['tools/moonlight/audio-stream.js', dir],
   {stdio: [helper.stdio[3], 'inherit', 'inherit']});
 ```
 
@@ -86,7 +86,7 @@ Standalone, with a FIFO:
 ```
 mkfifo /tmp/hbaudio
 hbmoonlight stream HOST APP --audio-fd 3 3>/tmp/hbaudio &
-node tools/moonlight/audio-stream.cjs runs/launcher-XXXX < /tmp/hbaudio
+node tools/moonlight/audio-stream.js runs/launcher-XXXX < /tmp/hbaudio
 ```
 
 ## Not yet tested on a live console

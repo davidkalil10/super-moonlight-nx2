@@ -1,6 +1,6 @@
 # Fake console
 
-A stand-in for a running Moonlight app so `live.cjs` and `feed.cjs` can be
+A stand-in for a running Moonlight app so `live.js` and `feed.js` can be
 developed and their resync path tested without a console. `shared/rpc.cjs`
 simulates the bridge: one serial link of 32 KiB exchanges at `RATE` bytes/s
 whose concurrent writes interleave at random, and a 60 Hz dispatch that runs the
@@ -8,11 +8,11 @@ real JS HBV2 decoder over the ring and writes back `applied`.
 
 ```sh
 # Steady state on the measured 5.7 MB/s link
-node tools/moonlight/live.cjs tools/moonlight/fake-console \
+node tools/moonlight/live.js tools/moonlight/fake-console \
   --input clip.mp4 --codec hbv2 --budget 64
 
 # Force a 1.5 s stall at t=4 s and watch the sender resync with a keyframe
-STALL=1500@4000 node tools/moonlight/live.cjs tools/moonlight/fake-console \
+STALL=1500@4000 node tools/moonlight/live.js tools/moonlight/fake-console \
   --input clip.mp4 --codec hbv2 --budget 64
 ```
 
@@ -30,13 +30,13 @@ without a console. `../protocol3.test.cjs` drives it.
 
 `bridge.cjs DIR` serves the same fake console through the real bridge
 (`hbl-platform/smilebasic/engine/lib/bridge.js`) and writes a run directory there, so tools
-that speak the bridge protocol (the native `hbmoonlight-host`, or `live.cjs` /
-`input-feeder.cjs` through a copy of the real `shared/rpc.cjs`) pay the same
+that speak the bridge protocol (the native `hbmoonlight-host`, or `live.js` /
+`input-feeder.js` through a copy of the real `shared/rpc.cjs`) pay the same
 HTTP, JSON and base64 costs as on a console. It also simulates the sound-memory
 allocation and an AudioOut that plays appended buffers in real time (underruns
 are counted), and `--pad` cycles a scripted controller + touch state.
 
 ```sh
 HB_PIPELINE=2 RATE=12e6 node tools/moonlight/fake-console/bridge.cjs /tmp/fake --pad &
-node tools/moonlight/live.cjs /tmp/fake --input clip.mp4 --codec hbv2 --budget 64
+node tools/moonlight/live.js /tmp/fake --input clip.mp4 --codec hbv2 --budget 64
 ```

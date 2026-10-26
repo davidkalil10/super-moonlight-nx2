@@ -6,7 +6,7 @@
 //        [--size 1920x1080]
 const path = require('node:path');
 const {spawn} = require('node:child_process');
-const {Encoder} = require('../../../../hbl-moonlight/tools/moonlight/hbv2-encoder.cjs');
+const {Encoder} = require('../../../../hbl-moonlight/tools/moonlight/hbv2-encoder.js');
 
 const FIELDS = ['sequence', 'slotBytes', 'qp', 'intra', 'inter', 'skip', 'deferred', 'keyframe'];
 
