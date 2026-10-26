@@ -120,7 +120,7 @@ function readData(packet, type, start, end) {
     }
     case TYPE.txt: {
       const strings = [];
-      for (let i = start; i < end;) {
+      for (let i = start; i < end; ) {
         const length = packet[i];
         if (i + 1 + length > end) throw Error('mDNS TXT string runs past the record');
         strings.push(packet.toString('utf8', i + 1, i + 1 + length));
