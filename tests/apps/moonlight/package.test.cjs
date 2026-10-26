@@ -19,7 +19,7 @@ const PINNED = {
   state: '370c0ab9bc38e877611b4dc867e5eabab6d0fd6cf24f90a6010f8e3a51b80051',
   data: 'f5bd127446b306fc0d512f5382c53087f34ce4b7fb4fc8477743520bce98ffdd',
   memory: '9573805be9a6be2fe3b4f095fe2180a771321d3549fdcf48eba1cb1607a8efa2',
-  icon: '19493baa4f4ddb1eedd69716f18ed68a97a3e1cd7b646777bba162d508d2eb90'
+  icon: '35075423270cead4efeb1bcdc88c7ed3104806dfd3a4899fb2ce8d92aed344bd'
 };
 const MEMORY_BYTES = 20217856;
 
