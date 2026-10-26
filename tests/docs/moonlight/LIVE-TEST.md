@@ -11,7 +11,7 @@ on the console shows it. The implemented console decoder path has its own
   — rebuild: `ssh rig 'rm -rf ~/claude-builds/HBLauncher/moonlight-helper/build && cd /media/storage/own/HBLauncher && bash tools/moonlight/helper/build.sh'`
 - HBV2 encoder: `~/claude-builds/HBLauncher/hbv2enc/hbv2enc`
   — rebuild: `ssh rig 'cd /media/storage/own/HBLauncher && bash tools/moonlight/build-hbv2enc.sh'`
-- App shaders (HBV2): `apps/moonlight/*.spv`, memory 8,695,808 bytes
+- App shaders (HBV2): `apps/moonlight/backends/hblauncher.gpu-app/*.spv`, memory 8,695,808 bytes
   — rebuild: `ssh rig 'cd /media/storage/own/HBLauncher && SPIRV_VAL=true GLSLANG=tools/moonlight/glslang-shim.sh node apps/moonlight/build.js'`
 
 ## On the console
