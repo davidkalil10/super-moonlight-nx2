@@ -18,12 +18,13 @@ const OUTPUT_SLOTS = 2;
 
 /**
  * The output sequence the gate write for an access unit names first; the first one until
- * decode is OUTPUT_LAG units in.
+ * decode is `lag` units in.
  * @param {number} auSequence
+ * @param {number} lag
  * @returns {number}
  */
-function lagged(auSequence) {
-  return auSequence <= OUTPUT_LAG ? 1 : auSequence - OUTPUT_LAG;
+function lagged(auSequence, lag) {
+  return auSequence <= lag ? 1 : auSequence - lag;
 }
 
 /**
@@ -39,7 +40,8 @@ function placeOutput(bytes, descriptor) {
 
 /**
  * Builds the gate write for the access unit `current`. Throws unless the status snapshot
- * matches what the host expects, including an acquired output exactly OUTPUT_LAG units back.
+ * matches what the host expects, including an acquired output exactly `lag` units back
+ * (OUTPUT_LAG, or 1 to fetch each output one gate after its decode opened).
  * @returns {{offset: number, bytes: Buffer}}
  */
 function gateWrite({
@@ -53,8 +55,10 @@ function gateWrite({
   publication,
   destination,
   published,
-  frame
+  frame,
+  lag = OUTPUT_LAG
 }) {
+  if (lag !== 1 && lag !== OUTPUT_LAG) throw Error('Staggered output lag is 1 or 2');
   const inputBytes = input.gateWrite({
     snapshot,
     expected,
@@ -66,10 +70,10 @@ function gateWrite({
   });
   const bytes = Buffer.alloc(WRITE_BYTES);
   inputBytes.copy(bytes, 0);
-  const outputSequence = lagged(current.sequence);
+  const outputSequence = lagged(current.sequence, lag);
   if (expected.acquire && expected.acquire.sequence !== outputSequence)
-    throw Error('Staggered acquire is not two AUs behind decode');
-  if (!expected.acquire && current.sequence > OUTPUT_LAG)
+    throw Error(`Staggered acquire is not ${lag === 1 ? 'one AU' : 'two AUs'} behind decode`);
+  if (!expected.acquire && current.sequence > lag)
     throw Error('Staggered output acquisition is missing');
   const first = expected.acquire
     ? output.outputDescriptor({
@@ -86,4 +90,4 @@ function gateWrite({
   return {offset: WRITE_OFFSET, bytes};
 }
 
-export {WRITE_OFFSET, WRITE_BYTES, gateWrite};
+export {WRITE_OFFSET, WRITE_BYTES, OUTPUT_LAG, gateWrite};

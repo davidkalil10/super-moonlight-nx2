@@ -43,6 +43,7 @@ import * as presentPacer from './present-pacer.js';
 import * as decodeWaits from './decode-wait.js';
 import * as receiveWaits from './receive-wait.js';
 import * as exchangeTiming from './exchange-timing.js';
+import * as gates from './staggered-gate.js';
 import {create as createStaggeredWorker} from './staggered-worker.js';
 
 const RESTART = 'Staggered worker native objects retained; restart SmileBASIC';
@@ -62,8 +63,6 @@ const POLL_MS = 5;
 const INPUT_RETRY_MS = 20;
 /** Serial-number arithmetic: a u32 distance below this means "at or after". */
 const HALF_SEQUENCE_RANGE = 0x80000000;
-/** The tail drains outputs from this many units before the last. */
-const TAIL_UNITS = 2;
 
 /** @typedef {import('./staggered-status.js').Snapshot} Snapshot */
 /** @typedef {import('./staggered-status.js').Expected} Expected */
@@ -184,21 +183,23 @@ async function waitOutput(worker, expected, {timeoutMs = DEFAULT_TIMEOUT_MS, pau
 
 /**
  * What the gate after access unit `sequence` expects: its receive, the submit of the unit
- * before it, the output two behind it and, from the fourth gate, the fetch of the output three
- * behind and the publication that fetch presented unless it was skipped.
+ * before it, the output `lag` behind it (two by default) and, once there is one, the fetch of
+ * the output before that and the publication that fetch presented unless it was skipped.
  * @param {number} sequence
  * @param {Map<number, {length: number, pts: bigint}>} units
  * @param {Map<number, any>} destinations Output sequence to the surface it was fetched into.
+ * @param {number} [lag]
  * @returns {Expected}
  */
-function expectedFor(sequence, units, destinations) {
+function expectedFor(sequence, units, destinations, lag = gates.OUTPUT_LAG) {
   const value = {receive: {sequence, bytes: units.get(sequence).length}};
   if (sequence >= 2) value.input = {sequence: sequence - 1};
-  if (sequence >= 3) value.acquire = {sequence: sequence - 2, pts: units.get(sequence - 2).pts};
-  if (sequence >= 4) {
-    const destination = destinations.get(sequence - 3);
+  const acquired = sequence - lag;
+  if (acquired >= 1) value.acquire = {sequence: acquired, pts: units.get(acquired).pts};
+  if (acquired >= 2) {
+    const destination = destinations.get(acquired - 1);
     if (!destination) throw Error('Missing prior staggered output destination');
-    value.fetch = {sequence: sequence - 3};
+    value.fetch = {sequence: acquired - 1};
     if (!destination.skip) value.ack = {sequence: destination.sequence, index: destination.index};
   }
   return value;
@@ -246,6 +247,7 @@ function jsonSafe(value) {
  * @param {'backlog' | 'vsync'} [options.skipRule]
  * @param {number | null} [options.trimBacklogMs] age of the unit in hand that counts as stale
  * @param {boolean} [options.gateOnReceive] gate each unit as soon as it is sent
+ * @param {1 | 2} [options.lag] fetch each output this many gates after its decode opened
  * @param {boolean} [options.decodeWait] sleep through a pending acquire (vsync rule only)
  * @param {boolean} [options.receiveWait] sleep through a pending receive
  * @param {{beforeMs: number, afterMs: number} | null} [options.avoid] span around a predicted
@@ -261,6 +263,7 @@ function create({
   skipRule = 'backlog',
   trimBacklogMs = null,
   gateOnReceive = false,
+  lag = gates.OUTPUT_LAG,
   decodeWait = false,
   receiveWait = false,
   avoid = null,
@@ -270,6 +273,7 @@ function create({
   const vsyncRule = skipRule === 'vsync';
   if (decodeWait && !vsyncRule) throw Error('The decode wait needs the vsync skip rule');
   if (trimBacklogMs !== null && vsyncRule) throw Error('The backlog trim needs the backlog rule');
+  if (lag !== 1 && lag !== gates.OUTPUT_LAG) throw Error('The staggered output lag is 1 or 2');
   const periodMs = 1000 / presentHz;
   let worker = null;
   let transport = null;
@@ -495,7 +499,7 @@ function create({
     }
   ) {
     enter('staggered-status');
-    const expected = expectedFor(sequence, units, destinations);
+    const expected = expectedFor(sequence, units, destinations, lag);
     if (vsyncRule) pendingAck(expected, backlog);
     if (expected.ack && !expected.ack.optional)
       await pacer.beforeRead(vsyncRule ? pending.openedAt : fetchOpened);
@@ -507,7 +511,7 @@ function create({
       onDecoded?.(1);
     }
     if (vsyncRule) {
-      if (expected.fetch && destinations.get(sequence - 3).skip) {
+      if (expected.fetch && destinations.get(expected.fetch.sequence).skip) {
         counts.skipped++;
         onSkipped?.(1);
       }
@@ -518,7 +522,7 @@ function create({
       sequence === 1 ? firstInput.index : snapshot.input.nextIndex
     );
     let destination = null;
-    if (sequence >= 3) {
+    if (sequence > lag) {
       enter('destination');
       destination = await target(sink, snapshot, backlog, arrivedAt, onTrimmed);
       if (!destination && vsyncRule) {
@@ -532,7 +536,7 @@ function create({
         confirm(snapshot, onPresented);
         destination = await target(sink, snapshot, backlog);
       }
-      destinations.set(sequence - 2, destination);
+      destinations.set(sequence - lag, destination);
     }
     enter('staggered-gate');
     const gateStarted = now();
@@ -545,7 +549,8 @@ function create({
       next: next && {sequence: sequence + 1, length: next.length, pts: next.pts},
       destination,
       published,
-      frame: layout
+      frame: layout,
+      ...(lag !== gates.OUTPUT_LAG && {lag})
     });
     timing.record('gate', gateStarted, now(), references(expected));
     lastGate = now();
@@ -626,7 +631,7 @@ function create({
 
     /**
      * Gates the last unit (already gated under gateOnReceive), stops the input worker and
-     * drains the last two outputs.
+     * drains the last `lag` outputs.
      * @param {any} [hooks]
      * @returns {Promise<{drained: number}>}
      */
@@ -641,7 +646,7 @@ function create({
       enter('staggered-tail');
       await waitFinalInput(last);
       await worker.stopInput();
-      for (let sequence = Math.max(1, last - TAIL_UNITS + 1); sequence <= last; sequence++) {
+      for (let sequence = Math.max(1, last - lag + 1); sequence <= last; sequence++) {
         const expected = tailExpected(sequence, units, destinations);
         const snapshot = await waitOutput(worker, expected, waits);
         counts.decoded++;

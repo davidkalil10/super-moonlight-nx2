@@ -16,6 +16,7 @@
 //              --staggered: [--present-hz 60|120] [--skip-backlog 2|off] [--skip-rule backlog|vsync]
 //                           [--trim-backlog-ms N] (backlog rule: skip one output once the unit in hand is N ms old at 3 gates in a row)
 //                           [--gate-on-receive] (prime and gate each unit as it arrives instead of on the next one)
+//                           [--output-lag 1|2] (fetch each output 1 or 2 gates after its decode opened; 2 by default)
 //                           [--decode-wait] (with --skip-rule vsync) [--receive-wait]
 //              [--socket-audio | --socket-audio-tone] (PCM or a 500 Hz test tone over native TCP to a console worker)
 // --moonlight runs tools/moonlight/helper's hbmoonlight (path from $HBMOONLIGHT)

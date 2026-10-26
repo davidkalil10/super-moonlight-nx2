@@ -154,6 +154,7 @@ async function run({
   const skipRule = cli.option(args, '--skip-rule') ?? 'backlog';
   const trimBacklogMs = cli.number(args, '--trim-backlog-ms', null);
   const gateOnReceive = args.includes('--gate-on-receive');
+  const outputLag = cli.number(args, '--output-lag', null);
   const decodeWait = args.includes('--decode-wait');
   const receiveWait = args.includes('--receive-wait');
   const avoidWindow = exchangeTiming.parseAvoid(cli.option(args, '--avoid-window') ?? undefined);
@@ -188,6 +189,9 @@ async function run({
     throw Error('--present-hz, --skip-backlog and --skip-rule apply to --staggered');
   if (!staggered && trimBacklogMs !== null) throw Error('--trim-backlog-ms applies to --staggered');
   if (!staggered && gateOnReceive) throw Error('--gate-on-receive applies to --staggered');
+  if (outputLag !== null && outputLag !== 1 && outputLag !== 2)
+    throw Error('--output-lag takes 1 or 2');
+  if (!staggered && outputLag !== null) throw Error('--output-lag applies to --staggered');
   if (!Number.isInteger(audioFrames) || audioFrames < 240 || audioFrames % 240)
     throw Error('--audio-frames takes a multiple of 240');
   if (socketAudio && audioFrames > 3840)
@@ -318,6 +322,7 @@ async function run({
           skipRule,
           ...(trimBacklogMs !== null && {trimBacklogMs}),
           ...(gateOnReceive && {gateOnReceive}),
+          ...(outputLag !== null && {lag: outputLag}),
           decodeWait,
           receiveWait,
           avoid: avoidWindow,
@@ -877,6 +882,7 @@ async function run({
           skipRule,
           ...(trimBacklogMs !== null && {trimBacklogMs}),
           ...(gateOnReceive && {gateOnReceive}),
+          ...(outputLag !== null && {outputLag}),
           decodeWait,
           receiveWait,
           avoidWindow,
