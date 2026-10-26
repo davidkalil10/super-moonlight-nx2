@@ -271,15 +271,14 @@ class AccessUnits {
     }
   }
 
+  /** Stops cutting units and drains the pipe to EOF, so the writer is never cut off. */
   close() {
     if (this.closed) return;
     this.closed = true;
-    this.stream.pause();
     this.stream.removeListener('data', this.onData);
     this.stream.removeListener('end', this.onEnd);
-    this.stream.removeListener('error', this.onError);
     this.stream.removeListener('close', this.onClose);
-    this.stream.destroy();
+    this.stream.resume();
     this.chunks = [];
     this.ready = [];
     this.metadata = [];

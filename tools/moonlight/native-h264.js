@@ -243,9 +243,9 @@ async function run({
     log({event: 'native-stop', reason});
     idrRequester.close();
     for (const child of children) child.kill('SIGINT');
-    reader?.close();
     helper?.stdin.end();
     helper?.kill('SIGINT');
+    reader?.close();
     soundSource?.halt();
   }
 
