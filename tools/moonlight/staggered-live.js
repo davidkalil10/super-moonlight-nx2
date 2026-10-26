@@ -5,10 +5,10 @@
  * the worker's checked writes (staggered-gate / staggered-status); call order, the odd tail
  * drain and stop follow sdk/tools/probe-staggered-ladder.cjs.
  *
- * Skip and catch-up: with more than SKIP_BACKLOG units queued on the host, an output is still
- * decoded, fetched and released but copied to a free surface behind a replay of the last
- * applied publication, so the shader keeps it off screen and the next gate does not wait for a
- * present. At most MAX_SKIPS outputs in a row are skipped this way.
+ * Skip and catch-up: with more than skipBacklog units (SKIP_BACKLOG by default) queued on the
+ * host, an output is still decoded, fetched and released but copied to a free surface behind a
+ * replay of the last applied publication, so the shader keeps it off screen and the next gate
+ * does not wait for a present. At most MAX_SKIPS outputs in a row are skipped this way.
  *
  * Rereads: a gate late on receive, input, acquire or fetch reads the status again right away,
  * since a pause costs the frame its vsync slot (request-budget.cjs staggeredRetryWait). A gate
@@ -208,6 +208,7 @@ function jsonSafe(value) {
  * @param {number} [options.timeoutMs]
  * @param {(ms: number) => Promise<unknown>} [options.pause]
  * @param {number} [options.presentHz]
+ * @param {number} [options.skipBacklog] host backlog above which an output is skipped
  * @param {() => number} [options.now]
  */
 function create({
@@ -215,6 +216,7 @@ function create({
   timeoutMs = DEFAULT_TIMEOUT_MS,
   pause = delay,
   presentHz = DEFAULT_PRESENT_HZ,
+  skipBacklog = SKIP_BACKLOG,
   now = Date.now
 } = {}) {
   let worker = null;
@@ -284,7 +286,7 @@ function create({
    */
   async function target(sink, snapshot, backlog) {
     const presentation = {current: snapshot.current, applied: snapshot.nativeApplied};
-    if (published && backlog > SKIP_BACKLOG && skips < MAX_SKIPS) {
+    if (published && backlog > skipBacklog && skips < MAX_SKIPS) {
       const discard = await sink.discardDestination(presentation);
       if (discard) {
         skips++;

@@ -107,6 +107,9 @@ async function run({
   const warmup = cli.number(args, '--warmup', 3);
   const queue = cli.number(args, '--queue', staggered ? STAGGERED_QUEUE : 3);
   const inputHz = cli.number(args, '--input-hz', 60);
+  const presentHz = cli.number(args, '--present-hz', 60);
+  const skipBacklog =
+    cli.option(args, '--skip-backlog') === 'off' ? Infinity : cli.number(args, '--skip-backlog', 2);
   const audioFrames = cli.number(
     args,
     '--audio-frames',
@@ -114,6 +117,11 @@ async function run({
   );
   if (!Number.isInteger(inputHz) || inputHz < 10 || inputHz > 120)
     throw Error('--input-hz takes 10 to 120');
+  if (presentHz !== 60 && presentHz !== 120) throw Error('--present-hz takes 60 or 120');
+  if (skipBacklog !== Infinity && !(Number.isInteger(skipBacklog) && skipBacklog >= 0))
+    throw Error('--skip-backlog takes a unit count or off');
+  if (!staggered && (args.includes('--present-hz') || args.includes('--skip-backlog')))
+    throw Error('--present-hz and --skip-backlog apply to --staggered');
   if (!Number.isInteger(audioFrames) || audioFrames < 240 || audioFrames % 240)
     throw Error('--audio-frames takes a multiple of 240');
   if (socketAudio && audioFrames > 3840)
@@ -234,7 +242,7 @@ async function run({
     const makeDecoder = async () => {
       transport = await createTransport({rpc, host: rpc.host});
       if (pairedLoop) paired = createPaired({rpc, publication: sink.workerPublication});
-      if (staggered) staggeredLive = createStaggered();
+      if (staggered) staggeredLive = createStaggered({presentHz, skipBacklog});
       try {
         return await createDecoder({
           rpc,
@@ -741,6 +749,8 @@ async function run({
     ...(staggered
       ? {
           decoded: steadyRows.reduce((sum, row) => sum + row.decoded, 0),
+          presentHz,
+          skipBacklog: skipBacklog === Infinity ? 'off' : skipBacklog,
           staggered: {...(staggeredLive?.counts ?? {}), tail}
         }
       : {}),

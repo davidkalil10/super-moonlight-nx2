@@ -10,6 +10,8 @@ const DEFAULT_WARMUP = 3;
 const LIMITS = {
   fps: (summary, value) => summary.fps >= value,
   minFps: (summary, value) => summary.minFps >= value,
+  decoded: (summary, value) => summary.decodedFps >= value,
+  queued: (summary, value) => summary.maxQueued <= value,
   dropped: (summary, value) => summary.dropped <= value,
   idr: (summary, value) => summary.idr <= value,
   resyncs: (summary, value) => summary.resyncs <= value,
@@ -71,6 +73,9 @@ function summarize(rows, {warmup = DEFAULT_WARMUP} = {}) {
     presented,
     fps: steady.length ? +(presented / steady.length).toFixed(2) : 0,
     minFps: steady.length ? Math.min(...steady.map(row => row.presented)) : 0,
+    decodedFps: steady.length ? +(sum('decoded') / steady.length).toFixed(2) : 0,
+    skipped: sum('skipped'),
+    maxQueued: steady.length ? Math.max(...steady.map(row => row.queued || 0)) : 0,
     dropped: sum('dropped'),
     idr: sum('idr'),
     resyncs: sum('resyncs'),
