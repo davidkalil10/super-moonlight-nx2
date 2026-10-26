@@ -1,0 +1,14 @@
+{
+  "format": "hb-desktop-frame-script",
+  "version": 1,
+  "frameCount": 6,
+  "clock": {"mode": "fixed-step", "originMs": 0, "rateHz": 60},
+  "inputs": [
+    {"frame": 0, "connected": true, "buttons": []},
+    {"frame": 1, "connected": true, "buttons": []},
+    {"frame": 2, "connected": true, "buttons": ["B"]},
+    {"frame": 3, "connected": true, "buttons": ["B"]},
+    {"frame": 4, "connected": true, "buttons": ["B"]},
+    {"frame": 5, "connected": true, "buttons": []}
+  ]
+}
