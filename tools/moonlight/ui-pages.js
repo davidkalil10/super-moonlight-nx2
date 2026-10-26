@@ -33,6 +33,8 @@ const LABEL = {size: 22, tracking: 22 * 0.08};
 const HEADING = {y: 200, status: 340, kicker: 24, size: 72};
 const BUTTON = {y: 640, width: 400, gap: 48};
 const PAGER = {width: 300};
+/** The tag on the cover of the app the PC is running. */
+const RUNNING = {width: 112, height: 30};
 /** Strips kept across pages, by text, size, width and alignment. */
 const CACHE_LIMIT = 512;
 
@@ -342,23 +344,15 @@ function createPages(raster) {
         ? covers.get(app.id).then(painted => (painted.width ? painted : letters()), letters)
         : letters();
       page.image(x, y, tile);
-      const nameY = y + COVER.height + GRID.name;
       if (current) {
-        page.solid(x, nameY, COVER.width, 34, COLOR.running);
-        page.text(
-          x,
-          nameY + 5,
-          `RUNNING · ${app.name}`,
-          20,
-          COVER.width,
-          COLOR.background,
-          'center',
-          {
-            weight: 700,
-            tracking: 1.2
-          }
-        );
-      } else page.text(x, nameY, app.name, 26, COVER.width, COLOR.ink, 'center');
+        page.solid(x + 8, y + 8, RUNNING.width, RUNNING.height, COLOR.running);
+        page.text(x + 8, y + 13, 'RUNNING', 18, RUNNING.width, COLOR.background, 'center', {
+          weight: 700,
+          tracking: 1.2
+        });
+      }
+      const nameY = y + COVER.height + GRID.name;
+      page.text(x, nameY, app.name, 26, COVER.width, current ? COLOR.running : COLOR.ink, 'center');
     });
     const buttons = GRID.y + 2 * GRID.row + 8;
     button(page, ITEM.back, SIDE, buttons, PAGER.width, '‹  PCs');
