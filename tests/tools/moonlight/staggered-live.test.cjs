@@ -22,8 +22,15 @@ const unitAt = sequence => ({data: Buffer.alloc(100 + sequence), pts: sequence *
 // the combined gate write decodes the gated unit and fetches the descriptor's output, and the
 // output worker holds one decoded unit back until the input worker stops.
 // With clock set, a fetched frame is applied on the next vsync of clock.vsyncMs and every
-// bridge read takes clock.readMs, like the renderer and bridge on the console.
-function simulatedDevice({late = new Set(), clock = null} = {}) {
+// bridge read takes clock.readMs, like the renderer and bridge on the console. A stalled
+// renderer never applies a publication, and the discard calls in noFreeSurface find no
+// free surface.
+function simulatedDevice({
+  late = new Set(),
+  clock = null,
+  stalled = false,
+  noFreeSurface = new Set()
+} = {}) {
   const sdk = 0x40000000;
   const moduleBase = 0x50000000;
   const mapped = 0x80000000;
@@ -134,7 +141,8 @@ function simulatedDevice({late = new Set(), clock = null} = {}) {
       requests.push('read');
       if (clock) {
         clock.now += clock.readMs;
-        while (presents.length && presents[0].at <= clock.now) presents.shift().present();
+        while (!stalled && presents.length && presents[0].at <= clock.now)
+          presents.shift().present();
       }
       const bytes = read(address, length);
       if (staleReceive && address === mapped + status.READ_START) {
@@ -181,9 +189,12 @@ function simulatedDevice({late = new Set(), clock = null} = {}) {
   );
   const publication = {mapped, color: 1};
   let sequence = 0;
+  const unapplied = [];
+  let discards = 0;
   const sink = {
     async workerDestination(presentation) {
       assert.ok(Number.isInteger(presentation.current));
+      if (sequence) unapplied.push(sequence !== applied || presentation.applied !== sequence);
       sequence++;
       const index = sequence % 3;
       return {
@@ -195,6 +206,7 @@ function simulatedDevice({late = new Set(), clock = null} = {}) {
       };
     },
     async discardDestination(presentation) {
+      if (noFreeSurface.delete(++discards)) return null;
       const index = [0, 1, 2].find(item => item !== presentation.current);
       return {
         index,
@@ -215,6 +227,7 @@ function simulatedDevice({late = new Set(), clock = null} = {}) {
     requests,
     pts,
     onScreenWrites,
+    unapplied,
     applied: () => applied
   };
 }
@@ -524,5 +537,102 @@ test('skipBacklog Infinity presents every unit under a backlog', async () => {
   assert.equal(live.counts.skipped, 0);
   assert.equal(live.counts.presented, 12);
   assert.equal(device.applied(), 12);
+  await live.stop();
+});
+
+const vsyncClock = () => ({now: 0, vsyncMs: 1000 / 60, readMs: 2.24});
+const clockPause = clock => async ms => {
+  clock.now += ms;
+};
+
+test('the vsync rule publishes once per vsync under a backlog and decodes every unit', async () => {
+  const clock = vsyncClock();
+  const device = simulatedDevice({clock});
+  const live = await liveOn(device, clockPause(clock), clock, {skipRule: 'vsync', skipBacklog: 1});
+  const frames = 60;
+  for (let sequence = 1; sequence <= frames; sequence++) {
+    const unit = unitAt(sequence);
+    device.pts.set(sequence, BigInt(unit.pts));
+    await live.push(unit, {sink: device.sink, backlog: 5});
+  }
+  const vsyncs = clock.now / clock.vsyncMs;
+  const {presented, waiting} = live.counts;
+  assert.ok(Math.abs(presented - vsyncs) <= 2, `${presented} presented over ${vsyncs} vsyncs`);
+  assert.equal(waiting.applied, undefined, 'no gate waited for present under the backlog');
+  assert.deepEqual(await live.finish({sink: device.sink}), {drained: 2});
+  const counts = live.counts;
+  assert.equal(counts.decoded, frames);
+  assert.equal(counts.presented + counts.skipped, frames);
+  assert.equal(device.applied(), counts.presented);
+  assert.ok(!device.unapplied.includes(true), 'never two publications pending');
+  assert.deepEqual(device.onScreenWrites, []);
+  await live.stop();
+});
+
+test('the vsync rule waits for a publication pending for two vsync periods', async () => {
+  const clock = vsyncClock();
+  const device = simulatedDevice({clock, stalled: true});
+  const live = await liveOn(device, clockPause(clock), clock, {
+    skipRule: 'vsync',
+    skipBacklog: 1,
+    timeoutMs: 50
+  });
+  let failure = null;
+  for (let sequence = 1; sequence <= 40 && !failure; sequence++) {
+    const unit = unitAt(sequence);
+    device.pts.set(sequence, BigInt(unit.pts));
+    failure = await live.push(unit, {sink: device.sink, backlog: 5}).then(
+      () => null,
+      error => error
+    );
+  }
+  assert.match(failure?.message ?? '', /checked status timed out/);
+  assert.ok(live.counts.skipped > 0, 'outputs went off screen before the deadline');
+  assert.ok(live.counts.waiting.applied > 0, 'the stale publication was waited for');
+  assert.equal(live.counts.presented, 0);
+  assert.ok(clock.now >= (2 * 1000) / 60, `${clock.now} ms before the wait`);
+});
+
+test('without a backlog the vsync rule costs and presents like the T23 rule', async () => {
+  const runRule = async skipRule => {
+    const device = simulatedDevice();
+    const live = await liveOn(device, noPause, null, {skipRule, skipBacklog: 1});
+    const steady = [];
+    await stream(device, live, 24, (sequence, requests) => {
+      if (sequence > 8) steady.push(requests);
+    });
+    await live.finish({sink: device.sink});
+    await live.stop();
+    return {steady, counts: live.counts, applied: device.applied()};
+  };
+  const legacy = await runRule('backlog');
+  const vsync = await runRule('vsync');
+  for (const requests of vsync.steady) assert.deepEqual(requests, ['read', 'gate']);
+  assert.deepEqual(vsync.counts, legacy.counts);
+  assert.equal(vsync.applied, 24);
+});
+
+test('an unknown skip rule is refused', () => {
+  assert.throws(() => create({skipRule: 'newest'}), /Unknown staggered skip rule/);
+});
+
+test('the vsync rule waits for the pending publication when no surface is free', async () => {
+  const clock = vsyncClock();
+  const noFreeSurface = new Set([3, 8]);
+  const device = simulatedDevice({clock, noFreeSurface});
+  const live = await liveOn(device, clockPause(clock), clock, {skipRule: 'vsync', skipBacklog: 1});
+  const frames = 40;
+  for (let sequence = 1; sequence <= frames; sequence++) {
+    const unit = unitAt(sequence);
+    device.pts.set(sequence, BigInt(unit.pts));
+    await live.push(unit, {sink: device.sink, backlog: 5});
+  }
+  await live.finish({sink: device.sink});
+  const counts = live.counts;
+  assert.equal(noFreeSurface.size, 0, 'both discards found no free surface');
+  assert.equal(counts.decoded, frames);
+  assert.equal(counts.presented + counts.skipped, frames);
+  assert.equal(device.applied(), counts.presented);
+  assert.ok(!device.unapplied.includes(true), 'never two publications pending');
   await live.stop();
 });
