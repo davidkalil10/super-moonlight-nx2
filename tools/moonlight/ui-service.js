@@ -225,17 +225,32 @@ function createService({
     clearTimeout(timer);
     if (current === child) current = null;
     if (result.signal === 'SIGKILL') result.err += '\nhelper timed out';
-    log({event: 'helper', args: args.slice(0, 2), code: result.code, signal: result.signal});
+    const error = result.code ? helperError(result) : null;
+    log({
+      event: 'helper',
+      args: args.slice(0, 2),
+      code: result.code,
+      signal: result.signal,
+      ...(error && {error})
+    });
     return result;
   }
 
-  function helperMessage(result, fallback) {
+  /** The helper's own error line ({message, stage, detail}), or null when it wrote none. */
+  function helperError(result) {
     const line = result.err.split('\n').find(text => text.includes('"event":"error"'));
     try {
-      return JSON.parse(line).message || fallback;
+      const {event, ...error} = JSON.parse(line);
+      return error;
     } catch {
-      return /timed out/.test(result.err) ? 'The helper timed out' : fallback;
+      return null;
     }
+  }
+
+  function helperMessage(result, fallback) {
+    const error = helperError(result);
+    if (error) return error.message || fallback;
+    return /timed out/.test(result.err) ? 'The helper timed out' : fallback;
   }
 
   async function list(host, token) {
