@@ -210,6 +210,23 @@ test('A on a host lists it and lands on the app grid; stale commands are acked a
   assert.equal(children.spawned.length, 1);
 });
 
+test('covers from the helper cache land on the grid, letter tiles fill the rest', async () => {
+  const fixture = await setup({coversDir: '/covers'});
+  const {console, children, service} = fixture;
+  await service.attach();
+  console.press('a', ITEM.host);
+  await service.poll();
+  await until(() => children.last('list'), 'list helper');
+  assert.deepEqual(children.last('list').args, ['list', '192.168.8.245', '--covers', '/covers']);
+  const apps = [{...APPS[0], cover: '/covers/192.168.8.245-881448767.png'}, APPS[1]];
+  children.last('list').finish({out: JSON.stringify({currentGame: 0, apps}) + '\n'});
+  await until(() => service.model().screen === 'apps', 'apps page');
+  await until(() => console.shown().images[0].rgba[0] === 2, 'cover tile on the grid');
+  const shown = console.shown();
+  assert.equal(shown.images.length, 2);
+  assert.equal(shown.images[1].rgba[0], 1, 'the second app keeps its letter tile');
+});
+
 test('an unreachable or hung helper ends on the error page', async () => {
   const fixture = await setup();
   const {console, children, service} = fixture;
@@ -389,6 +406,22 @@ test('quit stops the stream first, cancels on the host and confirms on the list'
   await until(() => service.model().screen === 'apps', 'apps after failed quit');
   assert.equal(service.model().message, 'Quit failed: cancel refused');
   assert.equal(service.model().currentGame, 1217);
+  console.press('y');
+  await service.poll();
+  console.press('a', ITEM.confirmQuit);
+  await service.poll();
+  await until(
+    () => children.spawned.filter(child => child.kind === 'quit').length === 3,
+    'third quit'
+  );
+  await until(() => children.last('quit').kills.includes('SIGKILL'), 'quit timeout');
+  await until(
+    () => children.spawned.filter(child => child.kind === 'list').length === 4,
+    'list after timeout'
+  );
+  children.last('list').finish({out: list(0)});
+  await until(() => service.model().screen === 'apps', 'apps after late quit');
+  assert.equal(service.model().message, 'Quit confirmed', 'the host state wins over a slow helper');
 });
 
 test('a stream that dies before connecting is an error; the service leaves with the app', async () => {
