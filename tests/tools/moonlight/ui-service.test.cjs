@@ -438,6 +438,33 @@ test('quit stops the stream first, cancels on the host and confirms on the list'
   );
 });
 
+test('a helper timeout logs the step the helper names', async () => {
+  const fixture = await setup();
+  const {console, children, service} = fixture;
+  await service.attach();
+  await openHost(fixture, 1217);
+  console.press('y');
+  await service.poll();
+  console.press('a', ITEM.confirmQuit);
+  await service.poll();
+  await until(() => children.last('quit'), 'quit helper');
+  children.last('quit').finish({
+    code: 3,
+    err: '{"event":"error","message":"timed out","stage":"reconnect"}\n'
+  });
+  await until(
+    () => fixture.events.some(event => event.event === 'helper' && event.args[0] === 'quit'),
+    'quit helper event'
+  );
+  const event = fixture.events.find(event => event.event === 'helper' && event.args[0] === 'quit');
+  assert.deepEqual(event.error, {message: 'timed out', stage: 'reconnect'});
+  assert.equal(
+    fixture.events.find(event => event.event === 'helper' && event.args[0] === 'list').error,
+    undefined,
+    'a helper that succeeded logs no error'
+  );
+});
+
 test('a stream that dies before connecting is an error; the service leaves with the app', async () => {
   let active = 'moonlight';
   const fixture = await setup({activeApp: () => active});
