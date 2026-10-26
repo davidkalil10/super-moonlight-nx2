@@ -158,6 +158,11 @@ test('CJK names draw through the CJK fallback', {skip: !pil || !cjk}, async () =
     ]);
     assert.ok(ink(name.bytes) > 0, 'the character draws');
     assert.notDeepEqual(name.bytes, box.bytes, 'and is not the missing-glyph box');
+    const [medium, bold] = await Promise.all([
+      raster.text('\u539f', 40, 100, 'left', {weight: 500}),
+      raster.text('\u539f', 40, 100, 'left', {weight: 700})
+    ]);
+    assert.ok(ink(bold.bytes) > ink(medium.bytes), 'the CJK face follows the weight');
     const light = tile => {
       const mask = [];
       for (let i = 0; i < tile.bytes.length; i += 4) mask.push(tile.bytes[i] > 200 ? 1 : 0);
