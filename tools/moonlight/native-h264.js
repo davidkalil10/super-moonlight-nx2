@@ -180,6 +180,8 @@ async function run({
     throw Error('--trim-backlog-ms takes a unit age in milliseconds');
   if (trimBacklogMs !== null && skipRule === 'vsync')
     throw Error('--trim-backlog-ms needs --skip-rule backlog');
+  if (trimBacklogMs !== null && skipBacklog < 1)
+    throw Error('--trim-backlog-ms needs --skip-backlog 1 or more');
   if (avoidWindow && !(decodeWait || receiveWait))
     throw Error('--avoid-window needs --decode-wait or --receive-wait to predict the events');
   if (

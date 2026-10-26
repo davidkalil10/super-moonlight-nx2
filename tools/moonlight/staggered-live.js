@@ -275,6 +275,8 @@ function create({
   const vsyncRule = skipRule === 'vsync';
   if (decodeWait && !vsyncRule) throw Error('The decode wait needs the vsync skip rule');
   if (trimBacklogMs !== null && vsyncRule) throw Error('The backlog trim needs the backlog rule');
+  if (trimBacklogMs !== null && skipBacklog < 1)
+    throw Error('The backlog trim needs a skip backlog of at least 1');
   if (lag !== 1 && lag !== gates.OUTPUT_LAG) throw Error('The staggered output lag is 1 or 2');
   const periodMs = 1000 / presentHz;
   let worker = null;

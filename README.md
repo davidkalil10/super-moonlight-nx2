@@ -108,7 +108,7 @@ hbv2 prints one stats line per second with `kib`, `qp`, `encodeMs` and `applied`
 | `--skip-backlog N\|off` | `2`, `1` with vsync | staggered: units queued before outputs go off screen |
 | `--skip-rule backlog\|vsync` | `backlog` | staggered: skip by backlog, or keep one publication pending per vsync |
 | `--decode-wait` | off | sleep to the predicted acquire (needs `--skip-rule vsync`) |
-| `--trim-backlog-ms N` | off | staggered, backlog rule: skip one output once the unit in hand is N ms old with a unit queued, at 3 gates in a row, at most once per 6 gates; counted as `trimmed`. Pick N above the default run's `au.gateAgeMs` plus a margin |
+| `--trim-backlog-ms N` | off | staggered, backlog rule, `--skip-backlog` 1 or more: skip one output once the unit in hand is N ms old with a unit queued, at 3 gates in a row, at most once per 6 gates; counted as `trimmed`. Pick N above the default run's `au.gateAgeMs` plus a margin |
 | `--gate-on-receive` | off | staggered, 60 Hz only: open decode N when unit N arrives instead of on N+1 |
 | `--output-lag 1\|2` | `2` | staggered: fetch each output 1 or 2 gates after its decode |
 | `--receive-wait` | off | sleep to the predicted receive |
