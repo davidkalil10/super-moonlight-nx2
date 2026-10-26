@@ -8,6 +8,7 @@
 // the control block. OUTDIR receives frame.rgba (last frame), state.bin,
 // states.bin (state after every frame) and data.bin. The JSON report goes to
 // stdout only after every frame and file succeeded. Exit 2: no usable device.
+// Tests set DESKTOP_VULKAN_RUN_FAIL=control|readback|image to fail that allocation.
 #include <vulkan/vulkan.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -115,16 +116,21 @@ static uint32_t memoryType(uint32_t bits, uint32_t flags) {
   return 0;
 }
 
-static VkDeviceMemory allocate(VkMemoryRequirements requirements, uint32_t flags) {
+static VkDeviceMemory allocate(const char *name, VkMemoryRequirements requirements,
+                               uint32_t flags) {
   VkMemoryAllocateInfo info = {.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
                                .allocationSize = requirements.size,
                                .memoryTypeIndex = memoryType(requirements.memoryTypeBits, flags)};
   VkDeviceMemory memory;
-  VK(vkAllocateMemory(device, &info, 0, &memory));
+  const char *fail = getenv("DESKTOP_VULKAN_RUN_FAIL");
+  VkResult result = fail && !strcmp(fail, name) ? VK_ERROR_OUT_OF_DEVICE_MEMORY
+                                                : vkAllocateMemory(device, &info, 0, &memory);
+  if (result != VK_SUCCESS) fprintf(stderr, "desktop-vulkan-run: cannot allocate %s\n", name);
+  VK(result);
   return memory;
 }
 
-static Buffer createBuffer(size_t size, VkBufferUsageFlags usage) {
+static Buffer createBuffer(const char *name, size_t size, VkBufferUsageFlags usage) {
   Buffer b = {.size = size};
   VkBufferCreateInfo info = {.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
                              .size = size,
@@ -133,8 +139,8 @@ static Buffer createBuffer(size_t size, VkBufferUsageFlags usage) {
   VK(vkCreateBuffer(device, &info, 0, &b.buffer));
   VkMemoryRequirements requirements;
   vkGetBufferMemoryRequirements(device, b.buffer, &requirements);
-  b.memory = allocate(requirements, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-                                        VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+  b.memory = allocate(name, requirements,
+                      VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
   VK(vkBindBufferMemory(device, b.buffer, b.memory, 0));
   VK(vkMapMemory(device, b.memory, 0, size, 0, (void **)&b.mapped));
   CHECK(b.mapped);
@@ -252,10 +258,11 @@ int main(int argc, char **argv) {
   VkQueue queue;
   vkGetDeviceQueue(device, family, 0, &queue);
 
-  Buffer controls = createBuffer(BUFFER_BYTES, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+  Buffer controls = createBuffer("control", BUFFER_BYTES, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
   memcpy(controls.mapped, state, STATE_BYTES);
   memcpy(controls.mapped + STATE_BYTES, data, dataSize);
-  Buffer readback = createBuffer((size_t)WIDTH * HEIGHT * 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT);
+  Buffer readback =
+      createBuffer("readback", (size_t)WIDTH * HEIGHT * 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT);
   uint8_t *states = malloc((size_t)frameCount * STATE_BYTES);
   Timing *timings = malloc(frameCount * sizeof *timings);
   CHECK(states && timings);
@@ -276,7 +283,8 @@ int main(int argc, char **argv) {
   VK(vkCreateImage(device, &imageInfo, 0, &image));
   VkMemoryRequirements imageRequirements;
   vkGetImageMemoryRequirements(device, image, &imageRequirements);
-  VkDeviceMemory imageMemory = allocate(imageRequirements, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+  VkDeviceMemory imageMemory =
+      allocate("image", imageRequirements, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
   VK(vkBindImageMemory(device, image, imageMemory, 0));
   VkImageViewCreateInfo viewInfo = {.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
                                     .image = image,

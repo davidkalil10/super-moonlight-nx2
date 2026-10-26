@@ -158,3 +158,44 @@ test('rejects-frame-write-past-the-control-block', {skip}, async () => {
   assert.equal(past.stdout, '');
   assert.deepEqual(fs.readdirSync(wrapped), []);
 });
+
+test('rejects-failed-readback-allocation', {skip}, async () => {
+  const {shaders, initialState, data} = await hello();
+  const ok = await frames('alloc-ok', [[true, []]]);
+  const framesFile = path.join(path.dirname(ok.files['frame.rgba']), 'frames.bin');
+  const env = {...process.env, DESKTOP_VULKAN_RUN_FAIL: 'readback'};
+  const output = path.join(scratch, 'no-readback');
+  fs.mkdirSync(output);
+  const failed = spawnSync(
+    gpu.runner,
+    [shaders.vertex, shaders.fragment, shaders.compute, initialState, data, framesFile, output],
+    {encoding: 'utf8', env}
+  );
+  assert.equal(failed.signal, null);
+  assert.equal(failed.status, 1);
+  assert.match(failed.stderr, /cannot allocate readback/);
+  assert.equal(failed.stdout, '');
+  assert.deepEqual(fs.readdirSync(output), []);
+
+  const outputDir = path.join(scratch, 'no-readback-run');
+  fs.mkdirSync(outputDir);
+  for (const name of ['run.json', 'frame.rgba'])
+    fs.writeFileSync(path.join(outputDir, name), 'stale');
+  assert.throws(
+    () =>
+      run({
+        shaders,
+        initialState,
+        data,
+        script: script([[true, []]]),
+        clock: clockProvider(),
+        buildDir: scratch,
+        outputDir,
+        runner: gpu.runner,
+        exec: (file, args) => spawnSync(file, args, {encoding: 'utf8', env})
+      }),
+    /desktop-vulkan-run failed \(exit 1\): desktop-vulkan-run: cannot allocate readback/
+  );
+  for (const name of ['run.json', 'frame.rgba'])
+    assert.ok(!fs.existsSync(path.join(outputDir, name)), name);
+});
