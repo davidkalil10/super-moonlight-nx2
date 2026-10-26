@@ -4,7 +4,8 @@
 Reads one JSON request per line on stdin and answers each with an 8-byte header (width,
 height as little-endian u32) followed by the pixels: alpha-8 for a text strip, RGBA8 for a
 tile. Layout stays in ui-pages.js; this process only paints. Text is Sora (fonts/, OFL) at
-the asked weight; a character Sora lacks falls back to DejaVu, as apps/moonlight/assets.py.
+the asked weight; a character Sora lacks falls back to DejaVu, then to a CJK font when the PC
+has one.
 
   {"kind":"text","text":"Desktop","size":36,"width":960,"weight":600,"tracking":0}
                                                                   -> alpha strip, width x line height
@@ -27,6 +28,14 @@ FALLBACKS = [
     "/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf",
 ]
 FALLBACK_PATH = next(f for f in FALLBACKS if Path(f).exists())
+CJK_FONTS = [
+    "/usr/share/fonts/google-noto-sans-cjk-vf-fonts/NotoSansCJK-VF.ttc",
+    "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+    "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
+    "/usr/share/fonts/google-droid-sans-fonts/DroidSansFallbackFull.ttf",
+    "/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf",
+]
+CJK_PATH = next((f for f in CJK_FONTS if Path(f).exists()), None)
 UNMAPPED = "͸"
 MAX_STRIP_HEIGHT = 96
 MAX_COVER_SIDE = 4096
@@ -49,6 +58,22 @@ def font(size, weight=600):
     return fonts[key]
 
 
+def chain(size, weight):
+    """The faces tried in order for each character: Sora, DejaVu, then CJK if present."""
+    faces = [font(size, weight), font(size, None)]
+    if CJK_PATH:
+        key = (size, "cjk")
+        if key not in fonts:
+            fonts[key] = ImageFont.truetype(CJK_PATH, size)
+        faces.append(fonts[key])
+    return faces
+
+
+def face_for(faces, text):
+    """The first face that draws every character of the text, else the last one tried."""
+    return next((face for face in faces if all(has_glyph(face, c) for c in text)), faces[-1])
+
+
 def has_glyph(face, char):
     """Whether the face draws the character itself rather than its missing-glyph box."""
     known = glyphs.setdefault(id(face), {})
@@ -61,10 +86,10 @@ def has_glyph(face, char):
 
 def runs(text, size, weight, tracking):
     """The text as (x, piece, face) runs and its width; tracking spaces every character."""
-    primary = font(size, weight)
+    faces = chain(size, weight)
     pieces = []
     for char in text:
-        face = primary if has_glyph(primary, char) else font(size, None)
+        face = face_for(faces, char)
         if tracking or not pieces or pieces[-1][1] is not face:
             pieces.append([char, face])
         else:
@@ -149,9 +174,7 @@ def letters(request):
     r, g, b = colorsys.hls_to_rgb(hue, 0.32, 0.45)
     out = Image.new("RGBA", (width, height), (int(r * 255), int(g * 255), int(b * 255), 255))
     initials = "".join(word[0] for word in name.split()[:2]).upper() or name[0].upper()
-    face = font(int(height * 0.5), 700)
-    if not all(has_glyph(face, char) for char in initials):
-        face = font(int(height * 0.5), None)
+    face = face_for(chain(int(height * 0.5), 700), initials)
     draw = ImageDraw.Draw(out)
     box = draw.textbbox((0, 0), initials, font=face)
     draw.text(
@@ -167,6 +190,8 @@ PAINTERS = {"text": text_strip, "legend": legend, "tile": tile, "letters": lette
 
 
 def main():
+    if not CJK_PATH:
+        print("ui-text.py: no CJK font found, CJK names draw as boxes", file=sys.stderr)
     out = sys.stdout.buffer
     for line in sys.stdin:
         request = json.loads(line)
