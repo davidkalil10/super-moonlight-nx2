@@ -65,14 +65,27 @@ async function fakeConsole() {
     writes,
     word,
     setWord,
+    loseHeader: 0,
+    revertAfterReads: 0,
+    reverting: null,
     async read(address, length) {
+      if (console.reverting && --console.reverting.reads < 0) {
+        console.reverting.words.copy(bytes, UI.uiMagic);
+        console.reverting = null;
+      }
       return Buffer.from(bytes.subarray(address - MAPPED, address - MAPPED + length));
     },
     async write(address, data) {
       const offset = address - MAPPED;
+      const before = Buffer.from(bytes.subarray(UI.uiMagic, UI.uiMagic + 16));
       data.copy(bytes, offset);
       writes.push(offset);
       if (offset !== UI.uiMagic || word(UI.uiMagic) !== UI_MAGIC || console.frozen) return;
+      if (console.loseHeader > 0) {
+        console.loseHeader--;
+        console.reverting = {words: before, reads: console.revertAfterReads};
+        return;
+      }
       const sequence = word(UI.uiSequence),
         page = word(UI.uiPage),
         base = UI_OFFSET + page * UI_PAGE_BYTES;
@@ -508,6 +521,35 @@ test('a page the console never applies keeps the next page off the shown buffer'
   assert.equal(console.word(UI.uiApplied), 5);
   assert.equal(console.word(UI.uiPage), 1);
 });
+
+for (const [when, reads] of [
+  ['at once', 0],
+  ['after the readback', 1]
+]) {
+  test(`a header the console reverts ${when} is written again, not republished`, async () => {
+    const fixture = await setup();
+    const {console, service} = fixture;
+    await service.attach();
+    const pageWrites = () =>
+      console.writes.filter(offset => offset === UI_OFFSET || offset === UI_OFFSET + UI_PAGE_BYTES)
+        .length;
+    const headerWrites = () => console.writes.filter(offset => offset === UI.uiMagic).length;
+    const [pagesBefore, headersBefore] = [pageWrites(), headerWrites()];
+    console.loseHeader = 1;
+    console.revertAfterReads = reads;
+    console.press('x');
+    await service.poll();
+    assert.equal(service.model().screen, 'settings');
+    assert.equal(console.word(UI.uiApplied), console.word(UI.uiSequence), 'applied');
+    assert.equal(console.word(UI.uiSequence), 2);
+    assert.ok(!fixture.events.some(event => event.event === 'apply-timeout'));
+    assert.equal(pageWrites() - pagesBefore, 1, 'one page write');
+    assert.ok(headerWrites() - headersBefore >= 2, 'the header went out again');
+    const rewrite = fixture.events.find(event => event.event === 'header-rewrite');
+    assert.equal(rewrite.sequence, 2);
+    assert.equal(rewrite.reverted[2], 1, 'the previous sequence came back');
+  });
+}
 
 test('nothing is published after the service detaches', async () => {
   const fixture = await setup();
