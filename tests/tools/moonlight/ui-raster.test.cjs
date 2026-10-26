@@ -15,6 +15,13 @@ try {
   pil = false;
 }
 const ink = bytes => bytes.filter(byte => byte > 0).length;
+const cjk = [
+  '/usr/share/fonts/google-noto-sans-cjk-vf-fonts/NotoSansCJK-VF.ttc',
+  '/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc',
+  '/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc',
+  '/usr/share/fonts/google-droid-sans-fonts/DroidSansFallbackFull.ttf',
+  '/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf'
+].some(file => fs.existsSync(file));
 
 test(
   'text strips are one line high, as wide as asked, and shortened to fit',
@@ -137,6 +144,31 @@ test('weights, letter spacing, glyph fallback and the legend strip', {skip: !pil
     assert.ok(legend.height >= 36 && legend.height <= 96, 'legend height ' + legend.height);
     assert.equal(lastInk(legend) < 400, true, 'two entries stay on the left');
     assert.ok(ink(legend.bytes) > 500, 'rings and labels left ink');
+  } finally {
+    raster.close();
+  }
+});
+
+test('CJK names draw through the CJK fallback', {skip: !pil || !cjk}, async () => {
+  const raster = createRaster();
+  try {
+    const [name, box] = await Promise.all([
+      raster.text('\u539f', 40, 100),
+      raster.text('\u0378', 40, 100)
+    ]);
+    assert.ok(ink(name.bytes) > 0, 'the character draws');
+    assert.notDeepEqual(name.bytes, box.bytes, 'and is not the missing-glyph box');
+    const light = tile => {
+      const mask = [];
+      for (let i = 0; i < tile.bytes.length; i += 4) mask.push(tile.bytes[i] > 200 ? 1 : 0);
+      return mask;
+    };
+    const [initials, boxes] = await Promise.all([
+      raster.letters('\u539f\u795e', 160, 90),
+      raster.letters('\u0378', 160, 90)
+    ]);
+    assert.ok(light(initials).filter(Boolean).length > 100, 'CJK initials in a light ink');
+    assert.notDeepEqual(light(initials), light(boxes), 'not the box');
   } finally {
     raster.close();
   }
