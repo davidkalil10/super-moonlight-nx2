@@ -2,6 +2,7 @@
  * Counts bridge exchanges and the time spent in them, per stage. `instrument` wraps an rpc so
  * every call is attributed to the stage the caller is in when it starts; `take` returns the
  * totals since the last take and resets them. Reads and writes count one exchange per chunk.
+ * `silentMs` says how long the console has kept a call waiting without settling any.
  */
 
 /** The rpc methods that reach the console. */
@@ -41,7 +42,7 @@ function requestsFor(name, args) {
  * @param {object} rpc
  * @param {() => string} stage returns the current stage's name
  * @param {() => number} [now] clock in milliseconds
- * @returns {{rpc: object, take(): Counts & {bridgeByStage: Record<string, Counts>}}}
+ * @returns {{rpc: object, take(): Counts & {bridgeByStage: Record<string, Counts>}, silentMs(): number}}
  */
 function instrument(rpc, stage, now = () => performance.now()) {
   const measured = {...rpc};
@@ -49,16 +50,21 @@ function instrument(rpc, stage, now = () => performance.now()) {
   let bridgeMs = 0;
   /** @type {Record<string, Counts>} */
   let byStage = {};
+  let pending = 0;
+  let answered = now();
   for (const name of METHODS) {
     if (typeof rpc[name] !== 'function') continue;
     measured[name] = async (...args) => {
       const label = stage();
       const started = now();
+      if (pending++ === 0) answered = started;
       try {
         return await rpc[name](...args);
       } finally {
+        pending--;
+        answered = now();
         const count = requestsFor(name, args);
-        const elapsed = now() - started;
+        const elapsed = answered - started;
         const row = (byStage[label] ||= {exchanges: 0, bridgeMs: 0});
         exchanges += count;
         bridgeMs += elapsed;
@@ -83,6 +89,9 @@ function instrument(rpc, stage, now = () => performance.now()) {
       exchanges = bridgeMs = 0;
       byStage = {};
       return result;
+    },
+    silentMs() {
+      return pending ? now() - answered : 0;
     }
   };
 }
