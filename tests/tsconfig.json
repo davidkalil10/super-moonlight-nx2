@@ -45,6 +45,10 @@
     "../hbl-moonlight/tools/moonlight/staggered-live.js",
     "../hbl-moonlight/tools/moonlight/staggered-output-plan.js",
     "../hbl-moonlight/tools/moonlight/staggered-status.js",
-    "../hbl-moonlight/tools/moonlight/staggered-worker.js"
+    "../hbl-moonlight/tools/moonlight/staggered-worker.js",
+    "../hbl-moonlight/tools/moonlight/paired-live.js",
+    "../hbl-moonlight/tools/moonlight/paired-loop-plan.js",
+    "../hbl-moonlight/tools/moonlight/paired-loop-worker.js",
+    "../hbl-moonlight/tools/moonlight/paired-output-frame.js"
   ]
 }
