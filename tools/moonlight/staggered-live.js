@@ -3,7 +3,7 @@
  * unit over native TCP and the output worker fetches the unit two behind it, so a steady
  * frame costs one checked status read and one combined gate write. Every gate goes through
  * the worker's checked writes (staggered-gate / staggered-status); call order, the odd tail
- * drain and stop follow sdk/tools/probe-staggered-ladder.cjs.
+ * drain and stop are the ones the removed probe-staggered-ladder.cjs proved on the console.
  *
  * Skip and catch-up: with more than skipBacklog units (SKIP_BACKLOG by default) queued on the
  * host, an output is still decoded, fetched and released but copied to a free surface behind a

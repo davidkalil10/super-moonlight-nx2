@@ -4,8 +4,8 @@
  * The input-only split worker feeds decoder input and one long-lived paired loop
  * (paired-loop-worker.js) acquires, fetches and publishes two outputs per pair. Each pair
  * opens the loop's gates in order: begin, both inputs, acquire with the expected PTS, two
- * ring destinations, fetch, then each publication. Gate and stop order follow
- * moonlight-dev's sdk/tools/probe-paired-output.cjs.
+ * ring destinations, fetch, then each publication. Gate and stop order are the ones the
+ * removed probe-paired-output.cjs proved on the console.
  *
  * A loop that fails to stop, or stops while still holding native objects, is retained for
  * the rest of the session: no new loop can be created until SmileBASIC restarts.
