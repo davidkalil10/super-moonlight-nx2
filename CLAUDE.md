@@ -32,7 +32,8 @@ The paths become package imports with the ESM switch in Phase 2.
 | `--present-hz 120 --receive-wait` | 28.9 | 9.3 | 23.6 |
 | Applied pacing: vsync rule, skip-backlog 1, decode and receive wait | 30.3 | 3.5 | 24.4 |
 
-Requests per frame fell by about two thirds, but bridge ms/frame stayed flat; large unit exchanges dominate, giving a roughly 40 fps ceiling at 120 present.
+Requests per frame fell by about two thirds, but bridge ms/frame stayed flat; decoded units never cross the bridge.
+Status and gate exchanges became 2.7x slower (2.5 to 7 ms) as they grew sparser; the flat gap probe points to contention while streaming, not idle wake-up, leaving roughly 40 fps at 120 present.
 The pacer stayed at 8.33 ms and did not learn the panel's 16.67 ms apply grid in 40 s; that remains open.
 
 ## Rules
