@@ -45,7 +45,10 @@ test('torn slot is rejected', () => {
 test('committed GLSL include matches the generator', () => {
   const fs = require('node:fs'),
     path = require('node:path');
-  const file = path.join(__dirname, '../../../hbl-moonlight/apps/moonlight/shaders/hbv.glsl');
+  const file = path.join(
+    __dirname,
+    '../../../hbl-moonlight/apps/moonlight/backends/hblauncher.gpu-app/hbv.glsl'
+  );
   if (!fs.existsSync(file)) return;
   assert.strictEqual(fs.readFileSync(file, 'utf8'), hbv.glsl());
 });

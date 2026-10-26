@@ -150,7 +150,7 @@ test('skipped macroblocks are copied lazily from the previous frame', () => {
 
 test('generated tables match the checked-in headers', () => {
   const here = path.join(__dirname, '../../../hbl-moonlight/tools/moonlight'),
-    shaders = path.join(here, '../../apps/moonlight/shaders');
+    shaders = path.join(here, '../../apps/moonlight/backends/hblauncher.gpu-app');
   assert.strictEqual(fs.readFileSync(path.join(here, 'hbv2-tables.h'), 'utf8'), hbv2.cTables());
   const glsl = path.join(shaders, 'hbv2-tables.glsl');
   if (fs.existsSync(glsl)) assert.strictEqual(fs.readFileSync(glsl, 'utf8'), hbv2.glslTables());
