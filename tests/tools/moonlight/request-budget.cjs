@@ -11,6 +11,7 @@ const registration =
   require('../../../hbl-moonlight/sdk/native/movie-event-functions.json').registerClientEvents;
 const SYNC = require('../../../hbl-platform/sdk/native/os-sync-functions.json');
 const {CODE} = require('../../../hbl-platform/sdk/native/thread.js');
+const cli = require('../../../hbl-platform/sdk/cli.js');
 const PAIRED = require('../../../hbl-moonlight/tools/moonlight/paired-loop-plan.js').CONTROL;
 const presentPacer = require('../../../hbl-moonlight/tools/moonlight/present-pacer.js');
 const decodeWaits = require('../../../hbl-moonlight/tools/moonlight/decode-wait.js');
@@ -1263,8 +1264,7 @@ async function budget({frames = 120, model = MODEL} = {}) {
 }
 
 if (require.main === module) {
-  const at = process.argv.indexOf('--frames');
-  const frames = at < 0 ? 120 : Number(process.argv[at + 1]);
+  const frames = cli.number(process.argv, '--frames', 120);
   if (!Number.isInteger(frames) || frames < 1) {
     console.error('Usage: node tools/moonlight/request-budget.cjs [--frames N]');
     process.exit(2);
