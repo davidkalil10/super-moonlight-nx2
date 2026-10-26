@@ -1,11 +1,23 @@
-// Comparison formats for HBV1 and the shared image metrics. BC1 and planar
-// YUV 4:2:0 are decoded the way a fragment shader would read them from a
-// storage buffer (no texture units), and upscaled with manual bilinear taps.
+/**
+ * Comparison formats for HBV1 and the shared image metrics. BC1 and planar YUV 4:2:0 are decoded
+ * the way a fragment shader would read them from a storage buffer (no texture units), and
+ * upscaled with manual bilinear taps.
+ */
+
+const BC1_BLOCK_SIZE = 4;
+const BC1_BLOCK_BYTES = 8;
+/** Power-iteration steps when estimating the principal colour axis. */
+const AXIS_ITERATIONS = 8;
+/** Endpoints are pulled in by this fraction of the projected range on each side. */
+const ENDPOINT_INSET = 1 / 16;
+/** PSNR reported for identical images. */
+const IDENTICAL_PSNR = 99;
 
 function clampByte(value) {
   return Math.min(255, Math.max(0, Math.round(value)));
 }
 
+/** RGB to a packed RGB565 endpoint. */
 function to565(r, g, b) {
   return ((clampByte(r) >> 3) << 11) | ((clampByte(g) >> 2) << 5) | (clampByte(b) >> 3);
 }
@@ -17,27 +29,33 @@ function from565(value) {
   return [(r << 3) | (r >> 2), (g << 2) | (g >> 4), (b << 3) | (b >> 2)];
 }
 
+/** The four-colour palette used when c0 > c1. */
 function bc1Palette(c0, c1) {
   const a = from565(c0),
     b = from565(c1);
   return [a, b, a.map((v, i) => (2 * v + b[i]) / 3), a.map((v, i) => (v + 2 * b[i]) / 3)];
 }
 
+/** The three-colour palette (plus black) used when c0 <= c1. */
 function threeColorPalette(c0, c1) {
   const a = from565(c0),
     b = from565(c1);
   return [a, b, a.map((v, i) => (v + b[i]) / 2), [0, 0, 0]];
 }
 
-// Principal-axis endpoints, one least-squares-free pass. Good enough to rank
-// formats; a production encoder (e.g. squish cluster fit) gains about 1 dB.
+/**
+ * Principal-axis endpoints, one least-squares-free pass. Good enough to rank formats; a
+ * production encoder (e.g. squish cluster fit) gains about 1 dB.
+ * @param {number[][]} pixels 16 RGB triples in raster order
+ * @returns {{c0: number, c1: number, indices: number}}
+ */
 function encodeBc1Block(pixels) {
   const mean = [0, 1, 2].map(c => pixels.reduce((sum, p) => sum + p[c], 0) / 16);
   let axis = [1, 1, 1];
   const cov = [0, 1, 2].map(i =>
     [0, 1, 2].map(j => pixels.reduce((s, p) => s + (p[i] - mean[i]) * (p[j] - mean[j]), 0))
   );
-  for (let k = 0; k < 8; k++) {
+  for (let k = 0; k < AXIS_ITERATIONS; k++) {
     const next = [0, 1, 2].map(
       i => cov[i][0] * axis[0] + cov[i][1] * axis[1] + cov[i][2] * axis[2]
     );
@@ -54,7 +72,7 @@ function encodeBc1Block(pixels) {
     low = Math.min(low, t);
     high = Math.max(high, t);
   }
-  const inset = (high - low) / 16;
+  const inset = (high - low) * ENDPOINT_INSET;
   low += inset;
   high -= inset;
   let c0 = to565(...mean.map((m, i) => m + axis[i] * high)),
@@ -78,24 +96,33 @@ function encodeBc1Block(pixels) {
   return {c0, c1, indices: indices >>> 0};
 }
 
+/** Edge-clamped 4x4 block of RGB triples at block (bx, by). */
+function bc1Pixels(rgb, width, height, bx, by) {
+  const pixels = [];
+  for (let y = 0; y < BC1_BLOCK_SIZE; y++)
+    for (let x = 0; x < BC1_BLOCK_SIZE; x++) {
+      const at =
+        (Math.min(height - 1, by * BC1_BLOCK_SIZE + y) * width +
+          Math.min(width - 1, bx * BC1_BLOCK_SIZE + x)) *
+        3;
+      pixels.push([rgb[at], rgb[at + 1], rgb[at + 2]]);
+    }
+  return pixels;
+}
+
+/** BC1 (DXT1): 4x4 blocks of two RGB565 endpoints and 2-bit indices. */
 const bc1 = {
   name: 'BC1',
-  bytes: (width, height) => Math.ceil(width / 4) * Math.ceil(height / 4) * 8,
+  bytes: (width, height) =>
+    Math.ceil(width / BC1_BLOCK_SIZE) * Math.ceil(height / BC1_BLOCK_SIZE) * BC1_BLOCK_BYTES,
   encode(rgb, width, height) {
-    const blocksX = Math.ceil(width / 4),
-      blocksY = Math.ceil(height / 4),
-      out = Buffer.alloc(blocksX * blocksY * 8);
+    const blocksX = Math.ceil(width / BC1_BLOCK_SIZE),
+      blocksY = Math.ceil(height / BC1_BLOCK_SIZE),
+      out = Buffer.alloc(blocksX * blocksY * BC1_BLOCK_BYTES);
     for (let by = 0; by < blocksY; by++)
       for (let bx = 0; bx < blocksX; bx++) {
-        const pixels = [];
-        for (let y = 0; y < 4; y++)
-          for (let x = 0; x < 4; x++) {
-            const at =
-              (Math.min(height - 1, by * 4 + y) * width + Math.min(width - 1, bx * 4 + x)) * 3;
-            pixels.push([rgb[at], rgb[at + 1], rgb[at + 2]]);
-          }
-        const {c0, c1, indices} = encodeBc1Block(pixels),
-          at = (by * blocksX + bx) * 8;
+        const {c0, c1, indices} = encodeBc1Block(bc1Pixels(rgb, width, height, bx, by)),
+          at = (by * blocksX + bx) * BC1_BLOCK_BYTES;
         out.writeUInt16LE(c0, at);
         out.writeUInt16LE(c1, at + 2);
         out.writeUInt32LE(indices, at + 4);
@@ -103,11 +130,11 @@ const bc1 = {
     return out;
   },
   decode(data, width, height) {
-    const blocksX = Math.ceil(width / 4),
+    const blocksX = Math.ceil(width / BC1_BLOCK_SIZE),
       rgb = Buffer.alloc(width * height * 3);
     for (let y = 0; y < height; y++)
       for (let x = 0; x < width; x++) {
-        const at = ((y >> 2) * blocksX + (x >> 2)) * 8;
+        const at = ((y >> 2) * blocksX + (x >> 2)) * BC1_BLOCK_BYTES;
         const c0 = data.readUInt16LE(at),
           c1 = data.readUInt16LE(at + 2);
         const index = (data.readUInt32LE(at + 4) >>> (((y & 3) * 4 + (x & 3)) * 2)) & 3;
@@ -120,6 +147,7 @@ const bc1 = {
   }
 };
 
+/** Planar YUV 4:2:0: a full luma plane, then the Cb and Cr planes at half size. */
 const yuv420 = {
   name: 'YUV420',
   bytes: (width, height) => width * height + 2 * Math.ceil(width / 2) * Math.ceil(height / 2),
@@ -170,6 +198,15 @@ const yuv420 = {
   }
 };
 
+/**
+ * Bilinear RGB24 resize with edge clamping; returns the input unchanged at equal size.
+ * @param {Buffer} rgb
+ * @param {number} width
+ * @param {number} height
+ * @param {number} outWidth
+ * @param {number} outHeight
+ * @returns {Buffer}
+ */
 function bilinear(rgb, width, height, outWidth, outHeight) {
   if (width === outWidth && height === outHeight) return rgb;
   const out = Buffer.alloc(outWidth * outHeight * 3);
@@ -194,15 +231,29 @@ function bilinear(rgb, width, height, outWidth, outHeight) {
   return out;
 }
 
+/**
+ * Peak signal-to-noise ratio in dB over all bytes; 99 when identical.
+ * @param {Uint8Array} a
+ * @param {Uint8Array} b
+ * @returns {number}
+ */
 function psnr(a, b) {
   if (a.length !== b.length) throw Error('Image sizes differ');
   let sum = 0;
   for (let i = 0; i < a.length; i++) sum += (a[i] - b[i]) ** 2;
   const mse = sum / a.length;
-  return mse === 0 ? 99 : 10 * Math.log10((255 * 255) / mse);
+  return mse === 0 ? IDENTICAL_PSNR : 10 * Math.log10((255 * 255) / mse);
 }
 
-// Fraction of fixed-size blocks whose encoded bytes changed since the last frame.
+/**
+ * Fraction of fixed-size blocks whose encoded bytes changed since the last frame.
+ * @param {Buffer | null | undefined} previous
+ * @param {Buffer} current
+ * @param {number} blockBytes
+ * @param {number} [start]
+ * @param {number} [end]
+ * @returns {number}
+ */
 function changedFraction(previous, current, blockBytes, start = 0, end = current.length) {
   if (!previous) return 1;
   let changed = 0,

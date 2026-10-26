@@ -1,9 +1,45 @@
-// Joins the helper's Annex-B pipe with its access-unit metadata without blocking either pipe.
+/**
+ * Joins the helper's Annex-B pipe with its access-unit metadata without blocking either pipe.
+ *
+ * The helper writes raw H.264 to one pipe and announces each access unit (sequence, size,
+ * keyframe flag, timestamps) on a separate metadata channel. AccessUnits cuts the byte stream
+ * into units by those sizes, with bounded buffering: by default it pauses the pipe when the
+ * queue is full; with onBacklog it instead drops queued units and skips ahead to the next
+ * keyframe.
+ */
+
+const NAL_SPS = 7;
+const NAL_PPS = 8;
+const NAL_TYPE_MASK = 31;
+const NAL_FORBIDDEN_BIT = 128;
+const MIB = 1024 * 1024;
+const DEFAULT_MAX_UNIT_BYTES = 16 * MIB;
+const MAX_UNIT_BYTES_LIMIT = 64 * MIB;
+const DEFAULT_MAX_QUEUED_UNITS = 4;
+const MAX_QUEUED_UNITS_LIMIT = 64;
+const MAX_PENDING_METADATA = 128;
+/** Raw bytes may run ahead of their metadata by this many maximum-size units. */
+const BUFFERED_UNITS = 2;
+
+/**
+ * Length of the Annex-B start code at `at` (3 or 4), or 0 if there is none.
+ * @param {Uint8Array} bytes
+ * @param {number} at
+ */
+function startCodeLength(bytes, at) {
+  if (bytes[at] || bytes[at + 1]) return 0;
+  return bytes[at + 2] === 1 ? 3 : bytes[at + 2] === 0 && bytes[at + 3] === 1 ? 4 : 0;
+}
+
+/**
+ * Splits an Annex-B byte stream into NAL units.
+ * @param {Uint8Array} bytes
+ * @returns {{type: number, data: Uint8Array}[]}
+ */
 function nals(bytes) {
   const starts = [];
   for (let at = 0; at + 2 < bytes.length; at++) {
-    if (bytes[at] || bytes[at + 1]) continue;
-    const prefix = bytes[at + 2] === 1 ? 3 : bytes[at + 2] === 0 && bytes[at + 3] === 1 ? 4 : 0;
+    const prefix = startCodeLength(bytes, at);
     if (!prefix) continue;
     starts.push({start: at, data: at + prefix});
     at += prefix - 1;
@@ -11,25 +47,74 @@ function nals(bytes) {
   return starts.map((start, index) => {
     const end = starts[index + 1]?.start ?? bytes.length;
     const data = bytes.subarray(start.data, end);
-    if (!data.length || data[0] & 128) throw Error('Invalid H.264 NAL header');
-    return {type: data[0] & 31, data};
+    if (!data.length || data[0] & NAL_FORBIDDEN_BIT) throw Error('Invalid H.264 NAL header');
+    return {type: data[0] & NAL_TYPE_MASK, data};
   });
 }
 
+/**
+ * The last SPS and PPS in a byte stream, copied out.
+ * @param {Uint8Array} bytes
+ * @returns {{sps?: Buffer, pps?: Buffer}}
+ */
 function parameterSets(bytes) {
   const result = {};
   for (const nal of nals(bytes)) {
-    if (nal.type === 7) result.sps = Buffer.from(nal.data);
-    if (nal.type === 8) result.pps = Buffer.from(nal.data);
+    if (nal.type === NAL_SPS) result.sps = Buffer.from(nal.data);
+    if (nal.type === NAL_PPS) result.pps = Buffer.from(nal.data);
   }
   return result;
 }
 
+function isNonNegativeSafeInteger(value) {
+  return Number.isSafeInteger(value) && value >= 0;
+}
+
+/** Whether an 'au' metadata record is well formed for units of at most maxUnitBytes. */
+function isValidRecord(record, maxUnitBytes) {
+  return (
+    isNonNegativeSafeInteger(record.seq) &&
+    isNonNegativeSafeInteger(record.frame) &&
+    Number.isSafeInteger(record.bytes) &&
+    record.bytes >= 1 &&
+    record.bytes <= maxUnitBytes &&
+    typeof record.keyframe === 'boolean' &&
+    isNonNegativeSafeInteger(record.pts)
+  );
+}
+
+/**
+ * @typedef {object} AccessUnitOptions
+ * @property {number} [maxUnitBytes] largest accepted access unit
+ * @property {number} [maxQueuedUnits] ready units held before pausing or dropping
+ * @property {() => void} [onBacklog] switches to drop-to-keyframe mode; called per dropped unit
+ */
+
+/** Async iterator of {...metadata, data} access units joined from a pipe and its metadata. */
 class AccessUnits {
-  constructor(stream, {maxUnitBytes = 16 * 1024 * 1024, maxQueuedUnits = 4, onBacklog} = {}) {
-    if (!Number.isSafeInteger(maxUnitBytes) || maxUnitBytes < 1 || maxUnitBytes > 64 * 1024 * 1024)
+  /**
+   * @param {import('node:stream').Readable} stream
+   * @param {AccessUnitOptions} [options]
+   */
+  constructor(
+    stream,
+    {
+      maxUnitBytes = DEFAULT_MAX_UNIT_BYTES,
+      maxQueuedUnits = DEFAULT_MAX_QUEUED_UNITS,
+      onBacklog
+    } = {}
+  ) {
+    if (
+      !Number.isSafeInteger(maxUnitBytes) ||
+      maxUnitBytes < 1 ||
+      maxUnitBytes > MAX_UNIT_BYTES_LIMIT
+    )
       throw Error('Invalid access-unit bound');
-    if (!Number.isInteger(maxQueuedUnits) || maxQueuedUnits < 1 || maxQueuedUnits > 64)
+    if (
+      !Number.isInteger(maxQueuedUnits) ||
+      maxQueuedUnits < 1 ||
+      maxQueuedUnits > MAX_QUEUED_UNITS_LIMIT
+    )
       throw Error('Invalid access-unit queue bound');
     this.stream = stream;
     this.maxUnitBytes = maxUnitBytes;
@@ -51,7 +136,7 @@ class AccessUnits {
     this.onData = chunk => {
       if (this.error || this.closed) return;
       if (!Buffer.isBuffer(chunk)) return this.fail(Error('H.264 output must be a binary pipe'));
-      if (this.bytes + chunk.length > this.maxUnitBytes * 2)
+      if (this.bytes + chunk.length > this.maxUnitBytes * BUFFERED_UNITS)
         return this.fail(Error('H.264 data exceeded the bounded access-unit buffer'));
       this.chunks.push(chunk);
       this.bytes += chunk.length;
@@ -71,26 +156,22 @@ class AccessUnits {
     stream.on('close', this.onClose);
   }
 
+  /**
+   * Queues one metadata record. Returns false for non-'au' records and for invalid ones, which
+   * also fail the reader.
+   * @param {any} record
+   * @returns {boolean}
+   */
   announce(record) {
     if (record?.type !== 'au') return false;
     try {
-      if (
-        !Number.isSafeInteger(record.seq) ||
-        record.seq < 0 ||
-        !Number.isSafeInteger(record.frame) ||
-        record.frame < 0 ||
-        !Number.isSafeInteger(record.bytes) ||
-        record.bytes < 1 ||
-        record.bytes > this.maxUnitBytes ||
-        typeof record.keyframe !== 'boolean' ||
-        !Number.isSafeInteger(record.pts) ||
-        record.pts < 0
-      )
+      if (!isValidRecord(record, this.maxUnitBytes))
         throw Error('Invalid H.264 access-unit metadata');
       if (this.sequence !== null && record.seq !== this.sequence + 1)
         throw Error('H.264 access-unit sequence discontinuity');
       if (this.metadataEnded) throw Error('H.264 metadata arrived after EOF');
-      if (this.metadata.length >= 128) throw Error('H.264 metadata queue exceeded its bound');
+      if (this.metadata.length >= MAX_PENDING_METADATA)
+        throw Error('H.264 metadata queue exceeded its bound');
       this.sequence = record.seq;
       this.metadata.push({...record});
       this.pump();
@@ -101,11 +182,13 @@ class AccessUnits {
     }
   }
 
+  /** Marks the metadata channel as finished. */
   endMetadata() {
     this.metadataEnded = true;
     this.pump();
   }
 
+  /** Removes size bytes from the front of the chunk queue into one buffer. */
   take(size) {
     const result = Buffer.allocUnsafe(size);
     let at = 0;
@@ -124,6 +207,10 @@ class AccessUnits {
     return result;
   }
 
+  /**
+   * Cuts every unit whose metadata and bytes are both present, applies backpressure or
+   * backlog dropping, detects truncation at EOF and wakes a waiting next().
+   */
   pump() {
     if (this.closed || this.error) return;
     while (

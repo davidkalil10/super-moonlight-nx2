@@ -1,6 +1,9 @@
-// Node side of the native HBV2 encoder (hbv2enc.c): one long-running process,
-// one frame in flight. Each call resolves with the encoder's stats and the
-// slot to write (empty when the frame changed nothing).
+/**
+ * Node side of the native HBV2 encoder (hbv2enc.c): one long-running process, one frame in
+ * flight. Each request is a fixed header followed by the RGB24 frame on stdin; each result is a
+ * fixed record of little-endian words followed by the slot on stdout. Each call resolves with the
+ * encoder's stats and the slot to write (empty when the frame changed nothing).
+ */
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -8,6 +11,10 @@ import {spawn} from 'node:child_process';
 
 const REQUEST_MAGIC = 0x49324248;
 const RESULT_MAGIC = 0x4f324248;
+/** The request header is a fixed 48 bytes; unused trailing words stay zero. */
+const REQUEST_BYTES = 48;
+const DEFAULT_QP_MAX = 51;
+/** Result record words, in order. */
 const RESULT_FIELDS = [
   'magic',
   'sequence',
@@ -24,6 +31,10 @@ const RESULT_FIELDS = [
 ];
 const RESULT_BYTES = RESULT_FIELDS.length * 4;
 
+/**
+ * The encoder binary: $HBV2ENC, or the default build location.
+ * @returns {string}
+ */
 function encoderPath() {
   const file =
     process.env.HBV2ENC || path.join(os.homedir(), 'claude-builds/HBLauncher/hbv2enc/hbv2enc');
@@ -32,7 +43,51 @@ function encoderPath() {
   return file;
 }
 
+/**
+ * @typedef {object} EncodeOptions
+ * @property {number} sequence
+ * @property {boolean} [keyframe]
+ * @property {number} [budget] target slot bytes
+ * @property {number} [cap] hard slot byte limit
+ * @property {number} [qpMin]
+ * @property {number} [qpMax]
+ * @property {number} [refresh] chunks forced intra per frame
+ */
+
+/**
+ * @param {number} width
+ * @param {number} height
+ * @param {EncodeOptions} options
+ * @returns {Buffer}
+ */
+function requestHeader(width, height, options) {
+  const header = Buffer.alloc(REQUEST_BYTES);
+  [
+    REQUEST_MAGIC,
+    width,
+    height,
+    options.sequence,
+    options.keyframe ? 1 : 0,
+    options.budget ?? 0,
+    options.cap ?? 0,
+    options.qpMin ?? 0,
+    options.qpMax ?? DEFAULT_QP_MAX,
+    options.refresh ?? 0
+  ].forEach((value, i) => header.writeUInt32LE(value >>> 0, i * 4));
+  return header;
+}
+
+function readResult(bytes) {
+  const result = {};
+  RESULT_FIELDS.forEach((name, i) => (result[name] = bytes.readUInt32LE(i * 4)));
+  return result;
+}
+
 class Encoder {
+  /**
+   * Spawns hbv2enc with its optional thread count and reconstruction output path.
+   * @param {{threads?: number, recon?: string}} [options]
+   */
   constructor({threads, recon} = {}) {
     const args = [];
     if (threads) args.push('--threads', String(threads));
@@ -54,40 +109,34 @@ class Encoder {
     });
   }
 
+  /** Settles the waiting call once its whole result record and slot have arrived. */
   drain() {
     if (!this.waiting || this.pending.length < RESULT_BYTES) return;
-    const result = {};
-    RESULT_FIELDS.forEach((name, i) => (result[name] = this.pending.readUInt32LE(i * 4)));
+    const result = readResult(this.pending);
     if (result.magic !== RESULT_MAGIC) {
       this.waiting.reject(Error('hbv2enc returned a bad record'));
       this.waiting = null;
       return;
     }
-    if (this.pending.length < RESULT_BYTES + result.slotBytes) return;
-    const slot = Buffer.from(this.pending.subarray(RESULT_BYTES, RESULT_BYTES + result.slotBytes));
-    this.pending = this.pending.subarray(RESULT_BYTES + result.slotBytes);
+    const end = RESULT_BYTES + result.slotBytes;
+    if (this.pending.length < end) return;
+    const slot = Buffer.from(this.pending.subarray(RESULT_BYTES, end));
+    this.pending = this.pending.subarray(end);
     const {resolve} = this.waiting;
     this.waiting = null;
     resolve({...result, slot});
   }
 
-  // rgb: width x height RGB24. Options: sequence, keyframe, budget and cap in
-  // bytes, qpMin/qpMax, refresh (chunks forced intra per frame).
+  /**
+   * @param {Buffer} rgb width x height RGB24
+   * @param {number} width
+   * @param {number} height
+   * @param {EncodeOptions} options
+   * @returns {Promise<Record<string, any>>} the result record's fields plus `slot`
+   */
   encode(rgb, width, height, options) {
     if (this.waiting) return Promise.reject(Error('hbv2enc is busy'));
-    const header = Buffer.alloc(48);
-    [
-      REQUEST_MAGIC,
-      width,
-      height,
-      options.sequence,
-      options.keyframe ? 1 : 0,
-      options.budget ?? 0,
-      options.cap ?? 0,
-      options.qpMin ?? 0,
-      options.qpMax ?? 51,
-      options.refresh ?? 0
-    ].forEach((value, i) => header.writeUInt32LE(value >>> 0, i * 4));
+    const header = requestHeader(width, height, options);
     const done = new Promise((resolve, reject) => (this.waiting = {resolve, reject}));
     this.process.stdin.write(header);
     this.process.stdin.write(rgb);
