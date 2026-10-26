@@ -25,6 +25,18 @@
     "../hbl-moonlight/tools/moonlight/frames.js",
     "../hbl-moonlight/tools/moonlight/ring.js",
     "../hbl-moonlight/tools/moonlight/h264-stream.js",
-    "../hbl-moonlight/tools/moonlight/reference.js"
+    "../hbl-moonlight/tools/moonlight/reference.js",
+    "../hbl-moonlight/apps/moonlight/build.js",
+    "../hbl-moonlight/tools/moonlight/bitrate.js",
+    "../hbl-moonlight/tools/moonlight/bridge-counter.js",
+    "../hbl-moonlight/tools/moonlight/controller.js",
+    "../hbl-moonlight/tools/moonlight/feed.js",
+    "../hbl-moonlight/tools/moonlight/helper.js",
+    "../hbl-moonlight/tools/moonlight/helper/generate-layout.js",
+    "../hbl-moonlight/tools/moonlight/input-feeder.js",
+    "../hbl-moonlight/tools/moonlight/present-pacer.js",
+    "../hbl-moonlight/tools/moonlight/run-summary.js",
+    "../hbl-moonlight/tools/moonlight/staggered-gate.js",
+    "../hbl-moonlight/tools/moonlight/touch.js"
   ]
 }
