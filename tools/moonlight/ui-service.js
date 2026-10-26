@@ -140,6 +140,8 @@ function createService({
   let applied = 0;
   let stalled = false;
   let stopped = false;
+  /** @type {Promise<void> | undefined} */
+  let detaching;
   let generation = 0;
   let current = null;
   let stream = null;
@@ -496,7 +498,13 @@ function createService({
     await dispatch({type: 'command', op, item: command.item, value: command.value});
   }
 
-  async function detach() {
+  /** Runs once: the poll loop and stop() both end in it. */
+  function detach() {
+    detaching ??= release();
+    return detaching;
+  }
+
+  async function release() {
     stopped = true;
     generation++;
     current?.cancel('SIGINT');
