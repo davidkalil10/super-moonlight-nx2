@@ -133,3 +133,49 @@ test('a failed receive or unchecked input slot cannot produce a decode gate writ
     /checked decoder buffer/
   );
 });
+
+test('with a length gate each receive waits on it first and stamps the recv count', () => {
+  const lengthGate = addresses.control + input.CONTROL.lengthGate;
+  const plain = input.plan(addresses);
+  const gated = input.plan({...addresses, lengthGate});
+  const sync = name => addresses.sdk + SYNC[name].offset;
+  for (let slot = 0; slot < 2; slot++) {
+    assert.deepEqual(gated.calls.receive[slot][0], {
+      function: sync('waitLightEvent'),
+      args: [lengthGate, 0, 0, 0]
+    });
+    assert.deepEqual(gated.calls.receive[slot].slice(1), plain.calls.receive[slot]);
+    assert.deepEqual(gated.calls.send[slot], plain.calls.send[slot]);
+    assert.equal(plain.calls.receive[slot][0].function, addresses.recvFunction);
+  }
+  assert.throws(() => input.plan({...addresses, lengthGate: -1}), /addresses/);
+});
+
+test('a gate write with no next leaves a zero placeholder on the ignored fetch gate', () => {
+  const bytes = input.gateWrite({snapshot: checkedSnapshot(), ...gate, next: null});
+  assert.equal(bytes.readUInt32LE(0), 5);
+  assert.equal(bytes.readUInt32LE(4), 40000);
+  assert.equal(bytes.readUInt32LE(0x80), 0);
+  assert.equal(bytes.readUInt32LE(0x80 + 4), 0);
+  assert.equal(bytes.readBigUInt64LE(0x80 + 32), BigInt(gate.ignoredFetchGate));
+});
+
+test('a primed descriptor fills its own slot and refuses an unbounded unit', () => {
+  const ignored = addresses.control + input.CONTROL.ignoredFetchGate;
+  const primed = input.primeWrite({sequence: 6, length: 41000, pts: 6000n}, ignored);
+  assert.equal(primed.offset, input.CONTROL.descriptors[1]);
+  assert.equal(primed.bytes.length, input.DESCRIPTOR.bytes);
+  assert.equal(primed.bytes.readUInt32LE(input.DESCRIPTOR.sequence), 6);
+  assert.equal(primed.bytes.readUInt32LE(input.DESCRIPTOR.length), 41000);
+  assert.equal(primed.bytes.readBigUInt64LE(input.DESCRIPTOR.pts), 6000n);
+  assert.equal(primed.bytes.readBigUInt64LE(input.DESCRIPTOR.inputAddress), 0n);
+  assert.equal(primed.bytes.readBigUInt64LE(input.DESCRIPTOR.fetchGate), BigInt(ignored));
+  assert.equal(input.primeWrite({sequence: 7, length: 1, pts: 1n}, ignored).offset, 0x100);
+  for (const unit of [
+    {sequence: 1, length: 10, pts: 1n},
+    {sequence: 6, length: 0, pts: 1n},
+    {sequence: 6, length: 0x100001, pts: 1n},
+    {sequence: 6, length: 10, pts: 1}
+  ])
+    assert.throws(() => input.primeWrite(unit, ignored), /Invalid staggered primed/);
+});

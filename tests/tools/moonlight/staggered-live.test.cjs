@@ -16,6 +16,7 @@ const ring = require('../../../hbl-moonlight/tools/moonlight/ring.js');
 const status = require('../../../hbl-moonlight/tools/moonlight/staggered-status.js');
 const gates = require('../../../hbl-moonlight/tools/moonlight/staggered-gate.js');
 const outputPlan = require('../../../hbl-moonlight/tools/moonlight/staggered-output-plan.js');
+const inputPlan = require('../../../hbl-moonlight/tools/moonlight/staggered-input-plan.js');
 const {MODEL, simulate} = require('./request-budget.cjs');
 const {
   create: createWorker
@@ -187,6 +188,11 @@ function simulatedDevice({
       write(address, bytes);
     },
     async writeAndCall(address, bytes) {
+      if (bytes.length === inputPlan.DESCRIPTOR.bytes) {
+        requests.push('prime');
+        write(address, bytes);
+        return {result: 0n};
+      }
       requests.push(bytes.length === gates.WRITE_BYTES ? 'gate' : 'drain');
       write(address, bytes);
       if (bytes.length === gates.WRITE_BYTES) {
@@ -933,4 +939,22 @@ async function defaultStreamDigest() {
 
 test('with every flag off a stream writes the same bytes as before the latency cuts', async () => {
   assert.equal(await defaultStreamDigest(), DEFAULT_STREAM_DIGEST);
+});
+
+test('gate on receive primes, sends and gates each unit in its own push', async () => {
+  const device = simulatedDevice();
+  const live = await liveOn(device, noPause, null, {gateOnReceive: true});
+  const perPush = [];
+  await stream(device, live, 24, (_sequence, requests) => perPush.push(requests));
+  assert.ok(perPush[0].includes('gate'), 'the first unit is gated in its own push');
+  for (const requests of perPush.slice(8)) assert.deepEqual(requests, ['prime', 'read', 'gate']);
+  const before = device.requests.length;
+  assert.deepEqual(await live.finish({sink: device.sink}), {drained: 2});
+  const tail = device.requests.slice(before);
+  assert.ok(!tail.includes('gate') && !tail.includes('prime'), 'the tail opens no further gate');
+  const counts = live.counts;
+  assert.equal(counts.decoded, 24);
+  assert.equal(counts.presented, 24);
+  assert.equal(device.applied(), 24);
+  await live.stop();
 });

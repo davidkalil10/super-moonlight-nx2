@@ -199,8 +199,9 @@ function device() {
     get worker() {
       return worker;
     },
-    async live(wrap = value => value) {
+    async live(wrap = value => value, schedule = {}) {
       const live = createLive({
+        ...schedule,
         createWorker: async settings => {
           worker = await createWorker(settings);
           return wrap(worker);
@@ -355,4 +356,62 @@ test('a stop before the first gate wakes no fetch and submits nothing', async ()
   await d.worker.finalize();
   assert.deepEqual(d.log, []);
   assert.equal(live.retained, false);
+});
+
+test('gate on receive submits each unit before the next one arrives, with no lost wake', async () => {
+  const d = device();
+  const live = await d.live(undefined, {gateOnReceive: true});
+  const submittedAtPush = [];
+  for (let sequence = 1; sequence <= 9; sequence++) {
+    await live.push(unitAt(sequence), {sink: d.sink});
+    for (let poll = 0; poll < 5; poll++) await d.worker.readStatus();
+    submittedAtPush.push((await d.worker.readStatus()).input.sequence);
+  }
+  assert.deepEqual(submittedAtPush, [1, 2, 3, 4, 5, 6, 7, 8, 9]);
+  assert.deepEqual(await live.finish({sink: d.sink}), {drained: 2});
+  const counts = withoutPacer(live.counts);
+  assert.equal(counts.decoded, 9);
+  assert.equal(counts.presented, 9);
+  assert.equal(d.decoder.coalesced, 0);
+  assert.equal(d.decoder.maxReady, 1);
+  submittedAfterAcquired(d.log);
+  assert.deepEqual(
+    d.log.filter(entry => entry.startsWith('acquire')),
+    Array.from({length: 9}, (_, index) => `acquire ${index + 1}`)
+  );
+  await live.stop();
+  await d.worker.finalize();
+  assert.equal(live.retained, false);
+});
+
+test('by default decode N waits for unit N+1', async () => {
+  const d = device();
+  const live = await d.live();
+  const submittedAtPush = [];
+  for (let sequence = 1; sequence <= 5; sequence++) {
+    await live.push(unitAt(sequence), {sink: d.sink});
+    for (let poll = 0; poll < 5; poll++) await d.worker.readStatus();
+    submittedAtPush.push((await d.worker.readStatus()).input.sequence);
+  }
+  assert.deepEqual(submittedAtPush, [0, 1, 2, 3, 4]);
+  await live.finish({sink: d.sink});
+  await live.stop();
+  await d.worker.finalize();
+});
+
+test('stopping a worker parked on the length gate submits nothing more', async () => {
+  const d = device();
+  const live = await d.live(undefined, {gateOnReceive: true});
+  await stream(live, d.sink, 4);
+  for (let poll = 0; poll < 5; poll++) await d.worker.readStatus();
+  const submitted = d.log.filter(entry => entry.startsWith('submit'));
+  assert.deepEqual(submitted, ['submit 1', 'submit 2', 'submit 3', 'submit 4']);
+  await live.stop();
+  assert.equal(live.retained, false);
+  assert.deepEqual(d.worker.diagnostics.joined, [true, true]);
+  assert.deepEqual(
+    d.log.filter(entry => entry.startsWith('submit')),
+    submitted
+  );
+  await d.worker.finalize();
 });

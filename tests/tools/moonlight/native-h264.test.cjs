@@ -1326,3 +1326,28 @@ test(
     }
   }
 );
+
+test(
+  '--gate-on-receive reaches the staggered scheduler and needs --staggered',
+  {timeout: 5000},
+  async () => {
+    const f = await fixture({units: pairedUnits(4)});
+    const created = [];
+    const fake = staggeredFake(f.events);
+    f.options.createStaggered = options => {
+      created.push(options);
+      return fake();
+    };
+    f.options.args.push('--staggered', '--gate-on-receive');
+    await exercise(f, async () => {
+      const summary = await run(f.options);
+      assert.equal(created[0].gateOnReceive, true);
+      assert.equal(summary.gateOnReceive, true);
+    });
+    const g = await fixture();
+    await exercise(g, async () => {
+      g.options.args.push('--gate-on-receive');
+      await assert.rejects(run(g.options), /--gate-on-receive applies to --staggered/);
+    });
+  }
+);
