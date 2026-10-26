@@ -34,7 +34,7 @@ const HOSTS_PER_PAGE = 6;
  * @typedef {{type: string, [key: string]: any}} Intent
  * @typedef {{
  *   screen: string, hosts: Host[], host: Host | null, apps: App[], currentGame: number,
- *   app: App | null, appPage: number, hostPage: number, hostIndex: number,
+ *   app: App | null, appPage: number, appIndex: number, hostPage: number, hostIndex: number,
  *   pin: string | null, url: string | null,
  *   message: string | null, back: string, from: string, overlay: boolean,
  *   settings: Record<string, any>
@@ -55,6 +55,7 @@ function makeModel(hosts, settings = defaults()) {
     currentGame: 0,
     app: null,
     appPage: 0,
+    appIndex: 0,
     hostPage: 0,
     hostIndex: 0,
     pin: null,
@@ -71,6 +72,9 @@ function makeModel(hosts, settings = defaults()) {
 const next = (model, patch, intents = []) => ({model: {...model, ...patch}, intents});
 /** @param {Model} model */
 const same = model => ({model, intents: []});
+
+/** Back to the hosts page, forgetting the host's apps. */
+const LEAVE_HOST = {screen: 'hosts', host: null, apps: [], app: null, appPage: 0, appIndex: 0};
 
 /** The last page of a list paged by `size`. @param {number} length @param {number} size */
 const lastPage = (length, size) => Math.max(0, Math.ceil(length / size) - 1);
@@ -122,11 +126,10 @@ function onCommand(model, command) {
         return next(model, {screen: 'hosts', pin: null, url: null}, [{type: 'cancelPair'}]);
       return same(model);
     case 'apps': {
-      if (op === 'b') return next(model, {screen: 'hosts', host: null, apps: [], app: null});
+      if (op === 'b') return next(model, LEAVE_HOST);
       if (op === 'y') return next(model, {screen: 'quitConfirm'});
       if (op !== 'a') return same(model);
-      if (item === ITEM.back)
-        return next(model, {screen: 'hosts', host: null, apps: [], app: null});
+      if (item === ITEM.back) return next(model, LEAVE_HOST);
       if (item === ITEM.previous) return next(model, {appPage: Math.max(0, model.appPage - 1)});
       if (item === ITEM.next)
         return next(model, {
@@ -134,7 +137,8 @@ function onCommand(model, command) {
         });
       const app = model.apps[item - ITEM.app];
       if (!app) return same(model);
-      return next(model, {screen: 'launching', app, message: null, overlay: false}, [
+      const appIndex = item - ITEM.app;
+      return next(model, {screen: 'launching', app, appIndex, message: null, overlay: false}, [
         {type: 'launch', host: model.host, app, settings: model.settings}
       ]);
     }

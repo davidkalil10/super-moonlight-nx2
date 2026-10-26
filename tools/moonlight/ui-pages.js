@@ -306,9 +306,11 @@ function createPages(raster) {
       .filter(row => ['size', 'fps', 'bitrate'].includes(row.id))
       .map(row => row.value)
       .join(' · ');
+    const slot = model.appIndex - start;
     const page = horizon({
       chips: hostChips(model),
       note: shape,
+      cursorHome: slot >= 0 && slot < shown.length ? slot : 0,
       keys: [
         ['A', 'Launch'],
         ['B', 'PCs'],
