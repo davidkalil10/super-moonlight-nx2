@@ -6,7 +6,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import {hostsFile} from './menu.js';
+import {hostsFile} from './ui-hosts.js';
 
 /** Mbps steps the bitrate row walks through. */
 const BITRATES = Array.from({length: 15}, (_, i) => 5 + i * 2.5);

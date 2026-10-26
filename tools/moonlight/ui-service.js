@@ -21,7 +21,7 @@ import {makeModel, reduce} from './ui-model.js';
 import {createPages} from './ui-pages.js';
 import {createRaster} from './ui-raster.js';
 import * as uiSettings from './ui-settings.js';
-import {hostsFile, loadHosts, seedHosts, saveHosts, parseList} from './menu.js';
+import {hostsFile, loadHosts, seedHosts, saveHosts, parseList} from './ui-hosts.js';
 import {discover, merge} from './ui-discover.js';
 import {HELPER} from './helper.js';
 import {findPrivateStorage} from './feed.js';
