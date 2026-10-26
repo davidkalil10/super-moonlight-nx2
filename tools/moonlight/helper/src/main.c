@@ -81,7 +81,22 @@ static int pair(char *host, int timeout) {
 }
 
 #define COVER_TIMEOUT 5
+#define COVER_MAX_BYTES (4 * 1024 * 1024)
+#define COVER_MAX_SIDE 4096
 #define QUIT_TIMEOUT 30
+
+/* A PNG the rasteriser can take: signature, an IHDR first, sane dimensions, bounded size. */
+static bool cover_ok(const char *bytes, size_t size) {
+  static const unsigned char signature[8] = {0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n'};
+  if (size < 33 || size > COVER_MAX_BYTES || memcmp(bytes, signature, 8) != 0)
+    return false;
+  if (memcmp(bytes + 12, "IHDR", 4) != 0)
+    return false;
+  const unsigned char *ihdr = (const unsigned char *)bytes + 16;
+  uint32_t width = (uint32_t)ihdr[0] << 24 | ihdr[1] << 16 | ihdr[2] << 8 | ihdr[3];
+  uint32_t height = (uint32_t)ihdr[4] << 24 | ihdr[5] << 16 | ihdr[6] << 8 | ihdr[7];
+  return width > 0 && height > 0 && width <= COVER_MAX_SIDE && height <= COVER_MAX_SIDE;
+}
 
 static bool read_unique_id(char *out, size_t size) {
   char path[4096];
@@ -112,15 +127,16 @@ static bool download_cover(SERVER_DATA *server, const char *unique_id, int app_i
   if (!data)
     return false;
   bool saved = false;
-  if (http_request(url, data) == GS_OK && data->size > 8 &&
-      memcmp(data->memory, "\x89PNG", 4) == 0) {
+  if (http_request(url, data) == GS_OK && cover_ok(data->memory, data->size)) {
     char partial[4200];
     snprintf(partial, sizeof(partial), "%s.part", path);
     FILE *file = fopen(partial, "wb");
     if (file) {
       saved = fwrite(data->memory, 1, data->size, file) == data->size;
-      fclose(file);
+      saved = fclose(file) == 0 && saved;
       saved = saved && rename(partial, path) == 0;
+      if (!saved)
+        unlink(partial);
     }
   }
   http_free_data(data);
@@ -131,10 +147,27 @@ static bool download_cover(SERVER_DATA *server, const char *unique_id, int app_i
  * under a plain alarm, since libcurl keeps going through EINTR and the pinned http.c sets no
  * timeout of its own: a slow /appasset costs COVER_TIMEOUT seconds and that cover, never the
  * list. */
+/* A cached cover counts only if its header still reads as a PNG the rasteriser takes. */
+static bool cached_cover_ok(const char *path) {
+  char head[64];
+  FILE *file = fopen(path, "rb");
+  if (!file)
+    return false;
+  size_t got = fread(head, 1, sizeof(head), file);
+  fclose(file);
+  return cover_ok(head, got);
+}
+
 static bool fetch_cover(SERVER_DATA *server, const char *unique_id, int app_id,
                         const char *directory, char *path, size_t size) {
-  snprintf(path, size, "%s/%s-%d.png", directory, server->serverInfo.address, app_id);
-  if (access(path, R_OK) == 0)
+  char host[256];
+  snprintf(host, sizeof(host), "%s", server->serverInfo.address);
+  for (char *c = host; *c; c++)
+    if (*c == '/' || *c == '\\')
+      *c = '_';
+  if (snprintf(path, size, "%s/%s-%d.png", directory, host, app_id) >= (int)size)
+    return false;
+  if (cached_cover_ok(path))
     return true;
   fflush(stdout);
   pid_t child = fork();
