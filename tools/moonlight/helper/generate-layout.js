@@ -13,7 +13,7 @@ import {STATE} from '../../../../hbl-platform/sdk/host/state-layout.js';
 import {NPAD_BYTES} from '../controller.js';
 import {TOUCH_BYTES, PANEL, MAX_POINTS} from '../touch.js';
 import symbols from '../../../../hbl-platform/sdk/native/audio-symbols.json' with {type: 'json'};
-import * as sdkImage from '../../../../hbl-platform/smilebasic/reference/sdk-checks.js';
+import {referenceBytes} from '../../../../hbl-platform/smilebasic/engine/lib/sdk.js';
 import {ALLOCATE as SDK_ALLOCATE} from '../../../../hbl-platform/sdk/native/allocate.js';
 import {isMain} from '../../../../hbl-platform/sdk/cli.js';
 
@@ -47,7 +47,7 @@ function audioEntry([constant, name]) {
   const matches = symbols.filter(s => s.name.includes(name));
   if (matches.length !== 1) throw Error('Ambiguous audio symbol ' + name);
   const {offset, size} = matches[0];
-  const hex = sdkImage.bytes(offset, Math.min(SIGNATURE_BYTES, size)).toString('hex');
+  const hex = referenceBytes(offset, Math.min(SIGNATURE_BYTES, size)).toString('hex');
   return `  [${constant}] = {"${name}", ${offset}u, "${hex}"},`;
 }
 
