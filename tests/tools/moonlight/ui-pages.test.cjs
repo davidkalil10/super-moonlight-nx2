@@ -101,13 +101,21 @@ test('the apps grid pages covers and letter tiles with the current app marked', 
     {type: 'listed', apps: APPS, currentGame: 1003}
   ).model;
   const covers = new Map([
-    [1000, Promise.resolve({width: 160, height: 90, bytes: Buffer.alloc(160 * 90 * 4, 9)})]
+    [1000, Promise.resolve({width: 160, height: 90, bytes: Buffer.alloc(160 * 90 * 4, 9)})],
+    [1001, Promise.resolve({width: 0, height: 0, bytes: Buffer.alloc(0)})],
+    [1002, Promise.reject(Error('rasteriser gone'))]
   ]);
   const first = await roundTrip(await pages.page(apps, covers));
   assert.equal(first.summary.images, 20);
   assert.equal(first.summary.items, 23);
   assert.ok(first.summary.texts <= 48);
   assert.equal(raster.calls.letters, 19, 'one cover came from the host, the rest are letter tiles');
+  assert.equal(
+    first.parsed.images[1].rgba[0],
+    'G'.charCodeAt(0),
+    'a refused cover falls back to letters'
+  );
+  assert.equal(first.parsed.images[2].w, COVER.width, 'a failed tile falls back to letters');
   assert.equal(first.parsed.images[0].rgba[0], 9, 'the fetched cover is used');
   assert.equal(first.parsed.images[0].w, COVER.width);
   const items = first.parsed.items;

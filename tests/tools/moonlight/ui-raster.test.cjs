@@ -76,6 +76,24 @@ test(
       assert.ok(light.length > 100, 'initials in a light ink');
       const other = await raster.letters('Hades', 160, 90);
       assert.notDeepEqual(other.bytes.subarray(0, 4), letters.bytes.subarray(0, 4), 'hue per name');
+      const truncated = path.join(directory, 'truncated.png');
+      fs.writeFileSync(truncated, fs.readFileSync(png).subarray(0, 100));
+      const broken = await raster.tile(truncated, 160, 90);
+      assert.deepEqual(
+        [broken.width, broken.height, broken.bytes.length],
+        [0, 0, 0],
+        'a cut file is refused'
+      );
+      const wide = path.join(directory, 'wide.png');
+      execFileSync('python3', [
+        '-c',
+        `from PIL import Image; Image.new('L', (5000, 1)).save(${JSON.stringify(wide)})`
+      ]);
+      const oversized = await raster.tile(wide, 160, 90);
+      assert.equal(oversized.width, 0, 'a cover over 4096 px is refused');
+      assert.equal((await raster.tile(path.join(directory, 'missing.png'), 160, 90)).width, 0);
+      const after = await raster.tile(png, 160, 90);
+      assert.equal(after.width, 160, 'the child keeps serving after a refusal');
     } finally {
       raster.close();
       fs.rmSync(directory, {recursive: true, force: true});
