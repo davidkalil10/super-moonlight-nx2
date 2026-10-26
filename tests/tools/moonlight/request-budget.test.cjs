@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const {BASELINE, MODEL, simulate, budget} = require('./request-budget.cjs');
+const {BASELINE, MODEL, GATE_WAITER, simulate, budget} = require('./request-budget.cjs');
 
 // Modeled steady-state requests per presented frame at 1080p30. Bump these down
 // (never up) when a scheduler change lowers them, and record before/after in the
@@ -223,10 +223,67 @@ test('the present pacer reads the status about once per frame at 60 Hz', async (
   }
 });
 
-test('host waits reject a host-side retry', async () => {
-  const options = {mode: 'staggered', frames: 10, presentHz: 60, lag: 2, barrier: true};
+test('host waits reject unknown policies and include input-slot retry RPCs', async () => {
+  const options = {mode: 'staggered', frames: 240, presentHz: 60, lag: 2, barrier: true};
   await assert.rejects(simulate({...options, hostWait: 'sleep'}), /host wait/);
-  await assert.rejects(simulate({...options, hostWait: 'pacer', retryRate: 0.1}), /host wait/);
+  for (const hostWait of ['pacer', 'waiter']) {
+    const base = await simulate({...options, hostWait});
+    const retry = await simulate({...options, hostWait, retryRate: 0.3});
+    assert.ok(retry.requestsPerFrame >= base.requestsPerFrame + 0.5, hostWait);
+    assert.ok(Math.abs(retry.inputSlotRetryRpcsPerFrame - 0.3) < 0.02, hostWait);
+  }
+});
+
+test('120 Hz gate waiter keeps the host status check and short bridge wait in budget', async () => {
+  assert.equal(GATE_WAITER.progressPollMs, 0.5);
+  assert.equal(GATE_WAITER.bridgeWaitMs, 1);
+  for (const decodeMs of [6.85, 8.5]) {
+    const result = await simulate({
+      mode: 'staggered',
+      frames: 240,
+      presentHz: 120,
+      lag: 2,
+      barrier: true,
+      paced: false,
+      hostWait: 'waiter',
+      model: {...MODEL, decodeMs, sourceFps: 120}
+    });
+    assert.equal(result.frames, 240);
+    assert.ok(result.requestsPerFrame >= 2 && result.requestsPerFrame < 2.5);
+    assert.ok(result.waiterBridgeMsPerFrame > 0 && result.waiterBridgeMsPerFrame <= 1);
+    assert.ok(result.bridgeMsPerFrame < 1000 / 120);
+    assert.ok(result.bridgeMsPerFrame > result.requestsPerFrame * MODEL.requestMs);
+  }
+});
+
+test('120 Hz matrix compares current host reread and console waiter at each retry rate', async () => {
+  const {staggered120HzGateWaiter: matrix} = await budget({frames: 240});
+  assert.equal(Object.keys(matrix).length, 6);
+  for (const decodeMs of [6.85, 8.5]) {
+    for (const retry of [0, 10, 30]) {
+      const {current, waiter} = matrix[`decode${decodeMs}-retry${retry}`];
+      assert.ok(current.requestsPerFrame >= 2);
+      assert.ok(waiter.requestsPerFrame >= 2);
+      assert.ok(waiter.bridgeMsPerFrame < 1000 / 120);
+      assert.ok(waiter.waiterBridgeMsPerFrame > 0);
+      if (retry === 0) {
+        assert.ok(current.fps >= 110, `${decodeMs} ms: ${current.fps} fps`);
+        assert.ok(waiter.fps < current.fps);
+      } else {
+        assert.ok(current.fps < 110, `${decodeMs} ms, ${retry}%: ${current.fps} fps`);
+        assert.ok(waiter.fps < 110, `${decodeMs} ms, ${retry}%: ${waiter.fps} fps`);
+      }
+    }
+  }
+});
+
+test('console gate waiter retains the 60 Hz baseline', async () => {
+  const {staggeredHostWait} = await budget({frames: 240});
+  for (const pacing of ['paced', 'unpaced']) {
+    const entry = staggeredHostWait[`60Hz-${pacing}-waiter`];
+    assert.ok(entry.fps >= 59.9, `${pacing}: ${entry.fps} fps`);
+    assert.ok(entry.bridgeMsPerFrame < 1000 / 60);
+  }
 });
 
 test('staggered late rereads cost less without the host pause', async () => {

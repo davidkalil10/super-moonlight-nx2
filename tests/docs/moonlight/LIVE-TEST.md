@@ -26,44 +26,49 @@ on the console shows it. The implemented console decoder path has its own
 ## Tests (m5, in order)
 
 ### 1. HBV2 video, desktop
+
 ```
 node tools/moonlight/live.js --moonlight 192.168.8.245 Desktop --codec hbv2 --budget 96 --no-input --no-audio
 ```
+
 Look at the console. Desktop text should be sharp (not the HBV1 blur). Per-second
 stats print `kib`, `qp`, `encodeMs`, `applied`. Expected ~59 fps on the wired link.
 
 **If the app fails to launch or the screen stays on the test card:** the compute
-shader uses `HBV2_LOCAL_SIZE=1024`, which may exceed the console's
-`maxComputeWorkGroupInvocations`. Rebuild the app with 512 and relaunch:
-```
-ssh rig 'cd /media/storage/own/HBLauncher && SPIRV_VAL=true GLSLANG=tools/moonlight/glslang-shim.sh HBV2_LOCAL_SIZE=512 node apps/moonlight/build.js'
-```
-(the build reads `HBV2_LOCAL_SIZE` from ring.js; set it in the env or edit
-`apps/moonlight/shaders/ring.glsl` line 13.)
+shader uses `HBV2_LOCAL_SIZE=512` (`LOCAL_SIZE` in hbl-moonlight's
+`tools/moonlight/ring.js`). NVIDIA drivers report a
+`maxComputeWorkGroupInvocations` of 1024, so the size is unlikely to be the
+cause; `docs/moonlight/HIGH-FPS.md` explains why 512 and not 1024.
 
 ### 2. Add input (controller + touch)
+
 ```
 node tools/moonlight/live.js --moonlight 192.168.8.245 Desktop --codec hbv2 --budget 96 --no-audio
 ```
+
 Move the sticks / tap the screen; the cursor on the host desktop should follow.
 Touch is sent as native multi-touch. B and Minus reach the game; hold Plus and
 Minus together for one second to return to the launcher.
 
 ### 3. Add audio
+
 ```
 node tools/moonlight/live.js --moonlight 192.168.8.245 Desktop --codec hbv2 --budget 96
 ```
+
 Sound should play. `game-audio.js` opens AudioOut only for a package with
 effects and closes it otherwise, so the stream owns the device while Moonlight
 runs. If `OpenDefaultAudioOut` still fails, the audio-stream process prints a
 hint and exits but video+input keep running.
 
 ### 4. A real game
+
 Pick a game from `hbmoonlight list 192.168.8.245` (Steam Big Picture, Kameo, …)
 and swap it for `Desktop` above. Expect ~59 fps at a steady budget; raise
 `--budget`/`--cap` for sharper stills at the cost of fps on a slower link.
 
 ## Known follow-ups (not blockers)
+
 - After launch/resync the picture sharpens over ~8 s as refresh chunks heal
   static blocks; raise `--refresh` to speed it.
 - AudioOut sharing with game-audio is untested live (above).
