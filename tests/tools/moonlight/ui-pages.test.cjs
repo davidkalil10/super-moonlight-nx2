@@ -106,15 +106,15 @@ test('the apps grid pages covers and letter tiles with the current app marked', 
     {type: 'listed', apps: APPS, currentGame: 1003}
   ).model;
   const covers = new Map([
-    [1000, Promise.resolve({width: 160, height: 90, bytes: Buffer.alloc(160 * 90 * 4, 9)})],
+    [1000, Promise.resolve({width: 240, height: 135, bytes: Buffer.alloc(240 * 135 * 4, 9)})],
     [1001, Promise.resolve({width: 0, height: 0, bytes: Buffer.alloc(0)})],
     [1002, Promise.reject(Error('rasteriser gone'))]
   ]);
   const first = await roundTrip(await pages.page(apps, covers));
-  assert.equal(first.summary.images, 20);
-  assert.equal(first.summary.items, 23);
+  assert.equal(first.summary.images, 10);
+  assert.equal(first.summary.items, 13, 'ten covers, back, previous and next');
   assert.ok(first.summary.texts <= 48);
-  assert.equal(raster.calls.letters, 19, 'one cover came from the host, the rest are letter tiles');
+  assert.equal(raster.calls.letters, 9, 'one cover came from the host, the rest are letter tiles');
   assert.equal(
     first.parsed.images[1].rgba[0],
     'G'.charCodeAt(0),
@@ -132,13 +132,13 @@ test('the apps grid pages covers and letter tiles with the current app marked', 
   assert.equal(previous.flags, ITEM_FLAG.greyed, 'no page before the first');
   assert.equal(next.flags, 0);
   assert.ok(items.every(item => item.x + item.w <= 1920 && item.y + item.h <= 1080));
-  const last = reduce(reduce(apps, command('a', ITEM.next)).model, command('a', ITEM.next)).model;
+  const last = [1, 2, 3, 4].reduce(model => reduce(model, command('a', ITEM.next)).model, apps);
   const third = await roundTrip(await pages.page(last, covers));
   assert.equal(third.summary.images, 5);
   assert.equal(third.parsed.items[0].id, ITEM.app + 40);
   assert.equal(third.parsed.items.find(item => item.id === ITEM.next).flags, ITEM_FLAG.greyed);
   assert.equal(third.parsed.items.find(item => item.id === ITEM.previous).flags, 0);
-  assert.equal(raster.calls.letters, 24, 'letter tiles are cached by name');
+  assert.equal(raster.calls.letters, 14, 'letter tiles are cached by name');
   const painted = raster.calls.text;
   const quit = reduce(
     reduce(reduce(apps, command('y')).model, command('a', ITEM.confirmQuit)).model,
@@ -152,8 +152,12 @@ test('the apps grid pages covers and letter tiles with the current app marked', 
   }).model;
   assert.equal(marked.message, 'Quit confirmed');
   const status = await roundTrip(await pages.page(marked, covers));
-  assert.equal(status.summary.texts, first.summary.texts, 'the status joins the subtitle strip');
-  assert.equal(raster.calls.text, painted + 1, 'only the subtitle is painted again');
+  assert.equal(
+    status.summary.texts,
+    first.summary.texts - 1,
+    'the status joins the subtitle strip; the quit app loses its running tag'
+  );
+  assert.equal(raster.calls.text, painted + 2, 'the subtitle and the untagged name are painted');
 });
 
 test('settings rows are adjustable unless locked or unbacked', async () => {
@@ -240,7 +244,24 @@ test('every Horizon screen keeps its cursor frames on screen and apart', async (
     });
   }
   const shown = (await roundTrip(await pages.page(screens.hosts))).parsed.items;
-  assert.equal(shown.length, 6, 'six PCs per page');
+  assert.deepEqual(
+    shown.map(item => item.id),
+    [0, 1, 2, 3, 4, 5].map(i => ITEM.host + i).concat(ITEM.previous, ITEM.next),
+    'six PCs per page and the pager'
+  );
+  const second = reduce(screens.hosts, command('a', ITEM.next)).model;
+  const opened = reduce(second, command('a', ITEM.host + 7)).model;
+  const back = reduce(
+    reduce(opened, {type: 'listed', apps: APPS.slice(0, 2), currentGame: 0}).model,
+    command('b')
+  ).model;
+  const returned = (await roundTrip(await pages.page(back))).parsed;
+  assert.deepEqual(
+    returned.items.slice(0, 3).map(item => item.id),
+    [ITEM.host + 6, ITEM.host + 7, ITEM.host + 8],
+    'hosts keep their ids on the second page'
+  );
+  assert.equal(returned.cursorHome, 1, 'the cursor comes back to the host it left');
 });
 
 test('the streaming overlay, the quit question and the error page carry their items', async () => {
