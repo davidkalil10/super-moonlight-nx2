@@ -143,8 +143,8 @@ proposed as diffs here and not applied.
 | - | ------ | ------------- | ---- | ---- |
 | 1 | Wide HBV2 dispatch through `computeSequence` | Decode spreads from one workgroup (one SM) to several; the largest single win (est. 2-4x on decode) | Medium: needs a pick / decode / commit split in the shader | none |
 | 2 | Drop the per-frame preview copy | ~8 MB of writes and two layout transitions per frame; frees bandwidth on a shared-memory SoC | Low | none |
-| 3 | Present mode and image count at swapchain creation | Removes the vblank-halving cliff (MAILBOX or IMMEDIATE), or adds a third image for overlap | Low to medium | `probe-present` lists more than FIFO, or max images >= 3 |
-| 4 | Extended swap interval or display mode for 120 Hz | Required for any 120 Hz present | Unknown | `probe-present --vi` shows the vi rate, `probe-swap-interval` shows an effect |
+| 3 | Present mode and image count at swapchain creation | Removes the vblank-halving cliff (MAILBOX or IMMEDIATE), or adds a third image for overlap | Low to medium | the present modes list more than FIFO, or max images >= 3 |
+| 4 | Extended swap interval or display mode for 120 Hz | Required for any 120 Hz present | Unknown | the vi rate is above 60, or a swap interval change has an effect |
 | 5 | Bridge protocol 3: input piggybacked on video writes, bigger requests (PLAN 2.11) | Gets 120 slots/s under the exchange ceiling | Medium | none; required for 120 |
 | 6 | Per-image fences instead of `vkQueueWaitIdle` | Overlaps CPU submit with GPU work and lets a frame finish after vblank without a full stall; lower latency | Medium: semaphore reuse must change too | after 3 |
 
@@ -249,10 +249,11 @@ What the catalog shows:
   but unconfirmed.
 - `GetLatestFrameNumber` and `ListFrameHistory` ignore their Layer argument. They
   read a global `LayerWithHistory` in nnCompat BSS (+0x5456558), which may be
-  SmileBASIC's layer or nobody's. `probe-present --vi` checks that it is
+  SmileBASIC's layer or nobody's. `probe-present --vi` checked that it was
   initialized before calling.
 
-How to read the probes:
+How the probes were read (historical: `probe-present` and `probe-swap-interval` were removed
+in lane Z; their results are in `hbl-notes/RUNS.md` and the display-120 research notes):
 
 - **The vi frame number cannot prove a 60 Hz panel.** If the global
   `LayerWithHistory` is initialized, it is almost certainly SmileBASIC's own
@@ -262,7 +263,7 @@ How to read the probes:
 - **vi frames/s clearly above 60:** the panel runs at least that fast, and
   something (the compat layer or the WSI's swap interval) holds our FIFO
   presents to every other vblank. Go to item 3, then `probe-swap-interval`.
-- **The decisive test available now is `probe-swap-interval --apply`:** if the
+- **The decisive test was `probe-swap-interval --apply`:** if the
   loop heartbeat ever goes above 60 fps under some pair, the panel is faster
   than 60.
 - **`probe-swap-interval` shows no change:** this is the expected outcome, not
