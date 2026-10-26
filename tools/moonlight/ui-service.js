@@ -28,7 +28,9 @@ import * as session from '../../../hbl-platform/sdk/host/session.js';
 import * as cli from '../../../hbl-platform/sdk/cli.js';
 
 const OP_NAME = Object.fromEntries(Object.entries(UI_OP).map(([name, op]) => [op, name]));
-const RUNS = '/media/storage2/builds/HBLauncher/ui-service';
+const RUNS = process.env.HBL_UI_RUNS || '/media/storage2/builds/HBLauncher/ui-service';
+/** live.js prefixes the helper lines it does not parse; the JSON events come through bare. */
+const RELAYED = /^hbmoonlight /;
 const POLL_MS = {idle: 50, streaming: 250};
 const APPLY_TIMEOUT_MS = 5000;
 const HELPER_TIMEOUT_MS = 20000;
@@ -126,6 +128,8 @@ function createService({
   let sequence = 0;
   let published = null;
   let seen = 0;
+  let applied = 0;
+  let stalled = false;
   let stopped = false;
   let generation = 0;
   let current = null;
@@ -139,12 +143,14 @@ function createService({
   const transfer = work => (chain = chain.then(work, work));
   const writeWord = (address, value) => transfer(() => memory.write(mapped + address, u32(value)));
 
-  async function publish() {
+  /** Publishes the page of the model; `again` republishes one the console never applied. */
+  async function publish(again = false) {
     const page = await pages.page(model, covers);
     if (!page) return;
     const same = published && serialize({...page, epoch, sequence}).equals(published);
-    if (same) return;
-    const next = sequence + 1 || 1;
+    if ((same && !again) || stopped) return;
+    let next = (sequence + 1) >>> 0 || 1;
+    if ((next & 1) === (applied & 1) && applied !== 0) next = (next + 1) >>> 0 || 1;
     const bytes = serialize({...page, epoch, sequence: next});
     await transfer(() => memory.write(pageAddress(mapped, next & 1), bytes));
     await transfer(() =>
@@ -155,9 +161,10 @@ function createService({
     );
     sequence = next;
     published = bytes;
+    stalled = false;
     log({event: 'published', screen: model.screen, sequence, bytes: bytes.length});
     const deadline = Date.now() + apply;
-    while ((await transfer(() => word(UI.uiApplied))) !== sequence) {
+    while ((applied = await transfer(() => word(UI.uiApplied))) !== sequence) {
       if (Date.now() > deadline) {
         const header = await transfer(() => memory.read(mapped + UI.uiMagic, 72));
         log({
@@ -165,15 +172,22 @@ function createService({
           sequence,
           header: [...new Uint32Array(header.buffer, header.byteOffset, 18)]
         });
+        stalled = true;
         return;
       }
       await sleep(5);
     }
   }
 
+  /** Everything that publishes runs through one queue, in order. */
+  function enqueue(work) {
+    queue = queue.then(work, work);
+    return queue;
+  }
+
   /** Model events run one at a time; intents start their work and come back through dispatch. */
   function dispatch(event) {
-    queue = queue.then(async () => {
+    return enqueue(async () => {
       if (stopped) return;
       const result = reduce(model, event);
       const changed = result.model !== model;
@@ -185,7 +199,6 @@ function createService({
         );
       if (changed) await publish();
     });
-    return queue;
   }
 
   async function busy(work) {
@@ -244,6 +257,7 @@ function createService({
   }
 
   async function pair(host, token) {
+    let pairError = null;
     const child = children.pair(host.address, (channel, line) => {
       let event;
       try {
@@ -252,15 +266,22 @@ function createService({
         return;
       }
       if (event.event === 'pin') dispatch({type: 'pin', pin: event.pin, url: event.url});
-      if (event.event === 'error')
+      if (event.event === 'error') {
+        pairError = event.message;
         log({event: 'pair-error', message: event.message, detail: event.detail});
+      }
     });
     current = child;
     const result = await busy(() => child.exited);
     if (current === child) current = null;
     if (token !== generation || result.signal === 'SIGINT') return;
     if (result.code === 0) await dispatch({type: 'paired'});
-    else await dispatch({type: 'failed', message: 'Pairing did not complete', back: 'hosts'});
+    else
+      await dispatch({
+        type: 'failed',
+        message: 'Pairing failed: ' + (pairError ?? 'the helper exited ' + result.code),
+        back: 'hosts'
+      });
   }
 
   function launch(host, app, streamSettings, token) {
@@ -273,7 +294,7 @@ function createService({
         if (channel === 'stdout') return log({event: 'stream-stats', line});
         let event;
         try {
-          event = JSON.parse(line);
+          event = JSON.parse(line.replace(RELAYED, ''));
         } catch {
           return log({event: 'stream-line', line});
         }
@@ -304,7 +325,7 @@ function createService({
     if (!child.stopping) {
       child.cancel('SIGINT');
       const timer = setTimeout(() => child.cancel('SIGKILL'), stopGrace);
-      child.stopping = child.exited.then(() => clearTimeout(timer));
+      child.stopping = busy(() => child.exited).then(() => clearTimeout(timer));
     }
     await child.stopping;
   }
@@ -335,7 +356,7 @@ function createService({
         return current?.cancel('SIGINT');
       case 'covers':
         covers = await coverTiles(intent.host, intent.apps);
-        return publish();
+        return enqueue(publish);
       case 'launch':
         return launch(intent.host, intent.app, intent.settings, token);
       case 'stopStream':
@@ -369,20 +390,25 @@ function createService({
     const block = await transfer(() => memory.read(mapped + UI.uiMagic, 72));
     const stale = block.readUInt32LE(UI.uiApplied - UI.uiMagic);
     seen = block.readUInt32LE(UI.cmdSequence - UI.uiMagic);
+    applied = stale;
     await transfer(() =>
       memory.write(mapped + UI.uiMagic, hostWords({magic: 0, epoch: 0, sequence: 0, page: 0}))
     );
     await writeWord(UI.hostBusy, 0);
+    await writeWord(UI.hostAck, seen);
     sequence = stale;
     log({event: 'attach', epoch, staleApplied: stale, seen});
     await dispatch({type: 'attached'});
   }
 
   async function poll() {
+    if (stalled) await enqueue(() => publish(true));
     const bytes = await transfer(() =>
       memory.read(mapped + COMMAND_READ.offset, COMMAND_READ.bytes)
     );
-    const {command} = readCommand(bytes);
+    const read = readCommand(bytes);
+    const {command} = read;
+    applied = read.applied;
     if (command.sequence === seen) return;
     seen = command.sequence;
     await writeWord(UI.hostAck, command.sequence);
@@ -399,6 +425,7 @@ function createService({
     stopped = true;
     generation++;
     current?.cancel('SIGINT');
+    await queue.catch(() => {});
     await stopStream();
     await transfer(() =>
       memory.write(mapped + UI.uiMagic, hostWords({magic: 0, epoch: 0, sequence: 0, page: 0}))
