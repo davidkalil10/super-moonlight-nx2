@@ -841,7 +841,7 @@ test('push reports its gate write and its send on the scheduler clock', async ()
   await live.stop();
 });
 
-async function trimRun(stale, options) {
+async function trimRun(stale, options, backlog = 1) {
   const device = simulatedDevice();
   const discard = device.sink.discardDestination;
   const discards = [];
@@ -860,6 +860,7 @@ async function trimRun(stale, options) {
     device.pts.set(sequence, BigInt(unit.pts));
     await live.push(unit, {
       sink: device.sink,
+      backlog,
       onSkipped: () => shown.push(sequence + ':skip'),
       onTrimmed: ageMs => trims.push({sequence, ageMs})
     });
@@ -905,6 +906,26 @@ test('without trimBacklogMs stale units present every output', async () => {
   assert.deepEqual(discards, []);
   assert.equal(counts.skipped, 0);
   assert.equal('trimmed' in counts, false);
+});
+
+const everyUnit = new Set(Array.from({length: 16}, (_, index) => index + 1));
+
+test('stale units with nothing queued behind them never trim', async () => {
+  const {counts, trims, discards} = await trimRun(everyUnit, {trimBacklogMs: 20}, 0);
+  assert.deepEqual(trims, []);
+  assert.deepEqual(discards, []);
+  assert.equal(counts.trimmed, 0);
+  assert.equal(counts.presented, 16);
+});
+
+test('a standing stale queue trims at most once per six gates', async () => {
+  const {counts, trims} = await trimRun(everyUnit, {trimBacklogMs: 20});
+  assert.deepEqual(
+    trims.map(trim => trim.sequence),
+    [6, 12]
+  );
+  assert.equal(counts.trimmed, 2);
+  assert.equal(counts.skipped, 2);
 });
 
 test('the backlog trim needs the backlog skip rule', () => {
