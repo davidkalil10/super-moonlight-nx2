@@ -69,7 +69,7 @@ async function fakeConsole() {
       const offset = address - MAPPED;
       data.copy(bytes, offset);
       writes.push(offset);
-      if (offset !== UI.uiMagic || word(UI.uiMagic) !== UI_MAGIC) return;
+      if (offset !== UI.uiMagic || word(UI.uiMagic) !== UI_MAGIC || console.frozen) return;
       const sequence = word(UI.uiSequence),
         page = word(UI.uiPage),
         base = UI_OFFSET + page * UI_PAGE_BYTES;
@@ -184,7 +184,7 @@ test('attach seeds after the stale sequence, ignores old commands and leaves mag
   );
   await service.poll();
   assert.equal(service.model().screen, 'hosts', 'the press before attach is not replayed');
-  assert.equal(console.word(UI.hostAck), 0);
+  assert.equal(console.word(UI.hostAck), 3, 'and is acked so the cursor does not pulse');
   await service.stop();
   assert.equal(console.word(UI.uiMagic), 0);
 });
@@ -207,6 +207,11 @@ test('A on a host lists it and lands on the app grid; stale commands are acked a
   await service.poll();
   assert.equal(console.word(UI.hostAck), stale, 'dropped commands are still acked');
   assert.equal(service.model().screen, 'apps');
+  const foreign = console.press('a', ITEM.app);
+  console.setWord(UI.cmdEpoch, 1699999999);
+  await service.poll();
+  assert.equal(console.word(UI.hostAck), foreign, 'another epoch is acked');
+  assert.equal(service.model().screen, 'apps', 'and dropped');
   assert.equal(children.spawned.length, 1);
 });
 
@@ -315,9 +320,10 @@ test('launch streams with the chosen settings; the chord is free; return relists
     stream.args.slice(3),
     settings.streamArgs({...settings.defaults(), bitrate: 22.5})
   );
-  stream.line('stderr', '{"event":"log","message":"RTSP handshake"}');
+  stream.line('stderr', 'hbmoonlight {"event":"log","message":"RTSP handshake"}');
   await until(() => service.model().message === 'RTSP handshake', 'stage');
   stream.line('stdout', '{"captured":60}');
+  stream.line('stderr', 'hbmoonlight Connecting to 192.168.8.245');
   stream.line('stderr', '{"event":"connected"}');
   await until(() => service.model().screen === 'streaming', 'streaming');
   const sequence = console.word(UI.uiSequence);
@@ -346,6 +352,9 @@ test('launch streams with the chosen settings; the chord is free; return relists
   assert.equal(service.model().message, null);
   assert.equal(service.model().currentGame, 1217, 'the host game keeps running');
   assert.ok(fixture.events.some(event => event.event === 'stream-stats'));
+  assert.ok(
+    fixture.events.some(event => event.event === 'stream-line' && /Connecting/.test(event.line))
+  );
   assert.ok(
     fixture.events.some(
       event => event.event === 'stream-event' && event.message === 'RTSP handshake'
@@ -440,4 +449,41 @@ test('a stream that dies before connecting is an error; the service leaves with 
   await finished;
   assert.equal(service.model().screen, 'stopped');
   assert.equal(console.word(UI.uiMagic), 0);
+});
+
+test('a page the console never applies keeps the next page off the shown buffer', async () => {
+  const fixture = await setup();
+  const {console, service} = fixture;
+  await service.attach();
+  assert.equal(console.word(UI.uiPage), 1, 'first page in buffer 1 after the stale 0');
+  console.frozen = true;
+  console.press('x');
+  await service.poll();
+  assert.equal(service.model().screen, 'settings');
+  assert.equal(console.word(UI.uiSequence), 2, 'published into buffer 0, never applied');
+  assert.ok(fixture.events.some(event => event.event === 'apply-timeout'));
+  console.frozen = false;
+  await service.poll();
+  assert.equal(console.word(UI.uiSequence), 4, 'republished, skipping the sequence for buffer 1');
+  assert.equal(console.word(UI.uiPage), 0);
+  assert.equal(console.word(UI.uiApplied), 4);
+  console.press('b');
+  await service.poll();
+  assert.equal(service.model().screen, 'hosts');
+  assert.equal(console.word(UI.uiApplied), 5);
+  assert.equal(console.word(UI.uiPage), 1);
+});
+
+test('nothing is published after the service detaches', async () => {
+  const fixture = await setup();
+  const {console, service} = fixture;
+  await service.attach();
+  const stopping = service.stop();
+  const late = service.dispatch({
+    type: 'hosts',
+    hosts: [...HOSTS, {name: 'Late', address: '10.0.0.9'}]
+  });
+  await Promise.all([stopping, late]);
+  assert.equal(console.word(UI.uiMagic), 0);
+  assert.equal(console.writes.at(-1), UI.uiMagic, 'magic 0 is the last write');
 });
