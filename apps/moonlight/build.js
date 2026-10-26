@@ -42,21 +42,27 @@ const SHIM = path.join(import.meta.dirname, '../../tools/moonlight/glslang-shim.
  */
 function refusal() {
   if (process.argv.length > 2) {
-    const from = target => path.relative(process.cwd(), path.join(import.meta.dirname, target));
+    const from = target => {
+      const absolute = path.join(import.meta.dirname, target);
+      const relative = path.relative(process.cwd(), absolute) || '.';
+      return relative.length < absolute.length ? relative : absolute;
+    };
     return (
       'build.js takes no arguments and rewrites the package in place; to check it, run node ' +
       from('../../../hbl-platform/sdk/build.js') +
       ' --check ' +
-      (from('.') || '.')
+      from('.')
     );
   }
   let found;
   try {
-    found = execFileSync(process.env.GLSLC || 'glslc', ['--version'], {encoding: 'utf8'});
+    found = execFileSync(process.env.GLSLC || 'glslc', ['--version'], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore']
+    }).split('\n')[0];
   } catch (error) {
-    found = 'none (' + error.message + ')';
+    found = 'none (' + error.message.split('\n')[0] + ')';
   }
-  found = found.split('\n')[0];
   if (found === GLSLC_VERSION) return null;
   return (
     'build.js compiles with glslc ' +
@@ -115,6 +121,8 @@ function initialState() {
 }
 
 async function main() {
+  if (process.env.GLSLANG && process.env.GLSLANG !== SHIM)
+    console.error('build.js ignores GLSLANG and compiles through ' + SHIM + '; GLSLC picks glslc');
   process.env.GLSLANG = SHIM;
   const output = name => path.join(import.meta.dirname, name);
   const backend = name => output(path.join(BACKEND, name));
@@ -142,4 +150,4 @@ if (isMain(import.meta)) {
     });
 }
 
-export {testCard};
+export {testCard, GLSLC_VERSION};

@@ -54,6 +54,8 @@ it reproduces all three files byte for byte, which the package test pins. glslan
 16.2.0 builds different bytes, so `build.js` refuses before writing anything when `glslc`
 (or `GLSLC`) prints another version. Moving to a new glslc means changing `GLSLC_VERSION` in
 `build.js` and the pinned hashes in `moonlight-dev` together.
+`GLSLC` picks the glslc for both the version check and the shim; a `GLSLANG` setting is
+ignored with a notice.
 
 Stream to a running app (the newest `runs/launcher-*` session):
 
