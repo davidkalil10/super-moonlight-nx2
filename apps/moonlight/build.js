@@ -1,6 +1,7 @@
 /**
  * Generates the HBV1 decoder include, the HBV2 tables, ring constants, an HBV2 test-card
- * keyframe for the initial private memory and the text atlas, then compiles the shaders.
+ * keyframe for the initial private memory and the text atlas, then compiles the shaders into
+ * backend one's section of the package.
  *
  * The platform build is imported only when main runs, so check.cjs can load testCard without
  * the shader toolchain.
@@ -25,8 +26,10 @@ const BARS = [
   [16, 16, 235]
 ];
 const TEST_CARD_QP = 6;
-/** Size of the initial launcher state buffer, assets/state.bin. */
+/** Size of the initial launcher state buffer, state.bin in the backend section. */
 const STATE_BYTES = 1024;
+/** Backend one's section of the package: its shaders, SPIR-V and memory images. */
+const BACKEND = 'backends/hblauncher.gpu-app';
 
 /**
  * RGB24 test card: colour bars over a full-range grey ramp in the bottom third.
@@ -77,14 +80,18 @@ function initialState() {
 
 async function main() {
   const output = name => path.join(import.meta.dirname, name);
-  await fs.writeFile(output('assets/state.bin'), initialState());
-  await fs.writeFile(output('shaders/hbv.glsl'), hbv.glsl());
-  await fs.writeFile(output('shaders/hbv2-tables.glsl'), hbv2.glslTables());
-  await fs.writeFile(output('shaders/ring.glsl'), ring.glsl());
-  await fs.writeFile(output('assets/memory.bin'), initialMemory(hbv2));
+  const backend = name => output(path.join(BACKEND, name));
+  await fs.writeFile(backend('state.bin'), initialState());
+  await fs.writeFile(backend('hbv.glsl'), hbv.glsl());
+  await fs.writeFile(backend('hbv2-tables.glsl'), hbv2.glslTables());
+  await fs.writeFile(backend('ring.glsl'), ring.glsl());
+  await fs.writeFile(backend('memory.bin'), initialMemory(hbv2));
   execFileSync('python3', [output('assets.py')], {stdio: 'inherit'});
-  const {buildApp} = await import('../../../hbl-platform/sdk/build.js');
-  await buildApp(import.meta.dirname);
+  const {headers, compile} = await import('../../../hbl-platform/sdk/build.js');
+  await headers(output(BACKEND));
+  compile(output('src/app.vert'), backend('app.vert.spv'));
+  for (const stage of ['frag', 'comp'])
+    compile(backend('app.' + stage), backend('app.' + stage + '.spv'));
 }
 
 if (isMain(import.meta))
