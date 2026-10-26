@@ -22,6 +22,11 @@
  * predicts instead of rereading back to back; receiveWait does the same for a pending
  * receive with receive-wait.js.
  *
+ * Gate on receive: by default the gate write for unit N carries N+1's length, so it waits for
+ * N+1 to arrive. gateOnReceive instead primes each unit's descriptor in its own exchange as it
+ * arrives (staggered-input-plan.js), sends it and gates it at once, so decode N opens a frame
+ * earlier for one more exchange per unit.
+ *
  * Rereads: a gate late on receive, input, acquire or fetch reads the status again right away,
  * since a pause costs the frame its vsync slot (request-budget.cjs staggeredRetryWait). A gate
  * waiting for the renderer to apply a publication sleeps to the vsync present-pacer predicts
@@ -240,6 +245,7 @@ function jsonSafe(value) {
  * @param {number} [options.skipBacklog] host backlog above which an output is skipped
  * @param {'backlog' | 'vsync'} [options.skipRule]
  * @param {number | null} [options.trimBacklogMs] age of the unit in hand that counts as stale
+ * @param {boolean} [options.gateOnReceive] gate each unit as soon as it is sent
  * @param {boolean} [options.decodeWait] sleep through a pending acquire (vsync rule only)
  * @param {boolean} [options.receiveWait] sleep through a pending receive
  * @param {{beforeMs: number, afterMs: number} | null} [options.avoid] span around a predicted
@@ -254,6 +260,7 @@ function create({
   skipBacklog = SKIP_BACKLOG,
   skipRule = 'backlog',
   trimBacklogMs = null,
+  gateOnReceive = false,
   decodeWait = false,
   receiveWait = false,
   avoid = null,
@@ -535,7 +542,7 @@ function create({
       expected,
       inputSlot,
       current: {sequence, length: current.length, pts: current.pts},
-      next: {sequence: sequence + 1, length: next.length, pts: next.pts},
+      next: next && {sequence: sequence + 1, length: next.length, pts: next.pts},
       destination,
       published,
       frame: layout
@@ -568,7 +575,7 @@ function create({
     async factory(options) {
       if (worker || retained) throw Error('Staggered worker already exists');
       transport = options.transport;
-      worker = await createWorker(options);
+      worker = await createWorker(gateOnReceive ? {...options, gateOnReceive} : options);
       return worker;
     },
 
@@ -584,7 +591,8 @@ function create({
 
     /**
      * Gates the held unit with `unit` as its next, or starts the workers with the first unit,
-     * then sends `unit` and holds it.
+     * then sends `unit` and holds it. Under gateOnReceive it primes `unit` instead, sends it
+     * and gates it with no next.
      * @param {{data: Buffer, pts: number | bigint, arrivedAt?: number}} unit
      * @param {any} [hooks]
      */
@@ -596,7 +604,10 @@ function create({
       const enter = hooks.enter || (() => {});
       if (held) {
         if (!(next.pts > held.pts)) throw Error('Staggered loop needs increasing access-unit PTS');
-        await gate(held.sequence, held, next, {...hooks, arrivedAt: unit.arrivedAt});
+        if (gateOnReceive) {
+          enter('staggered-prime');
+          await worker.primeInput({sequence: held.sequence + 1, ...next});
+        } else await gate(held.sequence, held, next, {...hooks, arrivedAt: unit.arrivedAt});
       } else {
         enter('staggered-start');
         await worker.start({sequence: 1, ...next});
@@ -608,12 +619,14 @@ function create({
       lastSend = now();
       hooks.onSent?.(lastSend);
       receive?.sent(sequence, next.length, lastSend);
+      if (gateOnReceive) await gate(sequence, next, null, {...hooks, arrivedAt: unit.arrivedAt});
       held = {sequence, ...next};
       counts.submitted++;
     },
 
     /**
-     * Gates the last unit, stops the input worker and drains the last two outputs.
+     * Gates the last unit (already gated under gateOnReceive), stops the input worker and
+     * drains the last two outputs.
      * @param {any} [hooks]
      * @returns {Promise<{drained: number}>}
      */
@@ -622,7 +635,8 @@ function create({
       finished = true;
       const {sink, enter = () => {}, onDecoded, onPresented, onSkipped} = hooks;
       const last = held.sequence;
-      await gate(last, held, {length: 1, pts: held.pts + 1n}, {...hooks, backlog: 0});
+      if (!gateOnReceive)
+        await gate(last, held, {length: 1, pts: held.pts + 1n}, {...hooks, backlog: 0});
       held = null;
       enter('staggered-tail');
       await waitFinalInput(last);

@@ -153,6 +153,7 @@ async function run({
   const presentHz = cli.number(args, '--present-hz', 60);
   const skipRule = cli.option(args, '--skip-rule') ?? 'backlog';
   const trimBacklogMs = cli.number(args, '--trim-backlog-ms', null);
+  const gateOnReceive = args.includes('--gate-on-receive');
   const decodeWait = args.includes('--decode-wait');
   const receiveWait = args.includes('--receive-wait');
   const avoidWindow = exchangeTiming.parseAvoid(cli.option(args, '--avoid-window') ?? undefined);
@@ -186,6 +187,7 @@ async function run({
   )
     throw Error('--present-hz, --skip-backlog and --skip-rule apply to --staggered');
   if (!staggered && trimBacklogMs !== null) throw Error('--trim-backlog-ms applies to --staggered');
+  if (!staggered && gateOnReceive) throw Error('--gate-on-receive applies to --staggered');
   if (!Number.isInteger(audioFrames) || audioFrames < 240 || audioFrames % 240)
     throw Error('--audio-frames takes a multiple of 240');
   if (socketAudio && audioFrames > 3840)
@@ -315,6 +317,7 @@ async function run({
           skipBacklog,
           skipRule,
           ...(trimBacklogMs !== null && {trimBacklogMs}),
+          ...(gateOnReceive && {gateOnReceive}),
           decodeWait,
           receiveWait,
           avoid: avoidWindow,
@@ -568,7 +571,6 @@ async function run({
               },
               onSent: at => {
                 sample.sentAt = at;
-                auSamples.push(sample);
               },
               onTrimmed: ageMs => {
                 trimmed++;
@@ -587,6 +589,7 @@ async function run({
           } finally {
             pairing = false;
           }
+          auSamples.push(sample);
           stats.submitted++;
           enter('read');
           continue;
@@ -873,6 +876,7 @@ async function run({
           skipBacklog: skipBacklog === Infinity ? 'off' : skipBacklog,
           skipRule,
           ...(trimBacklogMs !== null && {trimBacklogMs}),
+          ...(gateOnReceive && {gateOnReceive}),
           decodeWait,
           receiveWait,
           avoidWindow,

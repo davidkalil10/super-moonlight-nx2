@@ -3,7 +3,8 @@
  * frames of staggered-input-plan.js and staggered-output-plan.js.
  *
  * The control page holds the light events (decode gate 0x00, ignored fetch gate 0x10, fetch
- * gate 0x20, acquisition acknowledgement 0x30), the dispatch words 0x40-0x7f, the descriptors
+ * gate 0x20, acquisition acknowledgement 0x30, and under gate on receive the length gate 0x80,
+ * which starts signalled for AU 1), the dispatch words 0x40-0x7f, the descriptors
  * 0x100-0x2ff, the decoder output event 0x400 and its registration 0x440. The acknowledgement
  * is auto-clear and starts signalled for AU 1; the output worker signals it once per acquired
  * output (see staggered-input-plan.js for the order). A drain also stamps the next output's
@@ -332,6 +333,8 @@ function holdsOutput(acquired, fetched) {
  * @param {NativeTransport} options.transport
  * @param {Publication} options.publication
  * @param {number} [options.stopTimeoutMs]
+ * @param {boolean} [options.gateOnReceive] each receive waits for primeInput (see
+ *   staggered-input-plan.js)
  */
 async function create({
   rpc,
@@ -342,7 +345,8 @@ async function create({
   format,
   transport,
   publication,
-  stopTimeoutMs = 5000
+  stopTimeoutMs = 5000,
+  gateOnReceive = false
 }) {
   if (isUnboundedSetup(transport, publication))
     throw Error('Staggered worker needs bounded TCP and native publication');
@@ -384,7 +388,8 @@ async function create({
     [inputPlan.CONTROL.decodeGate, 0],
     [inputPlan.CONTROL.ignoredFetchGate, 0],
     [outputPlan.CONTROL.fetchGate, 0],
-    [ACQUIRE_ACK, 1]
+    [ACQUIRE_ACK, 1],
+    ...(gateOnReceive ? [[inputPlan.CONTROL.lengthGate, 1]] : [])
   ]) {
     await rpc.callAddress(sync.initializeLightEvent, [at(offset), signalled, AUTO_CLEAR, 0], SHORT);
     initialized.push({offset, finalize: sync.finalizeLightEvent});
@@ -402,7 +407,8 @@ async function create({
     recvFunction: transport.recvFunction,
     functions,
     decoder,
-    acquireAck: at(ACQUIRE_ACK)
+    acquireAck: at(ACQUIRE_ACK),
+    ...(gateOnReceive && {lengthGate: at(inputPlan.CONTROL.lengthGate)})
   });
   const video = outputPlan.plan({
     sdk,
@@ -506,6 +512,8 @@ async function create({
         transport.abort();
         await rpc.callAddress(sync.signalLightEvent, [at(inputPlan.CONTROL.decodeGate)], SHORT);
         await rpc.callAddress(sync.signalLightEvent, [at(ACQUIRE_ACK)], SHORT);
+        if (gateOnReceive)
+          await rpc.callAddress(sync.signalLightEvent, [at(inputPlan.CONTROL.lengthGate)], SHORT);
       } else {
         await rpc.callAddress(sync.signalEvent, [at(OUTPUT_EVENT)], SHORT);
         await rpc.callAddress(sync.signalLightEvent, [at(outputPlan.CONTROL.fetchGate)], SHORT);
@@ -619,6 +627,26 @@ async function create({
         throw error;
       }
       decodeGateSignals++;
+    },
+
+    /**
+     * Under gate on receive: writes access unit `unit`'s descriptor and signals the length gate
+     * in one exchange, before the unit is sent. The caller primes a unit only once the unit two
+     * before it, whose descriptor slot it reuses, is checked submitted.
+     * @param {{sequence: number, length: number, pts: bigint}} unit
+     */
+    async primeInput(unit) {
+      if (!gateOnReceive || !started || closed || retained || inputWorker.joined)
+        throw Error('Staggered input prime is unavailable');
+      const encoded = inputPlan.primeWrite(unit, at(inputPlan.CONTROL.ignoredFetchGate));
+      try {
+        await rpc.writeAndCall(at(encoded.offset), encoded.bytes, sync.signalLightEvent, [
+          at(inputPlan.CONTROL.lengthGate)
+        ]);
+      } catch (error) {
+        retained = true;
+        throw error;
+      }
     },
 
     /**

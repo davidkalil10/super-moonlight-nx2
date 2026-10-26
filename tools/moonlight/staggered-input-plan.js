@@ -17,6 +17,10 @@
  *
  * Each frame ends by restoring both of its slot's frames from their snapshots, since a frame
  * consumes itself as it runs, and jumping through a dispatch word to the other frame.
+ *
+ * With a length gate (gate on receive), the receive frame first waits on it: the host primes
+ * unit N's descriptor and signals the gate when N arrives, so the gate write for N no longer
+ * needs N+1 and can go out as soon as N is received. Its next descriptor is a placeholder.
  */
 import {build} from '../../../hbl-platform/smilebasic/engine/shared/frames.js';
 import {CALL4_X19} from '../../../hbl-platform/smilebasic/engine/shared/gadgets.js';
@@ -28,6 +32,7 @@ import * as status from './staggered-status.js';
 const CONTROL = {
   decodeGate: 0x00,
   ignoredFetchGate: 0x10,
+  lengthGate: 0x80,
   sendDispatch: [0x40, 0x48],
   receiveDispatch: [0x50, 0x58],
   descriptors: [0x100, 0x180]
@@ -123,8 +128,24 @@ function isUncheckedSlot(input, expected, checkedIndex) {
 }
 
 /**
+ * @returns {boolean} True unless `next` follows `current` with a later PTS.
+ */
+function isInvalidNext(current, next) {
+  return (
+    !next ||
+    next.sequence !== current.sequence + 1 ||
+    !Number.isInteger(next.length) ||
+    next.length < 1 ||
+    next.length > MAX_ACCESS_UNIT_BYTES ||
+    typeof next.pts !== 'bigint' ||
+    next.pts <= current.pts ||
+    next.pts > MAX_PTS
+  );
+}
+
+/**
  * @returns {boolean} True unless `current` is the checked access unit, `next` follows it with
- *   a later PTS and both gates are addresses.
+ *   a later PTS (or is null, under gate on receive) and both gates are addresses.
  */
 function isInvalidGate(current, next, expected, fetchGate, ignoredFetchGate) {
   return (
@@ -135,14 +156,7 @@ function isInvalidGate(current, next, expected, fetchGate, ignoredFetchGate) {
     typeof current.pts !== 'bigint' ||
     current.pts < 0n ||
     current.pts > MAX_PTS ||
-    !next ||
-    next.sequence !== current.sequence + 1 ||
-    !Number.isInteger(next.length) ||
-    next.length < 1 ||
-    next.length > MAX_ACCESS_UNIT_BYTES ||
-    typeof next.pts !== 'bigint' ||
-    next.pts <= current.pts ||
-    next.pts > MAX_PTS ||
+    (next !== null && isInvalidNext(current, next)) ||
     !Number.isSafeInteger(fetchGate) ||
     fetchGate <= 0 ||
     !Number.isSafeInteger(ignoredFetchGate) ||
@@ -171,7 +185,8 @@ function putDescriptor(descriptors, slot, unit, address, index, fetchGate) {
 /**
  * Both input descriptors for the gate that submits `current`: its own, naming the checked
  * input slot and the fetch gate (the ignored one until an output is acquired), and the next
- * unit's, which stays on the ignored gate until its own gate write.
+ * unit's, which stays on the ignored gate until its own gate write. A null `next` leaves the
+ * next descriptor a zero placeholder for its prime.
  * @param {object} options
  * @param {import('./staggered-status.js').Snapshot} options.snapshot
  * @param {import('./staggered-status.js').Expected} options.expected
@@ -198,8 +213,41 @@ function gateWrite({snapshot, expected, input, current, next, fetchGate, ignored
     input.index,
     expected.acquire ? fetchGate : ignoredFetchGate
   );
-  putDescriptor(descriptors, 1 - currentSlot, next, 0, 0, ignoredFetchGate);
+  putDescriptor(
+    descriptors,
+    1 - currentSlot,
+    next ?? {sequence: 0, length: 0, pts: 0n},
+    0,
+    0,
+    ignoredFetchGate
+  );
   return descriptors;
+}
+
+/**
+ * The descriptor that primes access unit `unit` under gate on receive, written over its slot
+ * once the unit two before it is submitted.
+ * @param {AccessUnit} unit
+ * @param {number} ignoredFetchGate
+ * @returns {{offset: number, bytes: Buffer}}
+ */
+function primeWrite(unit, ignoredFetchGate) {
+  if (
+    !Number.isInteger(unit?.sequence) ||
+    unit.sequence < 2 ||
+    !Number.isInteger(unit.length) ||
+    unit.length < 1 ||
+    unit.length > MAX_ACCESS_UNIT_BYTES ||
+    typeof unit.pts !== 'bigint' ||
+    unit.pts < 0n ||
+    unit.pts > MAX_PTS ||
+    !Number.isSafeInteger(ignoredFetchGate) ||
+    ignoredFetchGate <= 0
+  )
+    throw Error('Invalid staggered primed access unit');
+  const bytes = Buffer.alloc(DESCRIPTOR.bytes);
+  putDescriptor(bytes, 0, unit, 0, 0, ignoredFetchGate);
+  return {offset: CONTROL.descriptors[(unit.sequence - 1) % SLOTS], bytes};
 }
 
 /**
@@ -237,6 +285,8 @@ function buildFrame(address, sdk, calls, verified, mapped, results) {
  * @param {Record<string, number>} options.functions Movie decoder function addresses.
  * @param {number} options.decoder
  * @param {number} options.acquireAck The output worker's acquisition acknowledgement event.
+ * @param {number | null} [options.lengthGate] The event each receive waits on first, under gate
+ *   on receive.
  */
 function plan({
   sdk,
@@ -248,11 +298,13 @@ function plan({
   recvFunction,
   functions,
   decoder,
-  acquireAck
+  acquireAck,
+  lengthGate = null
 }) {
   const addresses = [sdk, base, control, mapped, scratch, recvFunction, decoder, acquireAck];
   if (
     addresses.some(value => !Number.isSafeInteger(value) || value <= 0) ||
+    (lengthGate !== null && !(Number.isSafeInteger(lengthGate) && lengthGate > 0)) ||
     !Number.isInteger(fd) ||
     fd < 0 ||
     ['sendInput', 'acquireInput'].some(
@@ -275,6 +327,9 @@ function plan({
   for (let slot = 0; slot < SLOTS; slot++) {
     const descriptor = at(CONTROL.descriptors[slot]);
     const receiveCalls = [
+      ...(lengthGate === null
+        ? []
+        : [{function: sync('waitLightEvent'), args: [lengthGate, 0, 0, 0]}]),
       {
         function: recvFunction,
         args: [fd, scratch, {u32: descriptor + DESCRIPTOR.length}, MSG_WAITALL]
@@ -291,7 +346,8 @@ function plan({
       {function: sync('waitLightEvent'), args: [acquireAck, 0, 0, 0]},
       {function: jump, args: [{u64: at(CONTROL.sendDispatch[slot])}, 1, 0, 0]}
     ];
-    receive.push(frame(loc.receive[slot], receiveCalls, {0: STAMP.receiveCount}));
+    const recvCall = lengthGate === null ? 0 : 1;
+    receive.push(frame(loc.receive[slot], receiveCalls, {[recvCall]: STAMP.receiveCount}));
     calls.receive.push(receiveCalls);
   }
   for (let slot = 0; slot < SLOTS; slot++) {
@@ -347,4 +403,4 @@ function plan({
   return {control: CONTROL, descriptor: DESCRIPTOR, locations: loc, receive, send, calls};
 }
 
-export {CONTROL, DESCRIPTOR, locations, gateWrite, plan};
+export {CONTROL, DESCRIPTOR, locations, gateWrite, primeWrite, plan};
