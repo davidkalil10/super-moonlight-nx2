@@ -10,7 +10,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import {execFileSync} from 'node:child_process';
 import * as ring from '../../tools/moonlight/ring.js';
-import {STATE} from '../../../hbl-platform/sdk/host/state-layout.js';
+import {STATE} from '../../../hbl-platform/sdk/host/layout.js';
 import {isMain} from '../../../hbl-platform/sdk/cli.js';
 import * as hbv from '../../tools/moonlight/hbv.js';
 import * as hbv2 from '../../tools/moonlight/hbv2.js';

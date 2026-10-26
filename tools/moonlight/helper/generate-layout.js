@@ -9,7 +9,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import * as ring from '../ring.js';
-import {STATE} from '../../../../hbl-platform/sdk/host/state-layout.js';
+import {STATE} from '../../../../hbl-platform/sdk/host/layout.js';
 import {NPAD_BYTES} from '../controller.js';
 import {TOUCH_BYTES, PANEL, MAX_POINTS} from '../touch.js';
 import symbols from '../../../../hbl-platform/sdk/native/audio-symbols.json' with {type: 'json'};

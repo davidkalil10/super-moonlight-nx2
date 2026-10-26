@@ -21,7 +21,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import * as session from '../../../hbl-platform/sdk/host/session.js';
 import * as cli from '../../../hbl-platform/sdk/cli.js';
-import {STATE} from '../../../hbl-platform/sdk/host/state-layout.js';
+import {STATE} from '../../../hbl-platform/sdk/host/layout.js';
 import {NEUTRAL, decode, toMoonlight, same, NPAD_BYTES} from './controller.js';
 import {TOUCH_BYTES, parseTouch, createTracker, step, flush, touchLine} from './touch.js';
 import {UI, UI_MAGIC} from './ring.js';
