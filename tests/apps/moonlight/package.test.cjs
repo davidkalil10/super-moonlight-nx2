@@ -65,11 +65,11 @@ function buildCopy(args, {cwd = '', env = {}} = {}) {
     assert.ok(before.some(line => line.startsWith('assets/text.bin ')));
     assert.ok(before.some(line => line.startsWith('backends/hblauncher.gpu-app/text.glsl ')));
     const result = spawnSync(process.execPath, [path.join(pkg, 'build.js'), ...args], {
-      cwd: path.join(copy, cwd),
+      cwd: path.resolve(copy, cwd),
       encoding: 'utf8',
       env: {...process.env, ...env}
     });
-    return {...result, unchanged: JSON.stringify(snapshot()) === JSON.stringify(before)};
+    return {...result, copy, unchanged: JSON.stringify(snapshot()) === JSON.stringify(before)};
   } finally {
     fs.rmSync(root, {recursive: true});
   }
@@ -78,33 +78,68 @@ function buildCopy(args, {cwd = '', env = {}} = {}) {
 test('build.js refuses arguments before it writes the package', () => {
   for (const [cwd, check] of [
     ['', 'node ../hbl-platform/sdk/build.js --check apps/moonlight'],
-    ['apps/moonlight', 'node ../../../hbl-platform/sdk/build.js --check .']
+    ['apps/moonlight', 'node ../../../hbl-platform/sdk/build.js --check .'],
+    [__dirname, copy => `node ${copy}/../hbl-platform/sdk/build.js --check ${copy}/apps/moonlight`]
   ]) {
     const result = buildCopy(['--check'], {cwd});
+    const shown = typeof check === 'function' ? path.normalize(check(result.copy)) : check;
     assert.equal(result.status, 1);
     assert.equal(
       result.stderr,
       'build.js takes no arguments and rewrites the package in place; to check it, run ' +
-        check +
+        shown +
         '\n'
     );
     assert.ok(result.unchanged);
   }
 });
 
-test('build.js refuses another glslc before it writes the package', () => {
+/** Runs buildCopy with GLSLC set to a shell script made from `body`, in a directory of its own. */
+function withGlslc(body, options = {}) {
   const fs = require('node:fs');
   const os = require('node:os');
-  const glslc = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'glslc-')), 'glslc');
-  fs.writeFileSync(glslc, '#!/bin/sh\necho "shaderc v2025.2 2025-05-01"\n', {mode: 0o755});
-  const result = buildCopy([], {env: {GLSLC: glslc}});
-  fs.rmSync(path.dirname(glslc), {recursive: true});
-  assert.equal(result.status, 1);
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'glslc-'));
+  const glslc = path.join(directory, 'glslc');
+  fs.writeFileSync(glslc, '#!/bin/sh\n' + body(directory) + '\n', {mode: 0o755});
+  try {
+    const result = buildCopy([], {...options, env: {...options.env, GLSLC: glslc}});
+    const log = path.join(directory, 'calls');
+    return {...result, calls: fs.existsSync(log) ? fs.readFileSync(log, 'utf8') : ''};
+  } finally {
+    fs.rmSync(directory, {recursive: true});
+  }
+}
+
+test('build.js refuses another glslc before it writes the package', () => {
+  for (const [body, found] of [
+    [() => 'echo "shaderc v2025.2 2025-05-01"', 'shaderc v2025.2 2025-05-01'],
+    [() => 'echo "broken install" >&2; exit 1', 'none (Command failed: ']
+  ]) {
+    const result = withGlslc(body);
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /^build\.js compiles with glslc shaderc v2026\.1 [^\n]* found /);
+    assert.ok(result.stderr.includes(' found ' + found), result.stderr);
+    assert.match(result.stderr, /; install it or point GLSLC at it\. Nothing was written\.\n$/);
+    if (found.startsWith('none')) assert.match(result.stderr, /\); install it/);
+    assert.equal(result.stderr.split('\n').length, 2, result.stderr);
+    assert.ok(result.unchanged);
+  }
+});
+
+test('build.js compiles with the GLSLC it checked, whatever GLSLANG says', async () => {
+  const {GLSLC_VERSION} = await import(path.join(PACKAGE, 'build.js'));
+  const result = withGlslc(
+    directory =>
+      `if [ "$1" = --version ]; then echo '${GLSLC_VERSION}'; exit 0; fi\n` +
+      `echo "$@" >> ${directory}/calls; exit 3`,
+    {env: {GLSLANG: '/bin/false'}}
+  );
+  assert.notEqual(result.status, 0);
+  assert.match(result.calls, /^-Os --target-env=vulkan1\.0 \S+app\.vert -o \S+app\.vert\.spv$/m);
   assert.match(
     result.stderr,
-    /^build\.js compiles with glslc shaderc v2026\.1 .*found shaderc v2025\.2 .*Nothing was written\.\n$/
+    /^build\.js ignores GLSLANG and compiles through \S+glslang-shim\.sh/m
   );
-  assert.ok(result.unchanged);
 });
 
 test('the package has no portable entry and no unlisted assets', async () => {
