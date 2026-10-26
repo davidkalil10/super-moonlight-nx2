@@ -5,7 +5,11 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 /** The staggered counts without the pacer's read counters, which the fake device does not pin. */
-const withoutPacer = ({pacer, ...counts}) => (assert.equal(typeof pacer.reads, 'number'), counts);
+const withoutPacer = ({pacer, exchanges, ...counts}) => (
+  assert.equal(typeof pacer.reads, 'number'),
+  assert.equal(typeof exchanges.gate.ms, 'number'),
+  counts
+);
 const {ADDRESS} = require('../../../hbl-platform-dev/sdk/tests/recording-rpc.cjs');
 const {gateConsole, BLOCK} = require('../../../hbl-platform-dev/sdk/tests/gate-worker-mock.cjs');
 const definitions = require('../../../hbl-moonlight/sdk/native/movie-functions.json');

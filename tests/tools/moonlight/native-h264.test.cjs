@@ -110,7 +110,7 @@ async function fixture({
         async workerDestination(presentation) {
           events.push({type: 'worker-destination', presentation});
           return {
-            address: 0x1000000 + (++workerSequence * 32768),
+            address: 0x1000000 + ++workerSequence * 32768,
             bytes: 32768,
             index: workerSequence % 3,
             sequence: workerSequence,
@@ -404,74 +404,98 @@ test(
   }
 );
 
-test('native split publication leaves frame commits to the output worker', {timeout: 5000}, async () => {
-  const f = await fixture({
-    units: [
-      {hex: accessUnit.toString('hex'), keyframe: true, pts: 1000},
-      {hex: accessUnit.toString('hex'), keyframe: false, pts: 2000},
-      {hex: accessUnit.toString('hex'), keyframe: false, pts: 3000}
-    ]
-  });
-  f.options.args.push('--split-decoder', '--native-publish');
-  await exercise(f, async () => {
-    await run(f.options);
-    assert.deepEqual(f.events.find(event => event.type === 'create-decoder').publication, {
-      mapped: 0x1000000,
-      color: 1
+test(
+  'native split publication leaves frame commits to the output worker',
+  {timeout: 5000},
+  async () => {
+    const f = await fixture({
+      units: [
+        {hex: accessUnit.toString('hex'), keyframe: true, pts: 1000},
+        {hex: accessUnit.toString('hex'), keyframe: false, pts: 2000},
+        {hex: accessUnit.toString('hex'), keyframe: false, pts: 3000}
+      ]
     });
-    assert.equal(f.events.filter(event => event.type === 'publish').length, 1);
-    assert.equal(f.events.filter(event => event.type === 'worker-destination').length, 2);
-    assert.equal(f.events.filter(event => event.type === 'finish-split').length, 2);
-    assert.deepEqual(
-      f.events.filter(event => event.type === 'worker-destination').map(event => event.presentation),
-      [{current: 0, applied: 0}, null]
-    );
-  });
-});
+    f.options.args.push('--split-decoder', '--native-publish');
+    await exercise(f, async () => {
+      await run(f.options);
+      assert.deepEqual(f.events.find(event => event.type === 'create-decoder').publication, {
+        mapped: 0x1000000,
+        color: 1
+      });
+      assert.equal(f.events.filter(event => event.type === 'publish').length, 1);
+      assert.equal(f.events.filter(event => event.type === 'worker-destination').length, 2);
+      assert.equal(f.events.filter(event => event.type === 'finish-split').length, 2);
+      assert.deepEqual(
+        f.events
+          .filter(event => event.type === 'worker-destination')
+          .map(event => event.presentation),
+        [{current: 0, applied: 0}, null]
+      );
+    });
+  }
+);
 
-test('automatic output queue passes the next job without a second host queue call', {timeout: 5000}, async () => {
-  const f = await fixture({
-    units: [
-      {hex: accessUnit.toString('hex'), keyframe: true, pts: 1000},
-      {hex: accessUnit.toString('hex'), keyframe: false, pts: 2000},
-      {hex: accessUnit.toString('hex'), keyframe: false, pts: 3000}
-    ]
-  });
-  f.options.args.push('--split-decoder', '--native-publish', '--auto-output-queue');
-  await exercise(f, async () => {
-    await run(f.options);
-    assert.equal(f.events.find(event => event.type === 'create-decoder').autoQueue, true);
-    assert.equal(f.events.filter(event => event.type === 'queue-split').length, 1);
-    assert.deepEqual(
-      f.events.filter(event => event.type === 'finish-split').map(event => [event.job.pts, event.nextJob?.pts]),
-      [[2000, 3000], [3000, undefined]]
-    );
-    assert.equal(f.events.filter(event => event.type === 'worker-destination').length, 2);
-  });
-});
+test(
+  'automatic output queue passes the next job without a second host queue call',
+  {timeout: 5000},
+  async () => {
+    const f = await fixture({
+      units: [
+        {hex: accessUnit.toString('hex'), keyframe: true, pts: 1000},
+        {hex: accessUnit.toString('hex'), keyframe: false, pts: 2000},
+        {hex: accessUnit.toString('hex'), keyframe: false, pts: 3000}
+      ]
+    });
+    f.options.args.push('--split-decoder', '--native-publish', '--auto-output-queue');
+    await exercise(f, async () => {
+      await run(f.options);
+      assert.equal(f.events.find(event => event.type === 'create-decoder').autoQueue, true);
+      assert.equal(f.events.filter(event => event.type === 'queue-split').length, 1);
+      assert.deepEqual(
+        f.events
+          .filter(event => event.type === 'finish-split')
+          .map(event => [event.job.pts, event.nextJob?.pts]),
+        [
+          [2000, 3000],
+          [3000, undefined]
+        ]
+      );
+      assert.equal(f.events.filter(event => event.type === 'worker-destination').length, 2);
+    });
+  }
+);
 
-test('linked gates check receive and acquire before opening the fetch gate', {timeout: 5000}, async () => {
-  const f = await fixture({
-    units: [
-      {hex: accessUnit.toString('hex'), keyframe: true, pts: 1000},
-      {hex: accessUnit.toString('hex'), keyframe: false, pts: 2000},
-      {hex: accessUnit.toString('hex'), keyframe: false, pts: 3000}
-    ]
-  });
-  f.options.args.push('--split-decoder', '--native-publish', '--auto-output-queue', '--linked-gates');
-  await exercise(f, async () => {
-    await run(f.options);
-    assert.equal(f.events.find(event => event.type === 'create-decoder').linkedGates, true);
-    assert.equal(f.events.filter(event => event.type === 'queue-split').length, 1);
-    assert.equal(f.events.filter(event => event.type === 'submit-split').length, 1);
-    const names = f.events.map(event => event.type);
-    const checked = Math.max(names.indexOf('verify-receive'), names.indexOf('wait-acquire'));
-    assert.ok(checked < names.indexOf('open-fetch'));
-    assert.equal(f.events.find(event => event.type === 'open-fetch').nextJob.sequence, 2);
-    assert.equal(f.events.filter(event => event.type === 'complete-fetch').length, 1);
-    assert.equal(f.events.filter(event => event.type === 'finish-split').length, 1);
-  });
-});
+test(
+  'linked gates check receive and acquire before opening the fetch gate',
+  {timeout: 5000},
+  async () => {
+    const f = await fixture({
+      units: [
+        {hex: accessUnit.toString('hex'), keyframe: true, pts: 1000},
+        {hex: accessUnit.toString('hex'), keyframe: false, pts: 2000},
+        {hex: accessUnit.toString('hex'), keyframe: false, pts: 3000}
+      ]
+    });
+    f.options.args.push(
+      '--split-decoder',
+      '--native-publish',
+      '--auto-output-queue',
+      '--linked-gates'
+    );
+    await exercise(f, async () => {
+      await run(f.options);
+      assert.equal(f.events.find(event => event.type === 'create-decoder').linkedGates, true);
+      assert.equal(f.events.filter(event => event.type === 'queue-split').length, 1);
+      assert.equal(f.events.filter(event => event.type === 'submit-split').length, 1);
+      const names = f.events.map(event => event.type);
+      const checked = Math.max(names.indexOf('verify-receive'), names.indexOf('wait-acquire'));
+      assert.ok(checked < names.indexOf('open-fetch'));
+      assert.equal(f.events.find(event => event.type === 'open-fetch').nextJob.sequence, 2);
+      assert.equal(f.events.filter(event => event.type === 'complete-fetch').length, 1);
+      assert.equal(f.events.filter(event => event.type === 'finish-split').length, 1);
+    });
+  }
+);
 
 test(
   'persistent worker waits for a late first output before taking over',
@@ -912,62 +936,84 @@ test(
   }
 );
 
-test('--present-hz, --skip-backlog and --skip-rule reach the staggered scheduler', {timeout: 5000}, async () => {
-  const f = await fixture({units: pairedUnits(6)});
-  const created = [];
-  const fake = staggeredFake(f.events);
-  f.options.createStaggered = options => {
-    created.push(options);
-    return fake();
-  };
-  f.options.args.push('--staggered', '--present-hz', '120', '--skip-backlog', 'off');
-  await exercise(f, async () => {
-    const summary = await run(f.options);
-    assert.deepEqual(created, [
-      {presentHz: 120, skipBacklog: Infinity, skipRule: 'backlog', decodeWait: false, receiveWait: false}
-    ]);
-    assert.equal(summary.presentHz, 120);
-    assert.equal(summary.skipBacklog, 'off');
-    assert.equal(summary.skipRule, 'backlog');
-  });
-  const v = await fixture({units: pairedUnits(6)});
-  const vsync = [];
-  const vsyncFake = staggeredFake(v.events);
-  v.options.createStaggered = options => {
-    vsync.push(options);
-    return vsyncFake();
-  };
-  v.options.args.push(
-    '--staggered',
-    '--present-hz',
-    '120',
-    '--skip-rule',
-    'vsync',
-    '--decode-wait',
-    '--receive-wait'
-  );
-  await exercise(v, async () => {
-    const summary = await run(v.options);
-    assert.deepEqual(vsync, [
-      {presentHz: 120, skipBacklog: 1, skipRule: 'vsync', decodeWait: true, receiveWait: true}
-    ]);
-    assert.equal(summary.skipRule, 'vsync');
-    assert.equal(summary.decodeWait, true);
-    assert.equal(summary.receiveWait, true);
-  });
-  for (const [extra, message] of [
-    [['--staggered', '--present-hz', '90'], /--present-hz takes 60 or 120/],
-    [['--staggered', '--skip-backlog', '-1'], /--skip-backlog takes/],
-    [['--staggered', '--skip-rule', 'newest'], /--skip-rule takes backlog or vsync/],
-    [['--staggered', '--skip-rule', 'vsync', '--skip-backlog', 'off'], /needs a --skip-backlog/],
-    [['--skip-rule', 'vsync'], /apply to --staggered/],
-    [['--staggered', '--decode-wait'], /--decode-wait needs --skip-rule vsync/],
-    [['--present-hz', '120'], /apply to --staggered/]
-  ]) {
-    const g = await fixture();
-    await exercise(g, async () => {
-      g.options.args.push(...extra);
-      await assert.rejects(run(g.options), message);
+test(
+  '--present-hz, --skip-backlog and --skip-rule reach the staggered scheduler',
+  {timeout: 5000},
+  async () => {
+    const f = await fixture({units: pairedUnits(6)});
+    const created = [];
+    const fake = staggeredFake(f.events);
+    f.options.createStaggered = options => {
+      created.push(options);
+      return fake();
+    };
+    f.options.args.push('--staggered', '--present-hz', '120', '--skip-backlog', 'off');
+    await exercise(f, async () => {
+      const summary = await run(f.options);
+      assert.equal(created.length, 1);
+      assert.equal(typeof created[0].now(), 'number', 'the scheduler runs on the host clock');
+      delete created[0].now;
+      assert.deepEqual(created, [
+        {
+          presentHz: 120,
+          skipBacklog: Infinity,
+          skipRule: 'backlog',
+          decodeWait: false,
+          receiveWait: false,
+          avoid: null
+        }
+      ]);
+      assert.equal(summary.presentHz, 120);
+      assert.equal(summary.skipBacklog, 'off');
+      assert.equal(summary.skipRule, 'backlog');
     });
+    const v = await fixture({units: pairedUnits(6)});
+    const vsync = [];
+    const vsyncFake = staggeredFake(v.events);
+    v.options.createStaggered = options => {
+      vsync.push(options);
+      return vsyncFake();
+    };
+    v.options.args.push(
+      '--staggered',
+      '--present-hz',
+      '120',
+      '--skip-rule',
+      'vsync',
+      '--decode-wait',
+      '--receive-wait'
+    );
+    await exercise(v, async () => {
+      const summary = await run(v.options);
+      delete vsync[0]?.now;
+      assert.deepEqual(vsync, [
+        {
+          presentHz: 120,
+          skipBacklog: 1,
+          skipRule: 'vsync',
+          decodeWait: true,
+          receiveWait: true,
+          avoid: null
+        }
+      ]);
+      assert.equal(summary.skipRule, 'vsync');
+      assert.equal(summary.decodeWait, true);
+      assert.equal(summary.receiveWait, true);
+    });
+    for (const [extra, message] of [
+      [['--staggered', '--present-hz', '90'], /--present-hz takes 60 or 120/],
+      [['--staggered', '--skip-backlog', '-1'], /--skip-backlog takes/],
+      [['--staggered', '--skip-rule', 'newest'], /--skip-rule takes backlog or vsync/],
+      [['--staggered', '--skip-rule', 'vsync', '--skip-backlog', 'off'], /needs a --skip-backlog/],
+      [['--skip-rule', 'vsync'], /apply to --staggered/],
+      [['--staggered', '--decode-wait'], /--decode-wait needs --skip-rule vsync/],
+      [['--present-hz', '120'], /apply to --staggered/]
+    ]) {
+      const g = await fixture();
+      await exercise(g, async () => {
+        g.options.args.push(...extra);
+        await assert.rejects(run(g.options), message);
+      });
+    }
   }
-});
+);

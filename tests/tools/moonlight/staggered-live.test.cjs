@@ -2,7 +2,12 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 /** The staggered counts without the pacer's read counters, which the fake device does not pin. */
-const withoutPacer = ({pacer, ...counts}) => (assert.equal(typeof pacer.reads, 'number'), counts);
+// The pacer and the exchange bins carry run timing, so count comparisons leave them out.
+const withoutPacer = ({pacer, exchanges, ...counts}) => (
+  assert.equal(typeof pacer.reads, 'number'),
+  assert.equal(typeof exchanges.status.ms, 'number'),
+  counts
+);
 const definitions = require('../../../hbl-moonlight/sdk/native/movie-functions.json');
 const registration =
   require('../../../hbl-moonlight/sdk/native/movie-event-functions.json').registerClientEvents;
@@ -631,7 +636,7 @@ test('without a backlog the vsync rule costs and presents like the T23 rule', as
   const legacy = await runRule('backlog');
   const vsync = await runRule('vsync');
   for (const requests of vsync.steady) assert.deepEqual(requests, ['read', 'gate']);
-  assert.deepEqual(vsync.counts, legacy.counts);
+  assert.deepEqual(withoutPacer(vsync.counts), withoutPacer(legacy.counts));
   assert.equal(vsync.applied, 24);
 });
 
@@ -660,13 +665,14 @@ test('the vsync rule waits for the pending publication when no surface is free',
   await live.stop();
 });
 
-async function decodeBound(decodeWait, {decodeMs = 8.5, frames = 60} = {}) {
+async function decodeBound(decodeWait, {decodeMs = 8.5, frames = 60, avoid = null} = {}) {
   const clock = vsyncClock();
   const device = simulatedDevice({clock, decodeMs});
   const live = await liveOn(device, clockPause(clock), clock, {
     skipRule: 'vsync',
     skipBacklog: 1,
-    decodeWait
+    decodeWait,
+    avoid
   });
   const requests = [];
   for (let sequence = 1; sequence <= frames; sequence++) {
@@ -698,11 +704,41 @@ test('the decode wait sleeps through a pending acquire instead of rereading', as
   );
 });
 
+test('status reads are binned against the predicted decode-done they aim at', async () => {
+  const {counts} = await decodeBound(true);
+  const status = counts.exchanges.status;
+  const gate = counts.exchanges.gate;
+  assert.equal(status.exchanges + gate.exchanges > 100, true, 'every exchange is counted');
+  assert.equal(+(status.ms / status.exchanges).toFixed(2), 2.24, 'the sim charges readMs a read');
+  const bins = status.offsets.decodeDone;
+  const total = Object.values(bins).reduce((sum, bin) => sum + bin.n, 0);
+  const aimed = (bins['-3']?.n ?? 0) + (bins['-2']?.n ?? 0);
+  assert.ok(aimed > total / 2, `${aimed} of ${total} reads start a readMs before decode-done`);
+  assert.ok(status.offsets.gate && status.offsets.send, 'gate and send offsets are always binned');
+  assert.equal(status.offsets.receiveDone, undefined, 'no receive predictor, no receive bins');
+});
+
+test('the avoid window moves status reads past the predicted decode-done', async () => {
+  const plain = await decodeBound(true);
+  const avoided = await decodeBound(true, {avoid: {beforeMs: 3, afterMs: 2}});
+  const bins = avoided.counts.exchanges.status.offsets.decodeDone;
+  const inside = ['-3', '-2', '-1', '0', '1'].reduce((sum, bin) => sum + (bins[bin]?.n ?? 0), 0);
+  assert.equal(inside, 0, JSON.stringify(bins));
+  assert.ok(bins['2']?.n > 0, 'reads land right after the window');
+  assert.equal(avoided.counts.decoded, plain.counts.decoded);
+  assert.ok(
+    Math.abs(avoided.counts.presented - plain.counts.presented) <= 2,
+    `${avoided.counts.presented}/${plain.counts.presented} presented`
+  );
+  const off = await decodeBound(true, {avoid: null});
+  assert.deepEqual(off.requests, plain.requests, 'no window changes nothing');
+});
+
 test('the decode wait changes nothing while decode keeps up', async () => {
   const reread = await decodeBound(false, {decodeMs: 0});
   const waited = await decodeBound(true, {decodeMs: 0});
   assert.deepEqual(waited.requests, reread.requests);
-  assert.deepEqual(waited.counts, reread.counts);
+  assert.deepEqual(withoutPacer(waited.counts), withoutPacer(reread.counts));
   assert.equal(waited.elapsed, reread.elapsed);
 });
 
@@ -755,6 +791,6 @@ test('the receive wait changes nothing while the receive keeps up', async () => 
   const reread = await receiveBound(false, {receiveMs: 0});
   const waited = await receiveBound(true, {receiveMs: 0});
   assert.deepEqual(waited.requests, reread.requests);
-  assert.deepEqual(waited.counts, reread.counts);
+  assert.deepEqual(withoutPacer(waited.counts), withoutPacer(reread.counts));
   assert.equal(waited.elapsed, reread.elapsed);
 });
