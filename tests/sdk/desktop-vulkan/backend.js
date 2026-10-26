@@ -4,7 +4,7 @@
  * all under backends/desktop.vulkan/. supports() checks that section and every file it names
  * before any Vulkan work; load() runs the package for a fixed frame script through run.cjs and
  * returns the run record. It presents offscreen only (no window, no swapchain) and provides no
- * audio. docs/hb-package.md in hbl-platform fixes the contract.
+ * audio. hbl-platform's README package spec fixes the contract.
  */
 import fs from 'node:fs';
 import path from 'node:path';
