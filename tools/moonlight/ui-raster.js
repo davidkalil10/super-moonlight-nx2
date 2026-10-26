@@ -66,7 +66,7 @@ function createRaster({spawnProcess = spawn} = {}) {
      * @param {'left' | 'center' | 'right'} [align]
      */
     text: (text, size, width, align = 'left') => paint({kind: 'text', text, size, width, align}, 1),
-    /** A cover PNG fitted inside a width x height RGBA8 tile. */
+    /** A cover PNG fitted inside a width x height RGBA8 tile; 0 x 0 when the file is not usable. */
     tile: (png, width, height) => paint({kind: 'tile', png, width, height}, 4),
     /** An RGBA8 tile with the name's initials on a hue derived from the name. */
     letters: (text, width, height) => paint({kind: 'letters', text, width, height}, 4),

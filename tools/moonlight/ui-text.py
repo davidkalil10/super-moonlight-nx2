@@ -25,6 +25,7 @@ FONTS = [
 ]
 FONT_PATH = next(f for f in FONTS if Path(f).exists())
 MAX_STRIP_HEIGHT = 96
+MAX_COVER_SIDE = 4096
 ELLIPSIS = "…"
 fonts = {}
 
@@ -65,9 +66,11 @@ def tile(request):
     out = Image.new("RGBA", (width, height), (0, 0, 0, 0))
     try:
         with Image.open(request["png"]) as source:
+            if source.format != "PNG" or max(source.size) > MAX_COVER_SIDE:
+                return None
             cover = ImageOps.contain(source.convert("RGBA"), (width, height), Image.LANCZOS)
-    except (OSError, ValueError):
-        return out
+    except (OSError, ValueError, Image.DecompressionBombError):
+        return None
     out.paste(cover, ((width - cover.width) // 2, (height - cover.height) // 2))
     return out
 
@@ -99,8 +102,11 @@ def main():
     for line in sys.stdin:
         request = json.loads(line)
         image = PAINTERS[request["kind"]](request)
-        out.write(struct.pack("<II", image.width, image.height))
-        out.write(image.tobytes())
+        if image is None:
+            out.write(struct.pack("<II", 0, 0))
+        else:
+            out.write(struct.pack("<II", image.width, image.height))
+            out.write(image.tobytes())
         out.flush()
 
 

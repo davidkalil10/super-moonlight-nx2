@@ -192,9 +192,11 @@ function createPages(raster) {
         h: GRID.cellHeight - 4,
         flags: current ? ITEM_FLAG.current : 0
       });
-      const tile =
-        covers.get(app.id) ??
+      const letters = () =>
         remember(tiles, app.name, () => raster.letters(app.name, COVER.width, COVER.height));
+      const tile = covers.has(app.id)
+        ? covers.get(app.id).then(painted => (painted.width ? painted : letters()), letters)
+        : letters();
       page.image(x + (GRID.cellWidth - COVER.width) / 2, y + 14, tile);
       page.text(
         x + 10,
