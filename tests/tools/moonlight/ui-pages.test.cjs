@@ -309,6 +309,19 @@ test('the streaming overlay, the quit question and the error page carry their it
     overlay.parsed.items.map(item => item.id),
     [ITEM.returnToApps, ITEM.quitHost]
   );
+  const [first] = overlay.parsed.items;
+  const under = overlay.parsed.texts.filter(
+    t =>
+      t.color === 0xff17191c &&
+      t.x <= first.x &&
+      t.x + t.w >= overlay.parsed.items[1].x + overlay.parsed.items[1].w
+  );
+  assert.ok(under.length >= 2, 'the heading and buttons sit on an opaque panel');
+  const covered = y => under.some(t => t.y <= y && y < t.y + t.h);
+  assert.ok(
+    [first.y, first.y + first.h / 2, first.y + first.h - 1].every(covered),
+    'the panel covers the buttons'
+  );
   const asked = await roundTrip(await pages.page(reduce(apps, command('y')).model));
   assert.deepEqual(
     asked.parsed.items.map(item => item.id),
