@@ -48,14 +48,18 @@ bool uiValid(uint base,uint epoch,uint sequence){
 }
 uint uiItemId(uint base,uint index){return uiWord(base+UI_ITEMS+index*8u);}
 uint uiItemFlags(uint base,uint index){return uiWord(base+UI_ITEMS+index*8u+5u);}
-// A new page keeps the cursor on the item with the same id, else goes to the page's home.
+// A new page keeps the cursor on the item with the same id, else goes to the page's home. A
+// page is current only when the shown page carries both its sequence and its epoch, so a new
+// service whose first sequence equals the stale uiApplied still applies.
 void uiApply(){
  uint sequence=uiWord(CONTROL_UI_SEQUENCE),epoch=uiWord(CONTROL_UI_EPOCH),page=uiWord(CONTROL_UI_PAGE);
- if(uiWord(CONTROL_UI_MAGIC)!=UI_MAGIC||sequence==0u||sequence==uiWord(CONTROL_UI_APPLIED)||page>1u)return;
+ if(uiWord(CONTROL_UI_MAGIC)!=UI_MAGIC||sequence==0u||page>1u)return;
+ uint applied=uiWord(CONTROL_UI_APPLIED),shown=uiShownBase();
+ bool sameEpoch=applied!=0u&&uiWord(shown+UI_HDR_EPOCH)==epoch;
+ if(sequence==applied&&sameEpoch)return;
  uint base=uiPageBase(page);
  if(!uiValid(base,epoch,sequence))return;
- uint applied=uiWord(CONTROL_UI_APPLIED),shown=uiShownBase(),cursor=uiWord(base+UI_HDR_HOME);
- bool sameEpoch=applied!=0u&&uiWord(shown+UI_HDR_EPOCH)==epoch;
+ uint cursor=uiWord(base+UI_HDR_HOME);
  if(sameEpoch){
   uint id=uiItemId(shown,min(uiWord(CONTROL_UI_CURSOR),UI_MAX_ITEMS-1u)),items=uiWord(base+UI_HDR_ITEMS);
   for(uint i=0u;i<items;i++)if(uiItemId(base,i)==id)cursor=i;
