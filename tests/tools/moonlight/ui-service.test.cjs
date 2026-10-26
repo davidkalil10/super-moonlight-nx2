@@ -140,6 +140,7 @@ async function setup(options = {}) {
     children,
     directory: '/run/dir',
     readHosts: () => HOSTS,
+    discoverHosts: async () => [],
     saveSettings: values => saved.push(values),
     settings: settings.defaults(),
     log: event => events.push(event),
@@ -486,4 +487,24 @@ test('nothing is published after the service detaches', async () => {
   await Promise.all([stopping, late]);
   assert.equal(console.word(UI.uiMagic), 0);
   assert.equal(console.writes.at(-1), UI.uiMagic, 'magic 0 is the last write');
+});
+
+test('mDNS hosts join the list after the manual ones and are saved once', async () => {
+  const written = [];
+  let found = [{name: 'rig', address: '192.168.8.245', port: 47989}];
+  const fixture = await setup({
+    discoverHosts: async () => found,
+    writeHosts: hosts => written.push(hosts)
+  });
+  const {console, service} = fixture;
+  await service.attach();
+  await until(() => fixture.events.some(event => event.event === 'discovered'), 'discovery');
+  assert.deepEqual(written, [], 'a host already listed changes nothing');
+  assert.equal(console.shown().items.length, 2);
+  found = [{name: 'Office PC', address: '10.0.0.7', port: 47989}];
+  console.press('y');
+  await service.poll();
+  await until(() => console.shown().items.length === 3, 'the new host on the page');
+  assert.deepEqual(written, [[...HOSTS, {name: 'Office PC', address: '10.0.0.7'}]]);
+  assert.equal(service.model().hosts[2].name, 'Office PC');
 });
