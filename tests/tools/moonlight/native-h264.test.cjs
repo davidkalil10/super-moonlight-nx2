@@ -1377,3 +1377,39 @@ test('--output-lag reaches the staggered scheduler and takes 1 or 2', {timeout: 
     });
   }
 });
+
+test(
+  'the staggered-worker started event names the latency flags that were on',
+  {timeout: 5000},
+  async () => {
+    const started = async args => {
+      const f = await fixture({units: pairedUnits(4)});
+      f.options.createStaggered = staggeredFake(f.events);
+      f.options.args.push('--staggered', ...args);
+      let event;
+      await exercise(f, async () => {
+        await run(f.options);
+        const events = (await fs.readFile(path.join(f.directory, 'logs', 'events.jsonl'), 'utf8'))
+          .trim()
+          .split('\n')
+          .map(JSON.parse);
+        event = events.find(entry => entry.event === 'staggered-worker');
+      });
+      return event;
+    };
+    const flagged = await started([
+      '--trim-backlog-ms',
+      '40',
+      '--gate-on-receive',
+      '--output-lag',
+      '1'
+    ]);
+    assert.equal(flagged.started, true);
+    assert.equal(flagged.trimBacklogMs, 40);
+    assert.equal(flagged.gateOnReceive, true);
+    assert.equal(flagged.outputLag, 1);
+    const plain = await started([]);
+    assert.equal(plain.started, true);
+    for (const key of ['trimBacklogMs', 'gateOnReceive', 'outputLag']) assert.ok(!(key in plain));
+  }
+);
