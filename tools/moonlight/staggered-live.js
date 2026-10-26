@@ -11,9 +11,10 @@
  * does not wait for a present. At most MAX_SKIPS outputs in a row are skipped this way.
  * trimBacklogMs (backlog rule only) skips one output the same way once the unit in hand has
  * been older than that, with another unit queued behind it, at TRIM_FRAMES gates in a row.
- * That drops a standing frame of delay the queued count cannot see. With nothing queued the age
- * is arrival phase and a trim cannot lower it. After a trim the next TRIM_FRAMES gates do not
- * count, so trims stay at most one per 2 * TRIM_FRAMES gates.
+ * That drops a standing delay at or below skipBacklog that the backlog skip leaves alone, so
+ * it needs a skipBacklog of at least 1. With nothing queued the age is arrival phase and a trim
+ * cannot lower it. After a trim the next TRIM_FRAMES gates do not count, so trims stay at most
+ * one per 2 * TRIM_FRAMES gates.
  *
  * skipRule 'vsync' instead keeps at most one publication pending: the newest output is
  * published once the previous publication is applied and the outputs in between go off
