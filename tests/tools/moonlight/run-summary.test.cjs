@@ -44,11 +44,19 @@ test('expectations parse strictly and score the summary', () => {
   for (const bad of ['fps', 'fps=', 'speed=3', 'fps=abc', ''])
     assert.throws(() => parseExpect(bad), /--expect/);
   const summary = summarize([row(30), row(30), row(30), row(28), row(30, {idr: 1})]);
-  assert.deepEqual(verdict(summary, {fps: 28}), {pass: true, failures: []});
+  assert.deepEqual(verdict(summary, {fps: 28, idr: 1}), {pass: true, failures: []});
   assert.deepEqual(verdict(summary, {fps: 30, idr: 0, requests: 10}), {
     pass: false,
     failures: ['fps 30', 'idr 0']
   });
+});
+
+test('a dropped frame or an IDR after the warmup fails unless the limits allow it', () => {
+  const rows = [row(30, {dropped: 9, idr: 2}), row(30), row(30), row(30), row(6, {dropped: 24, idr: 4}), row(30)];
+  const summary = summarize(rows);
+  assert.deepEqual(verdict(summary, {}), {pass: false, failures: ['dropped 0', 'idr 0']});
+  assert.deepEqual(verdict(summary, {dropped: 24, idr: 4}), {pass: true, failures: []});
+  assert.deepEqual(verdict(summarize(rows.slice(0, 4)), {}), {pass: true, failures: []});
 });
 
 test('a run with no steady rows fails', () => {
