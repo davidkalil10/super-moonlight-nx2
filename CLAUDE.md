@@ -1,20 +1,18 @@
 # hbl-moonlight
 
-The Moonlight streaming app and its host side, split out of HBLauncher (Phase 1 of
-the rewrite, `hbl-notes/team/REWRITE.md`). Runtime code only: tests, probes and
-research live in `moonlight-dev`.
+The Moonlight streaming app and its host side, split out of HBLauncher (Phase 1 of the
+rewrite, `hbl-notes/team/REWRITE.md`). Runtime code only: tests, probes and research live in
+`moonlight-dev`. README.md has the build, run, flags and the console/host contract.
 
 ## Layout
 
 Phase 1 keeps the original HBLauncher paths, so history and file names line up:
 
 - `apps/moonlight/`: the console app as an HB package (`manifest.json`, `assets/`,
-  `backends/hblauncher.gpu-app/`, `build.js`).
-- `tools/moonlight/`: the PC host (`live.js`, `native-h264.js`, staggered workers,
-  ring/HBV formats, `ui-page.js` for the console UI pages, `ui-service.js` and its `ui-*`
-  pieces for the console UI host, see `docs/moonlight/UI-SERVICE.md`) and `helper/`
-  (`hbmoonlight`, C, GPLv3 upstreams; `build.sh` builds the bench and checks only when
-  `moonlight-dev` sits beside this checkout, see `DEV_DIR` in its CMakeLists).
+  `backends/hblauncher.gpu-app/`, `build.js`, its own README).
+- `tools/moonlight/`: the PC host (`live.js`, `native-h264.js`, staggered and paired workers,
+  ring/HBV formats, `ui-*` for the console UI service) and `helper/` (`hbmoonlight`, C, GPLv3
+  upstreams).
 - `sdk/native/*-functions.json`: the native symbols only Moonlight uses.
 
 ## Sibling checkouts
@@ -23,10 +21,47 @@ Code outside this repo is required by relative path from sibling checkouts:
 
 ```
 <dir>/hbl-moonlight
-<dir>/hbl-platform     bridge, sdk/host, sdk/native, sdk/build.js
+<dir>/hbl-platform     bridge, sdk/host, sdk/native, sdk/build.js, runs/
 ```
 
-The paths become package imports with the ESM switch in Phase 2.
+Package `exports` replace the relative paths later in Phase 2.
+
+## Build and test
+
+- Helper: `tools/moonlight/helper/build.sh [BUILD]`; the binary is `BUILD/build/hbmoonlight`.
+  The bench, encoder check and input test build only when `moonlight-dev` sits beside this
+  checkout (`DEV_DIR` in `helper/CMakeLists.txt`).
+- Package: `node apps/moonlight/build.js`. It regenerates `hbv.glsl`, `hbv2-tables.glsl`,
+  `ring.glsl`, `state.bin` and `memory.bin`; `assets.py` regenerates the text atlas and
+  `text.glsl`. Never edit those by hand. Without glslangValidator use
+  `GLSLANG=tools/moonlight/glslang-shim.sh` (glslc); the committed SPIR-V is that build, byte
+  for byte.
+- Tests: none here. Run `npm test` and `npm run typecheck` in `moonlight-dev`, plus
+  `node apps/moonlight/check.cjs` there for shader changes.
+
+## Decisions
+
+- PC decode, shader display. Sunshine's stream is terminated on the PC by moonlight-common-c;
+  the console only runs fixed native call chains and GPU shaders, so no decoder logic runs on
+  console CPU. Two routes: HBV1/HBV2 re-encoded on the PC into the ring, or raw H.264 fed to
+  the console's `movie::Decoder` (nnCompat) writing NV12 straight into the ring's surfaces.
+- The bridge is the bottleneck, not the GPU: cost is per exchange, not per byte, so formats
+  fill whole 32 KiB exchanges and the senders are latest-wins (never queue frames, drop on a
+  stall).
+- One source of truth per layout: `ring.js` generates `ring.glsl` and the helper's
+  `console-layout.h`; `hbv.js`/`hbv2.js` generate their GLSL and C tables; `ui-page.js` mirrors
+  the shader's page validator. Change the JS and regenerate, never the outputs.
+- HBV2 uses an integer IDCT shared by JS, C and GLSL; a float transform drifts across P frames.
+- The console UI commands go through plain words in the control page, not the SDK mailbox: a
+  pending mailbox request stops the native worker at the next 60-frame boundary and would hitch
+  every press.
+- The UI block has no status word (frozen 2026-10-26, U2), so quit results show as the app grid
+  subtitle.
+- 120 fps content is impossible inside the SmileBASIC 4 process. The 120 Hz display mode can be
+  selected (native vsync 120/s), but SmileBASIC is a Switch 1 title under nnCompat, whose
+  present descriptor packs interval 1 as 1/60 s; title VI stays at 60/s and filmed content
+  changes on the 60 Hz grid (hbl-notes `team/research/120hz-result.md`). Nothing inside that
+  process can present faster, an NRO included.
 
 ## Pacing results (2026-10-26, session DjIU1L, 60 Hz panel, m5 quiet)
 
@@ -40,6 +75,20 @@ Requests per frame fell by about two thirds, but bridge ms/frame stayed flat; de
 Status and gate exchanges became 2.7x slower (2.5 to 7 ms) as they grew sparser; the flat gap probe points to contention while streaming, not idle wake-up, leaving roughly 40 fps at 120 present.
 `summary.staggered.exchanges` bins every status read and gate write by its start against the last gate, the last send and the predicted decode-done and receive-done (1 ms bins, host clock); `--avoid-window before-after` then keeps status reads out of that span around a predicted event. The window is chosen from a live run's bins, not guessed.
 The pacer stayed at 8.33 ms and did not learn the panel's 16.67 ms apply grid in 40 s; that remains open.
+
+## Gotchas
+
+- `live.js --codec` defaults to `hbv1`; pass `--codec hbv2` or `h264`.
+- `live.js` refuses an app with private storage below `ring.MEMORY_BYTES`: the console runs an
+  older package. Reopening the app reloads `memory.bin`, which wipes the ring.
+- The h264 route needs a launcher session from the current revision: it records the host
+  address the console connects back to over native TCP.
+- A console worker that may still run is never reused or freed; a timed-out join leaks it and
+  latches the decoder failed. A paired loop that fails to stop blocks new loops until
+  SmileBASIC restarts.
+- `apps/moonlight/README.md` is not part of the package fingerprint (manifest bytes, listed
+  assets and entry sources only), but `moonlight-dev/apps/moonlight/package.test.cjs` pins the
+  shader, state, data, memory and icon hashes.
 
 ## Rules
 
