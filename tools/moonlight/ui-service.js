@@ -98,6 +98,7 @@ function createChildren({
  * @param {() => import('./ui-model.js').Host[]} options.readHosts
  * @param {(settings: object) => void} options.saveSettings
  * @param {object} options.settings
+ * @param {string | null} [options.coversDir] Where the helper caches box art; null for letter tiles only.
  * @param {(event: object) => void} [options.log]
  * @param {number} [options.epoch]
  * @param {() => string | null} [options.activeApp] The app the console runs, null when unknown.
@@ -112,6 +113,7 @@ function createService({
   readHosts,
   saveSettings,
   settings,
+  coversDir = null,
   log = () => {},
   epoch = Math.floor(Date.now() / 1000) >>> 0,
   activeApp = () => readActiveApp(directory),
@@ -196,10 +198,10 @@ function createService({
   }
 
   /** A helper call bounded in time; a hung helper is killed and reported as such. */
-  async function helper(args) {
+  async function helper(args, limit = helperLimit) {
     const child = children.helper(args);
     current = child;
-    const timer = setTimeout(() => child.cancel('SIGKILL'), helperLimit);
+    const timer = setTimeout(() => child.cancel('SIGKILL'), limit);
     const result = await child.exited;
     clearTimeout(timer);
     if (current === child) current = null;
@@ -218,16 +220,14 @@ function createService({
   }
 
   async function list(host, token) {
-    const result = await busy(() => helper(['list', host.address]));
+    const covers = coversDir ? ['--covers', coversDir] : [];
+    const result = await busy(() => helper(['list', host.address, ...covers]));
     if (token !== generation) return;
     if (result.code === 0) {
       const listed = parseList(result.out);
       let message = null;
-      if (quitResult === 'cancelled')
-        message =
-          listed.currentGame === 0
-            ? 'Quit confirmed'
-            : 'Quit failed: the host game is still running';
+      if (quitResult && listed.currentGame === 0) message = 'Quit confirmed';
+      else if (quitResult === 'cancelled') message = 'Quit failed: the host game is still running';
       else if (quitResult) message = quitResult;
       quitResult = null;
       await dispatch({type: 'listed', ...listed, message});
@@ -311,7 +311,7 @@ function createService({
 
   async function quit(host, token) {
     await stopStream();
-    const result = await busy(() => helper(['quit', host.address]));
+    const result = await busy(() => helper(['quit', host.address], helperLimit * 3));
     if (token !== generation) return;
     const cancelled = result.code === 0;
     log({event: 'quit', host: host.address, cancelled, code: result.code, signal: result.signal});
@@ -502,6 +502,11 @@ async function main() {
   );
   saveHosts(hosts, hostList);
   const settingsFile = uiSettings.settingsFile();
+  const coversDir = path.join(
+    process.env.XDG_CACHE_HOME || path.join(os.homedir(), '.cache'),
+    'hblauncher/moonlight/covers'
+  );
+  fs.mkdirSync(coversDir, {recursive: true});
   const run = openRun(directory, rpc);
   const raster = createRaster();
   const service = createService({
@@ -513,6 +518,7 @@ async function main() {
     readHosts: () => seedHosts(loadHosts(hosts)),
     saveSettings: settings => uiSettings.save(settingsFile, settings),
     settings: uiSettings.load(settingsFile),
+    coversDir,
     log: run.log
   });
   const stop = () => service.stop();

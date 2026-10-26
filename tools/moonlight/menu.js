@@ -93,7 +93,11 @@ function parseList(stdout) {
   const parsed = JSON.parse(line);
   return {
     currentGame: parsed.currentGame || 0,
-    apps: (parsed.apps || []).map(a => ({id: a.id, name: a.name}))
+    apps: (parsed.apps || []).map(a => ({
+      id: a.id,
+      name: a.name,
+      ...(typeof a.cover === 'string' ? {cover: a.cover} : {})
+    }))
   };
 }
 
