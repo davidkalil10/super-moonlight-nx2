@@ -81,3 +81,45 @@ test('staggered rows report decoded fps, skipped presents and the deepest queue'
     failures: ['queued 2']
   });
 });
+
+test('rows with access-unit timing are weighted by units, and rows without it still summarise', () => {
+  const timed = (presented, au) => row(presented, {au});
+  const summary = summarize(
+    [
+      row(30),
+      timed(60, {
+        units: 60,
+        gated: 60,
+        waitMs: 20,
+        maxWaitMs: 31,
+        gateAgeMs: 18,
+        inHand: 1,
+        maxInHand: 2
+      }),
+      timed(60, {
+        units: 20,
+        gated: 20,
+        waitMs: 40,
+        maxWaitMs: 52.5,
+        gateAgeMs: 38,
+        inHand: 2,
+        maxInHand: 3
+      }),
+      row(60)
+    ],
+    {warmup: 1}
+  );
+  assert.deepEqual(summary.au, {
+    units: 80,
+    gated: 80,
+    waitMs: 25,
+    maxWaitMs: 52.5,
+    gateAgeMs: 23,
+    inHand: 1.3,
+    maxInHand: 3
+  });
+  const old = summarize([row(30), row(30), row(30), row(30)]);
+  assert.equal(old.au, undefined);
+  assert.equal(old.fps, 30);
+  assert.deepEqual(verdict(old, {}), {pass: true, failures: []});
+});

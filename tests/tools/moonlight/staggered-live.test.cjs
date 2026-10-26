@@ -794,3 +794,36 @@ test('the receive wait changes nothing while the receive keeps up', async () => 
   assert.deepEqual(withoutPacer(waited.counts), withoutPacer(reread.counts));
   assert.equal(waited.elapsed, reread.elapsed);
 });
+
+test('push reports its gate write and its send on the scheduler clock', async () => {
+  const clock = vsyncClock();
+  const device = simulatedDevice({clock});
+  const live = await liveOn(device, clockPause(clock), clock);
+  const times = [];
+  for (let sequence = 1; sequence <= 12; sequence++) {
+    const unit = unitAt(sequence);
+    device.pts.set(sequence, BigInt(unit.pts));
+    const seen = {sequence};
+    await live.push(unit, {
+      sink: device.sink,
+      onGate: at => {
+        seen.gate = at;
+        seen.reads = device.requests.filter(item => item === 'read').length;
+      },
+      onSent: at => {
+        seen.sent = at;
+      }
+    });
+    times.push(seen);
+  }
+  assert.equal(times[0].gate, undefined, 'the first unit starts the workers without a gate');
+  for (const seen of times.slice(1)) {
+    assert.ok(seen.gate <= seen.sent, `unit ${seen.sequence} sent before its gate`);
+    assert.ok(seen.reads > 0);
+  }
+  for (let index = 1; index < times.length; index++)
+    assert.ok(times[index].sent > times[index - 1].sent || index < 3);
+  assert.equal(times.at(-1).sent, clock.now);
+  await live.finish({sink: device.sink});
+  await live.stop();
+});

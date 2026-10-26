@@ -139,3 +139,25 @@ test('parameter sets contain bare NAL payloads for the native H.264 configuratio
   assert.equal(sets.pps.toString('hex'), '68ee3c80');
   assert.deepEqual(parameterSets(Buffer.from('00000165abcd', 'hex')), {});
 });
+
+test('units carry their arrival time only when the reader has a clock', async () => {
+  let time = 40;
+  const pipe = new PassThrough();
+  const reader = new AccessUnits(pipe, {now: () => (time += 10)});
+  reader.announce(metadata(0, 2));
+  reader.announce(metadata(1, 2));
+  pipe.end(Buffer.from([1, 2, 3, 4]));
+  reader.endMetadata();
+  const units = [];
+  for await (const unit of reader) units.push(unit);
+  assert.deepEqual(
+    units.map(unit => unit.arrivedAt),
+    [50, 60]
+  );
+  const plain = new PassThrough();
+  const untimed = new AccessUnits(plain);
+  untimed.announce(metadata(0, 1));
+  plain.end(Buffer.from([1]));
+  untimed.endMetadata();
+  for await (const unit of untimed) assert.equal('arrivedAt' in unit, false);
+});

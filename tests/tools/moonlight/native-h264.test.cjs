@@ -9,7 +9,9 @@ const {PassThrough} = require('node:stream');
 const {
   run,
   createIdrRequester,
-  countsSince
+  countsSince,
+  auTiming,
+  withInputStage
 } = require('../../../hbl-moonlight/tools/moonlight/native-h264.js');
 
 const accessUnit = Buffer.from('0000016742001eab00000168ce0100000165abcd', 'hex');
@@ -19,6 +21,47 @@ test('stats rows report staggered waits since the previous row', () => {
   assert.deepEqual(countsSince({receive: 7, applied: 2}, {receive: 4, applied: 2}), {receive: 3});
   assert.deepEqual(countsSince({slot: 1}, {}), {slot: 1});
   assert.deepEqual(countsSince({}, {}), {});
+});
+
+test('access-unit timing reports the wait to send, the age at gate and the units in hand', () => {
+  assert.deepEqual(
+    auTiming([
+      {arrivedAt: 100, gatedAt: null, sentAt: 103, inHand: null},
+      {arrivedAt: 110, gatedAt: 130, sentAt: 132.5, inHand: 1},
+      {arrivedAt: 120, gatedAt: 150, sentAt: 151, inHand: 3}
+    ]),
+    {units: 3, gated: 2, waitMs: 18.8, maxWaitMs: 31, gateAgeMs: 25, inHand: 2, maxInHand: 3}
+  );
+  assert.deepEqual(auTiming([]), {
+    units: 0,
+    gated: 0,
+    waitMs: null,
+    maxWaitMs: null,
+    gateAgeMs: null,
+    inHand: null,
+    maxInHand: null
+  });
+});
+
+test('the input feeder counts land in bridgeByStage, not in the row totals', () => {
+  const counts = {
+    exchanges: 10,
+    bridgeMs: 20,
+    bridgeByStage: {read: {exchanges: 10, bridgeMs: 20}}
+  };
+  assert.deepEqual(withInputStage(counts, {exchanges: 120, bridgeMs: 240.4}), {
+    exchanges: 10,
+    bridgeMs: 20,
+    bridgeByStage: {read: {exchanges: 10, bridgeMs: 20}, input: {exchanges: 120, bridgeMs: 240}}
+  });
+  assert.deepEqual(
+    withInputStage({exchanges: 0, bridgeMs: 0, bridgeByStage: {}}, {exchanges: 0, bridgeMs: 0}),
+    {
+      exchanges: 0,
+      bridgeMs: 0,
+      bridgeByStage: {}
+    }
+  );
 });
 
 test('backlog IDR requests recover within 100 ms and coalesce dropped frames', () => {
@@ -1103,3 +1146,122 @@ test(
     }
   }
 );
+
+function timedStaggeredFake(events, arrivals) {
+  const fake = staggeredFake(events)();
+  return () => ({
+    ...fake,
+    async push(unit, hooks) {
+      arrivals.push(unit.arrivedAt);
+      const gated = fake.pending;
+      if (gated) hooks.onGate(unit.arrivedAt + 10);
+      await fake.push(unit, hooks);
+      await new Promise(resolve => setTimeout(resolve, 15));
+      hooks.onSent(unit.arrivedAt + 12);
+    },
+    async finish(hooks) {
+      await new Promise(resolve => setTimeout(resolve, 50));
+      return fake.finish(hooks);
+    },
+    get pending() {
+      return fake.pending;
+    }
+  });
+}
+
+test(
+  'staggered stats rows time each unit from arrival and count the feeder reads as input',
+  {timeout: 5000},
+  async () => {
+    const f = await fixture({units: pairedUnits(6)});
+    const arrivals = [];
+    f.options.createStaggered = timedStaggeredFake(f.events, arrivals);
+    f.options.now = () => 1000;
+    f.options.statsMs = 10;
+    const spawnProcess = f.options.spawnProcess;
+    const feeders = [];
+    f.options.spawnProcess = (command, args, spawnOptions) => {
+      const child = spawnProcess(command, args, spawnOptions);
+      if (path.basename(args[0] ?? '') === 'input-feeder.js') {
+        feeders.push({args, stdio: spawnOptions.stdio});
+        child.stdio[3] = new PassThrough();
+        child.stdio[3].write(JSON.stringify({exchanges: 4, bridgeMs: 7}) + '\n');
+      }
+      return child;
+    };
+    f.options.args.push('--staggered', '--queue', '16', '--warmup', '0');
+    await exercise(f, async () => {
+      const summary = await run(f.options);
+      assert.deepEqual(arrivals, [1000, 1000, 1000, 1000, 1000]);
+      assert.deepEqual(feeders[0].args.slice(-4), ['--hz', '60', '--counts-fd', '3']);
+      assert.equal(feeders[0].stdio[3], 'pipe');
+      assert.equal(summary.au.units, 5);
+      assert.equal(summary.au.gated, 4);
+      assert.equal(summary.au.waitMs, 12);
+      assert.equal(summary.au.maxWaitMs, 12);
+      assert.equal(summary.au.gateAgeMs, 10);
+      assert.ok(summary.au.maxInHand >= 1);
+      assert.deepEqual(Object.keys(summary.stages.input), [
+        'requestsPerFrame',
+        'bridgeMsPerFrame',
+        'wallMsPerFrame',
+        'waitMsPerFrame'
+      ]);
+      assert.equal(summary.stages.input.requestsPerFrame, +(4 / summary.presented).toFixed(2));
+      const rows = (await fs.readFile(path.join(f.directory, 'logs', 'stats.jsonl'), 'utf8'))
+        .trim()
+        .split('\n')
+        .map(JSON.parse);
+      const fed = rows.find(row => row.bridgeByStage.input);
+      assert.deepEqual(fed.bridgeByStage.input, {exchanges: 4, bridgeMs: 7});
+      assert.equal(fed.exchanges, 0, 'the feeder reads stay out of the video exchange total');
+    });
+  }
+);
+
+test('the default path rows carry no access-unit timing', {timeout: 5000}, async () => {
+  const f = await fixture({units: pairedUnits(3)});
+  f.options.statsMs = 5;
+  f.options.args.push('--warmup', '0');
+  f.options.createDecoder = (create => async config => {
+    const decoder = await create(config);
+    return {
+      ...decoder,
+      async finishPersistent(destination) {
+        await new Promise(resolve => setTimeout(resolve, 20));
+        return decoder.finishPersistent(destination);
+      }
+    };
+  })(f.options.createDecoder);
+  await exercise(f, async () => {
+    const summary = await run(f.options);
+    assert.ok(summary.seconds > 0);
+    assert.equal(summary.au, undefined);
+    assert.equal(summary.stages.input, undefined);
+  });
+});
+
+test('--input-hz 120 reaches the input feeder and the summary', {timeout: 5000}, async () => {
+  const f = await fixture();
+  const feeders = [];
+  const spawnProcess = f.options.spawnProcess;
+  f.options.spawnProcess = (command, args, spawnOptions) => {
+    if (path.basename(args[0] ?? '') === 'input-feeder.js') feeders.push(args);
+    return spawnProcess(command, args, spawnOptions);
+  };
+  f.options.args.push('--input-hz', '120');
+  await exercise(f, async () => {
+    const summary = await run(f.options);
+    assert.equal(feeders.length, 1);
+    assert.deepEqual(feeders[0].slice(feeders[0].indexOf('--hz'), feeders[0].indexOf('--hz') + 2), [
+      '--hz',
+      '120'
+    ]);
+    assert.equal(summary.inputHz, 120);
+  });
+  const g = await fixture();
+  await exercise(g, async () => {
+    g.options.args.push('--input-hz', '121');
+    await assert.rejects(run(g.options), /--input-hz takes 10 to 120/);
+  });
+});
