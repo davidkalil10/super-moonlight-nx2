@@ -38,6 +38,15 @@ test('R1 needs R0 first or an explicit ms', () => {
   });
 });
 
+test('R1 takes its ms from the passing R0 attempt', () => {
+  const failed = {rung: 'R0', pass: false, gateAgeMs: 40};
+  const passed = {rung: 'R0-retry', pass: true, gateAgeMs: 22};
+  assert.equal(ladder.controlFor([failed, passed]), passed);
+  assert.equal(ladder.controlFor([failed, {rung: 'R0-retry', pass: false, gateAgeMs: 30}]).gateAgeMs,
+    30);
+  assert.equal(ladder.controlFor([{rung: 'R0', pass: false, gateAgeMs: null}]), null);
+});
+
 test('a flag is on only where native-h264.js records it', () => {
   const started = {event: 'staggered-worker', started: true, trimBacklogMs: 30};
   const summary = {skipBacklog: 1, inputHz: 120, receiveWait: true};
