@@ -1418,3 +1418,37 @@ test(
     for (const key of ['trimBacklogMs', 'gateOnReceive', 'outputLag']) assert.ok(!(key in plain));
   }
 );
+
+test(
+  'an error on the feeder counts pipe is logged and the run goes on',
+  {timeout: 5000},
+  async () => {
+    const f = await fixture({units: pairedUnits(6)});
+    f.options.createStaggered = timedStaggeredFake(f.events, []);
+    f.options.statsMs = 10;
+    const spawnProcess = f.options.spawnProcess;
+    f.options.spawnProcess = (command, args, spawnOptions) => {
+      const child = spawnProcess(command, args, spawnOptions);
+      if (path.basename(args[0] ?? '') === 'input-feeder.js') {
+        child.stdio[3] = new PassThrough();
+        setImmediate(() => child.stdio[3].emit('error', Error('counts pipe broke')));
+      }
+      return child;
+    };
+    f.options.args.push('--staggered', '--queue', '16', '--warmup', '0');
+    await exercise(f, async () => {
+      const summary = await run(f.options);
+      assert.equal(summary.presented > 0, true);
+      const events = (await fs.readFile(path.join(f.directory, 'logs', 'events.jsonl'), 'utf8'))
+        .trim()
+        .split('\n')
+        .map(JSON.parse);
+      const failed = events.filter(event => event.event === 'input-counts-error');
+      assert.deepEqual(
+        failed.map(event => event.message),
+        ['counts pipe broke']
+      );
+      assert.ok(events.some(event => event.event === 'summary'));
+    });
+  }
+);
