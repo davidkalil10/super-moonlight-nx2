@@ -387,7 +387,8 @@ not change. Raw mode reproduced the input byte for byte (600 units, SPS first).
   pad and touch state to the helper's tagged stdin (INPUT.md).
 - `tools/moonlight/audio-stream.js`: helper PCM to the console AudioOut
   (AUDIO.md).
-- `tools/moonlight/menu.js`: the console menu (MENU.md).
+- `tools/moonlight/ui-service.js`: the console UI, with its host list in
+  `ui-hosts.js` (UI-SERVICE.md in hbl-moonlight).
 - `tools/moonlight/hbv.test.cjs`, `hbv2.test.cjs`: layout, bit extraction,
   torn-slot rejection, and a native-C cross-check that decodes bit-exactly.
 - `apps/moonlight/`: the app. `build.js` regenerates `shaders/hbv.glsl`,
