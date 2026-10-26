@@ -277,10 +277,10 @@ function createService({
         } catch {
           return log({event: 'stream-line', line});
         }
+        log({...event, event: 'stream-event', name: event.event});
         if (event.event === 'connected') dispatch({type: 'streamStarted'});
         else if (event.event === 'log' && event.message)
           dispatch({type: 'stage', message: event.message});
-        else if (event.event === 'error') log({event: 'stream-error', ...event});
       }
     );
     stream = child;
@@ -313,8 +313,11 @@ function createService({
     await stopStream();
     const result = await busy(() => helper(['quit', host.address]));
     if (token !== generation) return;
-    quitResult =
-      result.code === 0 ? 'cancelled' : 'Quit failed: ' + helperMessage(result, 'the host refused');
+    const cancelled = result.code === 0;
+    log({event: 'quit', host: host.address, cancelled, code: result.code, signal: result.signal});
+    quitResult = cancelled
+      ? 'cancelled'
+      : 'Quit failed: ' + helperMessage(result, 'the host refused');
     await dispatch({type: 'quitDone'});
   }
 
