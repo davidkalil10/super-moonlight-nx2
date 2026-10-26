@@ -12,6 +12,12 @@ the console's native movie API into NV12 surfaces. Audio, controller and touch
 remain enabled. Setup, DUT results and performance limits are documented in
 [Native H.264](../../../moonlight-dev/docs/moonlight/NATIVE-H264.md).
 
+The app is an HB package (`manifest.json`, see hbl-platform `docs/hb-package.md`):
+`assets/` holds the icon and text atlas, `src/` the vertex shader, and
+`backends/hblauncher.gpu-app/` the compute and fragment shaders with their includes, the
+SPIR-V and the state and memory images. Both shaders read the frame ring, so the package
+has no portable entry yet.
+
 Build and check from the project root:
 
 ```sh
@@ -20,8 +26,9 @@ node apps/moonlight/build.js           # needs glslangValidator and spirv-val
 node ../moonlight-dev/apps/moonlight/check.cjs [CLIP]  # desktop Vulkan decode check, bit-exact against hbv2.js
 ```
 
-`build.js` regenerates `shaders/hbv.glsl`, `shaders/hbv2-tables.glsl`,
-`shaders/ring.glsl` and `assets/memory.bin`; do not edit those by hand.
+`build.js` regenerates `hbv.glsl`, `hbv2-tables.glsl`, `ring.glsl`, `state.bin` and
+`memory.bin` under `backends/hblauncher.gpu-app/`, and `assets.py` the icon, the text atlas
+and `text.glsl`; do not edit those by hand.
 
 Without glslangValidator, build through `tools/moonlight/glslang-shim.sh`,
 which maps the `-V ... SRC -o OUT` call onto `glslc -Os --target-env=vulkan1.0`:
@@ -30,9 +37,8 @@ which maps the `-V ... SRC -o OUT` call onto `glslc -Os --target-env=vulkan1.0`:
 GLSLANG=tools/moonlight/glslang-shim.sh node apps/moonlight/build.js
 ```
 
-The committed `app.comp.spv` and `app.frag.spv` were built that way;
-`app.vert.spv` is still the glslangValidator build. Rebuild all three with
-glslangValidator when it is available.
+The committed SPIR-V under `backends/hblauncher.gpu-app/` is that build; rebuilding
+through the shim reproduces all three files byte for byte.
 
 Stream to a running app (the newest `runs/launcher-*` session):
 
