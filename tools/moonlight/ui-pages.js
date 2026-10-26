@@ -8,19 +8,29 @@ import {ITEM, APPS_PER_PAGE} from './ui-model.js';
 import {PAGE_FLAG, ITEM_FLAG, MAX_ITEMS, MAX_TEXTS, MAX_IMAGES} from './ui-page.js';
 import * as uiSettings from './ui-settings.js';
 
-/** Colours as the page carries them: RGBA8 packed 0xAABBGGRR. */
+/** The Horizon palette as the page carries it: RGBA8 packed 0xAABBGGRR. */
 const COLOR = {
-  ink: 0xfff5eee2,
-  muted: 0xffbeaf96,
-  accent: 0xffddf66f,
-  grey: 0xff82786e,
-  background: 0xff3a250e,
+  ink: 0xfff9fafa,
+  soft: 0xffd1d3d6,
+  muted: 0xff9ea2a8,
+  grey: 0xff6c7178,
+  accent: 0xfff8bd38,
+  running: 0xffacef86,
+  card: 0xff242529,
+  dim: 0xff1d1f23,
+  slot: 0xff3c4044,
+  background: 0xff17191c,
   clear: 0x00000000
 };
 const COVER = {width: 160, height: 90};
 const GRID = {x: 120, y: 200, columns: 5, cellWidth: 340, cellHeight: 190};
 const TITLE = {x: 120, y: 56, size: 64};
 const FOOTER = 1024;
+const SIDE = 96;
+const CHIP = {y: 64, height: 54, pad: 10, size: 26};
+const LEGEND = {y: 984, size: 26, height: 40};
+const CARDS = {y: 300, width: 840, height: 96, gapX: 48, gapY: 32, pad: 32};
+const LABEL = {size: 22, tracking: 22 * 0.08};
 const MAX_HOSTS = 20;
 /** Strips kept across pages, by text, size, width and alignment. */
 const CACHE_LIMIT = 512;
@@ -64,24 +74,47 @@ function createPages(raster) {
     const images = [];
     /** @type {Page['items']} */
     const items = [];
+    /** @param {number} x @param {number} y @param {number} color @param {() => Promise<Painted>} paint */
+    function strip(x, y, color, paint) {
+      texts.push(
+        paint().then(painted => ({
+          x,
+          y,
+          w: painted.width,
+          h: painted.height,
+          alpha: painted.bytes,
+          color
+        }))
+      );
+      return page;
+    }
     const page = {
       /**
        * @param {number} x @param {number} y @param {string} label @param {number} size
        * @param {number} width @param {number} [color] @param {'left' | 'center' | 'right'} [align]
+       * @param {{weight?: number, tracking?: number}} [style]
        */
-      text(x, y, label, size, width, color = COLOR.ink, align = 'left') {
-        const key = [label, size, width, align].join('\u0000');
-        texts.push(
-          remember(strips, key, () => raster.text(label, size, width, align)).then(strip => ({
-            x,
-            y,
-            w: strip.width,
-            h: strip.height,
-            alpha: strip.bytes,
-            color
-          }))
+      text(x, y, label, size, width, color = COLOR.ink, align = 'left', style = {}) {
+        const {weight = 600, tracking = 0} = style;
+        const key = [label, size, width, align, weight, tracking].join('\u0000');
+        return strip(x, y, color, () =>
+          remember(strips, key, () => raster.text(label, size, width, align, {weight, tracking}))
         );
-        return page;
+      },
+      /** A filled rectangle under the strips queued after it. */
+      solid(x, y, w, h, color) {
+        return strip(x, y, color, () =>
+          remember(strips, ['\u0001solid', w, h].join('\u0000'), () =>
+            Promise.resolve({width: w, height: h, bytes: Buffer.alloc(w * h, 255)})
+          )
+        );
+      },
+      /** Button hints, each key in a ring. @param {[string, string][]} keys */
+      legend(x, y, keys, color = COLOR.soft) {
+        const key = ['\u0001legend', JSON.stringify(keys)].join('\u0000');
+        return strip(x, y, color, () =>
+          remember(strips, key, () => raster.legend(keys, LEGEND.size, 1200))
+        );
       },
       /** @param {number} x @param {number} y @param {Promise<Painted>} tile */
       image(x, y, tile) {
@@ -248,21 +281,73 @@ function createPages(raster) {
 
   /** @param {Model} model */
   function settings(model) {
-    const page = framed('Settings', '◀ ▶  Change      B  Back      Y  Reset to defaults');
+    const page = compose({background: COLOR.background, cursorHome: 0});
+    let x = SIDE;
+    for (const [label, width, color] of [
+      [model.host?.name, 300, COLOR.ink],
+      ['Settings', 180, COLOR.muted]
+    ]) {
+      if (!label) continue;
+      page.solid(x, CHIP.y, width, CHIP.height, COLOR.card);
+      page.text(x, CHIP.y + CHIP.pad, label, CHIP.size, width, color, 'center');
+      x += width + 16;
+    }
+    page.text(
+      1920 - SIDE - 700,
+      CHIP.y + CHIP.pad,
+      'Applies to the next launch',
+      26,
+      700,
+      COLOR.muted,
+      'right'
+    );
     uiSettings.rows(model.settings).forEach((row, i) => {
-      const y = 180 + i * 80;
+      const x = SIDE + (i % 2) * (CARDS.width + CARDS.gapX),
+        y = CARDS.y + Math.floor(i / 2) * (CARDS.height + CARDS.gapY),
+        inner = CARDS.width - 2 * CARDS.pad;
       const flags =
         (row.adjustable ? ITEM_FLAG.adjustable : 0) | (row.greyed ? ITEM_FLAG.greyed : 0);
-      const color = row.greyed ? COLOR.grey : COLOR.ink;
-      page.item({id: ITEM.setting + i, x: 100, y, w: 1720, h: 68, flags});
-      page.text(140, y + 14, row.label, 34, 1000, color);
-      const value = row.adjustable
-        ? `◀  ${row.value}  ▶`
-        : row.greyed
-          ? `${row.value} · not wired yet`
-          : row.value;
-      page.text(1100, y + 14, value, 34, 680, row.greyed ? COLOR.grey : COLOR.accent, 'right');
+      page.item({id: ITEM.setting + i, x, y, w: CARDS.width, h: CARDS.height, flags});
+      page.solid(x, y, CARDS.width, CARDS.height, row.greyed ? COLOR.dim : COLOR.card);
+      page.text(
+        x + CARDS.pad,
+        y + 12,
+        row.label.toUpperCase(),
+        LABEL.size,
+        inner,
+        row.greyed ? COLOR.grey : COLOR.muted,
+        'left',
+        {tracking: LABEL.tracking}
+      );
+      if (row.greyed) {
+        page.text(x + CARDS.pad, y + 46, 'Not available yet', 28, inner, COLOR.grey);
+        return;
+      }
+      if (row.adjustable) {
+        page.text(x + CARDS.pad, y + 40, '‹', 40, 40, COLOR.grey, 'left', {weight: 700});
+        page.text(x + CARDS.pad + inner - 40, y + 40, '›', 40, 40, COLOR.grey, 'right', {
+          weight: 700
+        });
+      }
+      page.text(x + CARDS.pad + 48, y + 40, row.value, 40, inner - 96, COLOR.ink, 'center', {
+        weight: 700
+      });
     });
+    page.legend(SIDE, LEGEND.y, [
+      ['◂▸', 'Change'],
+      ['B', 'Back'],
+      ['Y', 'Reset']
+    ]);
+    page.text(
+      1920 - SIDE - 700,
+      LEGEND.y + 5,
+      '1080p60 is the reference shape',
+      24,
+      700,
+      COLOR.grey,
+      'right',
+      {weight: 500}
+    );
     return page.build();
   }
 
