@@ -101,6 +101,47 @@ test(
   }
 );
 
+test('weights, letter spacing, glyph fallback and the legend strip', {skip: !pil}, async () => {
+  const raster = createRaster();
+  try {
+    const [medium, bold] = await Promise.all([
+      raster.text('Settings', 40, 400, 'left', {weight: 500}),
+      raster.text('Settings', 40, 400, 'left', {weight: 700})
+    ]);
+    assert.ok(ink(bold.bytes) > ink(medium.bytes), 'a heavier weight leaves more ink');
+    const lastInk = strip => {
+      let last = 0;
+      strip.bytes.forEach((byte, i) => byte > 0 && (last = Math.max(last, i % strip.width)));
+      return last;
+    };
+    const [tight, spaced] = await Promise.all([
+      raster.text('FRAME RATE', 22, 600),
+      raster.text('FRAME RATE', 22, 600, 'left', {tracking: 4})
+    ]);
+    assert.ok(lastInk(spaced) > lastInk(tight) + 30, 'tracking widens the line');
+    const [arrow, box] = await Promise.all([
+      raster.text('\u25c0', 40, 100),
+      raster.text('\u0378', 40, 100)
+    ]);
+    assert.ok(ink(arrow.bytes) > 0, 'a glyph the UI font lacks still draws');
+    assert.notDeepEqual(arrow.bytes, box.bytes, 'and is not the missing-glyph box');
+    const legend = await raster.legend(
+      [
+        ['A', 'Launch'],
+        ['B', 'PCs']
+      ],
+      26,
+      800
+    );
+    assert.equal(legend.width, 800);
+    assert.ok(legend.height >= 36 && legend.height <= 96, 'legend height ' + legend.height);
+    assert.equal(lastInk(legend) < 400, true, 'two entries stay on the left');
+    assert.ok(ink(legend.bytes) > 500, 'rings and labels left ink');
+  } finally {
+    raster.close();
+  }
+});
+
 test('a dead rasteriser rejects what is queued', async () => {
   const {EventEmitter} = require('node:events');
   const {PassThrough} = require('node:stream');
