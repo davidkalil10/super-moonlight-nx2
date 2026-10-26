@@ -1,15 +1,35 @@
-// Moonlight PCM paced over a native TCP stream into the console socket audio worker.
+/**
+ * Moonlight PCM paced over a native TCP stream into the console socket audio worker.
+ *
+ * Incoming PCM is queued on the host and sent one chunk per chunk duration, on a clock of
+ * its own: when the queue runs dry a silent chunk goes out instead, so the console worker,
+ * which blocks in recv, always gets a steady stream. A queue that grows past maxPending
+ * drops its oldest whole chunks. With `tone`, a 500 Hz test tone replaces the input, which
+ * is still drained.
+ *
+ * The rpc is wrapped so a lost bridge is noticed: the console objects are then retained
+ * rather than closed, and the report asks for a SmileBASIC restart.
+ */
 import {ByteQueue} from './audio-stream.js';
 import {create as createNativeTransport} from './native-tcp.js';
 import {create as createAudioWorker} from './audio-socket-worker.js';
 
 const SAMPLE_RATE = 48000;
+/** One interleaved stereo s16 sample frame. */
 const FRAME_BYTES = 4;
+/** Offset of the right channel's sample within a frame. */
+const RIGHT_SAMPLE_OFFSET = 2;
+const SAMPLE_BYTES = 2;
+/** Two chunks are appended before playback starts. */
 const PRIMED = 2;
+const DEFAULT_BUFFER_BYTES = 7680;
 const HEALTH_MS = 1000;
 const MAX_PENDING_CHUNKS = 4;
 const TONE_HZ = 500;
+const TONE_AMPLITUDE = 8000;
+/** Errors that mean the bridge itself is gone, not just one call. */
 const BRIDGE_LOST = /disconnected|timed out|ECONN|EPIPE|socket hang up/i;
+/** The rpc methods that reach the console. */
 const RPC_METHODS = [
   'request',
   'call',
@@ -21,23 +41,68 @@ const RPC_METHODS = [
   'writeAndCall'
 ];
 
+/**
+ * @typedef {object} SourceOptions
+ * @property {any} rpc
+ * @property {string} [host] Host address the console connects back to; defaults to rpc.host.
+ * @property {number} [bufferBytes] Bytes per chunk.
+ * @property {boolean} [tone] Play a test tone instead of the input.
+ * @property {number} [maxPending] Queued bytes kept before the oldest chunks are dropped.
+ * @property {number} [healthMs] Interval of the worker health polls.
+ * @property {(options: {rpc: any, host: string}) => Promise<any>} [createTransport]
+ * @property {(options: {rpc: any, transport: any, bufferBytes: number}) => Promise<any>}
+ *   [createAudio]
+ * @property {() => number} [now] Clock in milliseconds.
+ * @property {(ms: number) => Promise<unknown>} [sleep]
+ * @property {(callback: () => void, ms: number) => any} [every]
+ * @property {(timer: any) => void} [cancel]
+ * @property {(error: Error) => void} [onError] Called once when playback fails.
+ */
+
+/**
+ * @typedef {object} SocketAudioSource
+ * @property {(stream: import('node:stream').Readable) => void} attach Feeds PCM from a stream.
+ * @property {() => void} halt Stops pacing and detaches the input.
+ * @property {() => Promise<object>} close Halts, releases the console objects and reports.
+ * @property {() => object} report The current counters.
+ */
+
+/**
+ * One chunk of a stereo sine tone, the same on both channels.
+ * @param {number} bytes
+ * @returns {Buffer}
+ */
 function toneChunk(bytes) {
   const chunk = Buffer.alloc(bytes);
   for (let frame = 0; frame < bytes / FRAME_BYTES; frame++) {
-    const sample = Math.round(8000 * Math.sin((2 * Math.PI * TONE_HZ * frame) / SAMPLE_RATE));
+    const sample = Math.round(
+      TONE_AMPLITUDE * Math.sin((2 * Math.PI * TONE_HZ * frame) / SAMPLE_RATE)
+    );
     chunk.writeInt16LE(sample, frame * FRAME_BYTES);
-    chunk.writeInt16LE(sample, frame * FRAME_BYTES + 2);
+    chunk.writeInt16LE(sample, frame * FRAME_BYTES + RIGHT_SAMPLE_OFFSET);
   }
   return chunk;
 }
 
+/**
+ * The largest absolute s16 sample in a chunk.
+ * @param {Buffer} chunk
+ * @returns {number}
+ */
 function peakOf(chunk) {
   let peak = 0;
-  for (let i = 0; i + 1 < chunk.length; i += 2)
-    peak = Math.max(peak, Math.abs(chunk.readInt16LE(i)));
+  for (let offset = 0; offset + 1 < chunk.length; offset += SAMPLE_BYTES)
+    peak = Math.max(peak, Math.abs(chunk.readInt16LE(offset)));
   return peak;
 }
 
+/**
+ * Wraps the rpc's console-facing methods so an error that means the bridge is gone sets
+ * state.bridgeLost.
+ * @param {any} rpc
+ * @param {{bridgeLost: boolean}} state
+ * @returns {any}
+ */
 function watched(rpc, state) {
   const device = {...rpc};
   for (const name of RPC_METHODS) {
@@ -54,10 +119,16 @@ function watched(rpc, state) {
   return device;
 }
 
+/**
+ * Opens the transport and socket audio worker, primes two silent chunks and starts pacing.
+ * A failed setup throws an error carrying the report.
+ * @param {SourceOptions} options
+ * @returns {Promise<SocketAudioSource>}
+ */
 async function create({
   rpc,
   host = rpc.host,
-  bufferBytes = 7680,
+  bufferBytes = DEFAULT_BUFFER_BYTES,
   tone = false,
   maxPending = MAX_PENDING_CHUNKS * bufferBytes,
   healthMs = HEALTH_MS,
@@ -94,6 +165,11 @@ async function create({
   let transport = null;
   let audio = null;
 
+  /**
+   * Stops the worker and closes the transport, or, when the worker or the bridge may still
+   * hold them, aborts the transport and keeps the console objects. Never throws; failures
+   * land in stats.error.
+   */
   async function release() {
     let failure = null;
     if (audio && !audio.retained) {
@@ -141,8 +217,10 @@ async function create({
   let failed = false;
   let polling = null;
   let closing = null;
+  /** @type {(value?: unknown) => void} */
   let wake = () => {};
 
+  /** @param {Error} error */
   function fail(error) {
     if (halted || failed) return;
     failed = true;
@@ -151,48 +229,68 @@ async function create({
     onError(error);
   }
 
+  /** Drops the oldest whole chunks once the queue holds more than maxPending bytes. */
+  function dropOverflow() {
+    if (queue.bytes > maxPending) {
+      const excess = queue.bytes - maxPending;
+      const wholeChunkBytes = Math.ceil(excess / bufferBytes) * bufferBytes;
+      const dropped = queue.dropOldest(Math.min(wholeChunkBytes, queue.bytes));
+      stats.droppedBytes += dropped;
+      stats.overruns += Math.round(dropped / bufferBytes) || 1;
+    }
+  }
+
+  /** @param {Buffer} chunk */
   function onData(chunk) {
     if (halted) return;
     fed = true;
     stats.receivedBytes += chunk.length;
     queue.push(chunk);
-    if (queue.bytes > maxPending) {
-      const drop = queue.bytes - maxPending;
-      const whole = Math.ceil(drop / bufferBytes) * bufferBytes;
-      const dropped = queue.dropOldest(Math.min(whole, queue.bytes));
-      stats.droppedBytes += dropped;
-      stats.overruns += Math.round(dropped / bufferBytes) || 1;
-    }
+    dropOverflow();
   }
   const onInputError = error => fail(error);
+
+  /**
+   * The next chunk to send: the tone, queued PCM, or silence when the queue is short. Counts
+   * an underrun when a fed input first runs dry.
+   * @returns {Buffer}
+   */
+  function nextChunk() {
+    if (toned) {
+      if (queue.bytes >= bufferBytes) queue.pull(bufferBytes);
+      return toned;
+    }
+    if (queue.bytes >= bufferBytes) {
+      underflowing = false;
+      return queue.pull(bufferBytes);
+    }
+    stats.silenceChunks++;
+    if (fed && !underflowing) stats.underruns++;
+    underflowing = fed;
+    return silence;
+  }
+
+  /** Sleeps until `ms` have passed or halt() wakes it. */
+  function pause(ms) {
+    return new Promise(resolve => {
+      wake = resolve;
+      sleep(ms).then(resolve);
+    });
+  }
 
   const pacing = (async () => {
     let due = now();
     while (!halted) {
       const wait = due - now();
       if (wait > 0) {
-        await new Promise(resolve => {
-          wake = resolve;
-          sleep(wait).then(resolve);
-        });
+        await pause(wait);
         continue;
       }
       if (now() - due > PRIMED * bufferMs) {
         stats.late++;
         due = now();
       }
-      let chunk = silence;
-      if (toned) {
-        chunk = toned;
-        if (queue.bytes >= bufferBytes) queue.pull(bufferBytes);
-      } else if (queue.bytes >= bufferBytes) {
-        chunk = queue.pull(bufferBytes);
-        underflowing = false;
-      } else {
-        stats.silenceChunks++;
-        if (fed && !underflowing) stats.underruns++;
-        underflowing = fed;
-      }
+      const chunk = nextChunk();
       await audio.send(chunk);
       stats.sent++;
       stats.peak = Math.max(stats.peak, peakOf(chunk));
@@ -214,6 +312,7 @@ async function create({
       });
   }, healthMs);
 
+  /** @param {import('node:stream').Readable} stream */
   function attach(stream) {
     if (input || halted) throw Error('Socket audio input is already attached');
     input = stream;
@@ -242,6 +341,7 @@ async function create({
     };
   }
 
+  /** Halts, waits for the pacer and any health poll, then releases. Idempotent. */
   function close() {
     closing ||= (async () => {
       halt();
