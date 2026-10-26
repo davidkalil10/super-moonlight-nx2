@@ -9,6 +9,8 @@ layout(location=0) out vec4 outColor;
 layout(set=0,binding=1,std430) readonly buffer PrivateMemory { uint words[]; } ring;
 uint hbvWord(uint index){ return ring.words[index]; }
 #include "hbv.glsl"
+uint uiWord(uint index){ return ring.words[index]; }
+#include "ui.glsl"
 
 float planeByte(uint offset){ return float((ring.words[offset>>2]>>((offset&3u)*8u))&255u); }
 
@@ -58,8 +60,11 @@ vec3 nativeSample(vec2 p){
 void main(){
  vec2 p=gl_FragCoord.xy;
  uint mode=ring.words[CONTROL_MODE];
+ bool page=uiShowsPage(),overlay=page&&(ring.words[uiShownBase()+UI_HDR_FLAGS]&UI_FLAG_OVERLAY)!=0u;
  vec3 color;
- if(mode==MODE_NATIVE){
+ if(page&&!overlay){
+  color=uiDraw(p,vec3(0),float(c.state.z));
+ }else if(mode==MODE_NATIVE){
   color=nativeSample(p);
  }else if(mode==MODE_HBV2){
   color=hbv2Sample(p);
@@ -72,5 +77,6 @@ void main(){
   color=mix(color,vec3(.84,.91,.96),text(p,vec2(960-TEXT_WAITING.z/2,560),TEXT_WAITING));
   color=mix(color,vec3(.60,.72,.80),text(p,vec2(960-TEXT_RETURN.z/2,660),TEXT_RETURN));
  }
+ if(overlay)color=uiDraw(p,color*.35,float(c.state.z));
  outColor=vec4(color*(1.0-c.transition.x),1);
 }

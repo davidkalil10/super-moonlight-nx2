@@ -7,6 +7,9 @@ layout(local_size_x=HBV2_LOCAL_SIZE) in;
 layout(set=0,binding=1,std430) coherent buffer PrivateMemory { uint words[]; } memory;
 #include "hbv2-tables.glsl"
 #include "hbv2.glsl"
+uint uiWord(uint index){return memory.words[index];}
+#define UI_COMPUTE
+#include "ui.glsl"
 uint nativeChecksum(uint sequence,uint index,uint width,uint height,uint stride,uint rows,uint color){
  uint checksum=2166136261u;
  checksum=(checksum^sequence)*16777619u;
@@ -24,6 +27,8 @@ void main(){
   c.transition.x=max(0.0,c.transition.x-1.0/15.0);
   if(hbConnected() && (held&(HB_PLUS|HB_MINUS))==(HB_PLUS|HB_MINUS))c.game.x++;else c.game.x=0u;
   if(c.game.x>=60u)hbExit();
+  uiApply();
+  uiInput();
   hbEndFrame();
  }
  if(gl_LocalInvocationIndex==0u){

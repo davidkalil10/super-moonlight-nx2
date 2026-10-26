@@ -79,6 +79,7 @@ const UI = {
   cmdValue: UI_BLOCK + 44,
   cmdPage: UI_BLOCK + 48,
   cmdEpoch: UI_BLOCK + 52,
+  uiShown: UI_BLOCK + 56,
   hostAck: UI_BLOCK + 64,
   hostBusy: UI_BLOCK + 68
 };

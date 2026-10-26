@@ -51,5 +51,6 @@ const uint CONTROL_CMD_ITEM = 12298u;
 const uint CONTROL_CMD_VALUE = 12299u;
 const uint CONTROL_CMD_PAGE = 12300u;
 const uint CONTROL_CMD_EPOCH = 12301u;
+const uint CONTROL_UI_SHOWN = 12302u;
 const uint CONTROL_HOST_ACK = 12304u;
 const uint CONTROL_HOST_BUSY = 12305u;

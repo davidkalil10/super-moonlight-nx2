@@ -30,6 +30,13 @@ control page, the HBV ring, three native frames and, since 1.1.0, two 4 MiB cons
 buffers the host UI service publishes into (`tools/moonlight/ui-page.js`; design in the team
 note `research/moonlight-ui-design.md`).
 
+The console UI (`ui.glsl`, included by `app.comp` and `app.frag`) draws the pages the host
+service publishes: text strips and images at the positions the host laid out, a cursor the
+console moves by geometry on the frame of the press, and one forwarded command per press
+(A/B/X/Y, left/right on an adjustable item, L+R held one second). A page replaces the video
+unless it is an overlay, which shows over the dimmed stream while raised. Plus and Minus held
+together still exit to HBLauncher from any screen.
+
 `build.js` regenerates `hbv.glsl`, `hbv2-tables.glsl`, `ring.glsl`, `state.bin` and
 `memory.bin` under `backends/hblauncher.gpu-app/`, and `assets.py` the icon, the text atlas
 and `text.glsl`; do not edit those by hand.
