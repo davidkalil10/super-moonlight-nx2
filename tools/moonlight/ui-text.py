@@ -63,8 +63,11 @@ def text_strip(request):
 def tile(request):
     width, height = int(request["width"]), int(request["height"])
     out = Image.new("RGBA", (width, height), (0, 0, 0, 0))
-    with Image.open(request["png"]) as source:
-        cover = ImageOps.contain(source.convert("RGBA"), (width, height), Image.LANCZOS)
+    try:
+        with Image.open(request["png"]) as source:
+            cover = ImageOps.contain(source.convert("RGBA"), (width, height), Image.LANCZOS)
+    except (OSError, ValueError):
+        return out
     out.paste(cover, ((width - cover.width) // 2, (height - cover.height) // 2))
     return out
 

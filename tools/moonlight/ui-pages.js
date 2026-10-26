@@ -170,11 +170,11 @@ function createPages(raster) {
     const start = model.appPage * APPS_PER_PAGE;
     const shown = model.apps.slice(start, start + APPS_PER_PAGE);
     const pages = Math.max(1, Math.ceil(model.apps.length / APPS_PER_PAGE));
-    const status = model.message ? model.message + ' · ' : '';
+    const note = model.message ? model.message + ' · ' : '';
     page.text(
       TITLE.x,
       140,
-      `${status}${host} · ${model.apps.length} apps` +
+      `${note}${host} · ${model.apps.length} apps` +
         (pages > 1 ? ` · page ${model.appPage + 1} of ${pages}` : ''),
       28,
       1400,
