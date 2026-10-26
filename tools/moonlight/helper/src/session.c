@@ -55,6 +55,10 @@ static bool key_directory(char *path, size_t size) {
   return make_directory(path);
 }
 
+bool session_key_directory(char *path, size_t size) {
+  return key_directory(path, size);
+}
+
 int session_connect(SERVER_DATA *server, char *host) {
   char keys[4096];
   if (!key_directory(keys, sizeof(keys)))

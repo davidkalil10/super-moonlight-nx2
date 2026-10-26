@@ -16,6 +16,7 @@
 
 #include <client.h>
 #include <errors.h>
+#include <http.h>
 
 #include <errno.h>
 #include <poll.h>
@@ -25,6 +26,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/random.h>
+#include <sys/stat.h>
+#include <uuid/uuid.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -76,7 +79,67 @@ static int pair(char *host, int timeout) {
   return 0;
 }
 
-static int list(char *host) {
+#define COVER_TIMEOUT 5
+#define QUIT_TIMEOUT 30
+
+static void cover_alarm(int signal) {}
+
+static bool read_unique_id(char *out, size_t size) {
+  char path[4096];
+  if (!session_key_directory(path, sizeof(path)))
+    return false;
+  strncat(path, "/uniqueid.dat", sizeof(path) - strlen(path) - 1);
+  FILE *file = fopen(path, "r");
+  if (!file)
+    return false;
+  size_t got = fread(out, 1, size - 1, file);
+  fclose(file);
+  out[got] = 0;
+  return got > 0;
+}
+
+/* Box art through /appasset, as Moonlight Qt fetches it, cached under DIRECTORY by host and
+ * app id. A slow host costs at most COVER_TIMEOUT seconds per cover, not the whole list. */
+static bool fetch_cover(SERVER_DATA *server, const char *unique_id, int app_id,
+                        const char *directory, char *path, size_t size) {
+  snprintf(path, size, "%s/%s-%d.png", directory, server->serverInfo.address, app_id);
+  if (access(path, R_OK) == 0)
+    return true;
+  uuid_t uuid;
+  char uuid_text[37];
+  uuid_generate_random(uuid);
+  uuid_unparse(uuid, uuid_text);
+  char url[1024];
+  snprintf(url, sizeof(url),
+           "https://%s:%u/appasset?uniqueid=%s&uuid=%s&appid=%d&AssetType=2&AssetIdx=0",
+           server->serverInfo.address, server->httpsPort, unique_id, uuid_text, app_id);
+  PHTTP_DATA data = http_create_data();
+  if (!data)
+    return false;
+  struct sigaction interrupt = {.sa_handler = cover_alarm}, previous;
+  sigaction(SIGALRM, &interrupt, &previous);
+  alarm(COVER_TIMEOUT);
+  int result = http_request(url, data);
+  alarm(0);
+  sigaction(SIGALRM, &previous, NULL);
+  bool saved = false;
+  if (result == GS_OK && data->size > 8 && memcmp(data->memory, "\x89PNG", 4) == 0) {
+    char partial[4200];
+    snprintf(partial, sizeof(partial), "%s.part", path);
+    FILE *file = fopen(partial, "wb");
+    if (file) {
+      saved = fwrite(data->memory, 1, data->size, file) == data->size;
+      fclose(file);
+      saved = saved && rename(partial, path) == 0;
+    }
+  }
+  http_free_data(data);
+  return saved;
+}
+
+static int list(int argc, char **argv) {
+  char *host = argv[2];
+  const char *covers = option(argc, argv, "--covers", NULL);
   SERVER_DATA server;
   if (session_connect(&server, host))
     return 1;
@@ -86,13 +149,54 @@ static int list(char *host) {
   if (gs_applist(&server, &apps) != GS_OK)
     return session_fail("cannot read the app list", gs_error);
 
+  char unique_id[64];
+  if (covers && (mkdir(covers, 0700) != 0 && errno != EEXIST)) {
+    status("{\"event\":\"warning\",\"message\":\"cannot create the cover directory\"}");
+    covers = NULL;
+  }
+  if (covers && !read_unique_id(unique_id, sizeof(unique_id))) {
+    status("{\"event\":\"warning\",\"message\":\"no unique id for covers\"}");
+    covers = NULL;
+  }
+
   char name[512];
+  char cover[4096];
+  char escaped[8192];
   printf("{\"currentGame\":%d,\"apps\":[", server.currentGame);
   for (PAPP_LIST app = apps; app; app = app->next) {
     json_string(name, sizeof(name), app->name);
-    printf("%s{\"id\":%d,\"name\":\"%s\"}", app == apps ? "" : ",", app->id, name);
+    printf("%s{\"id\":%d,\"name\":\"%s\"", app == apps ? "" : ",", app->id, name);
+    if (covers && fetch_cover(&server, unique_id, app->id, covers, cover, sizeof(cover))) {
+      json_string(escaped, sizeof(escaped), cover);
+      printf(",\"cover\":\"%s\"", escaped);
+    }
+    printf("}");
   }
   printf("]}\n");
+  return 0;
+}
+
+/* Quits the host app with /cancel, then reads the host again so the caller gets the state the
+ * host reports rather than the request's own answer. Sunshine answers /cancel only once the
+ * session is torn down and the display restored, which can take a while. */
+static int quit(char *host) {
+  SERVER_DATA server;
+  if (session_connect(&server, host))
+    return 1;
+  if (!server.paired)
+    return session_fail("not paired", "run: hbmoonlight pair HOST");
+  if (server.currentGame == 0) {
+    printf("{\"event\":\"quit\",\"cancelled\":false,\"already\":true,\"currentGame\":0}\n");
+    return 0;
+  }
+  alarm(QUIT_TIMEOUT);
+  int result = gs_quit_app(&server);
+  alarm(0);
+  if (result != GS_OK)
+    return session_fail("quit failed", gs_error);
+  SERVER_DATA after;
+  int current = session_connect(&after, host) == 0 ? after.currentGame : -1;
+  printf("{\"event\":\"quit\",\"cancelled\":true,\"already\":false,\"currentGame\":%d}\n", current);
   return 0;
 }
 
@@ -231,7 +335,8 @@ static int stream(int argc, char **argv) {
 
 static int usage(void) {
   fprintf(stderr, "usage: hbmoonlight pair HOST [--timeout SECONDS]\n"
-                  "       hbmoonlight list HOST\n"
+                  "       hbmoonlight list HOST [--covers DIR]\n"
+                  "       hbmoonlight quit HOST\n"
                   "       hbmoonlight stream HOST APP [--size WxH] [--fps N] [--bitrate KBPS]\n"
                   "                         [--codec h264|hevc] [--software] [--audio-fd FD]"
                   " [--quit]\n"
@@ -248,7 +353,9 @@ int main(int argc, char **argv) {
   if (strcmp(argv[1], "pair") == 0)
     return pair(argv[2], atoi(option(argc, argv, "--timeout", "120")));
   if (strcmp(argv[1], "list") == 0)
-    return list(argv[2]);
+    return list(argc, argv);
+  if (strcmp(argv[1], "quit") == 0)
+    return quit(argv[2]);
   if (strcmp(argv[1], "stream") == 0 && argc >= 4)
     return stream(argc, argv);
   return usage();
