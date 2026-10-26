@@ -57,7 +57,7 @@ const CONTROL = {
 const MODE = {none: 0, hbv1: 1, hbv2: 2, native: 3};
 const NATIVE_ABI = 0x484e5633;
 /** Compute shader workgroup size. */
-const LOCAL_SIZE = 1024;
+const LOCAL_SIZE = 512;
 const FNV_OFFSET_BASIS = 2166136261;
 const FNV_PRIME = 16777619;
 

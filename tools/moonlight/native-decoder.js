@@ -24,6 +24,7 @@ import path from 'node:path';
 import definitions from '../../sdk/native/movie-functions.json' with {type: 'json'};
 import {create as createModule} from '../../../hbl-platform/sdk/native/module.js';
 import {create as createFinite} from '../../../hbl-platform/sdk/native/finite.js';
+import {builds} from '../../../hbl-platform/scripts/toolchain.js';
 import {create as createPersistentWorker} from './persistent-decoder-worker.js';
 import {create as createSplitWorker} from './split-decoder-worker.js';
 
@@ -88,7 +89,7 @@ const CONFIGURATION_CREATED = 1;
 
 const QUEUE_TIMEOUT_MS = 5000;
 const QUEUE_POLL_MS = 5;
-const DEFAULT_WORKER_ROOT = '/media/storage2/builds/HBLauncher/native-h264';
+const DEFAULT_WORKER_ROOT = builds('native-h264');
 
 /** @param {bigint} value */
 const result = value => Number(BigInt.asUintN(32, value));

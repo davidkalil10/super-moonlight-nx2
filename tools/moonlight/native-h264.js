@@ -9,6 +9,7 @@ import os from 'node:os';
 import {AccessUnits, parameterSets} from './h264-stream.js';
 import {instrument} from './bridge-counter.js';
 import * as cli from '../../../hbl-platform/sdk/cli.js';
+import {builds} from '../../../hbl-platform/scripts/toolchain.js';
 import * as scoring from './run-summary.js';
 import {bitrate as streamBitrate} from './bitrate.js';
 import {create as createNativeDecoder} from './native-decoder.js';
@@ -135,7 +136,7 @@ async function run({
   const output =
     process.env.HB_NATIVE_LOG_DIR ||
     path.join(
-      '/media/storage2/builds/HBLauncher/native-h264',
+      builds('native-h264'),
       new Date().toISOString().replace(/[:.]/g, '-') + '-' + revision.slice(0, 8)
     );
   await fs.mkdir(output, {recursive: true, mode: 0o700});
