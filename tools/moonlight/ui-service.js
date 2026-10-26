@@ -353,6 +353,12 @@ function createService({
         }
         log({...event, event: 'stream-event', name: event.event});
         if (event.event === 'connected') dispatch({type: 'streamStarted'});
+        else if (event.event === 'console-stalled')
+          dispatch({
+            type: 'failed',
+            message: 'The console stopped answering, so the stream was stopped',
+            back: 'apps'
+          });
         else if (event.event === 'log' && event.message)
           dispatch({type: 'stage', message: event.message});
       }
