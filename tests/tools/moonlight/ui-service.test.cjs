@@ -551,6 +551,16 @@ for (const [when, reads] of [
   });
 }
 
+test('stopping a running service detaches once', async () => {
+  const fixture = await setup();
+  const {console, service} = fixture;
+  const finished = service.start();
+  await until(() => service.model().screen === 'hosts', 'attach');
+  await Promise.all([service.stop(), finished]);
+  assert.equal(fixture.events.filter(event => event.event === 'detach').length, 1);
+  assert.equal(console.word(UI.uiMagic), 0);
+});
+
 test('nothing is published after the service detaches', async () => {
   const fixture = await setup();
   const {console, service} = fixture;
