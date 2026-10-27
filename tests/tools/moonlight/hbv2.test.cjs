@@ -1,9 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
-const os = require('node:os');
 const path = require('node:path');
-const {execFileSync} = require('node:child_process');
 const hbv2 = require('../../../hbl-moonlight/tools/moonlight/hbv2.js');
 
 function scene(width, height, shift = 0) {
@@ -148,75 +146,9 @@ test('skipped macroblocks are copied lazily from the previous frame', () => {
     for (let x = 16; x < 64; x++) assert.strictEqual(y[row * 64 + x], kept[row * 64 + x]);
 });
 
-test('generated tables match the checked-in headers', () => {
+test('generated tables match the checked-in shader header', () => {
   const here = path.join(__dirname, '../../../hbl-moonlight/tools/moonlight'),
     shaders = path.join(here, '../../apps/moonlight/backends/hblauncher.gpu-app');
-  assert.strictEqual(fs.readFileSync(path.join(here, 'hbv2-tables.h'), 'utf8'), hbv2.cTables());
   const glsl = path.join(shaders, 'hbv2-tables.glsl');
   if (fs.existsSync(glsl)) assert.strictEqual(fs.readFileSync(glsl, 'utf8'), hbv2.glslTables());
 });
-
-function compiler() {
-  for (const cc of ['gcc', 'cc'])
-    try {
-      execFileSync(cc, ['--version'], {stdio: 'ignore'});
-      return cc;
-    } catch {}
-  return null;
-}
-
-test(
-  'native encoder slots decode bit-exactly to its reconstruction',
-  {skip: !compiler()},
-  async () => {
-    const builds = path.join(os.homedir(), 'claude-builds/HBLauncher'),
-      base = fs.existsSync(builds) ? builds : os.tmpdir(),
-      build = fs.mkdtempSync(path.join(base, 'hbv2enc-test-'));
-    try {
-      execFileSync(
-        'bash',
-        [path.join(__dirname, '../../../hbl-moonlight/tools/moonlight/build-hbv2enc.sh')],
-        {
-          env: {...process.env, HBV2_BUILD: build},
-          stdio: 'ignore'
-        }
-      );
-      process.env.HBV2ENC = path.join(build, 'hbv2enc');
-      const {Encoder} = require('../../../hbl-moonlight/tools/moonlight/hbv2-encoder.js');
-      const recon = path.join(build, 'recon.bin'),
-        encoder = new Encoder({threads: 2, recon}),
-        decoder = new hbv2.Decoder(),
-        [width, height] = [320, 176],
-        frameBytes = width * height * 1.5,
-        emitted = [];
-      for (let t = 0; t < 6; t++) {
-        const result = await encoder.encode(scene(width, height, t * 2), width, height, {
-          sequence: t + 1,
-          budget: 12000,
-          qpMax: 40,
-          refresh: 1
-        });
-        if (result.slotBytes) emitted.push(hbv2.words(result.slot));
-      }
-      await encoder.close();
-      const data = fs.readFileSync(recon);
-      assert.strictEqual(data.length, emitted.length * frameBytes);
-      emitted.forEach((words, i) => {
-        assert.strictEqual(decoder.step([words]), 1);
-        const frame = decoder.frame,
-          at = i * frameBytes;
-        assert.ok(Buffer.from(frame.y).equals(data.subarray(at, at + width * height)));
-        assert.ok(
-          Buffer.from(frame.cb).equals(
-            data.subarray(at + width * height, at + width * height * 1.25)
-          )
-        );
-        assert.ok(
-          Buffer.from(frame.cr).equals(data.subarray(at + width * height * 1.25, at + frameBytes))
-        );
-      });
-    } finally {
-      fs.rmSync(build, {recursive: true, force: true});
-    }
-  }
-);

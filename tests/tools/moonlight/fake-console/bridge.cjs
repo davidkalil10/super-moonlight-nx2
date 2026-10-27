@@ -1,7 +1,7 @@
 // Serves the fake console over the real bridge protocol
 // (smilebasic/engine/lib/bridge.cjs), so host tools that speak HTTP/JSON can be
-// run and measured end to end without a console: the native host, and live.js
-// or input-feeder.js through a copy of the real shared/rpc.cjs.
+// run and measured end to end without a console: live.js or input-feeder.js
+// through a copy of the real shared/rpc.cjs.
 //
 // It writes a run directory (connection.json, shared/rpc.cjs, the Moonlight app
 // report and game-audio-source.json) and serves until SIGINT. Natives are

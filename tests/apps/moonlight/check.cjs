@@ -3,7 +3,6 @@
 // launcher: exit handling, the waiting screen, the HBV2 test card, an HBV1
 // slot, and an HBV2 P-frame chain with a torn slot and a stray reference.
 // HBV2 planes must match the JS reference decoder bit for bit.
-//   node check.cjs [CLIP]   CLIP also streams through the native encoder.
 const fs = require('node:fs/promises'),
   path = require('node:path'),
   os = require('node:os');
@@ -21,7 +20,6 @@ const {NPAD} = require(path.join(platform, 'sdk/host/npad.js'));
 const hbv = require(path.join(moonlight, 'tools/moonlight/hbv.js'));
 const hbv2 = require(path.join(moonlight, 'tools/moonlight/hbv2.js'));
 const {psnr} = require(path.join(moonlight, 'tools/moonlight/reference.js'));
-const {readFrames} = require(path.join(moonlight, 'tools/moonlight/frames.js'));
 const uiPage = () => import(path.join(moonlight, 'tools/moonlight/ui-page.js'));
 const builds =
   process.env.HB_MOONLIGHT_CHECK_BUILDS ||
@@ -265,31 +263,6 @@ async function chainCheck(dir) {
   assert.ok(score > 45);
 }
 
-async function clipCheck(dir, clip) {
-  const {Encoder} = require(path.join(moonlight, 'tools/moonlight/hbv2-encoder.js'));
-  const encoder = new Encoder(),
-    decoder = new hbv2.Decoder(),
-    patches = [];
-  let sequence = 0;
-  for await (const frame of readFrames(clip, 1920, 1080, 6)) {
-    const result = await encoder.encode(frame, 1920, 1080, {
-      sequence: ++sequence,
-      budget: 96 * 1024,
-      refresh: 2
-    });
-    if (!result.slotBytes) continue;
-    decoder.apply(hbv2.words(result.slot));
-    patches.push([ring.slotOffset(result.sequence), result.slot]);
-  }
-  await encoder.close();
-  const {memory, report} = await run(dir, Buffer.alloc(ring.MEMORY_BYTES), patches);
-  samePlanes(memory, decoder.frame, path.basename(clip));
-  const times = report.frames.map(f => f.computeMs.toFixed(2)).join(' ');
-  console.log(
-    `${path.basename(clip)}: native slots decode bit-exact on the GPU, compute ms ${times}`
-  );
-}
-
 // A published page: the compute shader validates and applies it, moves the cursor on a press
 // and writes one command per press; the fragment shader draws strips, images and the cursor
 // over the background, or over the dimmed video for a raised overlay.
@@ -407,7 +380,6 @@ async function main() {
     await hbv1Check(dir);
     await chainCheck(dir);
     await uiCheck(dir);
-    if (process.argv[2]) await clipCheck(dir, process.argv[2]);
     console.log(
       'Passed: exit, waiting screen, native NV12, HBV2 test card, HBV1 slot, HBV2 P chain, console UI.'
     );

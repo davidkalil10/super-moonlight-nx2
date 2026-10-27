@@ -52,38 +52,37 @@ HB package backend two (offscreen Vulkan); its README is read by `readme.test.cj
   the console controller as Moonlight gamepad state.
 - `tools/moonlight/helper/`: `bench.c` (`hbmoonlight-bench FILE h264|hevc WxH [--software]
   [--raw-fd FD] [--rgb]` pushes an Annex B file through the helper's video callbacks),
-  `encode-check.c` and `tests/input.c`, built by the hbl-moonlight helper CMake project.
+  and `tests/input.c`, built by the hbl-moonlight helper CMake project.
 
 ## Fake console
 
-`tools/moonlight/fake-console` stands in for a running Moonlight app, so `live.js` and
-`feed.js` can be developed and their resync tested without a console. `shared/rpc.cjs`
+`tools/moonlight/fake-console` stands in for a running Moonlight app, so `feed.js` can be
+developed without a console. `shared/rpc.cjs`
 simulates the bridge: one serial link of 32 KiB exchanges whose concurrent writes interleave at
 random, and a 60 Hz dispatch that runs the JS HBV2 decoder over the ring and writes back
 `applied`.
 
 ```sh
-# steady state on the measured 5.7 MB/s link
-node ../hbl-moonlight/tools/moonlight/live.js tools/moonlight/fake-console \
-  --input clip.mp4 --codec hbv2 --budget 64
-# a 1.5 s stall at t=4 s; the sender resyncs with a keyframe
-STALL=1500@4000 node ../hbl-moonlight/tools/moonlight/live.js tools/moonlight/fake-console \
-  --input clip.mp4 --codec hbv2 --budget 64
+# HBV1 slots of a clip, fed on the measured 5.7 MB/s link
+node tools/moonlight/encode.cjs clip.mp4 clip.hbv --size 1920x1088
+node ../hbl-moonlight/tools/moonlight/feed.js tools/moonlight/fake-console clip.hbv
+# a 1.5 s stall at t=4 s
+STALL=1500@4000 node ../hbl-moonlight/tools/moonlight/feed.js tools/moonlight/fake-console clip.hbv
 ```
 
 Env: `RATE` (link bytes/s, default 5.7e6), `STALL=ms@at` (pause the dispatch once), `DECODE=1`
 (full pixel decode instead of the light apply).
 
 `bridge.cjs DIR [--pad]` serves the same fake console through the real
-`hbl-platform/smilebasic/engine/lib/bridge.js` and writes a run directory, so `live.js`,
-`input-feeder.js` or `hbmoonlight-host` pay the same HTTP, JSON and base64 costs as on a
+`hbl-platform/smilebasic/engine/lib/bridge.js` and writes a run directory, so `live.js` or
+`input-feeder.js` pay the same HTTP, JSON and base64 costs as on a
 console. It also simulates the sound-memory allocation and an AudioOut that plays appended
 buffers in real time (underruns counted); `--pad` cycles a scripted controller and touch state
 every 500 ms. `HB_PIPELINE` works as on the launcher.
 
 ```sh
 HB_PIPELINE=2 RATE=12e6 node tools/moonlight/fake-console/bridge.cjs /tmp/fake --pad &
-node ../hbl-moonlight/tools/moonlight/live.js /tmp/fake --input clip.mp4 --codec hbv2 --budget 64
+node ../hbl-moonlight/tools/moonlight/input-feeder.js /tmp/fake
 ```
 
 `shared/console.cjs` is a separate byte-level model of the `bootstrap.bas` `RPC()` loop for
@@ -95,17 +94,12 @@ flat memory buffer; `protocol3.test.cjs` round-trips the real `native.js` throug
 Only with the user at the console (DEVICE-RULES.md). From `hbl-moonlight`, against a fresh
 `./start.sh --app moonlight` session showing the HBV2 test card, in order:
 
-1. Video: `node tools/moonlight/live.js --moonlight 192.168.8.245 Desktop --codec hbv2 --budget 96 --no-input --no-audio`.
-   Desktop text is sharp; about 59 fps on the wired link.
+1. Video: `node tools/moonlight/live.js --moonlight 192.168.8.245 Desktop --codec h264 --staggered --no-input --no-audio`
+   (the h264 flags are in `hbl-moonlight/README.md`).
 2. Input: drop `--no-input`. Sticks and taps move the host cursor; touch is native multi-touch.
 3. Audio: drop `--no-audio`. If `OpenDefaultAudioOut` fails, the audio process prints a hint
    and exits while video and input keep running.
-4. A real game from `hbmoonlight list 192.168.8.245` in place of `Desktop`; raise `--budget`
-   or `--cap` for sharper stills at the cost of fps on a slower link.
-5. Console decode: `--codec h264` (see the h264 flags in `hbl-moonlight/README.md`).
-
-After a launch or resync the picture sharpens over about 8 s as refresh chunks heal static
-blocks; raise `--refresh` to speed it.
+4. A real game from `hbmoonlight list 192.168.8.245` in place of `Desktop`.
 
 ## Protocol 3 write test
 

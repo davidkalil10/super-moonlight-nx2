@@ -20,8 +20,6 @@
   "include": [
     "../hbl-moonlight/tools/moonlight/hbv.js",
     "../hbl-moonlight/tools/moonlight/hbv2.js",
-    "../hbl-moonlight/tools/moonlight/hbv2-encoder.js",
-    "../hbl-moonlight/tools/moonlight/encode-worker.js",
     "../hbl-moonlight/tools/moonlight/frames.js",
     "../hbl-moonlight/tools/moonlight/ring.js",
     "../hbl-moonlight/tools/moonlight/h264-stream.js",
@@ -32,7 +30,6 @@
     "../hbl-moonlight/tools/moonlight/controller.js",
     "../hbl-moonlight/tools/moonlight/feed.js",
     "../hbl-moonlight/tools/moonlight/helper.js",
-    "../hbl-moonlight/tools/moonlight/helper/generate-layout.js",
     "../hbl-moonlight/tools/moonlight/input-feeder.js",
     "../hbl-moonlight/tools/moonlight/present-pacer.js",
     "../hbl-moonlight/tools/moonlight/run-summary.js",
