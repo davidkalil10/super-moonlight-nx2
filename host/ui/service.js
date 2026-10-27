@@ -1,9 +1,9 @@
 /**
- * The host side of the console Moonlight UI: publishes the pages of ui-pages.js into the
+ * The host side of the console Moonlight UI: publishes the pages of pages.js into the
  * private storage of the running Moonlight app, reads the commands the console writes back and
- * drives the helper and the stream child from the state machine in ui-model.js.
+ * drives the helper and the stream child from the state machine in model.js.
  *
- *   node tools/moonlight/ui-service.js [RUN_DIR]
+ *   node host/ui/service.js [RUN_DIR]
  *
  * The console owns the cursor, the overlay and the command words; this service owns the pages,
  * the epoch and sequence, hostAck and hostBusy. It exits when the Moonlight app leaves the
@@ -15,16 +15,16 @@ import os from 'node:os';
 import path from 'node:path';
 import readline from 'node:readline';
 import {spawn, execFileSync} from 'node:child_process';
-import {UI, UI_MAGIC, UI_OP, MEMORY_BYTES} from './ring.js';
-import {MAGIC, COMMAND_READ, serialize, pageAddress, hostWords, readCommand} from './ui-page.js';
-import {makeModel, reduce} from './ui-model.js';
-import {createPages} from './ui-pages.js';
-import {createRaster} from './ui-raster.js';
-import * as uiSettings from './ui-settings.js';
-import {hostsFile, loadHosts, seedHosts, saveHosts, parseList} from './ui-hosts.js';
-import {discover, merge} from './ui-discover.js';
-import {HELPER} from './helper.js';
-import {findPrivateStorage} from './feed.js';
+import {UI, UI_MAGIC, UI_OP, MEMORY_BYTES} from '../../tools/moonlight/ring.js';
+import {MAGIC, COMMAND_READ, serialize, pageAddress, hostWords, readCommand} from './page.js';
+import {makeModel, reduce} from './model.js';
+import {createPages} from './pages.js';
+import {createRaster} from './raster.js';
+import * as uiSettings from './settings.js';
+import {hostsFile, loadHosts, seedHosts, saveHosts, parseList} from './hosts.js';
+import {discover, merge} from './discover.js';
+import {HELPER} from '../../tools/moonlight/helper.js';
+import {findPrivateStorage} from '../../tools/moonlight/feed.js';
 import * as session from '../../../hbl-platform/sdk/host/session.js';
 import * as cli from '../../../hbl-platform/sdk/cli.js';
 
@@ -56,7 +56,7 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 function createChildren({
   spawnProcess = spawn,
   helperPath = HELPER,
-  liveScript = path.join(import.meta.dirname, 'live.js')
+  liveScript = path.join(import.meta.dirname, '../../tools/moonlight/live.js')
 } = {}) {
   function wrap(child, {onLine, collect}) {
     let out = '';
@@ -101,8 +101,8 @@ function createChildren({
  * @param {ReturnType<typeof createPages>} options.pages
  * @param {ReturnType<typeof createChildren>} options.children
  * @param {string} options.directory The launcher run directory, for live.js and the exit watch.
- * @param {() => import('./ui-model.js').Host[]} options.readHosts
- * @param {(hosts: import('./ui-model.js').Host[]) => void} [options.writeHosts] Saves a merged list.
+ * @param {() => import('./model.js').Host[]} options.readHosts
+ * @param {(hosts: import('./model.js').Host[]) => void} [options.writeHosts] Saves a merged list.
  * @param {() => Promise<{name: string, address: string}[]>} [options.discoverHosts] mDNS, bounded.
  * @param {(settings: object) => void} options.saveSettings
  * @param {object} options.settings

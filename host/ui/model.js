@@ -7,7 +7,7 @@
  * Item ids are the host's: ITEM groups a page's rows into id ranges so a command names a host,
  * an app or a setting without the console knowing what a row is.
  */
-import {CATALOG, adjust, defaults} from './ui-settings.js';
+import {CATALOG, adjust, defaults} from './settings.js';
 
 /** First item id of each group; a row's id is its group base plus its index, 10000 rows apart. */
 const ITEM = {

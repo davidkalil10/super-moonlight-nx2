@@ -20,8 +20,9 @@ apps/moonlight (console GPU)        compute picks/decodes, fragment draws
 - `apps/moonlight/`: the HB package (`manifest.json`, `assets/`, `backends/hblauncher.gpu-app/`,
   `build.js`); its own README covers the package build.
 - `tools/moonlight/`: the host. `live.js` (sender), `native-h264.js` (console decoder route),
-  the staggered workers, `ring.js` and the HBV formats, `ui-*.js` (console UI
-  service), `input-feeder.js`, `audio-stream.js`, and `helper/` (`hbmoonlight`, C, GPLv3).
+  the staggered workers, `ring.js` and the HBV formats, `input-feeder.js`, `audio-stream.js`,
+  and `helper/` (`hbmoonlight`, C, GPLv3).
+- `host/ui/`: the console UI service (see Console UI service).
 - `sdk/native/movie-functions.json`, `movie-event-functions.json`: the native symbols only
   Moonlight uses.
 
@@ -68,7 +69,7 @@ to the launcher; single B and Minus presses reach the PC.
 ```sh
 node tools/moonlight/live.js [RUN_DIR] --moonlight 192.168.8.245 Desktop --codec h264 --fps 60
 # console UI: the console picks the host and app
-node tools/moonlight/ui-service.js [RUN_DIR]
+node host/ui/service.js [RUN_DIR]
 ```
 
 ### live.js flags
@@ -212,7 +213,7 @@ The shader is the only console writer of +16..+63 and never writes host words; t
 between; the host takes a command only when its epoch and page are current. One press makes
 one command; the host's state machine gives it meaning.
 
-### Page format (`UI_OFFSET + page * 4 MiB`, `ui-page.js`)
+### Page format (`UI_OFFSET + page * 4 MiB`, `host/ui/page.js`)
 
 | Offset | Content |
 | --- | --- |
@@ -238,20 +239,20 @@ one.
 
 ## Console UI service
 
-`node tools/moonlight/ui-service.js [RUN_DIR]` is the PC half of the console UI (`RUN_DIR`
+`node host/ui/service.js [RUN_DIR]` is the PC half of the console UI (`RUN_DIR`
 from the `SESSION READY` line, else the newest). The console draws the pages the service
 publishes and sends back commands; the host owns every screen.
 
 | File | Role |
 | --- | --- |
-| `ui-model.js` | pure state machine, `reduce(model, event)` returns the next model and intents; item ids per screen in `ITEM` |
-| `ui-hosts.js` | the host list in `hosts.json` (`$XDG_CONFIG_HOME/hblauncher/moonlight/`) and the helper's app list |
-| `ui-settings.js` | settings catalog (size, fps, bitrate, codec, audio, present rate), `settings.json` beside `hosts.json`, `streamArgs` for `live.js` |
-| `ui-pages.js` | one layout per screen; strips and tiles cached by text and size |
-| `ui-raster.js` + `ui-text.py` | long-lived PIL child painting strips, cover tiles and letter tiles |
-| `ui-page.js` | page serializer, validator and parser, mirror of the shader |
-| `ui-discover.js` | mDNS for `_nvstream._tcp.local`, answer parser, merge into the host list |
-| `ui-service.js` | attach, publish, command poll, children (helper `list`/`pair`/`quit`, `live.js`), exit |
+| `model.js` | pure state machine, `reduce(model, event)` returns the next model and intents; item ids per screen in `ITEM` |
+| `hosts.js` | the host list in `hosts.json` (`$XDG_CONFIG_HOME/hblauncher/moonlight/`) and the helper's app list |
+| `settings.js` | settings catalog (size, fps, bitrate, codec, audio, present rate), `settings.json` beside `hosts.json`, `streamArgs` for `live.js` |
+| `pages.js` | one layout per screen; strips and tiles cached by text and size |
+| `raster.js` + `text.py` (Sora in `fonts/`) | long-lived PIL child painting strips, cover tiles and letter tiles |
+| `page.js` | page serializer, validator and parser, mirror of the shader |
+| `discover.js` | mDNS for `_nvstream._tcp.local`, answer parser, merge into the host list |
+| `service.js` | attach, publish, command poll, children (helper `list`/`pair`/`quit`, `live.js`), exit |
 
 - Attach writes magic 0, reads the stale `uiApplied` and seeds the next sequence after it.
   Commands written before attach are not replayed. A page is republished only when its bytes

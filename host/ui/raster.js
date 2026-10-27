@@ -1,5 +1,5 @@
 /**
- * The host side of ui-text.py: one long-lived PIL child that paints the text strips and cover
+ * The host side of text.py: one long-lived PIL child that paints the text strips and cover
  * tiles of the console UI pages. Requests are answered in order, each with an 8-byte size
  * header and the pixels, so the queue here pairs every reply with its request.
  */
@@ -16,7 +16,7 @@ const HEADER_BYTES = 8;
  * @param {{spawnProcess?: typeof spawn}} [options]
  */
 function createRaster({spawnProcess = spawn} = {}) {
-  const child = spawnProcess('python3', [path.join(import.meta.dirname, 'ui-text.py')], {
+  const child = spawnProcess('python3', [path.join(import.meta.dirname, 'text.py')], {
     stdio: ['pipe', 'pipe', 'inherit']
   });
   /** @type {{resolve: (painted: Painted) => void, reject: (error: Error) => void}[]} */
@@ -39,7 +39,7 @@ function createRaster({spawnProcess = spawn} = {}) {
     }
   });
   child.on('exit', (code, signal) => {
-    failure = Error('ui-text.py exited: ' + (signal || code));
+    failure = Error('text.py exited: ' + (signal || code));
     for (const request of queue.splice(0)) request.reject(failure);
   });
   child.on('error', error => {

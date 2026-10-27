@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Rasteriser for the console UI pages (tools/moonlight/ui-raster.js).
+"""Rasteriser for the console UI pages (host/ui/raster.js).
 
 Reads one JSON request per line on stdin and answers each with an 8-byte header (width,
 height as little-endian u32) followed by the pixels: alpha-8 for a text strip, RGBA8 for a
-tile. Layout stays in ui-pages.js; this process only paints. Text is Sora (fonts/, OFL) at
+tile. Layout stays in pages.js; this process only paints. Text is Sora (fonts/, OFL) at
 the asked weight; a character Sora lacks falls back to DejaVu, then to a CJK font when the PC
 has one.
 
@@ -201,7 +201,7 @@ PAINTERS = {"text": text_strip, "legend": legend, "tile": tile, "letters": lette
 
 def main():
     if not CJK_PATH:
-        print("ui-text.py: no CJK font found, CJK names draw as boxes", file=sys.stderr)
+        print("text.py: no CJK font found, CJK names draw as boxes", file=sys.stderr)
     out = sys.stdout.buffer
     for line in sys.stdin:
         request = json.loads(line)

@@ -6,13 +6,13 @@ rewrite, `hbl-notes/team/REWRITE.md`). Runtime code only: tests, probes and rese
 
 ## Layout
 
-Phase 1 keeps the original HBLauncher paths, so history and file names line up:
+Phase 1 kept the original HBLauncher paths; lane Z moves the host into `host/` one chunk at a time:
 
 - `apps/moonlight/`: the console app as an HB package (`manifest.json`, `assets/`,
   `backends/hblauncher.gpu-app/`, `build.js`, its own README).
 - `tools/moonlight/`: the PC host (`live.js`, `native-h264.js`, staggered workers,
-  ring/HBV formats, `ui-*` for the console UI service) and `helper/` (`hbmoonlight`, C, GPLv3
-  upstreams).
+  ring/HBV formats) and `helper/` (`hbmoonlight`, C, GPLv3 upstreams).
+- `host/ui/`: the console UI service, its rasteriser and the Sora font.
 - `sdk/native/*-functions.json`: the native symbols only Moonlight uses.
 
 ## Sibling checkouts
@@ -53,7 +53,7 @@ Package `exports` replace the relative paths later in Phase 2.
   fill whole 32 KiB exchanges and the senders are latest-wins (never queue frames, drop on a
   stall).
 - One source of truth per layout: `ring.js` generates `ring.glsl`; `hbv.js`/`hbv2.js` generate
-  their GLSL tables; `ui-page.js` mirrors the shader's page validator. Change the JS and
+  their GLSL tables; `host/ui/page.js` mirrors the shader's page validator. Change the JS and
   regenerate, never the outputs.
 - HBV2 uses an integer IDCT shared by JS and GLSL; a float transform drifts across P frames.
 - The console UI commands go through plain words in the control page, not the SDK mailbox: a

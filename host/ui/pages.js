@@ -1,12 +1,12 @@
 /**
  * The console UI pages: one layout per screen of the state machine, as the items, text strips
- * and images ui-page.js serializes. Layout is the host's; the console only draws what it is
- * given, moves the cursor over the items and forwards presses with the item ids ui-model.js
+ * and images page.js serializes. Layout is the host's; the console only draws what it is
+ * given, moves the cursor over the items and forwards presses with the item ids model.js
  * assigns. Strips are painted once per text, size and width and kept.
  */
-import {ITEM, APPS_PER_PAGE, HOSTS_PER_PAGE} from './ui-model.js';
-import {PAGE_FLAG, ITEM_FLAG, MAX_ITEMS, MAX_TEXTS, MAX_IMAGES} from './ui-page.js';
-import * as uiSettings from './ui-settings.js';
+import {ITEM, APPS_PER_PAGE, HOSTS_PER_PAGE} from './model.js';
+import {PAGE_FLAG, ITEM_FLAG, MAX_ITEMS, MAX_TEXTS, MAX_IMAGES} from './page.js';
+import * as uiSettings from './settings.js';
 
 /** The Horizon palette as the page carries it: RGBA8 packed 0xAABBGGRR. */
 const COLOR = {
@@ -41,10 +41,10 @@ const STRIP_HEIGHT = 96;
 const CACHE_LIMIT = 512;
 
 /**
- * @typedef {import('./ui-raster.js').Painted} Painted
- * @typedef {import('./ui-model.js').Model} Model
- * @typedef {import('./ui-page.js').Page} Page
- * @typedef {ReturnType<import('./ui-raster.js').createRaster>} Raster
+ * @typedef {import('./raster.js').Painted} Painted
+ * @typedef {import('./model.js').Model} Model
+ * @typedef {import('./page.js').Page} Page
+ * @typedef {ReturnType<import('./raster.js').createRaster>} Raster
  */
 
 /**

@@ -27,7 +27,7 @@ node ../moonlight-dev/apps/moonlight/check.cjs  # desktop Vulkan decode check, b
 
 Private memory (`manifest.json` `memory.bytes`, layout in `tools/moonlight/ring.js`) holds the
 control page, the HBV ring, three native frames and, since 1.1.0, two 4 MiB console UI page
-buffers the host UI service publishes into (`tools/moonlight/ui-page.js`; format in
+buffers the host UI service publishes into (`host/ui/page.js`; format in
 the [repo README](../../README.md), Page format).
 
 The console UI (`ui.glsl`, included by `app.comp` and `app.frag`) draws the pages the host

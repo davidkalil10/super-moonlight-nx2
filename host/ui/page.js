@@ -6,7 +6,7 @@
  * page with the same rules as validate() here before it draws it. Contract: team note
  * research/moonlight-ui-design.md, "Memory and words".
  */
-import {UI, UI_OFFSET, UI_PAGE_BYTES, UI_OP} from './ring.js';
+import {UI, UI_OFFSET, UI_PAGE_BYTES, UI_OP} from '../../tools/moonlight/ring.js';
 
 const MAGIC = 0x47504248;
 const HEADER_WORDS = 16;
