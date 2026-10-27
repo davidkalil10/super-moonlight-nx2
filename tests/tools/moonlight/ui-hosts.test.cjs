@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const hosts = require('../../../hbl-moonlight/tools/moonlight/ui-hosts.js');
+const hosts = require('../../../hbl-moonlight/host/ui/hosts.js');
 
 // --- host list load/save/seed -----------------------------------------
 

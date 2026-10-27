@@ -20,7 +20,7 @@ const {NPAD} = require(path.join(platform, 'sdk/host/npad.js'));
 const hbv = require(path.join(moonlight, 'tools/moonlight/hbv.js'));
 const hbv2 = require(path.join(moonlight, 'tools/moonlight/hbv2.js'));
 const {psnr} = require(path.join(moonlight, 'tools/moonlight/reference.js'));
-const uiPage = () => import(path.join(moonlight, 'tools/moonlight/ui-page.js'));
+const uiPage = () => import(path.join(moonlight, 'host/ui/page.js'));
 const builds =
   process.env.HB_MOONLIGHT_CHECK_BUILDS ||
   path.join(os.homedir(), 'claude-builds/HBLauncher/gpu-check');

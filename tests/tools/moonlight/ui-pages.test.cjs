@@ -2,10 +2,10 @@
 // a fake rasteriser whose strips have deterministic sizes.
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const {createPages, COVER} = require('../../../hbl-moonlight/tools/moonlight/ui-pages.js');
-const {ITEM, makeModel, reduce} = require('../../../hbl-moonlight/tools/moonlight/ui-model.js');
-const settings = require('../../../hbl-moonlight/tools/moonlight/ui-settings.js');
-const uiPage = () => import('../../../hbl-moonlight/tools/moonlight/ui-page.js');
+const {createPages, COVER} = require('../../../hbl-moonlight/host/ui/pages.js');
+const {ITEM, makeModel, reduce} = require('../../../hbl-moonlight/host/ui/model.js');
+const settings = require('../../../hbl-moonlight/host/ui/settings.js');
+const uiPage = () => import('../../../hbl-moonlight/host/ui/page.js');
 
 function fakeRaster() {
   const calls = {text: 0, letters: 0, tile: 0};

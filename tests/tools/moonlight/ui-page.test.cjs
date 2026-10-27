@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const load = () => import('../../../hbl-moonlight/tools/moonlight/ui-page.js');
+const load = () => import('../../../hbl-moonlight/host/ui/page.js');
 const ring = () => import('../../../hbl-moonlight/tools/moonlight/ring.js');
 
 function samplePage(overrides = {}) {

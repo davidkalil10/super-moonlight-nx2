@@ -2,7 +2,7 @@
 // children standing in for the helper and live.js.
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const {createService} = require('../../../hbl-moonlight/tools/moonlight/ui-service.js');
+const {createService} = require('../../../hbl-moonlight/host/ui/service.js');
 const {
   UI,
   UI_MAGIC,
@@ -11,10 +11,10 @@ const {
   UI_PAGE_BYTES,
   MEMORY_BYTES
 } = require('../../../hbl-moonlight/tools/moonlight/ring.js');
-const {ITEM} = require('../../../hbl-moonlight/tools/moonlight/ui-model.js');
-const {createPages} = require('../../../hbl-moonlight/tools/moonlight/ui-pages.js');
-const settings = require('../../../hbl-moonlight/tools/moonlight/ui-settings.js');
-const uiPage = () => import('../../../hbl-moonlight/tools/moonlight/ui-page.js');
+const {ITEM} = require('../../../hbl-moonlight/host/ui/model.js');
+const {createPages} = require('../../../hbl-moonlight/host/ui/pages.js');
+const settings = require('../../../hbl-moonlight/host/ui/settings.js');
+const uiPage = () => import('../../../hbl-moonlight/host/ui/page.js');
 
 const HOSTS = [
   {name: 'Rig', address: '192.168.8.245'},

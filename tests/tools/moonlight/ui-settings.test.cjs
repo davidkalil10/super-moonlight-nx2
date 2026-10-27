@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const settings = require('../../../hbl-moonlight/tools/moonlight/ui-settings.js');
+const settings = require('../../../hbl-moonlight/host/ui/settings.js');
 
 const created = [];
 test.after(() => {

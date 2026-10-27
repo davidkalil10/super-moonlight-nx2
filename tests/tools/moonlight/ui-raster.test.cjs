@@ -1,4 +1,4 @@
-// The rasteriser paints what ui-pages.js lays out; sizes and coverage are checked, never exact
+// The rasteriser paints what pages.js lays out; sizes and coverage are checked, never exact
 // bytes, since they depend on the PIL and font builds of the host.
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -6,7 +6,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const {execFileSync} = require('node:child_process');
-const {createRaster} = require('../../../hbl-moonlight/tools/moonlight/ui-raster.js');
+const {createRaster} = require('../../../hbl-moonlight/host/ui/raster.js');
 
 let pil = true;
 try {
@@ -190,6 +190,6 @@ test('a dead rasteriser rejects what is queued', async () => {
   const raster = createRaster({spawnProcess: () => child});
   const strip = raster.text('a', 36, 100);
   child.emit('exit', 1, null);
-  await assert.rejects(strip, /ui-text.py exited: 1/);
+  await assert.rejects(strip, /text.py exited: 1/);
   await assert.rejects(raster.text('b', 36, 100), /exited/);
 });

@@ -13,7 +13,7 @@ const {
   candidates,
   merge,
   discover
-} = require('../../../hbl-moonlight/tools/moonlight/ui-discover.js');
+} = require('../../../hbl-moonlight/host/ui/discover.js');
 
 const FIXTURE = fs.readFileSync(path.join(__dirname, 'fixtures/mdns-sunshine.bin'));
 
