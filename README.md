@@ -20,7 +20,7 @@ apps/moonlight (console GPU)        compute picks/decodes, fragment draws
 - `apps/moonlight/`: the HB package (`manifest.json`, `assets/`, `backends/hblauncher.gpu-app/`,
   `build.js`); its own README covers the package build.
 - `tools/moonlight/`: the host. `live.js` (sender), `native-h264.js` (console decoder route),
-  the staggered and paired workers, `ring.js` and the HBV formats, `ui-*.js` (console UI
+  the staggered workers, `ring.js` and the HBV formats, `ui-*.js` (console UI
   service), `input-feeder.js`, `audio-stream.js`, and `helper/` (`hbmoonlight`, C, GPLv3).
 - `sdk/native/movie-functions.json`, `movie-event-functions.json`: the native symbols only
   Moonlight uses.
@@ -86,13 +86,7 @@ node tools/moonlight/ui-service.js [RUN_DIR]
 
 | Flag | Default | Meaning |
 | --- | --- | --- |
-| (none) | | persistent worker: one console thread decodes each unit, input over native TCP |
-| `--split-decoder` | | separate input and output workers |
-| `--native-publish` | | the output worker publishes surfaces itself (needs `--split-decoder`) |
-| `--auto-output-queue` | | the fetch frame queues the next output (needs `--native-publish`) |
-| `--linked-gates` | | the output worker opens the next decode gate as it fetches (needs `--auto-output-queue`) |
-| `--paired-loop` | | input-only split worker plus a guarded two-frame output loop |
-| `--staggered` | | lag-2 input and output workers: one status read and one gate write per frame |
+| `--staggered` | always | lag-2 input and output workers, one status read and one gate write per frame; the only route, so the flag is a no-op |
 | `--present-hz 60\|120` | `60` | staggered: display refresh the pacer starts from |
 | `--skip-backlog N\|off` | `2`, `1` with vsync | staggered: units queued before outputs go off screen |
 | `--skip-rule backlog\|vsync` | `backlog` | staggered: skip by backlog, or keep one publication pending per vsync |
@@ -102,13 +96,12 @@ node tools/moonlight/ui-service.js [RUN_DIR]
 | `--output-lag 1\|2` | `2` | staggered: fetch each output 1 or 2 gates after its decode |
 | `--receive-wait` | off | sleep to the predicted receive |
 | `--avoid-window B-A` | off | keep status reads out of B ms before to A ms after a predicted event (needs a wait flag) |
-| `--queue N` | `3`, `8` staggered | host access-unit queue, 1 to 16 |
+| `--queue N` | `8` | host access-unit queue, 1 to 16 |
 | `--input-hz N` | `60` | input feeder rate, 10 to 120 |
 | `--audio-frames N` | `960` on protocol 3, else `1920` | AudioOut buffer, multiple of 240 (up to 3840 with socket audio) |
 | `--socket-audio` / `--socket-audio-tone` | off | PCM, or a 500 Hz tone, over native TCP to a console audio worker |
 | `--duration S` / `--warmup S` | none / `3` | run length; rows skipped before scoring |
 | `--expect fps=30,dropped=0,idr=0,trimmed=0` | dropped and IDR fail | limits for the PASS/FAIL verdict |
-| `--ab` | | run without, then with `--split-decoder` (needs `--duration`) |
 
 The native route needs `--moonlight` and a launcher session from the current revision (the
 session records the host address for the TCP connection). Each run writes a source/build

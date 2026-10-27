@@ -10,7 +10,7 @@ Phase 1 keeps the original HBLauncher paths, so history and file names line up:
 
 - `apps/moonlight/`: the console app as an HB package (`manifest.json`, `assets/`,
   `backends/hblauncher.gpu-app/`, `build.js`, its own README).
-- `tools/moonlight/`: the PC host (`live.js`, `native-h264.js`, staggered and paired workers,
+- `tools/moonlight/`: the PC host (`live.js`, `native-h264.js`, staggered workers,
   ring/HBV formats, `ui-*` for the console UI service) and `helper/` (`hbmoonlight`, C, GPLv3
   upstreams).
 - `sdk/native/*-functions.json`: the native symbols only Moonlight uses.
@@ -88,8 +88,8 @@ The pacer stayed at 8.33 ms and did not learn the panel's 16.67 ms apply grid in
 - The h264 route needs a launcher session from the current revision: it records the host
   address the console connects back to over native TCP.
 - A console worker that may still run is never reused or freed; a timed-out join leaks it and
-  latches the decoder failed. A paired loop that fails to stop blocks new loops until
-  SmileBASIC restarts.
+  latches the decoder failed. Staggered workers that fail to stop, or a lost bridge, retain the
+  native objects until SmileBASIC restarts.
 - `apps/moonlight/README.md` is not part of the package fingerprint (manifest bytes, listed
   assets and entry sources only), but `moonlight-dev/apps/moonlight/package.test.cjs` pins the
   shader, state, data, memory and icon hashes.

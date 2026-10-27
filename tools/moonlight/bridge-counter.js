@@ -3,6 +3,7 @@
  * every call is attributed to the stage the caller is in when it starts; `take` returns the
  * totals since the last take and resets them. Reads and writes count one exchange per chunk.
  * `silentMs` says how long the console has kept a call waiting without settling any.
+ * `watchBridge` marks an rpc `bridgeLost` once a call fails because the connection is gone.
  */
 
 /** The rpc methods that reach the console. */
@@ -16,6 +17,8 @@ const METHODS = [
   'query',
   'writeAndCall'
 ];
+/** Errors that mean the bridge to the console is gone rather than one request failing. */
+const LOST = /Console disconnected|timed out|ECONNREFUSED|ECONNRESET|EPIPE|socket hang up/i;
 /** The bridge splits reads and writes into exchanges of at most this many bytes. */
 const CHUNK_BYTES = 0x80000;
 
@@ -96,4 +99,25 @@ function instrument(rpc, stage, now = () => performance.now()) {
   };
 }
 
-export {instrument, requestsFor};
+/**
+ * A copy of `rpc` whose bridge methods set `bridgeLost` when the connection is lost.
+ * @param {any} rpc
+ * @returns {any}
+ */
+function watchBridge(rpc) {
+  const watched = {...rpc, bridgeLost: false};
+  for (const name of METHODS) {
+    if (typeof rpc[name] !== 'function') continue;
+    watched[name] = async (...args) => {
+      try {
+        return await rpc[name](...args);
+      } catch (error) {
+        if (LOST.test(error.message)) watched.bridgeLost = true;
+        throw error;
+      }
+    };
+  }
+  return watched;
+}
+
+export {instrument, requestsFor, watchBridge};

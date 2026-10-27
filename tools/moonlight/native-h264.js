@@ -7,7 +7,7 @@ import {spawn} from 'node:child_process';
 import {execFileSync} from 'node:child_process';
 import os from 'node:os';
 import {AccessUnits, parameterSets} from './h264-stream.js';
-import {instrument} from './bridge-counter.js';
+import {instrument, watchBridge} from './bridge-counter.js';
 import * as cli from '../../../hbl-platform/sdk/cli.js';
 import {builds} from '../../../hbl-platform/sdk/build.js';
 import * as scoring from './run-summary.js';
@@ -16,7 +16,6 @@ import {create as createNativeDecoder} from './native-decoder.js';
 import {create as createNativeTransport} from './native-tcp.js';
 import {create as createNativeSink} from './native-sink.js';
 import {create as createSocketAudioSource} from './socket-audio-source.js';
-import * as pairedLive from './paired-live.js';
 import {create as createStaggeredLive} from './staggered-live.js';
 import * as exchangeTiming from './exchange-timing.js';
 
@@ -25,8 +24,8 @@ const IDR_COOLDOWN_MS = 100;
 // keyframe cannot help; past CONSOLE_STALL_MS the stream reports the console and stops.
 const IDR_QUIET_MS = 1000;
 const CONSOLE_STALL_MS = 5000;
-// A staggered host runs at present pace, so it needs room for a source burst (batch C2).
-const STAGGERED_QUEUE = 8;
+// The host runs at present pace, so it needs room for a source burst (batch C2).
+const QUEUE = 8;
 
 function createIdrRequester(
   send,
@@ -113,7 +112,6 @@ async function run({
   createTransport = createNativeTransport,
   createSink = createNativeSink,
   createSocketAudio = createSocketAudioSource,
-  createPaired = pairedLive.create,
   createStaggered = createStaggeredLive,
   spawnProcess = spawn,
   consoleStallMs = CONSOLE_STALL_MS,
@@ -128,27 +126,9 @@ async function run({
   const socketTone = args.includes('--socket-audio-tone');
   const socketAudio = socketTone || args.includes('--socket-audio');
   if (socketAudio && !audio) throw Error('--socket-audio cannot be combined with --no-audio');
-  const pairedLoop = args.includes('--paired-loop');
-  const staggered = args.includes('--staggered');
-  const workerMode =
-    pairedLoop || staggered || args.includes('--split-decoder') ? 'split' : 'persistent';
-  const nativePublish = args.includes('--native-publish');
-  const autoOutputQueue = args.includes('--auto-output-queue');
-  const linkedGates = args.includes('--linked-gates');
-  if (staggered && (pairedLoop || nativePublish || autoOutputQueue || linkedGates))
-    throw Error(
-      '--staggered drives its own input and output workers; drop the paired and split worker flags'
-    );
-  if (pairedLoop && (nativePublish || autoOutputQueue || linkedGates))
-    throw Error('--paired-loop publishes from its own worker; drop the split worker flags');
-  if (nativePublish && workerMode !== 'split')
-    throw Error('--native-publish requires --split-decoder');
-  if (autoOutputQueue && !nativePublish)
-    throw Error('--auto-output-queue requires --native-publish');
-  if (linkedGates && !autoOutputQueue) throw Error('--linked-gates requires --auto-output-queue');
   const duration = cli.number(args, '--duration', null);
   const warmup = cli.number(args, '--warmup', 3);
-  const queue = cli.number(args, '--queue', staggered ? STAGGERED_QUEUE : 3);
+  const queue = cli.number(args, '--queue', QUEUE);
   const inputHz = cli.number(args, '--input-hz', 60);
   const presentHz = cli.number(args, '--present-hz', 60);
   const skipRule = cli.option(args, '--skip-rule') ?? 'backlog';
@@ -184,18 +164,10 @@ async function run({
     throw Error('--trim-backlog-ms needs --skip-backlog 1 or more');
   if (avoidWindow && !(decodeWait || receiveWait))
     throw Error('--avoid-window needs --decode-wait or --receive-wait to predict the events');
-  if (
-    !staggered &&
-    ['--present-hz', '--skip-backlog', '--skip-rule'].some(name => args.includes(name))
-  )
-    throw Error('--present-hz, --skip-backlog and --skip-rule apply to --staggered');
-  if (!staggered && trimBacklogMs !== null) throw Error('--trim-backlog-ms applies to --staggered');
-  if (!staggered && gateOnReceive) throw Error('--gate-on-receive applies to --staggered');
   if (gateOnReceive && presentHz === 120)
     throw Error('--gate-on-receive is untested at --present-hz 120');
   if (outputLag !== null && outputLag !== 1 && outputLag !== 2)
     throw Error('--output-lag takes 1 or 2');
-  if (!staggered && outputLag !== null) throw Error('--output-lag applies to --staggered');
   if (!Number.isInteger(audioFrames) || audioFrames < 240 || audioFrames % 240)
     throw Error('--audio-frames takes a multiple of 240');
   if (socketAudio && audioFrames > 3840)
@@ -240,15 +212,13 @@ async function run({
   );
   let stage = 'setup';
   const bridge = instrument(rpc, () => stage);
-  rpc = pairedLoop || staggered ? pairedLive.watchBridge(bridge.rpc) : bridge.rpc;
+  rpc = watchBridge(bridge.rpc);
   let stopping = false;
   let pairing = false;
   let decoder = null;
   let transport = null;
-  let paired = null;
   let staggeredLive = null;
   let tail = null;
-  let unpaired = 0;
   let sink = null;
   let soundSource = null;
   let socketAudioReport = null;
@@ -318,32 +288,27 @@ async function run({
     let generation = 0;
     const makeDecoder = async () => {
       transport = await createTransport({rpc, host: rpc.host});
-      if (pairedLoop) paired = createPaired({rpc, publication: sink.workerPublication});
-      if (staggered)
-        staggeredLive = createStaggered({
-          presentHz,
-          skipBacklog,
-          skipRule,
-          ...(trimBacklogMs !== null && {trimBacklogMs}),
-          ...(gateOnReceive && {gateOnReceive}),
-          ...(outputLag !== null && {lag: outputLag}),
-          decodeWait,
-          receiveWait,
-          avoid: avoidWindow,
-          now
-        });
+      staggeredLive = createStaggered({
+        presentHz,
+        skipBacklog,
+        skipRule,
+        ...(trimBacklogMs !== null && {trimBacklogMs}),
+        ...(gateOnReceive && {gateOnReceive}),
+        ...(outputLag !== null && {lag: outputLag}),
+        decodeWait,
+        receiveWait,
+        avoid: avoidWindow,
+        now
+      });
       try {
         return await createDecoder({
           rpc,
           directory,
           workerDirectory: path.join(output, 'decoder-' + generation),
-          workerMode,
+          workerMode: 'split',
           transport,
-          publication: nativePublish || pairedLoop || staggered ? sink.workerPublication : null,
-          autoQueue: autoOutputQueue,
-          linkedGates,
-          ...(pairedLoop ? {splitWorkerFactory: paired.factory} : {}),
-          ...(staggered ? {splitWorkerFactory: staggeredLive.factory} : {}),
+          publication: sink.workerPublication,
+          splitWorkerFactory: staggeredLive.factory,
           log,
           cancelled
         });
@@ -469,12 +434,10 @@ async function run({
       pps,
       configured = false,
       workerStarted = false,
-      pendingSplitOutput = null,
       firstFrame = null,
-      heldUnit = null,
       outstanding = 0;
     async function resync(error) {
-      if ((nativePublish && workerStarted) || paired?.exists || staggeredLive?.exists) throw error;
+      if (staggeredLive?.exists) throw error;
       resets = resets.filter(time => Date.now() - time < 30000);
       if (resets.length >= 3) throw error;
       resets.push(Date.now());
@@ -485,7 +448,6 @@ async function run({
       decoder = await makeDecoder();
       configured = false;
       workerStarted = false;
-      pendingSplitOutput = null;
       outstanding = 0;
       requestIdr();
     }
@@ -526,7 +488,7 @@ async function run({
         dropped: reader.dropped - dropped,
         queued,
         ...(staggeredLive ? {waiting: countsSince(staggeredLive.counts.waiting, waited)} : {}),
-        ...(staggered ? {au: auTiming(auSamples)} : {}),
+        au: auTiming(auSamples),
         ...(trimBacklogMs !== null ? {trimmed} : {}),
         ...withInputStage(bridge.take(), inputBridge),
         at: stage + '/' + (decoder?.step ?? '-'),
@@ -569,7 +531,7 @@ async function run({
         configured = true;
       }
       try {
-        if (workerStarted && staggered) {
+        if (workerStarted) {
           pairing = true;
           const sample = {arrivedAt: unit.arrivedAt, gatedAt: null, sentAt: null, inHand: null};
           try {
@@ -606,106 +568,12 @@ async function run({
           enter('read');
           continue;
         }
-        if (workerStarted && pairedLoop) {
-          if (!heldUnit) {
-            heldUnit = unit;
-            enter('read');
-            continue;
-          }
-          const units = [heldUnit, unit];
-          heldUnit = null;
-          pairing = true;
-          try {
-            await paired.pair({
-              decoder,
-              sink,
-              units,
-              layout: firstFrame,
-              enter,
-              onDecoded: count => {
-                stats.decoded += count;
-              },
-              onPresented: count => {
-                stats.presented += count;
-              }
-            });
-          } finally {
-            pairing = false;
-          }
-          stats.submitted += 2;
-          enter('read');
-          continue;
-        }
-        if (workerStarted && workerMode === 'split') {
-          enter('split-input');
-          if (linkedGates && pendingSplitOutput) {
-            const staged = await decoder.stageSplitInput(unit, {sendFirst: true});
-            stats.submitted++;
-            const [, acquired] = await Promise.all([
-              decoder.verifySplitReceive(undefined, pendingSplitOutput),
-              decoder.waitSplitOutputAcquired(pendingSplitOutput)
-            ]);
-            enter('destination');
-            const destination = await sink.workerDestination(acquired.presentation);
-            enter('split-output');
-            await decoder.openSplitOutputFetch(pendingSplitOutput, destination, staged);
-            const [current] = await Promise.all([
-              decoder.finishSplitInputAfterLinkedGate(),
-              decoder.completeSplitOutputFetch(pendingSplitOutput)
-            ]);
-            stats.decoded++;
-            stats.presented++;
-            pendingSplitOutput = current;
-            enter('read');
-            continue;
-          }
-          const current = await decoder.submitSplit(unit);
-          stats.submitted++;
-          if (pendingSplitOutput) {
-            enter('destination');
-            const destination = nativePublish
-              ? await sink.workerDestination(current.presentation)
-              : await sink.destination();
-            enter('split-output');
-            const frame = await decoder.finishSplitOutput(
-              pendingSplitOutput,
-              destination,
-              autoOutputQueue ? current : null
-            );
-            stats.decoded++;
-            if (!nativePublish) {
-              enter('publish');
-              await sink.publish(destination, frame);
-            }
-            stats.presented++;
-          }
-          enter('split-queue');
-          if (!autoOutputQueue || !pendingSplitOutput) await decoder.queueSplitOutput(current);
-          pendingSplitOutput = current;
-          enter('read');
-          continue;
-        }
-        if (workerStarted) {
-          enter('persistent');
-          await decoder.beginPersistent(unit);
-          enter('destination');
-          const destination = await sink.destination();
-          enter('persistent');
-          const frame = await decoder.finishPersistent(destination);
-          stats.submitted++;
-          stats.decoded++;
-          enter('publish');
-          await sink.publish(destination, frame);
-          stats.presented++;
-          enter('read');
-          continue;
-        }
         enter('submit');
         await decoder.submit(unit);
         stats.submitted++;
         outstanding++;
-        // Frames before the persistent worker take the host-driven path, which is
-        // drained fully so the worker starts with no output owed.
+        // Frames before the staggered workers take the host-driven path, which is
+        // drained fully so the workers start with no output owed.
         const drainUntil = Date.now() + 200;
         for (let pull = true; pull || outstanding > 0; pull = false) {
           enter('destination');
@@ -724,18 +592,11 @@ async function run({
           stats.presented++;
           firstFrame ||= frame;
           if (outstanding === 0 && !workerStarted) {
-            if (staggered) {
-              await sink.wait();
-              staggeredLive.start({input: decoder.lastInput, frame: firstFrame});
-            } else if (pairedLoop) {
-              await sink.wait();
-              await decoder.startSplit();
-              await paired.start();
-            } else if (workerMode === 'split') await decoder.startSplit();
-            else await decoder.startPersistent();
+            await sink.wait();
+            staggeredLive.start({input: decoder.lastInput, frame: firstFrame});
             workerStarted = true;
             log({
-              event: (staggered ? 'staggered' : pairedLoop ? 'paired' : workerMode) + '-worker',
+              event: 'staggered-worker',
               started: true,
               ...(trimBacklogMs !== null && {trimBacklogMs}),
               ...(gateOnReceive && {gateOnReceive}),
@@ -748,11 +609,6 @@ async function run({
         await resync(error);
       }
       enter('read');
-    }
-    if (heldUnit) {
-      unpaired++;
-      heldUnit = null;
-      log({event: 'paired-unpaired', count: unpaired});
     }
     if (staggeredLive?.pending) {
       if (!stopping || stopReason === 'duration') {
@@ -777,27 +633,7 @@ async function run({
       } else tail = {drained: 0, skipped: stopReason};
       log({event: 'staggered-tail', ...tail});
     }
-    if (workerMode === 'split' && pendingSplitOutput && !stopping) {
-      enter('destination');
-      const destination = nativePublish
-        ? await sink.workerDestination(null)
-        : await sink.destination();
-      enter('split-output');
-      const frame = await decoder.finishSplitOutput(pendingSplitOutput, destination);
-      stats.decoded++;
-      if (!nativePublish) {
-        enter('publish');
-        await sink.publish(destination, frame);
-      }
-      stats.presented++;
-      pendingSplitOutput = null;
-    }
   } catch (error) {
-    if (paired?.exists && !rpc.bridgeLost)
-      log({
-        event: 'paired-snapshot',
-        snapshot: await paired.snapshot().catch(snapshotError => ({error: snapshotError.message}))
-      });
     if (staggeredLive?.exists && !rpc.bridgeLost)
       log({
         event: 'staggered-snapshot',
@@ -805,14 +641,13 @@ async function run({
           .snapshot()
           .catch(snapshotError => ({error: snapshotError.message}))
       });
-    if (!stopping || pairedLoop || staggered)
-      log({
-        event: 'native-error',
-        message: error.message,
-        pending: error.pending,
-        control: error.control,
-        ...(stopping ? {stopping} : {})
-      });
+    log({
+      event: 'native-error',
+      message: error.message,
+      pending: error.pending,
+      control: error.control,
+      ...(stopping ? {stopping} : {})
+    });
     if (!stopping) throw error;
   } finally {
     clearInterval(monitor);
@@ -842,14 +677,6 @@ async function run({
       if (socketAudioReport.retainedForSafety) errors.push(Error(socketAudioReport.error));
     }
     let retained = Boolean(rpc.bridgeLost);
-    if (paired && !retained) {
-      try {
-        await paired.stop();
-      } catch (error) {
-        errors.push(error);
-        retained = true;
-      }
-    }
     if (staggeredLive && !retained) {
       try {
         await staggeredLive.stop();
@@ -863,7 +690,7 @@ async function run({
       errors.push(Error('Native objects retained for safety; restart SmileBASIC'));
       log({
         event: 'native-retained',
-        reason: (staggered ? 'staggered worker' : 'paired loop') + ' or bridge state is uncertain'
+        reason: 'staggered worker or bridge state is uncertain'
       });
     } else {
       try {
@@ -883,28 +710,18 @@ async function run({
   }
   const steadyRows = rows.slice(warmup);
   const summary = {
-    workerMode: pairedLoop ? 'paired' : staggered ? 'staggered' : workerMode,
-    ...(staggered
-      ? {
-          decoded: steadyRows.reduce((sum, row) => sum + row.decoded, 0),
-          presentHz,
-          skipBacklog: skipBacklog === Infinity ? 'off' : skipBacklog,
-          skipRule,
-          ...(trimBacklogMs !== null && {trimBacklogMs}),
-          ...(gateOnReceive && {gateOnReceive}),
-          ...(outputLag !== null && {outputLag}),
-          decodeWait,
-          receiveWait,
-          avoidWindow,
-          staggered: {...(staggeredLive?.counts ?? {}), tail}
-        }
-      : {}),
-    ...(pairedLoop
-      ? {
-          decoded: steadyRows.reduce((sum, row) => sum + row.decoded, 0),
-          unpaired
-        }
-      : {}),
+    workerMode: 'staggered',
+    decoded: steadyRows.reduce((sum, row) => sum + row.decoded, 0),
+    presentHz,
+    skipBacklog: skipBacklog === Infinity ? 'off' : skipBacklog,
+    skipRule,
+    ...(trimBacklogMs !== null && {trimBacklogMs}),
+    ...(gateOnReceive && {gateOnReceive}),
+    ...(outputLag !== null && {outputLag}),
+    decodeWait,
+    receiveWait,
+    avoidWindow,
+    staggered: {...(staggeredLive?.counts ?? {}), tail},
     queue,
     inputHz,
     audioFrames,
@@ -929,7 +746,7 @@ async function run({
     event: 'summary',
     verdict: result.pass ? 'PASS' : 'FAIL',
     failures: result.failures,
-    mode: workerMode,
+    mode: 'staggered',
     fps: summary.fps,
     minFps: summary.minFps,
     dropped: summary.dropped,

@@ -6,15 +6,14 @@
  * output) in module memory. configure() turns SPS/PPS into a configuration and starts the
  * decoder. Everything is destroyed again, in reverse, by close().
  *
- * Three ways to drive it, picked by `workerMode`:
+ * Two ways to drive it, picked by `workerMode`:
  *
  * - host: submit() and receive() run each frame from the host. One finite worker frame
  *   carries SendInput, AcquireOutput and the next AcquireInput, and receive() points the
  *   output buffer at the destination surface and fetches the frame in one paired exchange.
- * - persistent: after a host-driven first frame, a persistent console worker decodes each
- *   access unit (persistent-decoder-worker.js).
- * - split: after a host-driven first frame, separate console workers receive input over the
- *   TCP transport and fetch outputs (split-decoder-worker.js).
+ * - split: configure() also creates and registers the console workers of
+ *   `splitWorkerFactory` (the staggered workers), which take over after the host-driven
+ *   first frame; close() stops and finalizes them.
  *
  * Input indices are pipelined: each frame acquires the input slot of the next one, and the
  * host only polls for a slot when that came back empty.
@@ -25,8 +24,6 @@ import definitions from '../../sdk/native/movie-functions.json' with {type: 'jso
 import {create as createModule} from '../../../hbl-platform/sdk/native/module.js';
 import {createFinite} from '../../../hbl-platform/sdk/native/jobs.js';
 import {builds} from '../../../hbl-platform/sdk/build.js';
-import {create as createPersistentWorker} from './persistent-decoder-worker.js';
-import {create as createSplitWorker} from './split-decoder-worker.js';
 
 /**
  * Offsets in the module memory. The decoder, media objects and buffers sit at the start;
@@ -215,7 +212,6 @@ function unsupportedLayout({width, height, stride, sliceHeight}, bytes, destinat
  * @typedef {object} AccessUnit
  * @property {Buffer} data One H.264 access unit.
  * @property {number} pts
- * @property {number} [receiveLength] Split mode: the bytes the console receives for it.
  */
 
 /** @typedef {{address: number, bytes: number}} OutputDestination */
@@ -226,12 +222,9 @@ function unsupportedLayout({width, height, stride, sliceHeight}, bytes, destinat
  * @property {any} rpc
  * @property {string} directory Holds the compatibility-module.json of the movie module.
  * @property {string} [workerDirectory] Where native workers keep their files.
- * @property {'host' | 'persistent' | 'split'} [workerMode]
+ * @property {'host' | 'split'} [workerMode]
  * @property {any} [transport] The native TCP transport; split mode needs one.
  * @property {any} [publication] Split mode: the sink's worker publication.
- * @property {boolean} [autoQueue]
- * @property {boolean} [linkedGates]
- * @property {(options: object) => Promise<any>} [persistentWorkerFactory]
  * @property {((options: object) => Promise<any>) | null} [splitWorkerFactory]
  * @property {(event: object) => void} [log]
  * @property {() => boolean} [cancelled]
@@ -245,16 +238,13 @@ async function create({
   workerMode = 'host',
   transport = null,
   publication = null,
-  autoQueue = false,
-  linkedGates = false,
-  persistentWorkerFactory = createPersistentWorker,
   splitWorkerFactory = null,
   log = () => {},
   cancelled = () => false
 }) {
-  if (!['host', 'persistent', 'split'].includes(workerMode))
-    throw Error('Unknown decoder worker mode');
-  if (workerMode === 'split' && !transport) throw Error('Split decoder needs a TCP transport');
+  if (!['host', 'split'].includes(workerMode)) throw Error('Unknown decoder worker mode');
+  if (workerMode === 'split' && (!transport || !splitWorkerFactory))
+    throw Error('Split decoder needs a TCP transport and a worker factory');
   const movieModule = JSON.parse(
     /** @type {any} */ (await fs.readFile(path.join(directory, 'compatibility-module.json')))
   );
@@ -302,12 +292,7 @@ async function create({
   let lastInput = null;
   /** The raw result of a caller's SDK call run just before SendInput, such as a tick. */
   let lastStamp = null;
-  let persistent = null;
-  let persistentStarted = false;
-  let persistentJob = null;
   let split = null;
-  let splitStarted = false;
-  let splitInputJob = null;
 
   /**
    * @param {string} name
@@ -442,22 +427,12 @@ async function create({
   }
 
   /**
-   * Records the next input a console worker acquired.
-   * @param {{input: {status?: number, index: number}}} completed
-   */
-  function takeInput(completed) {
-    pendingInput = completed.input.index >= 0 ? completed.input.index : null;
-    lastInput = completed.input;
-  }
-
-  /**
    * Stops the workers and the decoder and destroys what create() built, collecting every
    * failure. Workers are finalized only after a clean shutdown.
    */
   async function close() {
     if (closed) return;
     if (split) await split.stop();
-    if (persistent) await persistent.stop();
     closed = true;
     const errors = [];
     try {
@@ -483,13 +458,6 @@ async function create({
     if (transport) {
       try {
         await transport.close();
-      } catch (error) {
-        errors.push(error);
-      }
-    }
-    if (!errors.length && persistent) {
-      try {
-        await persistent.finalize();
       } catch (error) {
         errors.push(error);
       }
@@ -538,8 +506,8 @@ async function create({
     },
 
     /**
-     * Configures the decoder from bare SPS and PPS NALs, creates the console worker of the
-     * persistent or split mode, and starts decoding.
+     * Configures the decoder from bare SPS and PPS NALs, creates the split mode's console
+     * workers, and starts decoding.
      * @param {Buffer} sps
      * @param {Buffer} pps
      * @param {number} [fps]
@@ -570,21 +538,8 @@ async function create({
       await api.write(MEMORY.key, Buffer.from('frame-rate\0'));
       await api.call('mediaSetInt', [pointer('configuration'), pointer('key'), fps]);
       await success('configure', [pointer('decoder'), pointer('configuration')]);
-      if (workerMode === 'persistent') {
-        persistent = await persistentWorkerFactory({
-          rpc,
-          module: movieModule,
-          functions: fn,
-          decoder: pointer('decoder'),
-          output: pointer('output'),
-          format: pointer('format'),
-          transport,
-          cancelled
-        });
-        await persistent.register();
-      }
       if (workerMode === 'split') {
-        split = await (splitWorkerFactory || createSplitWorker)({
+        split = await splitWorkerFactory({
           rpc,
           module: movieModule,
           functions: fn,
@@ -593,8 +548,6 @@ async function create({
           format: pointer('format'),
           transport,
           publication,
-          autoQueue,
-          linkedGates,
           cancelled
         });
         await split.register();
@@ -613,213 +566,6 @@ async function create({
 
     get lastStamp() {
       return lastStamp;
-    },
-
-    get splitDiagnostics() {
-      return split?.diagnostics ?? null;
-    },
-
-    /** Hands decoding to the split workers once the host decoded the first frame. */
-    async startSplit() {
-      if (workerMode !== 'split' || !running || closed || !sizing || !layout)
-        throw Error('Split decoder needs a completed host-driven first frame');
-      if (outputIndex >= 0 || pendingOutput) throw Error('Decoder output is still owned');
-      await split.start();
-      splitStarted = true;
-    },
-
-    /**
-     * Claims an input buffer for `unit` and stages the split worker's receive into it.
-     * @param {AccessUnit} unit
-     * @param {{sendFirst?: boolean}} [options]
-     */
-    async stageSplitInput(unit, {sendFirst = false} = {}) {
-      if (!splitStarted || closed || !running || splitInputJob)
-        throw Error('Split decoder input is not ready');
-      if (!unit || invalidUnit(unit)) throw Error('Invalid decoder access unit');
-      step = 'acquireInput';
-      if (pendingInput === null) pendingInput = await acquireInput();
-      const index = pendingInput;
-      step = 'cacheInput';
-      await cacheInput(index);
-      const {address, capacity} = inputs.get(index);
-      if (!Number.isSafeInteger(address) || address <= 0 || unit.data.length > capacity)
-        throw Error('H.264 access unit exceeds the native input buffer');
-      step = 'split-receive';
-      splitInputJob = await split.stageInput({
-        index,
-        length: unit.data.length,
-        receiveLength: unit.receiveLength,
-        pts: unit.pts,
-        inputAddress: address,
-        payload: unit.data,
-        sendFirst
-      });
-      return splitInputJob;
-    },
-
-    /** @param {Buffer} [payload] */
-    async completeSplitInput(payload) {
-      if (!splitInputJob || closed || !running) throw Error('Split decoder has no staged input');
-      step = 'split-submit';
-      const completed = await split.completeInput(splitInputJob, payload);
-      splitInputJob = null;
-      takeInput(completed);
-      step = 'idle';
-      return completed;
-    },
-
-    /**
-     * @param {Buffer} payload
-     * @param {any} pairedOutput
-     */
-    async verifySplitReceive(payload, pairedOutput) {
-      if (!splitInputJob || closed || !running) throw Error('Split decoder has no staged input');
-      step = 'split-receive-check';
-      return split.verifyReceived(splitInputJob, payload, pairedOutput);
-    },
-
-    async finishSplitInputAfterLinkedGate() {
-      if (!splitInputJob || closed || !running) throw Error('Split decoder has no staged input');
-      step = 'split-submit';
-      const completed = await split.finishInputAfterLinkedGate(splitInputJob);
-      splitInputJob = null;
-      takeInput(completed);
-      step = 'idle';
-      return completed;
-    },
-
-    /** @param {AccessUnit} unit */
-    async submitSplit(unit) {
-      await this.stageSplitInput(unit, {sendFirst: true});
-      return this.completeSplitInput();
-    },
-
-    /** @param {any} job */
-    async queueSplitOutput(job) {
-      if (!splitStarted || closed || !running) throw Error('Split decoder is not running');
-      step = 'split-output';
-      await split.queueOutput(job);
-    },
-
-    /** @param {any} job */
-    async waitSplitOutputAcquired(job) {
-      if (!splitStarted || closed || !running) throw Error('Split decoder is not running');
-      return split.waitForAcquired(job);
-    },
-
-    /**
-     * @param {any} job
-     * @param {OutputDestination} destination
-     * @param {any} [nextJob]
-     */
-    async finishSplitOutput(job, destination, nextJob = null) {
-      if (!splitStarted || closed || !running) throw Error('Split decoder is not running');
-      const {bytes} = sizing;
-      if (!destination || unfitDestination(destination, sizing))
-        throw Error('Native output does not fit the aligned destination surface');
-      step = 'split-fetch';
-      const completed = await split.finishOutput(job, destination, layout, nextJob);
-      step = 'idle';
-      return {...layout, bytes, pts: completed.pts.toString(), format: 'nv12'};
-    },
-
-    /**
-     * @param {any} job
-     * @param {OutputDestination} destination
-     * @param {any} nextJob
-     */
-    async openSplitOutputFetch(job, destination, nextJob) {
-      if (!splitStarted || closed || !running) throw Error('Split decoder is not running');
-      if (!destination || unfitDestination(destination, sizing))
-        throw Error('Native output does not fit the aligned destination surface');
-      step = 'split-fetch';
-      return split.openOutputFetch(job, destination, layout, nextJob);
-    },
-
-    /** @param {any} job */
-    async completeSplitOutputFetch(job) {
-      if (!splitStarted || closed || !running) throw Error('Split decoder is not running');
-      const completed = await split.completeOutputFetch(job);
-      step = 'idle';
-      return {...layout, bytes: sizing.bytes, pts: completed.pts.toString(), format: 'nv12'};
-    },
-
-    /**
-     * Hands decoding to the persistent worker once the host decoded the first frame.
-     * @param {{stage?: any}} [options]
-     */
-    async startPersistent({stage = null} = {}) {
-      if (workerMode !== 'persistent' || !running || closed || !sizing || !layout)
-        throw Error('Persistent decoder needs a completed host-driven first frame');
-      if (outputIndex >= 0 || pendingOutput) throw Error('Decoder output is still owned');
-      await persistent.start({stage});
-      persistentStarted = true;
-    },
-
-    /**
-     * Claims an input buffer for `unit` and starts the persistent worker on it. Without a
-     * transport the host writes the unit itself.
-     * @param {AccessUnit} unit
-     */
-    async beginPersistent(unit) {
-      if (!persistentStarted || closed || !running)
-        throw Error('Persistent decoder is not running');
-      if (persistentJob) throw Error('Persistent decoder job is already in flight');
-      if (invalidUnit(unit)) throw Error('Invalid decoder access unit');
-      step = 'acquireInput';
-      if (pendingInput === null) pendingInput = await acquireInput();
-      const index = pendingInput;
-      step = 'cacheInput';
-      await cacheInput(index);
-      const {address, capacity} = inputs.get(index);
-      if (!Number.isSafeInteger(address) || address <= 0 || unit.data.length > capacity)
-        throw Error('H.264 access unit exceeds the native input buffer');
-      if (!transport) {
-        step = 'writeUnit';
-        await rpc.write(address, unit.data);
-      }
-      step = 'persistent-start';
-      persistentJob = await persistent.begin({
-        index,
-        length: unit.data.length,
-        pts: unit.pts,
-        ...(transport ? {inputAddress: address, payload: unit.data} : {})
-      });
-      step = 'persistent-output';
-    },
-
-    /**
-     * Fetches the persistent worker's frame into `destination`.
-     * @param {OutputDestination} destination
-     */
-    async finishPersistent(destination) {
-      if (!persistentJob || closed || !running)
-        throw Error('Persistent decoder has no submitted access unit');
-      const {bytes} = sizing;
-      if (unfitDestination(destination, sizing))
-        throw Error('Native output does not fit the aligned destination surface');
-      step = 'persistent-fetch';
-      const completed = await persistent.finish(persistentJob, destination);
-      persistentJob = null;
-      takeInput(completed);
-      step = 'idle';
-      return {
-        ...layout,
-        bytes,
-        pts: completed.pts.toString(),
-        format: 'nv12',
-        ...(completed.probe ? {probe: completed.probe} : {})
-      };
-    },
-
-    /**
-     * @param {AccessUnit} unit
-     * @param {OutputDestination} destination
-     */
-    async processPersistent(unit, destination) {
-      await this.beginPersistent(unit);
-      return this.finishPersistent(destination);
     },
 
     /**

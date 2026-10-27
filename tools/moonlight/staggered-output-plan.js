@@ -14,7 +14,7 @@
 import {build, CALL4_X19} from '../../../hbl-platform/smilebasic/engine/shared/frames.js';
 import {CODE, IPC_COPY} from '../../../hbl-platform/sdk/native/thread.js';
 import SYNC from '../../../hbl-platform/sdk/native/os-sync-functions.json' with {type: 'json'};
-import {metadata} from './paired-output-frame.js';
+import {metadata} from './publication-metadata.js';
 import * as status from './staggered-status.js';
 import * as ring from './ring.js';
 

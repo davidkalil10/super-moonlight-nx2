@@ -2,14 +2,13 @@
 // native H.264 decoder (native-h264.js).
 // Usage: node tools/moonlight/live.js [runs/launcher-XXXX] --moonlight HOST APP
 //        [--bitrate KBPS|auto] [--codec h264] [--size 1920x1080] [--fps 60]
-//        [--split-decoder] [--native-publish] [--auto-output-queue] [--linked-gates]
-//        [--paired-loop] (input-only split worker plus a guarded two-frame output loop)
-//        [--duration S] [--warmup S] [--expect fps=30,dropped=0,idr=0] [--ab] [--queue 3, 8 with --staggered] [--input-hz 60] [--audio-frames 960]
-//        --staggered: [--present-hz 60|120] [--skip-backlog 2|off] [--skip-rule backlog|vsync]
-//                     [--trim-backlog-ms N] (backlog rule: skip one output once the unit in hand is N ms old at 3 gates in a row)
-//                     [--gate-on-receive] (prime and gate each unit as it arrives instead of on the next one)
-//                     [--output-lag 1|2] (fetch each output 1 or 2 gates after its decode opened; 2 by default)
-//                     [--decode-wait] (with --skip-rule vsync) [--receive-wait]
+//        [--duration S] [--warmup S] [--expect fps=30,dropped=0,idr=0] [--queue 8] [--input-hz 60] [--audio-frames 960]
+//        [--staggered] (no-op: the staggered workers are the only route)
+//        [--present-hz 60|120] [--skip-backlog 2|off] [--skip-rule backlog|vsync]
+//        [--trim-backlog-ms N] (backlog rule: skip one output once the unit in hand is N ms old at 3 gates in a row)
+//        [--gate-on-receive] (prime and gate each unit as it arrives instead of on the next one)
+//        [--output-lag 1|2] (fetch each output 1 or 2 gates after its decode opened; 2 by default)
+//        [--decode-wait] (with --skip-rule vsync) [--receive-wait] [--avoid-window BEFORE-AFTER]
 //        [--socket-audio | --socket-audio-tone] (PCM or a 500 Hz test tone over native TCP to a console worker)
 // --moonlight runs tools/moonlight/helper's hbmoonlight (path from $HBMOONLIGHT)
 //   and, unless --no-input / --no-audio, also feeds controller+touch into its
@@ -41,37 +40,17 @@ async function main() {
   const storage = await findPrivateStorage(directory);
   if (storage.bytes < ring.MEMORY_BYTES)
     throw Error('The running Moonlight app predates HBV2; rebuild and reinstall it');
-  const runs = args.includes('--ab')
-    ? [
-        args.filter(
-          arg =>
-            arg !== '--ab' &&
-            arg !== '--split-decoder' &&
-            arg !== '--native-publish' &&
-            arg !== '--auto-output-queue' &&
-            arg !== '--linked-gates' &&
-            arg !== '--paired-loop'
-        ),
-        [...args, '--split-decoder']
-      ]
-    : [args];
-  if (runs.length > 1 && !args.includes('--duration')) throw Error('--ab needs --duration');
-  let pass = true;
-  for (const [index, runArgs] of runs.entries()) {
-    if (index) await new Promise(resolve => setTimeout(resolve, 3000));
-    const summary = await nativeH264.run({
-      args: runArgs,
-      directory,
-      rpc,
-      storage,
-      helperPath: HELPER,
-      width,
-      height,
-      fps
-    });
-    pass &&= summary.pass;
-  }
-  if (!pass) process.exitCode = 1;
+  const summary = await nativeH264.run({
+    args,
+    directory,
+    rpc,
+    storage,
+    helperPath: HELPER,
+    width,
+    height,
+    fps
+  });
+  if (!summary.pass) process.exitCode = 1;
 }
 
 main().catch(error => {
