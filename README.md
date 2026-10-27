@@ -1,9 +1,9 @@
 # hbl-moonlight
 
 Moonlight for HBLauncher: stream PC games from Sunshine to the Switch 2. The console runs
-the Moonlight HB package (`apps/moonlight/`), the PC runs the host side (`tools/moonlight/`):
-the `hbmoonlight` client, the stream senders and the console UI service. Tests, simulators
-and research live in the sibling `moonlight-dev`.
+the Moonlight HB package (`apps/moonlight/`), the PC runs the host side (`host/`,
+`tools/moonlight/`): the `hbmoonlight` client, the stream senders and the console UI
+service. Tests, simulators and research live in the sibling `moonlight-dev`.
 
 ```
 Sunshine (rig, 192.168.8.245)
@@ -19,10 +19,13 @@ apps/moonlight (console GPU)        compute picks/decodes, fragment draws
 
 - `apps/moonlight/`: the HB package (`manifest.json`, `assets/`, `backends/hblauncher.gpu-app/`,
   `build.js`); its own README covers the package build.
-- `tools/moonlight/`: the host. `live.js` (sender), `native-h264.js` (console decoder route),
-  the staggered workers, `ring.js` and the HBV formats, `input-feeder.js`, `audio-stream.js`,
-  and `helper/` (`hbmoonlight`, C, GPLv3).
+- `host/stream/`: `live.js` (sender), `native-h264.js` (console decoder route), the
+  staggered workers and `helper.js` (finds the `hbmoonlight` binary).
+- `host/audio/`: `audio-stream.js` and the socket audio worker.
+- `host/input/`: `input-feeder.js`, `controller.js`, `touch.js`.
 - `host/ui/`: the console UI service (see Console UI service).
+- `tools/moonlight/`: `ring.js`, the HBV formats, `feed.js`, `frames.js`, `reference.js` and
+  `helper/` (`hbmoonlight`, C, GPLv3).
 - `sdk/native/movie-functions.json`, `movie-event-functions.json`: the native symbols only
   Moonlight uses.
 
@@ -56,7 +59,7 @@ sudo dnf install gcc gcc-c++ cmake openssl-devel libcurl-devel expat-devel libuu
 moonlight-common-c at `b126e481` (has `LiSendTouchEvent`) and its enet at `dea6fb5`. A
 published `hbmoonlight` is GPLv3. The bench, the encoder check and the input test build only
 when `moonlight-dev` sits beside this checkout (`DEV_DIR` in `helper/CMakeLists.txt`).
-`tools/moonlight/helper.js` finds the binary: `$HBMOONLIGHT`, else the default build path.
+`host/stream/helper.js` finds the binary: `$HBMOONLIGHT`, else the default build path.
 
 ## Run
 
@@ -67,7 +70,7 @@ Refresh in the launcher and relaunch. Hold Plus and Minus together for one secon
 to the launcher; single B and Minus presses reach the PC.
 
 ```sh
-node tools/moonlight/live.js [RUN_DIR] --moonlight 192.168.8.245 Desktop --codec h264 --fps 60
+node host/stream/live.js [RUN_DIR] --moonlight 192.168.8.245 Desktop --codec h264 --fps 60
 # console UI: the console picks the host and app
 node host/ui/service.js [RUN_DIR]
 ```

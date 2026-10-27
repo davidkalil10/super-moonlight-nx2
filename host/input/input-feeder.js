@@ -14,7 +14,7 @@
  * With --counts-fd N, the reads' bridge exchanges and time go out on that descriptor once a
  * second as {exchanges, bridgeMs} lines, for the stream's stats rows (stage "input").
  *
- * Usage: node tools/moonlight/input-feeder.js [runs/launcher-XXXX] [--hz 60] [--labels]
+ * Usage: node host/input/input-feeder.js [runs/launcher-XXXX] [--hz 60] [--labels]
  *        [--counts-fd N]
  */
 import fs from 'node:fs';
@@ -24,8 +24,8 @@ import * as cli from '../../../hbl-platform/sdk/cli.js';
 import {STATE} from '../../../hbl-platform/sdk/host/layout.js';
 import {NEUTRAL, decode, toMoonlight, same, NPAD_BYTES} from './controller.js';
 import {TOUCH_BYTES, parseTouch, createTracker, step, flush, touchLine} from './touch.js';
-import {UI, UI_MAGIC} from './ring.js';
-import {instrument} from './bridge-counter.js';
+import {UI, UI_MAGIC} from '../../tools/moonlight/ring.js';
+import {instrument} from '../stream/bridge-counter.js';
 
 /** One read from the start of the state buffer to the end of the touch block. */
 const READ_BYTES = STATE.touch + TOUCH_BYTES;

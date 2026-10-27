@@ -23,7 +23,7 @@ import {createRaster} from './raster.js';
 import * as uiSettings from './settings.js';
 import {hostsFile, loadHosts, seedHosts, saveHosts, parseList} from './hosts.js';
 import {discover, merge} from './discover.js';
-import {HELPER} from '../../tools/moonlight/helper.js';
+import {HELPER} from '../stream/helper.js';
 import {findPrivateStorage} from '../../tools/moonlight/feed.js';
 import * as session from '../../../hbl-platform/sdk/host/session.js';
 import * as cli from '../../../hbl-platform/sdk/cli.js';
@@ -77,7 +77,7 @@ function splashHeader() {
 function createChildren({
   spawnProcess = spawn,
   helperPath = HELPER,
-  liveScript = path.join(import.meta.dirname, '../../tools/moonlight/live.js')
+  liveScript = path.join(import.meta.dirname, '../stream/live.js')
 } = {}) {
   /** Collects the output for exited, or hands each line to onLine as it arrives. */
   function wrap(child, {onLine, collect}) {

@@ -1,6 +1,6 @@
 // Live sender: streams a Moonlight host into the running Moonlight app through the console's
 // native H.264 decoder (native-h264.js).
-// Usage: node tools/moonlight/live.js [runs/launcher-XXXX] --moonlight HOST APP
+// Usage: node host/stream/live.js [runs/launcher-XXXX] --moonlight HOST APP
 //        [--bitrate KBPS|auto] [--codec h264] [--size 1920x1080] [--fps 60]
 //        [--duration S] [--warmup S] [--expect fps=30,dropped=0,idr=0] [--queue 8] [--input-hz 60] [--audio-frames 960]
 //        [--staggered] (no-op: the staggered workers are the only route)
@@ -15,8 +15,8 @@
 //   stdin (input-feeder.js) and plays its audio on the console (audio-stream.js,
 //   or socket-audio-source.js with --socket-audio).
 import path from 'node:path';
-import * as ring from './ring.js';
-import {findPrivateStorage} from './feed.js';
+import * as ring from '../../tools/moonlight/ring.js';
+import {findPrivateStorage} from '../../tools/moonlight/feed.js';
 import {HELPER} from './helper.js';
 import * as session from '../../../hbl-platform/sdk/host/session.js';
 import * as cli from '../../../hbl-platform/sdk/cli.js';

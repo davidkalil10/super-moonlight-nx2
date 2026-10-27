@@ -11,7 +11,7 @@
  * rather than closed, and the report asks for a SmileBASIC restart.
  */
 import {ByteQueue} from './audio-stream.js';
-import {create as createNativeTransport} from './native-tcp.js';
+import {create as createNativeTransport} from '../stream/native-tcp.js';
 import {create as createAudioWorker} from './audio-socket-worker.js';
 
 const SAMPLE_RATE = 48000;

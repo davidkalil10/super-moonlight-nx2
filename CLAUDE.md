@@ -10,9 +10,11 @@ The host is moving from `tools/moonlight/` into `host/`; until it is done both h
 
 - `apps/moonlight/`: the console app as an HB package (`manifest.json`, `assets/`,
   `backends/hblauncher.gpu-app/`, `build.js`, its own README).
-- `tools/moonlight/`: the PC host (`live.js`, `native-h264.js`, staggered workers,
-  ring/HBV formats) and `helper/` (`hbmoonlight`, C, GPLv3 upstreams).
+- `host/stream/`, `host/audio/`, `host/input/`: the PC host (`live.js`, `native-h264.js`,
+  staggered workers, audio and input feeders).
 - `host/ui/`: the console UI service, its rasteriser and the Sora font.
+- `tools/moonlight/`: ring/HBV formats, test feeders and `helper/` (`hbmoonlight`, C, GPLv3
+  upstreams).
 - `sdk/native/*-functions.json`: the native symbols only Moonlight uses.
 
 ## Sibling checkouts

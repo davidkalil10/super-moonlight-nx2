@@ -13,7 +13,7 @@
  *
  * Destinations are checked to be writable mapped memory before the decoder may write them.
  */
-import * as ring from './ring.js';
+import * as ring from '../../tools/moonlight/ring.js';
 
 /** The storage memory flag of a coherent allocation. */
 const COHERENT_MEMORY = 4;

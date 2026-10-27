@@ -59,5 +59,5 @@ ignored with a notice.
 Stream to a running app (the newest `runs/launcher-*` session):
 
 ```sh
-node tools/moonlight/live.js --moonlight HOST APP --codec h264 --staggered --socket-audio
+node host/stream/live.js --moonlight HOST APP --codec h264 --staggered --socket-audio
 ```

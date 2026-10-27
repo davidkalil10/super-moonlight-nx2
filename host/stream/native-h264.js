@@ -15,7 +15,7 @@ import {bitrate as streamBitrate} from './bitrate.js';
 import {create as createNativeDecoder} from './native-decoder.js';
 import {create as createNativeTransport} from './native-tcp.js';
 import {create as createNativeSink} from './native-sink.js';
-import {create as createSocketAudioSource} from './socket-audio-source.js';
+import {create as createSocketAudioSource} from '../audio/socket-audio-source.js';
 import {create as createStaggeredLive} from './staggered-live.js';
 import * as exchangeTiming from './exchange-timing.js';
 
@@ -366,7 +366,7 @@ async function run({
       const child = spawnProcess(
         process.execPath,
         [
-          path.join(import.meta.dirname, 'input-feeder.js'),
+          path.join(import.meta.dirname, '../input/input-feeder.js'),
           directory,
           '--hz',
           String(inputHz),
@@ -409,7 +409,7 @@ async function run({
       const child = spawnProcess(
         process.execPath,
         [
-          path.join(import.meta.dirname, 'audio-stream.js'),
+          path.join(import.meta.dirname, '../audio/audio-stream.js'),
           directory,
           '--buffer-frames',
           String(audioFrames),

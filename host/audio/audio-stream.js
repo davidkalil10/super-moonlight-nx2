@@ -10,7 +10,7 @@
  * playhead, and GetReleasedAudioOutBuffer is only polled for buffers that should be done.
  * Functions resolve through sdk/native/symbols.js like game-audio.js.
  *
- * Usage: node tools/moonlight/audio-stream.js [runs/launcher-XXXX] [--fd N | --file PATH]
+ * Usage: node host/audio/audio-stream.js [runs/launcher-XXXX] [--fd N | --file PATH]
  *        [--buffer-frames 3840] [--queue 3] [--prime 2] [--stats]
  */
 import fs from 'node:fs';

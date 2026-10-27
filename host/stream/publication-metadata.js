@@ -6,7 +6,7 @@
  * space, a checksum over all of them and the sequence. The staggered output frames publish
  * through it.
  */
-import * as ring from './ring.js';
+import * as ring from '../../tools/moonlight/ring.js';
 
 /** Indices of the native ring surfaces. */
 const SURFACES = [0, 1, 2];

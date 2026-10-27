@@ -15,7 +15,7 @@
  * Their errors carry `retryable` when the worker simply has not got there yet, and `pending`
  * names what it is still waiting for, so the scheduler knows whether to read again.
  */
-import * as ring from './ring.js';
+import * as ring from '../../tools/moonlight/ring.js';
 
 /** Ring offsets of the status groups. */
 const STATUS = {
