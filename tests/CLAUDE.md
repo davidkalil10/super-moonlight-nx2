@@ -94,8 +94,8 @@ compare to every exchange, small ones included.
   24.5-25.1 dB. Clips (720p upscaled, flattering): HBV2 64-96K holds 56-59 fps; 160K drops
   mandelbrot to 34 fps at 5.7 MB/s but holds 59 at 12 MB/s, so keep the budget near 64-96K on
   the slow link. `displayed` PSNR is low for fast-moving text in both codecs: it measures
-  latency, not reconstruction. Encode was 2.4-5.8 ms per 1080p frame idle; desktop RADV decodes in 1-5 ms. Artifacts in
-  `~/claude-builds/HBLauncher/hbv2-eval/`.
+  latency, not reconstruction. Encode was 2.4-5.8 ms per 1080p frame idle; desktop RADV
+  decodes in 1-5 ms. Artifacts in `~/claude-builds/HBLauncher/hbv2-eval/`.
 - Helper decode on m5 (`hbmoonlight-bench`, 1080p60 testsrc2 at 20 Mb/s): H.264 VAAPI 7.6 ms
   (6.4 with 4 slices), software 3.3 (2.8), HEVC VAAPI 7.0. VAAPI is likely slowed by the NV12
   readback (not profiled); synthetic content flatters software, so compare on a real game
