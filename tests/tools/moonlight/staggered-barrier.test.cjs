@@ -16,12 +16,10 @@ const definitions = require('../../../hbl-moonlight/sdk/native/movie-functions.j
 const registration =
   require('../../../hbl-moonlight/sdk/native/movie-event-functions.json').registerClientEvents;
 const ring = require('../../../hbl-moonlight/tools/moonlight/ring.js');
-const inputPlan = require('../../../hbl-moonlight/tools/moonlight/staggered-input-plan.js');
-const outputPlan = require('../../../hbl-moonlight/tools/moonlight/staggered-output-plan.js');
-const {
-  create: createWorker
-} = require('../../../hbl-moonlight/tools/moonlight/staggered-worker.js');
-const {create: createLive} = require('../../../hbl-moonlight/tools/moonlight/staggered-live.js');
+const inputPlan = require('../../../hbl-moonlight/host/stream/staggered-input-plan.js');
+const outputPlan = require('../../../hbl-moonlight/host/stream/staggered-output-plan.js');
+const {create: createWorker} = require('../../../hbl-moonlight/host/stream/staggered-worker.js');
+const {create: createLive} = require('../../../hbl-moonlight/host/stream/staggered-live.js');
 
 const layout = {width: 1920, height: 1080, stride: 1920, sliceHeight: 1088};
 const noWait = async () => {};

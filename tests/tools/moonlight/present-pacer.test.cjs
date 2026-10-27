@@ -40,7 +40,7 @@ async function gates({
 }
 
 async function pacerOn(options = {}) {
-  const {create} = await import('../../../hbl-moonlight/tools/moonlight/present-pacer.js');
+  const {create} = await import('../../../hbl-moonlight/host/stream/present-pacer.js');
   const clock = {now: 0.3};
   const pacer = create({
     periodMs: PERIOD,

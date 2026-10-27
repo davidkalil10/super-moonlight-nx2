@@ -6,7 +6,7 @@ const {
   primeAppend,
   cycle,
   checkedCycle
-} = require('../../../hbl-moonlight/tools/moonlight/audio-socket-plan.js');
+} = require('../../../hbl-moonlight/host/audio/audio-socket-plan.js');
 
 const options = {
   sdk: 0x10000000,

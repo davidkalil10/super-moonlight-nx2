@@ -4,7 +4,7 @@ const {
   parseExpect,
   summarize,
   verdict
-} = require('../../../hbl-moonlight/tools/moonlight/run-summary.js');
+} = require('../../../hbl-moonlight/host/stream/run-summary.js');
 
 const row = (presented, extra = {}) => ({
   presented,

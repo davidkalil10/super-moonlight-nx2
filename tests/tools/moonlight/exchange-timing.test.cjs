@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const load = () => import('../../../hbl-moonlight/tools/moonlight/exchange-timing.js');
+const load = () => import('../../../hbl-moonlight/host/stream/exchange-timing.js');
 
 test('exchanges bin by their offset from each known event', async () => {
   const {create} = await load();

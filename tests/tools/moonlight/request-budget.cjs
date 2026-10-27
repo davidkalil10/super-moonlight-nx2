@@ -1,9 +1,9 @@
 // Offline request budget for the staggered native H.264 host loop: a virtual-clock model of
 // the lag-2 gate cycle, with the present pacer and the decode and receive waits it uses.
 const cli = require('../../../hbl-platform/sdk/cli.js');
-const presentPacer = require('../../../hbl-moonlight/tools/moonlight/present-pacer.js');
-const decodeWaits = require('../../../hbl-moonlight/tools/moonlight/decode-wait.js');
-const receiveWaits = require('../../../hbl-moonlight/tools/moonlight/receive-wait.js');
+const presentPacer = require('../../../hbl-moonlight/host/stream/present-pacer.js');
+const decodeWaits = require('../../../hbl-moonlight/host/stream/decode-wait.js');
+const receiveWaits = require('../../../hbl-moonlight/host/stream/receive-wait.js');
 
 // requestMs is the 3a figure (23.46 ms / 10.47 requests); that run has no overlapping
 // requests, so it is pure bridge cost. decodeMs is the decode latency the host sees after

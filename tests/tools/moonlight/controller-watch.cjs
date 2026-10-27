@@ -12,7 +12,7 @@ const {
   toMoonlight,
   same,
   readController
-} = require('../../../hbl-moonlight/tools/moonlight/controller.js');
+} = require('../../../hbl-moonlight/host/input/controller.js');
 
 async function main() {
   const args = process.argv.slice(2);

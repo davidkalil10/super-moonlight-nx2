@@ -7,7 +7,7 @@ const {
   gate,
   readStorage,
   OVERLAY_READ
-} = require('../../../hbl-moonlight/tools/moonlight/input-feeder.js');
+} = require('../../../hbl-moonlight/host/input/input-feeder.js');
 const {UI, UI_MAGIC} = require('../../../hbl-moonlight/tools/moonlight/ring.js');
 
 function block(magic, overlay) {

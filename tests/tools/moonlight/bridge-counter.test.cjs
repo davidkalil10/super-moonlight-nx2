@@ -4,7 +4,7 @@ const {
   instrument,
   requestsFor,
   watchBridge
-} = require('../../../hbl-moonlight/tools/moonlight/bridge-counter.js');
+} = require('../../../hbl-moonlight/host/stream/bridge-counter.js');
 
 test('bridge counter attributes requests and elapsed time to the active stage', async () => {
   let clock = 0;

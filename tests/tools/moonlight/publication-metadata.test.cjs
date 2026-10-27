@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const ring = require('../../../hbl-moonlight/tools/moonlight/ring.js');
-const {metadata} = require('../../../hbl-moonlight/tools/moonlight/publication-metadata.js');
+const {metadata} = require('../../../hbl-moonlight/host/stream/publication-metadata.js');
 
 const mapped = 0x40000000;
 const frame = {width: 1920, height: 1080, stride: 1920, sliceHeight: 1088};

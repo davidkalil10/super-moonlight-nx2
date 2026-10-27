@@ -80,7 +80,7 @@ every 500 ms. `HB_PIPELINE` works as on the launcher.
 
 ```sh
 HB_PIPELINE=2 RATE=12e6 node tools/moonlight/fake-console/bridge.cjs /tmp/fake --pad &
-node ../hbl-moonlight/tools/moonlight/input-feeder.js /tmp/fake
+node ../hbl-moonlight/host/input/input-feeder.js /tmp/fake
 ```
 
 `shared/console.cjs` is a separate byte-level model of the `bootstrap.bas` `RPC()` loop for
@@ -92,7 +92,7 @@ flat memory buffer; `protocol3.test.cjs` round-trips the real `native.js` throug
 Only with the user at the console (DEVICE-RULES.md). From `hbl-moonlight`, against a fresh
 `./start.sh --app moonlight` session showing the HBV2 test card, in order:
 
-1. Video: `node tools/moonlight/live.js --moonlight 192.168.8.245 Desktop --codec h264 --staggered --no-input --no-audio`
+1. Video: `node host/stream/live.js --moonlight 192.168.8.245 Desktop --codec h264 --staggered --no-input --no-audio`
    (the h264 flags are in `hbl-moonlight/README.md`).
 2. Input: drop `--no-input`. Sticks and taps move the host cursor; touch is native multi-touch.
 3. Audio: drop `--no-audio`. If `OpenDefaultAudioOut` fails, the audio process prints a hint
