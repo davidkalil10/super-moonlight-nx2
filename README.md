@@ -34,7 +34,6 @@ argument and uses the newest one when it is omitted.
 
 ```sh
 tools/moonlight/helper/build.sh [BUILD]   # hbmoonlight into BUILD/build/ (default ~/claude-builds/HBLauncher/moonlight-helper)
-tools/moonlight/build-hbv2enc.sh          # native HBV2 encoder, $HBV2_BUILD or ~/claude-builds/HBLauncher/hbv2enc
 node apps/moonlight/build.js              # package shaders and memory image
 node ../hbl-platform/sdk/build.js --check apps/moonlight  # check the package, write nothing
 ```
@@ -67,9 +66,6 @@ Refresh in the launcher and relaunch. Hold Plus and Minus together for one secon
 to the launcher; single B and Minus presses reach the PC.
 
 ```sh
-# PC decode, HBV2 into the ring
-node tools/moonlight/live.js [RUN_DIR] --moonlight 192.168.8.245 Desktop --codec hbv2 --budget 96
-# console decode
 node tools/moonlight/live.js [RUN_DIR] --moonlight 192.168.8.245 Desktop --codec h264 --fps 60
 # console UI: the console picks the host and app
 node tools/moonlight/ui-service.js [RUN_DIR]
@@ -80,22 +76,11 @@ node tools/moonlight/ui-service.js [RUN_DIR]
 | Flag | Default | Meaning |
 | --- | --- | --- |
 | `--moonlight HOST APP` | | stream from Sunshine through `hbmoonlight`; APP is a name (case-insensitive) or an id from `list` |
-| `--screen` / `--input FILE` | | capture the PC screen (`screencast.py`) or loop a file through ffmpeg instead |
-| `--codec hbv1\|hbv2\|h264` | `hbv1` | ring format, or the console decoder route |
+| `--codec h264` | `h264` | the only route left: the console decoder |
 | `--size WxH` | `1920x1080` | stream and frame size |
 | `--fps N` | `60` | requested frame rate |
 | `--bitrate KBPS\|auto` | `auto` | Moonlight's table: interpolated by pixels, linear in fps to 60, square root above; 500 to 150000 |
 | `--no-input` / `--no-audio` | on | skip `input-feeder.js` / the audio path |
-| `--depth N` | `2` | ring writes in flight (hbv1, hbv2) |
-| `--workers N` | `12` | hbv1 encode threads |
-| `--budget KiB` | `96` | hbv2 target frame size |
-| `--cap KiB` | `256` | hbv2 hard frame size, also the keyframe budget |
-| `--qp-min` / `--qp-max` | `4` / `40` | hbv2 qp search range |
-| `--refresh N` | `2` | hbv2 chunks forced intra per frame |
-| `--threads N` | encoder default | hbv2 encoder threads |
-| `--resync MS` | `1000` | hbv2: force a keyframe when `applied` stalls this long (polled every 500 ms) |
-
-hbv2 prints one stats line per second with `kib`, `qp`, `encodeMs` and `applied`.
 
 ### h264 flags (`native-h264.js`)
 
@@ -165,13 +150,9 @@ Status and errors are one JSON object per line on stderr.
   A `stats` line each second reports decoded, written, dropped, failed and decode+convert ms.
 - Covers: only a real PNG of at most 4 MiB and 4096 px a side, fetched under a 5 s alarm.
 
-`hbmoonlight-host` (same CMake project) is the whole host in one process (`helper/src/host.c`
-lists its flags); it talks only to the launcher's local bridge.
-
 ## Private memory (binding 1)
 
-`tools/moonlight/ring.js` is the source of truth; `build.js` generates `ring.glsl` and
-`generate-layout.js` the helper's `console-layout.h` from it.
+`tools/moonlight/ring.js` is the source of truth; `build.js` generates `ring.glsl` from it.
 
 ```
 control 0x000000  64 KiB: shader words, native publication, written[8160] at 0x400 (ends 0x8380),

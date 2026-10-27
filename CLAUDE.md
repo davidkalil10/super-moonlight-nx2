@@ -45,15 +45,17 @@ Package `exports` replace the relative paths later in Phase 2.
 
 - PC decode, shader display. Sunshine's stream is terminated on the PC by moonlight-common-c;
   the console only runs fixed native call chains and GPU shaders, so no decoder logic runs on
-  console CPU. Two routes: HBV1/HBV2 re-encoded on the PC into the ring, or raw H.264 fed to
-  the console's `movie::Decoder` (nnCompat) writing NV12 straight into the ring's surfaces.
+  console CPU. The stream is raw H.264 fed to the console's `movie::Decoder` (nnCompat), which
+  writes NV12 straight into the ring's surfaces. The PC-side HBV1/HBV2 encoders are gone; the
+  shaders keep their HBV decode because the package bytes are pinned, and `memory.bin` still
+  holds an HBV2 test card made by `hbv2.js`.
 - The bridge is the bottleneck, not the GPU: cost is per exchange, not per byte, so formats
   fill whole 32 KiB exchanges and the senders are latest-wins (never queue frames, drop on a
   stall).
-- One source of truth per layout: `ring.js` generates `ring.glsl` and the helper's
-  `console-layout.h`; `hbv.js`/`hbv2.js` generate their GLSL and C tables; `ui-page.js` mirrors
+- One source of truth per layout: `ring.js` generates `ring.glsl`; `hbv.js`/`hbv2.js` generate
+  their GLSL tables; `ui-page.js` mirrors
   the shader's page validator. Change the JS and regenerate, never the outputs.
-- HBV2 uses an integer IDCT shared by JS, C and GLSL; a float transform drifts across P frames.
+- HBV2 uses an integer IDCT shared by JS and GLSL; a float transform drifts across P frames.
 - The console UI commands go through plain words in the control page, not the SDK mailbox: a
   pending mailbox request stops the native worker at the next 60-frame boundary and would hitch
   every press.
@@ -80,7 +82,7 @@ The pacer stayed at 8.33 ms and did not learn the panel's 16.67 ms apply grid in
 
 ## Gotchas
 
-- `live.js --codec` defaults to `hbv1`; pass `--codec hbv2` or `h264`.
+- `live.js` only streams H.264 to the console decoder; `--codec` accepts only `h264`.
 - `live.js` refuses an app with private storage below `ring.MEMORY_BYTES`: the console runs an
   older package. Reopening the app reloads `memory.bin`, which wipes the ring.
 - The h264 route needs a launcher session from the current revision: it records the host

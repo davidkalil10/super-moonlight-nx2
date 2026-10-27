@@ -1,5 +1,4 @@
-/* GameStream session plumbing shared by hbmoonlight and hbmoonlight-host:
- * client keys, reaching and pairing state of the host, app lookup, the stream
+/* GameStream session plumbing for hbmoonlight: client keys, reaching and pairing state of the host, app lookup, the stream
  * configuration and the connection listener. */
 #include "helper.h"
 

@@ -9,8 +9,8 @@
  *   frames   three 1920x1088 4:2:0 YCbCr frames; HBV2 uses the first two
  *
  * The compute shader applies slots in sequence order and the fragment shader only samples the
- * result (or, for HBV1, decodes the chosen slot per pixel). ring.glsl and the helper's
- * console-layout.h are generated from these values.
+ * result (or, for HBV1, decodes the chosen slot per pixel). ring.glsl is generated from
+ * these values.
  */
 const SLOTS = 8;
 const EXCHANGE_BYTES = 0x8000;

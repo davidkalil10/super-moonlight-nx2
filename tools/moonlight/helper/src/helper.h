@@ -35,7 +35,6 @@ void video_callbacks(DECODER_RENDERER_CALLBACKS *callbacks);
 void video_take_stats(struct video_stats *stats);
 
 void audio_configure(int fd);
-void audio_configure_sink(void (*sink)(const void *pcm, size_t bytes));
 void audio_callbacks(AUDIO_RENDERER_CALLBACKS *callbacks);
 unsigned audio_take_dropped(void);
 

@@ -20,10 +20,9 @@ shaders read the frame ring, so the package has no portable entry and no `src/` 
 Build and check from the project root:
 
 ```sh
-tools/moonlight/build-hbv2enc.sh       # native encoder, used by check.cjs CLIP and live.js
 node apps/moonlight/build.js           # needs glslc 2026.1 (Fedora 44) and spirv-val
 node ../hbl-platform/sdk/build.js --check apps/moonlight  # checks the package, writes nothing
-node ../moonlight-dev/apps/moonlight/check.cjs [CLIP]  # desktop Vulkan decode check, bit-exact against hbv2.js
+node ../moonlight-dev/apps/moonlight/check.cjs  # desktop Vulkan decode check, bit-exact against hbv2.js
 ```
 
 Private memory (`manifest.json` `memory.bytes`, layout in `tools/moonlight/ring.js`) holds the
@@ -60,5 +59,5 @@ ignored with a notice.
 Stream to a running app (the newest `runs/launcher-*` session):
 
 ```sh
-node tools/moonlight/live.js --screen --codec hbv2 --budget 96
+node tools/moonlight/live.js --moonlight HOST APP --codec h264 --staggered --socket-audio
 ```

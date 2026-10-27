@@ -27,7 +27,7 @@ add_executable(hbmoonlight
 target_compile_options(hbmoonlight PRIVATE -Wall -Wextra -Wno-unused-parameter)
 target_link_libraries(hbmoonlight PRIVATE gamestream Threads::Threads)
 
-# The bench, the encoder check and the input test live in moonlight-dev: they build when that
+# The bench and the input test live in moonlight-dev: they build when that
 # checkout sits beside this one, or where DEV_DIR points.
 set(DEV_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../../../moonlight-dev/tools/moonlight/helper"
   CACHE PATH "moonlight-dev helper directory")
@@ -39,31 +39,6 @@ if(${HAVE_DEV})
   target_compile_options(hbmoonlight-bench PRIVATE -Wall -Wextra -Wno-unused-parameter)
   target_link_libraries(hbmoonlight-bench PRIVATE gamestream Threads::Threads)
 endif()
-
-# HBV2 encoder: tools/moonlight/hbv2enc.c built as is, and linked in process
-# through src/encoder.c, with the flags of build-hbv2enc.sh.
-find_package(OpenMP REQUIRED)
-set(HBV2_FLAGS -O3 -march=native)
-add_executable(hbv2enc ../hbv2enc.c)
-target_compile_options(hbv2enc PRIVATE ${HBV2_FLAGS} -Wall -Wextra)
-target_link_libraries(hbv2enc PRIVATE OpenMP::OpenMP_C m)
-
-add_library(hbv2 STATIC src/encoder.c)
-target_compile_options(hbv2 PRIVATE ${HBV2_FLAGS} -Wall -Wextra -Wno-unused-function)
-target_link_libraries(hbv2 PUBLIC OpenMP::OpenMP_C m Threads::Threads)
-
-if(${HAVE_DEV})
-  add_executable(hbv2-encode-check ${DEV_DIR}/src/encode-check.c)
-  target_include_directories(hbv2-encode-check PRIVATE src)
-  target_compile_options(hbv2-encode-check PRIVATE -Wall -Wextra)
-  target_link_libraries(hbv2-encode-check PRIVATE hbv2)
-endif()
-
-add_executable(hbmoonlight-host
-  src/host.c src/run.c src/bridge.c src/sender.c src/console-input.c src/console-audio.c
-  src/session.c src/status.c src/mailbox.c src/video.c src/audio.c)
-target_compile_options(hbmoonlight-host PRIVATE -Wall -Wextra -Wno-unused-parameter)
-target_link_libraries(hbmoonlight-host PRIVATE gamestream hbv2 Threads::Threads)
 
 include(CTest)
 if(BUILD_TESTING AND ${HAVE_DEV})
