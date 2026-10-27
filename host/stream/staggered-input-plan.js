@@ -271,6 +271,142 @@ function buildFrame(address, sdk, calls, verified, mapped, results) {
   return built;
 }
 
+/** Native results each send frame stamps: SendInput and the next AcquireInput status. */
+const SEND_RESULTS = {1: STAMP.sendStatus, 2: STAMP.nextSlotStatus};
+
+/**
+ * Address helpers for one plan: the worker's regions, control page and ring words, and the
+ * sdk entry points every frame calls.
+ * @param {{sdk: number, base: number, control: number, mapped: number}} options
+ */
+function addressing({sdk, base, control, mapped}) {
+  return {
+    loc: locations(base),
+    at: offset => control + offset,
+    ringAt: offset => mapped + offset,
+    copy: sdk + IPC_COPY.offset,
+    jump: sdk + CODE.longjmp.offset,
+    sync: name => sdk + SYNC[name].offset
+  };
+}
+
+/**
+ * The receive frame of `slot`: wait on the length gate if there is one, read the unit, stamp
+ * its sequence, park on the decode gate, open the descriptor's fetch gate, wait for the
+ * acquisition acknowledgement, then jump to the send frame.
+ * @param {ReturnType<typeof addressing>} a
+ * @param {number} slot
+ * @param {{scratch: number, fd: number, recvFunction: number, acquireAck: number,
+ *   lengthGate: number | null}} options
+ */
+function receiveCalls(
+  {at, ringAt, copy, jump, sync},
+  slot,
+  {scratch, fd, recvFunction, acquireAck, lengthGate}
+) {
+  const descriptor = at(CONTROL.descriptors[slot]);
+  return [
+    ...(lengthGate === null
+      ? []
+      : [{function: sync('waitLightEvent'), args: [lengthGate, 0, 0, 0]}]),
+    {
+      function: recvFunction,
+      args: [fd, scratch, {u32: descriptor + DESCRIPTOR.length}, MSG_WAITALL]
+    },
+    {
+      function: copy,
+      args: [ringAt(STAMP.receiveSequence), descriptor + DESCRIPTOR.sequence, SEQUENCE_BYTES, 0]
+    },
+    {function: sync('waitLightEvent'), args: [at(CONTROL.decodeGate), 0, 0, 0]},
+    {
+      function: sync('signalLightEvent'),
+      args: [{u64: descriptor + DESCRIPTOR.fetchGate}, 0, 0, 0]
+    },
+    {function: sync('waitLightEvent'), args: [acquireAck, 0, 0, 0]},
+    {function: jump, args: [{u64: at(CONTROL.sendDispatch[slot])}, 1, 0, 0]}
+  ];
+}
+
+/**
+ * The copies that restore both frames of `slot` from their snapshots. The send frame's own
+ * length is 0 until sizedFrame() knows it.
+ * @param {ReturnType<typeof addressing>} a
+ * @param {number} slot
+ * @param {number} receiveBytes
+ */
+function restoreCalls({loc, copy}, slot, receiveBytes) {
+  return [
+    {
+      function: copy,
+      args: [loc.receive[slot], loc.receiveSnapshot[slot], receiveBytes, 0]
+    },
+    {
+      function: copy,
+      args: [loc.send[slot], loc.sendSnapshot[slot], 0, 0]
+    }
+  ];
+}
+
+/**
+ * The send frame of `slot`: copy the unit into its input buffer, submit it, acquire the next
+ * input buffer, stamp the sequence, restore, jump to the receive frame.
+ * @param {ReturnType<typeof addressing>} a
+ * @param {number} slot
+ * @param {{scratch: number, functions: Record<string, number>, decoder: number}} options
+ * @param {ReturnType<typeof restoreCalls>} restore
+ */
+function sendCalls({at, ringAt, copy, jump}, slot, {scratch, functions, decoder}, restore) {
+  const descriptor = at(CONTROL.descriptors[slot]);
+  return [
+    {
+      function: copy,
+      args: [
+        {u64: descriptor + DESCRIPTOR.inputAddress},
+        scratch,
+        {u32: descriptor + DESCRIPTOR.length},
+        0
+      ]
+    },
+    {
+      function: functions.sendInput,
+      args: [
+        decoder,
+        {u32: descriptor + DESCRIPTOR.inputIndex},
+        0,
+        {u32: descriptor + DESCRIPTOR.length},
+        {u64: descriptor + DESCRIPTOR.pts},
+        0
+      ]
+    },
+    {
+      function: functions.acquireInput,
+      args: [decoder, ringAt(STAMP.nextIndex), ringAt(STAMP.inputCount), 0]
+    },
+    {
+      function: copy,
+      args: [ringAt(STAMP.inputSequence), descriptor + DESCRIPTOR.sequence, SEQUENCE_BYTES, 0]
+    },
+    ...restore,
+    {function: jump, args: [{u64: at(CONTROL.receiveDispatch[slot])}, 1, 0, 0]}
+  ];
+}
+
+/**
+ * Builds a frame that restores itself: a first build gives its length, which goes into its
+ * own restore copy before the final build.
+ * @param {(address: number, calls: any[], results: Record<number, number>) =>
+ *   ReturnType<typeof buildFrame>} frame
+ * @param {number} address
+ * @param {any[]} calls
+ * @param {ReturnType<typeof restoreCalls>} restore
+ * @param {Record<number, number>} results
+ * @returns {ReturnType<typeof buildFrame>}
+ */
+function sizedFrame(frame, address, calls, restore, results) {
+  restore[1].args[2] = frame(address, calls, results).frame.length;
+  return frame(address, calls, results);
+}
+
 /**
  * Plans both slots' receive and send frames.
  * @param {object} options
@@ -311,95 +447,28 @@ function plan({
     )
   )
     throw Error('Invalid staggered input frame addresses');
-  const loc = locations(base);
-  const at = offset => control + offset;
-  const ringAt = offset => mapped + offset;
-  const copy = sdk + IPC_COPY.offset;
-  const jump = sdk + CODE.longjmp.offset;
-  const sync = name => sdk + SYNC[name].offset;
+  const a = addressing({sdk, base, control, mapped});
   const verified = new Set([recvFunction, functions.sendInput, functions.acquireInput]);
   const frame = (address, calls, results = {}) =>
     buildFrame(address, sdk, calls, verified, mapped, results);
+  const units = {scratch, fd, recvFunction, functions, decoder, acquireAck, lengthGate};
+  /** The recv call's logical index: after the length-gate wait when there is one. */
+  const recvCall = lengthGate === null ? 0 : 1;
   const receive = [];
   const send = [];
   const calls = {receive: [], send: []};
   for (let slot = 0; slot < SLOTS; slot++) {
-    const descriptor = at(CONTROL.descriptors[slot]);
-    const receiveCalls = [
-      ...(lengthGate === null
-        ? []
-        : [{function: sync('waitLightEvent'), args: [lengthGate, 0, 0, 0]}]),
-      {
-        function: recvFunction,
-        args: [fd, scratch, {u32: descriptor + DESCRIPTOR.length}, MSG_WAITALL]
-      },
-      {
-        function: copy,
-        args: [ringAt(STAMP.receiveSequence), descriptor + DESCRIPTOR.sequence, SEQUENCE_BYTES, 0]
-      },
-      {function: sync('waitLightEvent'), args: [at(CONTROL.decodeGate), 0, 0, 0]},
-      {
-        function: sync('signalLightEvent'),
-        args: [{u64: descriptor + DESCRIPTOR.fetchGate}, 0, 0, 0]
-      },
-      {function: sync('waitLightEvent'), args: [acquireAck, 0, 0, 0]},
-      {function: jump, args: [{u64: at(CONTROL.sendDispatch[slot])}, 1, 0, 0]}
-    ];
-    const recvCall = lengthGate === null ? 0 : 1;
-    receive.push(frame(loc.receive[slot], receiveCalls, {[recvCall]: STAMP.receiveCount}));
-    calls.receive.push(receiveCalls);
+    const list = receiveCalls(a, slot, units);
+    receive.push(frame(a.loc.receive[slot], list, {[recvCall]: STAMP.receiveCount}));
+    calls.receive.push(list);
   }
   for (let slot = 0; slot < SLOTS; slot++) {
-    const descriptor = at(CONTROL.descriptors[slot]);
-    const restore = [
-      {
-        function: copy,
-        args: [loc.receive[slot], loc.receiveSnapshot[slot], receive[slot].frame.length, 0]
-      },
-      {
-        function: copy,
-        args: [loc.send[slot], loc.sendSnapshot[slot], 0, 0]
-      }
-    ];
-    const sendCalls = [
-      {
-        function: copy,
-        args: [
-          {u64: descriptor + DESCRIPTOR.inputAddress},
-          scratch,
-          {u32: descriptor + DESCRIPTOR.length},
-          0
-        ]
-      },
-      {
-        function: functions.sendInput,
-        args: [
-          decoder,
-          {u32: descriptor + DESCRIPTOR.inputIndex},
-          0,
-          {u32: descriptor + DESCRIPTOR.length},
-          {u64: descriptor + DESCRIPTOR.pts},
-          0
-        ]
-      },
-      {
-        function: functions.acquireInput,
-        args: [decoder, ringAt(STAMP.nextIndex), ringAt(STAMP.inputCount), 0]
-      },
-      {
-        function: copy,
-        args: [ringAt(STAMP.inputSequence), descriptor + DESCRIPTOR.sequence, SEQUENCE_BYTES, 0]
-      },
-      ...restore,
-      {function: jump, args: [{u64: at(CONTROL.receiveDispatch[slot])}, 1, 0, 0]}
-    ];
-    const results = {1: STAMP.sendStatus, 2: STAMP.nextSlotStatus};
-    const sized = frame(loc.send[slot], sendCalls, results);
-    restore[1].args[2] = sized.frame.length;
-    send.push(frame(loc.send[slot], sendCalls, results));
-    calls.send.push(sendCalls);
+    const restore = restoreCalls(a, slot, receive[slot].frame.length);
+    const list = sendCalls(a, slot, units, restore);
+    send.push(sizedFrame(frame, a.loc.send[slot], list, restore, SEND_RESULTS));
+    calls.send.push(list);
   }
-  return {control: CONTROL, descriptor: DESCRIPTOR, locations: loc, receive, send, calls};
+  return {control: CONTROL, descriptor: DESCRIPTOR, locations: a.loc, receive, send, calls};
 }
 
 export {CONTROL, DESCRIPTOR, locations, gateWrite, primeWrite, plan};

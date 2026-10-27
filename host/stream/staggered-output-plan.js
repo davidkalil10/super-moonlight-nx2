@@ -161,6 +161,154 @@ function buildFrame(address, sdk, calls, verified, mapped, results) {
   return built;
 }
 
+/** Native results each fetch frame stamps: SetData, GetOutputBuffer and Release status. */
+const FETCH_RESULTS = {0: STAMP.setStatus, 1: STAMP.getStatus, 2: STAMP.releaseStatus};
+
+/**
+ * Address helpers for one plan: the worker's regions, control page and ring words, and the
+ * sdk entry points every frame calls.
+ * @param {{sdk: number, base: number, control: number, mapped: number}} options
+ */
+function addressing({sdk, base, control, mapped}) {
+  return {
+    loc: locations(base),
+    at: offset => control + offset,
+    ringAt: offset => mapped + offset,
+    copy: sdk + IPC_COPY.offset,
+    jump: sdk + CODE.longjmp.offset,
+    sync: name => sdk + SYNC[name].offset
+  };
+}
+
+/**
+ * The acquire frame of `slot`: wait for an output, acquire and stamp it, acknowledge the
+ * acquisition, park on the fetch gate, then jump to the fetch frame.
+ * @param {ReturnType<typeof addressing>} a
+ * @param {number} slot
+ * @param {{functions: Record<string, number>, decoder: number, event: number,
+ *   acquireAck: number}} options
+ */
+function acquireCalls(
+  {at, ringAt, copy, jump, sync},
+  slot,
+  {functions, decoder, event, acquireAck}
+) {
+  const descriptor = at(CONTROL.descriptors[slot]);
+  return [
+    {function: sync('waitEvent'), args: [event, 0, 0, 0]},
+    {
+      function: functions.acquireOutput,
+      args: [
+        decoder,
+        ringAt(STAMP.outputIndex),
+        ringAt(STAMP.pts),
+        ringAt(STAMP.flags),
+        ringAt(STAMP.outputCount)
+      ]
+    },
+    {
+      function: copy,
+      args: [ringAt(STAMP.acquireSequence), descriptor + DESCRIPTOR.sequence, SEQUENCE_BYTES, 0]
+    },
+    {function: sync('signalLightEvent'), args: [acquireAck, 0, 0, 0]},
+    {function: sync('waitLightEvent'), args: [at(CONTROL.fetchGate), 0, 0, 0]},
+    {function: jump, args: [{u64: at(CONTROL.fetchDispatch[slot])}, 1, 0, 0]}
+  ];
+}
+
+/**
+ * The copies that restore both frames of `slot` from their snapshots. The fetch frame's own
+ * length is 0 until sizedFrame() knows it.
+ * @param {ReturnType<typeof addressing>} a
+ * @param {number} slot
+ * @param {number} acquireBytes
+ */
+function restoreCalls({loc, copy}, slot, acquireBytes) {
+  return [
+    {
+      function: copy,
+      args: [loc.acquire[slot], loc.acquireSnapshot[slot], acquireBytes, 0]
+    },
+    {
+      function: copy,
+      args: [loc.fetch[slot], loc.fetchSnapshot[slot], 0, 0]
+    }
+  ];
+}
+
+/**
+ * The fetch frame of `slot`: copy the held output into the descriptor's surface, release it,
+ * publish the metadata and then the sequence, stamp the fetch, restore, jump to the acquire
+ * frame.
+ * @param {ReturnType<typeof addressing>} a
+ * @param {number} slot
+ * @param {{functions: Record<string, number>, decoder: number, output: number,
+ *   format: number}} options
+ * @param {ReturnType<typeof restoreCalls>} restore
+ */
+function fetchCalls({at, ringAt, copy, jump}, slot, {functions, decoder, output, format}, restore) {
+  const descriptor = at(CONTROL.descriptors[slot]);
+  return [
+    {
+      function: functions.bufferSetData,
+      args: [
+        output,
+        {u64: descriptor + DESCRIPTOR.address},
+        {u64: descriptor + DESCRIPTOR.bytes},
+        0
+      ]
+    },
+    {
+      function: functions.getOutput,
+      args: [decoder, {u32: ringAt(STAMP.outputIndex)}, output, format]
+    },
+    {
+      function: functions.releaseOutput,
+      args: [decoder, {u32: ringAt(STAMP.outputIndex)}, 0, 0]
+    },
+    {
+      function: copy,
+      args: [
+        ringAt(ring.CONTROL.nativeIndex),
+        descriptor + DESCRIPTOR.metadata,
+        PUBLICATION_BYTES,
+        0
+      ]
+    },
+    {
+      function: copy,
+      args: [
+        ringAt(ring.CONTROL.nativeSequence),
+        descriptor + DESCRIPTOR.metadata + PUBLICATION_BYTES,
+        SEQUENCE_BYTES,
+        0
+      ]
+    },
+    {
+      function: copy,
+      args: [ringAt(STAMP.fetchSequence), descriptor + DESCRIPTOR.sequence, SEQUENCE_BYTES, 0]
+    },
+    ...restore,
+    {function: jump, args: [{u64: at(CONTROL.acquireDispatch[slot])}, 1, 0, 0]}
+  ];
+}
+
+/**
+ * Builds a frame that restores itself: a first build gives its length, which goes into its
+ * own restore copy before the final build.
+ * @param {(address: number, calls: any[], results: Record<number, number>) =>
+ *   ReturnType<typeof buildFrame>} frame
+ * @param {number} address
+ * @param {any[]} calls
+ * @param {ReturnType<typeof restoreCalls>} restore
+ * @param {Record<number, number>} results
+ * @returns {ReturnType<typeof buildFrame>}
+ */
+function sizedFrame(frame, address, calls, restore, results) {
+  restore[1].args[2] = frame(address, calls, results).frame.length;
+  return frame(address, calls, results);
+}
+
 /**
  * Plans both slots' acquire and fetch frames.
  * @param {object} options
@@ -184,105 +332,26 @@ function plan({sdk, base, control, mapped, event, acquireAck, functions, decoder
     )
   )
     throw Error('Invalid staggered output frame addresses');
-  const loc = locations(base);
-  const at = offset => control + offset;
-  const ringAt = offset => mapped + offset;
-  const copy = sdk + IPC_COPY.offset;
-  const jump = sdk + CODE.longjmp.offset;
-  const sync = name => sdk + SYNC[name].offset;
+  const a = addressing({sdk, base, control, mapped});
   const verified = new Set(Object.values(functions));
   const frame = (address, calls, results = {}) =>
     buildFrame(address, sdk, calls, verified, mapped, results);
+  const units = {functions, decoder, event, acquireAck, output, format};
   const acquire = [];
   const fetch = [];
   const calls = {acquire: [], fetch: []};
   for (let slot = 0; slot < SLOTS; slot++) {
-    const descriptor = at(CONTROL.descriptors[slot]);
-    const acquireCalls = [
-      {function: sync('waitEvent'), args: [event, 0, 0, 0]},
-      {
-        function: functions.acquireOutput,
-        args: [
-          decoder,
-          ringAt(STAMP.outputIndex),
-          ringAt(STAMP.pts),
-          ringAt(STAMP.flags),
-          ringAt(STAMP.outputCount)
-        ]
-      },
-      {
-        function: copy,
-        args: [ringAt(STAMP.acquireSequence), descriptor + DESCRIPTOR.sequence, SEQUENCE_BYTES, 0]
-      },
-      {function: sync('signalLightEvent'), args: [acquireAck, 0, 0, 0]},
-      {function: sync('waitLightEvent'), args: [at(CONTROL.fetchGate), 0, 0, 0]},
-      {function: jump, args: [{u64: at(CONTROL.fetchDispatch[slot])}, 1, 0, 0]}
-    ];
-    acquire.push(frame(loc.acquire[slot], acquireCalls, {1: STAMP.acquireStatus}));
-    calls.acquire.push(acquireCalls);
+    const list = acquireCalls(a, slot, units);
+    acquire.push(frame(a.loc.acquire[slot], list, {1: STAMP.acquireStatus}));
+    calls.acquire.push(list);
   }
   for (let slot = 0; slot < SLOTS; slot++) {
-    const descriptor = at(CONTROL.descriptors[slot]);
-    const restore = [
-      {
-        function: copy,
-        args: [loc.acquire[slot], loc.acquireSnapshot[slot], acquire[slot].frame.length, 0]
-      },
-      {
-        function: copy,
-        args: [loc.fetch[slot], loc.fetchSnapshot[slot], 0, 0]
-      }
-    ];
-    const fetchCalls = [
-      {
-        function: functions.bufferSetData,
-        args: [
-          output,
-          {u64: descriptor + DESCRIPTOR.address},
-          {u64: descriptor + DESCRIPTOR.bytes},
-          0
-        ]
-      },
-      {
-        function: functions.getOutput,
-        args: [decoder, {u32: ringAt(STAMP.outputIndex)}, output, format]
-      },
-      {
-        function: functions.releaseOutput,
-        args: [decoder, {u32: ringAt(STAMP.outputIndex)}, 0, 0]
-      },
-      {
-        function: copy,
-        args: [
-          ringAt(ring.CONTROL.nativeIndex),
-          descriptor + DESCRIPTOR.metadata,
-          PUBLICATION_BYTES,
-          0
-        ]
-      },
-      {
-        function: copy,
-        args: [
-          ringAt(ring.CONTROL.nativeSequence),
-          descriptor + DESCRIPTOR.metadata + PUBLICATION_BYTES,
-          SEQUENCE_BYTES,
-          0
-        ]
-      },
-      {
-        function: copy,
-        args: [ringAt(STAMP.fetchSequence), descriptor + DESCRIPTOR.sequence, SEQUENCE_BYTES, 0]
-      },
-      ...restore,
-      {function: jump, args: [{u64: at(CONTROL.acquireDispatch[slot])}, 1, 0, 0]}
-    ];
-    const results = {0: STAMP.setStatus, 1: STAMP.getStatus, 2: STAMP.releaseStatus};
-    const sized = frame(loc.fetch[slot], fetchCalls, results);
-    restore[1].args[2] = sized.frame.length;
-    fetch.push(frame(loc.fetch[slot], fetchCalls, results));
-    calls.fetch.push(fetchCalls);
+    const restore = restoreCalls(a, slot, acquire[slot].frame.length);
+    const list = fetchCalls(a, slot, units, restore);
+    fetch.push(sizedFrame(frame, a.loc.fetch[slot], list, restore, FETCH_RESULTS));
+    calls.fetch.push(list);
   }
-  return {control: CONTROL, descriptor: DESCRIPTOR, locations: loc, acquire, fetch, calls};
+  return {control: CONTROL, descriptor: DESCRIPTOR, locations: a.loc, acquire, fetch, calls};
 }
 
 export {CONTROL, DESCRIPTOR, locations, outputDescriptor, placeholderDescriptor, plan};
