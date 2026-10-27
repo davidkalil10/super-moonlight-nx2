@@ -1,10 +1,19 @@
-// Native H.264 route: ordered helper access units become console-written NV12 surfaces.
+/**
+ * Native H.264 route: the helper's ordered access units are decoded on the console into
+ * console-written NV12 surfaces.
+ *
+ * run() spawns the helper with its raw H.264 and PCM pipes, the input feeder and the audio
+ * stream or the socket audio source. The first frames take the host-driven decoder path, which
+ * is drained fully before the staggered workers take over the rest. A stats row goes out every
+ * statsMs and the run record keeps manifest.json, events.jsonl, stats.jsonl and summary.json.
+ * The stream stops on SIGINT/SIGTERM, --duration, Moonlight leaving the console or a console
+ * that stops answering, and the summary scores the steady rows against --expect.
+ */
 import fs from 'node:fs/promises';
 import fsSync from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline';
-import {spawn} from 'node:child_process';
-import {execFileSync} from 'node:child_process';
+import {spawn, execFileSync} from 'node:child_process';
 import os from 'node:os';
 import {AccessUnits, parameterSets} from './h264-stream.js';
 import {instrument, watchBridge} from './bridge-counter.js';
@@ -19,14 +28,42 @@ import {create as createSocketAudioSource} from '../audio/socket-audio-source.js
 import {create as createStaggeredLive} from './staggered-live.js';
 import * as exchangeTiming from './exchange-timing.js';
 
+/** Shortest gap between two keyframe requests to Sunshine. */
 const IDR_COOLDOWN_MS = 100;
-// A backlog while the console is not answering is the console's, so asking Sunshine for a
-// keyframe cannot help; past CONSOLE_STALL_MS the stream reports the console and stops.
+/**
+ * A backlog while the console is not answering is the console's, so asking Sunshine for a
+ * keyframe cannot help; past CONSOLE_STALL_MS the stream reports the console and stops.
+ */
 const IDR_QUIET_MS = 1000;
 const CONSOLE_STALL_MS = 5000;
-// The host runs at present pace, so it needs room for a source burst (batch C2).
+/** The host runs at present pace, so it needs room for a source burst (batch C2). */
 const QUEUE = 8;
+/** Default stats row interval. */
+const STATS_MS = 1000;
+/** How often app-runtime.json is read to see whether Moonlight still runs. */
+const RUNTIME_CHECK_MS = 500;
+/** Decoder resyncs allowed inside RESYNC_WINDOW_MS; the next error ends the stream. */
+const RESYNC_LIMIT = 3;
+const RESYNC_WINDOW_MS = 30000;
+/** How long the host-driven path keeps polling for owed frames, and the gap between polls. */
+const DRAIN_MS = 200;
+const DRAIN_POLL_MS = 5;
+/** The helper's pipes: raw H.264 on fd 4, PCM on fd 3. */
+const H264_FD = 4;
+const AUDIO_FD = 3;
+/** A PCM frame is 4 bytes; audio buffers come in steps of 240 frames. */
+const FRAME_BYTES = 4;
+const FRAME_STEP = 240;
+/** The most frames the socket audio source buffers. */
+const SOCKET_AUDIO_FRAMES = 3840;
+/** The run record is private to the user. */
+const PRIVATE_DIRECTORY = 0o700;
+const PRIVATE_FILE = 0o600;
 
+/**
+ * Coalesces keyframe requests into one send at most every IDR_COOLDOWN_MS, none after close().
+ * The clock and the timer functions can be replaced for tests.
+ */
 function createIdrRequester(
   send,
   {now = Date.now, schedule = setTimeout, cancel = clearTimeout} = {}
@@ -55,6 +92,7 @@ function createIdrRequester(
   };
 }
 
+/** The counts in `now` that moved since `before`, leaving out the ones that did not. */
 function countsSince(now, before) {
   return Object.fromEntries(
     Object.entries(now)
@@ -63,12 +101,14 @@ function countsSince(now, before) {
   );
 }
 
+/** Rounds to one decimal. */
 const tenths = value => Math.round(value * 10) / 10;
 
 /**
  * One stats row's access-unit timing: the mean and longest wait from host arrival to send, and
  * over the units that went through a gate, the mean age at gate and how many were in hand.
- * @param {{arrivedAt: number, gatedAt: number | null, sentAt: number, inHand: number | null}[]} samples
+ * @param {{arrivedAt: number, gatedAt: number | null, sentAt: number,
+ *   inHand: number | null}[]} samples
  */
 function auTiming(samples) {
   const gated = samples.filter(sample => sample.gatedAt !== null);
@@ -98,55 +138,11 @@ function withInputStage(counts, input) {
   return counts;
 }
 
-async function run({
-  args,
-  directory,
-  rpc,
-  storage,
-  helperPath,
-  width,
-  height,
-  fps,
-  sourceRevision,
-  createDecoder = createNativeDecoder,
-  createTransport = createNativeTransport,
-  createSink = createNativeSink,
-  createSocketAudio = createSocketAudioSource,
-  createStaggered = createStaggeredLive,
-  spawnProcess = spawn,
-  consoleStallMs = CONSOLE_STALL_MS,
-  statsMs = 1000,
-  now = () => performance.now()
-}) {
-  const at = args.indexOf('--moonlight');
-  const host = args[at + 1],
-    app = args[at + 2];
-  if (at < 0 || !host || !app) throw Error('Native H.264 requires --moonlight HOST APP');
-  const audio = !args.includes('--no-audio');
-  const socketTone = args.includes('--socket-audio-tone');
-  const socketAudio = socketTone || args.includes('--socket-audio');
-  if (socketAudio && !audio) throw Error('--socket-audio cannot be combined with --no-audio');
-  const duration = cli.number(args, '--duration', null);
-  const warmup = cli.number(args, '--warmup', 3);
-  const queue = cli.number(args, '--queue', QUEUE);
-  const inputHz = cli.number(args, '--input-hz', 60);
-  const presentHz = cli.number(args, '--present-hz', 60);
-  const skipRule = cli.option(args, '--skip-rule') ?? 'backlog';
-  const trimBacklogMs = cli.number(args, '--trim-backlog-ms', null);
-  const gateOnReceive = args.includes('--gate-on-receive');
-  const outputLag = cli.number(args, '--output-lag', null);
-  const decodeWait = args.includes('--decode-wait');
-  const receiveWait = args.includes('--receive-wait');
-  const avoidWindow = exchangeTiming.parseAvoid(cli.option(args, '--avoid-window') ?? undefined);
-  const skipBacklog =
-    cli.option(args, '--skip-backlog') === 'off'
-      ? Infinity
-      : cli.number(args, '--skip-backlog', skipRule === 'vsync' ? 1 : 2);
-  const audioFrames = cli.number(
-    args,
-    '--audio-frames',
-    socketAudio ? 1920 : rpc.a.protocol >= 3 ? 960 : 1920
-  );
+/** The range checks of the stream flags, in the order they are reported. */
+function checkFlags(args, flags) {
+  const {inputHz, presentHz, skipBacklog, skipRule, decodeWait, receiveWait, trimBacklogMs} = flags;
+  const {avoidWindow, gateOnReceive, outputLag, audioFrames, socketAudio, queue} = flags;
+  const {duration, warmup} = flags;
   if (!Number.isInteger(inputHz) || inputHz < 10 || inputHz > 120)
     throw Error('--input-hz takes 10 to 120');
   if (presentHz !== 60 && presentHz !== 120) throw Error('--present-hz takes 60 or 120');
@@ -168,9 +164,9 @@ async function run({
     throw Error('--gate-on-receive is untested at --present-hz 120');
   if (outputLag !== null && outputLag !== 1 && outputLag !== 2)
     throw Error('--output-lag takes 1 or 2');
-  if (!Number.isInteger(audioFrames) || audioFrames < 240 || audioFrames % 240)
+  if (!Number.isInteger(audioFrames) || audioFrames < FRAME_STEP || audioFrames % FRAME_STEP)
     throw Error('--audio-frames takes a multiple of 240');
-  if (socketAudio && audioFrames > 3840)
+  if (socketAudio && audioFrames > SOCKET_AUDIO_FRAMES)
     throw Error('--audio-frames takes up to 3840 with --socket-audio');
   if (!Number.isInteger(queue) || queue < 1 || queue > 16)
     throw Error('--queue takes 1 to 16 units');
@@ -178,27 +174,97 @@ async function run({
   if (!Number.isInteger(warmup) || warmup < 0) throw Error('--warmup takes whole seconds');
   if (args.includes('--expect') && !/^[a-z]/i.test(cli.option(args, '--expect') ?? ''))
     throw Error('--expect needs a value such as fps=30,dropped=0,idr=0');
-  const expect = scoring.parseExpect(cli.option(args, '--expect') ?? undefined);
-  const bitrate = streamBitrate(args, width, height, fps);
-  if (!rpc.host) throw Error('Native TCP requires a fresh launcher session from this branch');
-  const revision =
-    sourceRevision ||
-    execFileSync('git', ['rev-parse', 'HEAD'], {
-      cwd: path.resolve(import.meta.dirname, '../..'),
-      encoding: 'utf8'
-    }).trim();
-  const output =
+}
+
+/** Reads the stream flags; throws on the first one that is missing or out of range. */
+function parseOptions(args, rpc, width, height, fps) {
+  const at = args.indexOf('--moonlight');
+  const host = args[at + 1];
+  const app = args[at + 2];
+  if (at < 0 || !host || !app) throw Error('Native H.264 requires --moonlight HOST APP');
+  const audio = !args.includes('--no-audio');
+  const socketTone = args.includes('--socket-audio-tone');
+  const socketAudio = socketTone || args.includes('--socket-audio');
+  if (socketAudio && !audio) throw Error('--socket-audio cannot be combined with --no-audio');
+  const skipRule = cli.option(args, '--skip-rule') ?? 'backlog';
+  const flags = {
+    host,
+    app,
+    audio,
+    socketTone,
+    socketAudio,
+    duration: cli.number(args, '--duration', null),
+    warmup: cli.number(args, '--warmup', 3),
+    queue: cli.number(args, '--queue', QUEUE),
+    inputHz: cli.number(args, '--input-hz', 60),
+    presentHz: cli.number(args, '--present-hz', 60),
+    skipRule,
+    trimBacklogMs: cli.number(args, '--trim-backlog-ms', null),
+    gateOnReceive: args.includes('--gate-on-receive'),
+    outputLag: cli.number(args, '--output-lag', null),
+    decodeWait: args.includes('--decode-wait'),
+    receiveWait: args.includes('--receive-wait'),
+    avoidWindow: exchangeTiming.parseAvoid(cli.option(args, '--avoid-window') ?? undefined),
+    skipBacklog:
+      cli.option(args, '--skip-backlog') === 'off'
+        ? Infinity
+        : cli.number(args, '--skip-backlog', skipRule === 'vsync' ? 1 : 2),
+    audioFrames: cli.number(
+      args,
+      '--audio-frames',
+      socketAudio ? 1920 : rpc.a.protocol >= 3 ? 960 : 1920
+    ),
+    input: !args.includes('--no-input')
+  };
+  checkFlags(args, flags);
+  return {
+    ...flags,
+    expect: scoring.parseExpect(cli.option(args, '--expect') ?? undefined),
+    bitrate: streamBitrate(args, width, height, fps)
+  };
+}
+
+/** The per-row counters, in stats-row order. */
+function freshStats() {
+  return {
+    received: 0,
+    submitted: 0,
+    decoded: 0,
+    presented: 0,
+    skipped: 0,
+    bytes: 0,
+    keyframes: 0,
+    resyncs: 0,
+    idr: 0
+  };
+}
+
+/** The commit this host runs from, for the manifest and the record name. */
+function headRevision() {
+  return execFileSync('git', ['rev-parse', 'HEAD'], {
+    cwd: path.resolve(import.meta.dirname, '../..'),
+    encoding: 'utf8'
+  }).trim();
+}
+
+/** HB_NATIVE_LOG_DIR, or a new record named after the start time and the revision. */
+function recordDirectory(revision) {
+  return (
     process.env.HB_NATIVE_LOG_DIR ||
     path.join(
       builds('native-h264'),
       new Date().toISOString().replace(/[:.]/g, '-') + '-' + revision.slice(0, 8)
-    );
-  await fs.mkdir(output, {recursive: true, mode: 0o700});
+    )
+  );
+}
+
+async function writeManifest(output, session, revision) {
+  await fs.mkdir(output, {recursive: true, mode: PRIVATE_DIRECTORY});
   await fs.writeFile(
     path.join(output, 'manifest.json'),
     JSON.stringify(
       {
-        session: rpc.a.session,
+        session,
         sourceRevision: revision,
         builder: os.hostname(),
         targetArchitecture: 'aarch64',
@@ -208,8 +274,108 @@ async function run({
       null,
       2
     ) + '\n',
-    {mode: 0o600}
+    {mode: PRIVATE_FILE}
   );
+}
+
+/** The helper's stream command: raw H.264 on H264_FD and, with audio, PCM on AUDIO_FD. */
+function helperArgs(host, app, {width, height, fps, bitrate, audio}) {
+  return [
+    'stream',
+    host,
+    app,
+    '--size',
+    `${width}x${height}`,
+    '--fps',
+    String(fps),
+    '--bitrate',
+    bitrate,
+    '--raw-h264-fd',
+    String(H264_FD),
+    ...(audio ? ['--audio-fd', String(AUDIO_FD)] : [])
+  ];
+}
+
+/**
+ * The run's summary record, before scoring; the steady rows are those after the warmup.
+ * @param {ReturnType<typeof parseOptions>} options
+ */
+function buildSummary(options, {rows, staggeredLive, tail, socketAudioReport, stopReason}) {
+  const {presentHz, skipBacklog, skipRule, trimBacklogMs, gateOnReceive, outputLag} = options;
+  const {decodeWait, receiveWait, avoidWindow, queue, inputHz, audioFrames, audio} = options;
+  const {socketAudio, input, warmup, expect} = options;
+  const steadyRows = rows.slice(warmup);
+  return {
+    workerMode: 'staggered',
+    decoded: steadyRows.reduce((sum, row) => sum + row.decoded, 0),
+    presentHz,
+    skipBacklog: skipBacklog === Infinity ? 'off' : skipBacklog,
+    skipRule,
+    ...(trimBacklogMs !== null && {trimBacklogMs}),
+    ...(gateOnReceive && {gateOnReceive}),
+    ...(outputLag !== null && {outputLag}),
+    decodeWait,
+    receiveWait,
+    avoidWindow,
+    staggered: {...(staggeredLive?.counts ?? {}), tail},
+    queue,
+    inputHz,
+    audioFrames,
+    audio,
+    ...(socketAudio ? {socketAudio: socketAudioReport} : {}),
+    input,
+    ...scoring.summarize(rows, {warmup}),
+    expect,
+    stopReason
+  };
+}
+
+/** Scores the summary against --expect and the stop reason, and merges the verdict into it. */
+function score(summary, {expect, duration, socketAudioReport, stopReason}) {
+  const result = scoring.verdict(summary, expect);
+  if (socketAudioReport?.error) result.failures.push('socket audio: ' + socketAudioReport.error);
+  if (stopReason === 'console-stalled') result.failures.push('console stopped answering');
+  if (duration !== null && stopReason !== 'duration')
+    result.failures.push('ended before duration: ' + stopReason);
+  result.pass = result.failures.length === 0;
+  Object.assign(summary, result);
+  return result;
+}
+
+/**
+ * Streams HOST APP from the --moonlight flags until a stop, then writes and returns the scored
+ * summary. Throws on bad flags, on a stream error that was not caused by a stop, and with an
+ * AggregateError when the shutdown fails or native objects had to be retained.
+ */
+async function run({
+  args,
+  directory,
+  rpc,
+  storage,
+  helperPath,
+  width,
+  height,
+  fps,
+  sourceRevision,
+  createDecoder = createNativeDecoder,
+  createTransport = createNativeTransport,
+  createSink = createNativeSink,
+  createSocketAudio = createSocketAudioSource,
+  createStaggered = createStaggeredLive,
+  spawnProcess = spawn,
+  consoleStallMs = CONSOLE_STALL_MS,
+  statsMs = STATS_MS,
+  now = () => performance.now()
+}) {
+  const options = parseOptions(args, rpc, width, height, fps);
+  const {host, app, audio, socketTone, socketAudio, duration, queue, inputHz} = options;
+  const {presentHz, skipRule, trimBacklogMs, gateOnReceive, outputLag} = options;
+  const {decodeWait, receiveWait, avoidWindow, skipBacklog, audioFrames, bitrate} = options;
+  if (!rpc.host) throw Error('Native TCP requires a fresh launcher session from this branch');
+  const revision = sourceRevision || headRevision();
+  const output = recordDirectory(revision);
+  await writeManifest(output, rpc.a.session, revision);
+
   let stage = 'setup';
   const bridge = instrument(rpc, () => stage);
   rpc = watchBridge(bridge.rpc);
@@ -235,23 +401,30 @@ async function run({
   let inputBridge = {exchanges: 0, bridgeMs: 0};
   let trimmed = 0;
   let auSamples = [];
-  const stats = {
-    received: 0,
-    submitted: 0,
-    decoded: 0,
-    presented: 0,
-    skipped: 0,
-    bytes: 0,
-    keyframes: 0,
-    resyncs: 0,
-    idr: 0
-  };
+  const stats = freshStats();
+  // The decoder generations and what the current one has been fed.
+  let resets = [];
+  let generation = 0;
+  let sps;
+  let pps;
+  let configured = false;
+  let workerStarted = false;
+  let firstFrame = null;
+  let outstanding = 0;
+  // What the next stats row counts from.
+  let dropped = 0;
+  let queued = 0;
+  let waited = {};
+  let stageAt;
+  let stageMs = {};
+  const statsFile = path.join(output, 'stats.jsonl');
+
   const log = value => {
     const line = JSON.stringify(value);
     fsSync.appendFileSync(
       path.join(output, 'events.jsonl'),
       JSON.stringify({at: new Date().toISOString(), ...value}) + '\n',
-      {mode: 0o600}
+      {mode: PRIVATE_FILE}
     );
     console.error(line);
   };
@@ -261,6 +434,15 @@ async function run({
     stats.idr++;
     helper.stdin.write(JSON.stringify({type: 'request-idr'}) + '\n');
   });
+  const countSkipped = count => {
+    stats.skipped += count;
+  };
+  const countDecoded = count => {
+    stats.decoded += count;
+  };
+  const countPresented = count => {
+    stats.presented += count;
+  };
 
   function stop(reason = 'cleanup') {
     if (stopped) return;
@@ -279,64 +461,62 @@ async function run({
   const onTerminate = () => stop('SIGTERM');
   process.on('SIGINT', onInterrupt);
   process.on('SIGTERM', onTerminate);
+
   function requestIdr() {
     if (!stopping && bridge.silentMs() < IDR_QUIET_MS) idrRequester.request();
   }
-  try {
-    sink = await createSink(rpc, storage, {cancelled});
-    let resets = [];
-    let generation = 0;
-    const makeDecoder = async () => {
-      transport = await createTransport({rpc, host: rpc.host});
-      staggeredLive = createStaggered({
-        presentHz,
-        skipBacklog,
-        skipRule,
-        ...(trimBacklogMs !== null && {trimBacklogMs}),
-        ...(gateOnReceive && {gateOnReceive}),
-        ...(outputLag !== null && {lag: outputLag}),
-        decodeWait,
-        receiveWait,
-        avoid: avoidWindow,
-        now
+
+  /** Opens a decoder generation on its own transport and staggered scheduler. */
+  async function makeDecoder() {
+    transport = await createTransport({rpc, host: rpc.host});
+    staggeredLive = createStaggered({
+      presentHz,
+      skipBacklog,
+      skipRule,
+      ...(trimBacklogMs !== null && {trimBacklogMs}),
+      ...(gateOnReceive && {gateOnReceive}),
+      ...(outputLag !== null && {lag: outputLag}),
+      decodeWait,
+      receiveWait,
+      avoid: avoidWindow,
+      now
+    });
+    try {
+      return await createDecoder({
+        rpc,
+        directory,
+        workerDirectory: path.join(output, 'decoder-' + generation),
+        workerMode: 'split',
+        transport,
+        publication: sink.workerPublication,
+        splitWorkerFactory: staggeredLive.factory,
+        log,
+        cancelled
       });
-      try {
-        return await createDecoder({
-          rpc,
-          directory,
-          workerDirectory: path.join(output, 'decoder-' + generation),
-          workerMode: 'split',
-          transport,
-          publication: sink.workerPublication,
-          splitWorkerFactory: staggeredLive.factory,
-          log,
-          cancelled
-        });
-      } catch (error) {
-        await transport?.close().catch(() => {});
-        throw error;
-      }
-    };
-    decoder = await makeDecoder();
-    helper = spawnProcess(
-      helperPath,
-      [
-        'stream',
-        host,
-        app,
-        '--size',
-        `${width}x${height}`,
-        '--fps',
-        String(fps),
-        '--bitrate',
-        bitrate,
-        '--raw-h264-fd',
-        '4',
-        ...(audio ? ['--audio-fd', '3'] : [])
-      ],
-      {stdio: ['pipe', 'ignore', 'pipe', audio ? 'pipe' : 'ignore', 'pipe']}
-    );
-    reader = new AccessUnits(helper.stdio[4], {
+    } catch (error) {
+      await transport?.close().catch(() => {});
+      throw error;
+    }
+  }
+
+  /** The helper's JSON stderr: unit metadata goes to the reader, other events to the log. */
+  function relayStatus(line) {
+    let record;
+    try {
+      record = JSON.parse(line);
+    } catch {
+      console.error('hbmoonlight ' + line);
+      return;
+    }
+    if (record.type === 'au') reader.announce(record);
+    else if (record.event !== 'stats') log(record);
+  }
+
+  function spawnHelper() {
+    helper = spawnProcess(helperPath, helperArgs(host, app, {width, height, fps, bitrate, audio}), {
+      stdio: ['pipe', 'ignore', 'pipe', audio ? 'pipe' : 'ignore', 'pipe']
+    });
+    reader = new AccessUnits(helper.stdio[H264_FD], {
       maxQueuedUnits: queue,
       onBacklog: requestIdr,
       now
@@ -350,332 +530,246 @@ async function run({
       if (!stopping && code !== 0) reader.fail(Error('hbmoonlight exited: ' + (signal || code)));
     });
     statusLines = readline.createInterface({input: helper.stderr});
-    statusLines.on('line', line => {
-      let record;
-      try {
-        record = JSON.parse(line);
-      } catch {
-        console.error('hbmoonlight ' + line);
-        return;
-      }
-      if (record.type === 'au') reader.announce(record);
-      else if (record.event !== 'stats') log(record);
-    });
+    statusLines.on('line', relayStatus);
     statusLines.on('close', () => reader.endMetadata());
-    if (!args.includes('--no-input')) {
-      const child = spawnProcess(
-        process.execPath,
-        [
-          path.join(import.meta.dirname, '../input/input-feeder.js'),
-          directory,
-          '--hz',
-          String(inputHz),
-          '--counts-fd',
-          '3'
-        ],
-        {
-          stdio: ['ignore', helper.stdin, 'inherit', 'pipe']
-        }
-      );
-      if (child.stdio?.[3])
-        readline
-          .createInterface({input: child.stdio[3]})
-          .on('line', line => {
-            try {
-              const counts = JSON.parse(line);
-              inputBridge.exchanges += counts.exchanges;
-              inputBridge.bridgeMs += counts.bridgeMs;
-            } catch {}
-          })
-          .on('error', error => log({event: 'input-counts-error', message: error.message}));
-      child.on('error', error => reader.fail(error));
-      child.on('exit', (code, signal) => {
-        if (!stopping && code !== 0)
-          reader.fail(Error('Moonlight input feed exited: ' + (signal || code)));
-      });
-      children.push(child);
-    }
-    if (socketAudio) {
-      soundSource = await createSocketAudio({
-        rpc,
-        host: rpc.host,
-        bufferBytes: audioFrames * 4,
-        tone: socketTone,
-        onError: error => reader.fail(error)
-      });
-      soundSource.attach(helper.stdio[3]);
-      log({event: 'socket-audio', started: true, bufferBytes: audioFrames * 4});
-    } else if (audio) {
-      const child = spawnProcess(
-        process.execPath,
-        [
-          path.join(import.meta.dirname, '../audio/audio-stream.js'),
-          directory,
-          '--buffer-frames',
-          String(audioFrames),
-          '--queue',
-          '2',
-          '--prime',
-          '2',
-          '--stats'
-        ],
-        {
-          stdio: [helper.stdio[3], 'inherit', 'inherit']
-        }
-      );
-      child.on('error', error => reader.fail(error));
-      child.on('exit', (code, signal) => {
-        if (!stopping && code !== 0)
-          reader.fail(Error('Moonlight audio stream exited: ' + (signal || code)));
-      });
-      children.push(child);
-    }
-    let sps,
-      pps,
-      configured = false,
-      workerStarted = false,
-      firstFrame = null,
-      outstanding = 0;
-    async function resync(error) {
-      if (staggeredLive?.exists) throw error;
-      resets = resets.filter(time => Date.now() - time < 30000);
-      if (resets.length >= 3) throw error;
-      resets.push(Date.now());
-      stats.resyncs++;
-      log({event: 'native-resync', message: error.message, result: error.result});
-      await decoder.close();
-      generation++;
-      decoder = await makeDecoder();
-      configured = false;
-      workerStarted = false;
-      outstanding = 0;
-      requestIdr();
-    }
-    monitor = setInterval(async () => {
-      try {
-        const runtime = JSON.parse(await fs.readFile(path.join(directory, 'app-runtime.json')));
-        if (runtime.active?.id !== 'moonlight') stop('app-exit');
-      } catch (error) {
-        reader.fail(error);
-      }
-    }, 500);
-    let dropped = 0;
-    let queued = 0;
-    let waited = {};
-    stage = 'read';
-    let stageAt = performance.now(),
-      stageMs = {};
-    const enter = name => {
-      const now = performance.now();
-      stageMs[stage] = (stageMs[stage] || 0) + now - stageAt;
-      stageAt = now;
-      stage = name;
-    };
-    const statsFile = path.join(output, 'stats.jsonl');
-    printing = setInterval(() => {
-      const silent = bridge.silentMs();
-      if (silent >= consoleStallMs && !stopping) {
-        log({
-          event: 'console-stalled',
-          silentMs: Math.round(silent),
-          message: 'The console stopped answering'
-        });
-        stop('console-stalled');
-      }
-      const row = {
-        codec: 'h264',
-        ...stats,
-        dropped: reader.dropped - dropped,
-        queued,
-        ...(staggeredLive ? {waiting: countsSince(staggeredLive.counts.waiting, waited)} : {}),
-        au: auTiming(auSamples),
-        ...(trimBacklogMs !== null ? {trimmed} : {}),
-        ...withInputStage(bridge.take(), inputBridge),
-        at: stage + '/' + (decoder?.step ?? '-'),
-        ms: Object.fromEntries(Object.entries(stageMs).map(([k, v]) => [k, Math.round(v)]))
-      };
-      rows.push(row);
-      const line = JSON.stringify(row);
-      console.log(line);
-      fs.appendFile(statsFile, line + '\n', {mode: 0o600}).catch(() => {});
-      stageMs = {};
-      inputBridge = {exchanges: 0, bridgeMs: 0};
-      auSamples = [];
-      trimmed = 0;
-      dropped = reader.dropped;
-      queued = 0;
-      waited = staggeredLive?.counts.waiting ?? {};
-      Object.keys(stats).forEach(key => {
-        stats[key] = 0;
-      });
-    }, statsMs);
-    if (duration !== null) ending = setTimeout(() => stop('duration'), duration * 1000);
-    for await (const unit of reader) {
-      enter('unit');
-      queued = Math.max(queued, reader.ready.length);
-      if (stopping) break;
-      stats.received++;
-      stats.bytes += unit.data.length;
-      if (unit.keyframe) stats.keyframes++;
-      const sets = parameterSets(unit.data);
-      if (
-        configured &&
-        ((sets.sps && !sets.sps.equals(sps)) || (sets.pps && !sets.pps.equals(pps)))
-      )
-        await resync(Error('H.264 parameter sets changed'));
-      sps = sets.sps || sps;
-      pps = sets.pps || pps;
-      if (!configured) {
-        if (!unit.keyframe || !sps || !pps) continue;
-        await decoder.configure(sps, pps, fps);
-        configured = true;
-      }
-      try {
-        if (workerStarted) {
-          pairing = true;
-          const sample = {arrivedAt: unit.arrivedAt, gatedAt: null, sentAt: null, inHand: null};
-          try {
-            await staggeredLive.push(unit, {
-              sink,
-              enter,
-              backlog: reader.ready.length,
-              onGate: at => {
-                sample.gatedAt = at;
-                sample.inHand = 1 + reader.ready.length;
-              },
-              onSent: at => {
-                sample.sentAt = at;
-              },
-              onTrimmed: ageMs => {
-                trimmed++;
-                log({event: 'backlog-trim', ageMs: tenths(ageMs), trimBacklogMs});
-              },
-              onSkipped: count => {
-                stats.skipped += count;
-              },
-              onDecoded: count => {
-                stats.decoded += count;
-              },
-              onPresented: count => {
-                stats.presented += count;
-              }
-            });
-          } finally {
-            pairing = false;
-          }
-          auSamples.push(sample);
-          stats.submitted++;
-          enter('read');
-          continue;
-        }
-        enter('submit');
-        await decoder.submit(unit);
-        stats.submitted++;
-        outstanding++;
-        // Frames before the staggered workers take the host-driven path, which is
-        // drained fully so the workers start with no output owed.
-        const drainUntil = Date.now() + 200;
-        for (let pull = true; pull || outstanding > 0; pull = false) {
-          enter('destination');
-          const destination = await sink.destination();
-          enter('receive');
-          const frame = await decoder.receive(destination);
-          if (!frame) {
-            if (Date.now() > drainUntil) break;
-            await new Promise(resolve => setTimeout(resolve, 5));
-            continue;
-          }
-          outstanding--;
-          stats.decoded++;
-          enter('publish');
-          await sink.publish(destination, frame);
-          stats.presented++;
-          firstFrame ||= frame;
-          if (outstanding === 0 && !workerStarted) {
-            await sink.wait();
-            staggeredLive.start({input: decoder.lastInput, frame: firstFrame});
-            workerStarted = true;
-            log({
-              event: 'staggered-worker',
-              started: true,
-              ...(trimBacklogMs !== null && {trimBacklogMs}),
-              ...(gateOnReceive && {gateOnReceive}),
-              ...(outputLag !== null && {outputLag})
-            });
-          }
-        }
-      } catch (error) {
-        if (stopping || error.result === undefined) throw error;
-        await resync(error);
-      }
-      enter('read');
-    }
-    if (staggeredLive?.pending) {
-      if (!stopping || stopReason === 'duration') {
-        pairing = true;
-        try {
-          tail = await staggeredLive.finish({
-            sink,
-            enter,
-            onDecoded: count => {
-              stats.decoded += count;
-            },
-            onPresented: count => {
-              stats.presented += count;
-            },
-            onSkipped: count => {
-              stats.skipped += count;
-            }
-          });
-        } finally {
-          pairing = false;
-        }
-      } else tail = {drained: 0, skipped: stopReason};
-      log({event: 'staggered-tail', ...tail});
-    }
-  } catch (error) {
-    if (staggeredLive?.exists && !rpc.bridgeLost)
-      log({
-        event: 'staggered-snapshot',
-        snapshot: await staggeredLive
-          .snapshot()
-          .catch(snapshotError => ({error: snapshotError.message}))
-      });
-    log({
-      event: 'native-error',
-      message: error.message,
-      pending: error.pending,
-      control: error.control,
-      ...(stopping ? {stopping} : {})
+  }
+
+  /** Fails the stream when a child cannot start or exits uninvited with a non-zero code. */
+  function watchChild(child, name) {
+    child.on('error', error => reader.fail(error));
+    child.on('exit', (code, signal) => {
+      if (!stopping && code !== 0) reader.fail(Error(name + ' exited: ' + (signal || code)));
     });
-    if (!stopping) throw error;
-  } finally {
-    clearInterval(monitor);
-    clearInterval(printing);
-    clearTimeout(ending);
-    stop('cleanup');
-    statusLines?.close();
-    const errors = [];
-    if (soundSource) {
-      socketAudioReport = await soundSource.close();
-      log({event: 'socket-audio', ...socketAudioReport});
-      await fs
-        .writeFile(
-          path.join(directory, `moonlight-audio-${Date.now()}.json`),
-          JSON.stringify(
-            {
-              session: rpc.a.session,
-              mode: 'socket',
-              completed: new Date().toISOString(),
-              ...socketAudioReport
-            },
-            null,
-            2
-          )
-        )
-        .catch(error => errors.push(error));
-      if (socketAudioReport.retainedForSafety) errors.push(Error(socketAudioReport.error));
+    children.push(child);
+  }
+
+  /** The input feeder writes to the helper's stdin and its bridge counts to fd 3. */
+  function spawnInputFeeder() {
+    const child = spawnProcess(
+      process.execPath,
+      [
+        path.join(import.meta.dirname, '../input/input-feeder.js'),
+        directory,
+        '--hz',
+        String(inputHz),
+        '--counts-fd',
+        '3'
+      ],
+      {
+        stdio: ['ignore', helper.stdin, 'inherit', 'pipe']
+      }
+    );
+    if (child.stdio?.[3])
+      readline
+        .createInterface({input: child.stdio[3]})
+        .on('line', line => {
+          try {
+            const counts = JSON.parse(line);
+            inputBridge.exchanges += counts.exchanges;
+            inputBridge.bridgeMs += counts.bridgeMs;
+          } catch {}
+        })
+        .on('error', error => log({event: 'input-counts-error', message: error.message}));
+    watchChild(child, 'Moonlight input feed');
+  }
+
+  /** The audio stream reads the helper's PCM pipe as its stdin. */
+  function spawnAudioStream() {
+    const child = spawnProcess(
+      process.execPath,
+      [
+        path.join(import.meta.dirname, '../audio/audio-stream.js'),
+        directory,
+        '--buffer-frames',
+        String(audioFrames),
+        '--queue',
+        '2',
+        '--prime',
+        '2',
+        '--stats'
+      ],
+      {
+        stdio: [helper.stdio[AUDIO_FD], 'inherit', 'inherit']
+      }
+    );
+    watchChild(child, 'Moonlight audio stream');
+  }
+
+  /** Closes this decoder generation and opens the next, unless resyncs come too often. */
+  async function resync(error) {
+    if (staggeredLive?.exists) throw error;
+    resets = resets.filter(time => Date.now() - time < RESYNC_WINDOW_MS);
+    if (resets.length >= RESYNC_LIMIT) throw error;
+    resets.push(Date.now());
+    stats.resyncs++;
+    log({event: 'native-resync', message: error.message, result: error.result});
+    await decoder.close();
+    generation++;
+    decoder = await makeDecoder();
+    configured = false;
+    workerStarted = false;
+    outstanding = 0;
+    requestIdr();
+  }
+
+  async function checkRuntime() {
+    try {
+      const runtime = JSON.parse(await fs.readFile(path.join(directory, 'app-runtime.json')));
+      if (runtime.active?.id !== 'moonlight') stop('app-exit');
+    } catch (error) {
+      reader.fail(error);
     }
+  }
+
+  /** Books the time since the last stage change to the stage being left. */
+  const enter = name => {
+    const time = performance.now();
+    stageMs[stage] = (stageMs[stage] || 0) + time - stageAt;
+    stageAt = time;
+    stage = name;
+  };
+
+  function statsRow() {
+    return {
+      codec: 'h264',
+      ...stats,
+      dropped: reader.dropped - dropped,
+      queued,
+      ...(staggeredLive ? {waiting: countsSince(staggeredLive.counts.waiting, waited)} : {}),
+      au: auTiming(auSamples),
+      ...(trimBacklogMs !== null ? {trimmed} : {}),
+      ...withInputStage(bridge.take(), inputBridge),
+      at: stage + '/' + (decoder?.step ?? '-'),
+      ms: Object.fromEntries(Object.entries(stageMs).map(([k, v]) => [k, Math.round(v)]))
+    };
+  }
+
+  function startRow() {
+    stageMs = {};
+    inputBridge = {exchanges: 0, bridgeMs: 0};
+    auSamples = [];
+    trimmed = 0;
+    dropped = reader.dropped;
+    queued = 0;
+    waited = staggeredLive?.counts.waiting ?? {};
+    Object.keys(stats).forEach(key => {
+      stats[key] = 0;
+    });
+  }
+
+  /** Stops on a stalled console, then prints and records one stats row. */
+  function printRow() {
+    const silent = bridge.silentMs();
+    if (silent >= consoleStallMs && !stopping) {
+      log({
+        event: 'console-stalled',
+        silentMs: Math.round(silent),
+        message: 'The console stopped answering'
+      });
+      stop('console-stalled');
+    }
+    const row = statsRow();
+    rows.push(row);
+    const line = JSON.stringify(row);
+    console.log(line);
+    fs.appendFile(statsFile, line + '\n', {mode: PRIVATE_FILE}).catch(() => {});
+    startRow();
+  }
+
+  /** The staggered push callbacks, which time the unit into `sample` and count the frames. */
+  function pushOptions(sample) {
+    return {
+      sink,
+      enter,
+      backlog: reader.ready.length,
+      onGate: at => {
+        sample.gatedAt = at;
+        sample.inHand = 1 + reader.ready.length;
+      },
+      onSent: at => {
+        sample.sentAt = at;
+      },
+      onTrimmed: ageMs => {
+        trimmed++;
+        log({event: 'backlog-trim', ageMs: tenths(ageMs), trimBacklogMs});
+      },
+      onSkipped: countSkipped,
+      onDecoded: countDecoded,
+      onPresented: countPresented
+    };
+  }
+
+  function startWorkers() {
+    staggeredLive.start({input: decoder.lastInput, frame: firstFrame});
+    workerStarted = true;
+    log({
+      event: 'staggered-worker',
+      started: true,
+      ...(trimBacklogMs !== null && {trimBacklogMs}),
+      ...(gateOnReceive && {gateOnReceive}),
+      ...(outputLag !== null && {outputLag})
+    });
+  }
+
+  /** Submits a unit on the host-driven path and publishes every frame it owes. */
+  async function submitHostPath(unit) {
+    enter('submit');
+    await decoder.submit(unit);
+    stats.submitted++;
+    outstanding++;
+    // Frames before the staggered workers take the host-driven path, which is
+    // drained fully so the workers start with no output owed.
+    const drainUntil = Date.now() + DRAIN_MS;
+    for (let pull = true; pull || outstanding > 0; pull = false) {
+      enter('destination');
+      const destination = await sink.destination();
+      enter('receive');
+      const frame = await decoder.receive(destination);
+      if (!frame) {
+        if (Date.now() > drainUntil) break;
+        await new Promise(resolve => setTimeout(resolve, DRAIN_POLL_MS));
+        continue;
+      }
+      outstanding--;
+      stats.decoded++;
+      enter('publish');
+      await sink.publish(destination, frame);
+      stats.presented++;
+      firstFrame ||= frame;
+      if (outstanding === 0 && !workerStarted) {
+        await sink.wait();
+        startWorkers();
+      }
+    }
+  }
+
+  /** Socket audio report, written next to the run directory's other Moonlight records. */
+  async function closeSocketAudio(errors) {
+    socketAudioReport = await soundSource.close();
+    log({event: 'socket-audio', ...socketAudioReport});
+    await fs
+      .writeFile(
+        path.join(directory, `moonlight-audio-${Date.now()}.json`),
+        JSON.stringify(
+          {
+            session: rpc.a.session,
+            mode: 'socket',
+            completed: new Date().toISOString(),
+            ...socketAudioReport
+          },
+          null,
+          2
+        )
+      )
+      .catch(error => errors.push(error));
+    if (socketAudioReport.retainedForSafety) errors.push(Error(socketAudioReport.error));
+  }
+
+  /**
+   * Stops the workers, then closes the decoder and the sink; with a lost bridge or a failed
+   * worker stop the native objects are left alone instead.
+   */
+  async function releaseNative(errors) {
     let retained = Boolean(rpc.bridgeLost);
     if (staggeredLive && !retained) {
       try {
@@ -704,60 +798,189 @@ async function run({
         errors.push(error);
       }
     }
+  }
+
+  /** Opens the sink and the first decoder, starts the children and the timers. */
+  async function openStream() {
+    sink = await createSink(rpc, storage, {cancelled});
+    decoder = await makeDecoder();
+    spawnHelper();
+    if (options.input) spawnInputFeeder();
+    if (socketAudio) {
+      soundSource = await createSocketAudio({
+        rpc,
+        host: rpc.host,
+        bufferBytes: audioFrames * FRAME_BYTES,
+        tone: socketTone,
+        onError: error => reader.fail(error)
+      });
+      soundSource.attach(helper.stdio[AUDIO_FD]);
+      log({event: 'socket-audio', started: true, bufferBytes: audioFrames * FRAME_BYTES});
+    } else if (audio) spawnAudioStream();
+    monitor = setInterval(checkRuntime, RUNTIME_CHECK_MS);
+    stage = 'read';
+    stageAt = performance.now();
+    printing = setInterval(printRow, statsMs);
+    if (duration !== null) ending = setTimeout(() => stop('duration'), duration * 1000);
+  }
+
+  /**
+   * Resyncs on changed parameter sets and configures the decoder on the first keyframe that
+   * carries both; false while the unit has to be skipped.
+   */
+  async function readyToDecode(unit) {
+    const sets = parameterSets(unit.data);
+    if (configured && ((sets.sps && !sets.sps.equals(sps)) || (sets.pps && !sets.pps.equals(pps))))
+      await resync(Error('H.264 parameter sets changed'));
+    sps = sets.sps || sps;
+    pps = sets.pps || pps;
+    if (configured) return true;
+    if (!unit.keyframe || !sps || !pps) return false;
+    await decoder.configure(sps, pps, fps);
+    configured = true;
+    return true;
+  }
+
+  /** Hands a unit to the running staggered workers, timing it into the row's samples. */
+  async function pushStaggered(unit) {
+    pairing = true;
+    const sample = {arrivedAt: unit.arrivedAt, gatedAt: null, sentAt: null, inHand: null};
+    try {
+      await staggeredLive.push(unit, pushOptions(sample));
+    } finally {
+      pairing = false;
+    }
+    auSamples.push(sample);
+    stats.submitted++;
+    enter('read');
+  }
+
+  /** One unit from the reader; true once the stream is stopping and the loop must end. */
+  async function feedUnit(unit) {
+    enter('unit');
+    queued = Math.max(queued, reader.ready.length);
+    if (stopping) return true;
+    stats.received++;
+    stats.bytes += unit.data.length;
+    if (unit.keyframe) stats.keyframes++;
+    if (!(await readyToDecode(unit))) return false;
+    try {
+      if (workerStarted) {
+        await pushStaggered(unit);
+        return false;
+      }
+      await submitHostPath(unit);
+    } catch (error) {
+      if (stopping || error.result === undefined) throw error;
+      await resync(error);
+    }
+    enter('read');
+    return false;
+  }
+
+  /** Drains the units the workers still hold, unless a stop other than --duration cut it. */
+  async function finishTail() {
+    if (!stopping || stopReason === 'duration') {
+      pairing = true;
+      try {
+        tail = await staggeredLive.finish({
+          sink,
+          enter,
+          onDecoded: countDecoded,
+          onPresented: countPresented,
+          onSkipped: countSkipped
+        });
+      } finally {
+        pairing = false;
+      }
+    } else tail = {drained: 0, skipped: stopReason};
+    log({event: 'staggered-tail', ...tail});
+  }
+
+  async function streamUnits() {
+    for await (const unit of reader) if (await feedUnit(unit)) break;
+    if (staggeredLive?.pending) await finishTail();
+  }
+
+  /** Logs a failed stream, with the workers' snapshot while the bridge still answers. */
+  async function logFailure(error) {
+    if (staggeredLive?.exists && !rpc.bridgeLost)
+      log({
+        event: 'staggered-snapshot',
+        snapshot: await staggeredLive
+          .snapshot()
+          .catch(snapshotError => ({error: snapshotError.message}))
+      });
+    log({
+      event: 'native-error',
+      message: error.message,
+      pending: error.pending,
+      control: error.control,
+      ...(stopping ? {stopping} : {})
+    });
+  }
+
+  /** Stops everything and releases the native objects; throws what failed on the way. */
+  async function shutdown() {
+    clearInterval(monitor);
+    clearInterval(printing);
+    clearTimeout(ending);
+    stop('cleanup');
+    statusLines?.close();
+    const errors = [];
+    if (soundSource) await closeSocketAudio(errors);
+    await releaseNative(errors);
     process.removeListener('SIGINT', onInterrupt);
     process.removeListener('SIGTERM', onTerminate);
     if (errors.length) throw new AggregateError(errors, 'Native H.264 shutdown failed');
   }
-  const steadyRows = rows.slice(warmup);
-  const summary = {
-    workerMode: 'staggered',
-    decoded: steadyRows.reduce((sum, row) => sum + row.decoded, 0),
-    presentHz,
-    skipBacklog: skipBacklog === Infinity ? 'off' : skipBacklog,
-    skipRule,
-    ...(trimBacklogMs !== null && {trimBacklogMs}),
-    ...(gateOnReceive && {gateOnReceive}),
-    ...(outputLag !== null && {outputLag}),
-    decodeWait,
-    receiveWait,
-    avoidWindow,
-    staggered: {...(staggeredLive?.counts ?? {}), tail},
-    queue,
-    inputHz,
-    audioFrames,
-    audio,
-    ...(socketAudio ? {socketAudio: socketAudioReport} : {}),
-    input: !args.includes('--no-input'),
-    ...scoring.summarize(rows, {warmup}),
-    expect,
-    stopReason
-  };
-  const result = scoring.verdict(summary, expect);
-  if (socketAudioReport?.error) result.failures.push('socket audio: ' + socketAudioReport.error);
-  if (stopReason === 'console-stalled') result.failures.push('console stopped answering');
-  if (duration !== null && stopReason !== 'duration')
-    result.failures.push('ended before duration: ' + stopReason);
-  result.pass = result.failures.length === 0;
-  Object.assign(summary, result);
-  await fs.writeFile(path.join(output, 'summary.json'), JSON.stringify(summary, null, 2) + '\n', {
-    mode: 0o600
-  });
-  log({
-    event: 'summary',
-    verdict: result.pass ? 'PASS' : 'FAIL',
-    failures: result.failures,
-    mode: 'split',
-    fps: summary.fps,
-    minFps: summary.minFps,
-    dropped: summary.dropped,
-    ...(summary.trimmed !== undefined && {trimmed: summary.trimmed}),
-    idr: summary.idr,
-    requestsPerFrame: summary.requestsPerFrame,
-    bridgeMsPerFrame: summary.bridgeMsPerFrame,
-    stopReason,
-    record: output
-  });
-  return summary;
+
+  /** Scores the run, writes summary.json and logs the verdict. */
+  async function writeSummary() {
+    const summary = buildSummary(options, {
+      rows,
+      staggeredLive,
+      tail,
+      socketAudioReport,
+      stopReason
+    });
+    const result = score(summary, {
+      expect: options.expect,
+      duration,
+      socketAudioReport,
+      stopReason
+    });
+    await fs.writeFile(path.join(output, 'summary.json'), JSON.stringify(summary, null, 2) + '\n', {
+      mode: PRIVATE_FILE
+    });
+    log({
+      event: 'summary',
+      verdict: result.pass ? 'PASS' : 'FAIL',
+      failures: result.failures,
+      mode: 'split',
+      fps: summary.fps,
+      minFps: summary.minFps,
+      dropped: summary.dropped,
+      ...(summary.trimmed !== undefined && {trimmed: summary.trimmed}),
+      idr: summary.idr,
+      requestsPerFrame: summary.requestsPerFrame,
+      bridgeMsPerFrame: summary.bridgeMsPerFrame,
+      stopReason,
+      record: output
+    });
+    return summary;
+  }
+
+  try {
+    await openStream();
+    await streamUnits();
+  } catch (error) {
+    await logFailure(error);
+    if (!stopping) throw error;
+  } finally {
+    await shutdown();
+  }
+  return writeSummary();
 }
 
 export {run, createIdrRequester, countsSince, auTiming, withInputStage};
