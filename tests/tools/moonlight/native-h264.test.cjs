@@ -107,6 +107,7 @@ test('backlog IDR requests recover within 100 ms and coalesce dropped frames', (
 
 async function fixture({
   hangSubmit = 0,
+  slowSubmit = 0,
   audioFailure = false,
   emptyPolls = 0,
   units = [{hex: accessUnit.toString('hex'), keyframe: true, pts: 123456}]
@@ -130,7 +131,9 @@ async function fixture({
       host: '192.0.2.10',
       request: () =>
         new Promise((resolve, reject) =>
-          setTimeout(() => reject(Error('Console response timed out')), hangSubmit)
+          slowSubmit
+            ? setTimeout(resolve, slowSubmit)
+            : setTimeout(() => reject(Error('Console response timed out')), hangSubmit)
         )
     },
     storage: {},
@@ -187,7 +190,7 @@ async function fixture({
           events.push({type: 'configure', sps, pps, fps});
         },
         async submit(unit) {
-          if (hangSubmit) await config.rpc.request();
+          if (hangSubmit || slowSubmit) await config.rpc.request();
           events.push({type: 'submit', unit});
           pipeline++;
         },
@@ -369,6 +372,54 @@ test(
     });
   }
 );
+
+test(
+  'a console that stops answering without losing the bridge fails the run',
+  {timeout: 5000},
+  async () => {
+    const f = await fixture({slowSubmit: 1200});
+    await exercise(f, async () => {
+      const summary = await run({...f.options, consoleStallMs: 300});
+      assert.equal(summary.stopReason, 'console-stalled');
+      assert.equal(summary.pass, false);
+      assert.ok(summary.failures.includes('console stopped answering'));
+      const events = (await fs.readFile(path.join(f.directory, 'logs', 'events.jsonl'), 'utf8'))
+        .trim()
+        .split('\n')
+        .map(JSON.parse);
+      assert.equal(events.find(event => event.event === 'summary').mode, 'split');
+    });
+  }
+);
+
+test(
+  'the first-frame drain waits for a late output before the staggered workers start',
+  {timeout: 5000},
+  async () => {
+    const f = await fixture({emptyPolls: 2, units: pairedUnits(2)});
+    await exercise(f, async () => {
+      await run(f.options);
+      const before = f.events.slice(
+        0,
+        f.events.findIndex(event => event.type === 'staggered-start')
+      );
+      assert.equal(before.filter(event => event.type === 'receive').length, 3);
+      assert.equal(f.events.filter(event => event.type === 'staggered-start').length, 1);
+    });
+  }
+);
+
+test('the decoder gets its own TCP transport to the console host', {timeout: 5000}, async () => {
+  const f = await fixture({units: pairedUnits(2)});
+  await exercise(f, async () => {
+    await run(f.options);
+    assert.deepEqual(
+      f.events.filter(event => event.type === 'create-transport').map(event => event.host),
+      ['192.0.2.10']
+    );
+    assert.equal(f.events.filter(event => event.type === 'close-transport').length, 1);
+  });
+});
 
 test(
   'stopping signals the helper before its video pipe closes and keeps draining it',
