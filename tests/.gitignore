@@ -16,3 +16,4 @@ __pycache__/
 !/apps/.gitkeep
 !/apps/moonlight/
 node_modules/
+/node_modules
