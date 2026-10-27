@@ -746,7 +746,7 @@ async function run({
     event: 'summary',
     verdict: result.pass ? 'PASS' : 'FAIL',
     failures: result.failures,
-    mode: 'staggered',
+    mode: 'split',
     fps: summary.fps,
     minFps: summary.minFps,
     dropped: summary.dropped,
