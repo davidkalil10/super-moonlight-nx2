@@ -243,16 +243,19 @@ one.
 from the `SESSION READY` line, else the newest). The console draws the pages the service
 publishes and sends back commands; the host owns every screen.
 
-| File | Role |
-| --- | --- |
-| `model.js` | pure state machine, `reduce(model, event)` returns the next model and intents; item ids per screen in `ITEM` |
-| `hosts.js` | the host list in `hosts.json` (`$XDG_CONFIG_HOME/hblauncher/moonlight/`) and the helper's app list |
-| `settings.js` | settings catalog (size, fps, bitrate, codec, audio, present rate), `settings.json` beside `hosts.json`, `streamArgs` for `live.js` |
-| `pages.js` | one layout per screen; strips and tiles cached by text and size |
-| `raster.js` + `text.py` (Sora in `fonts/`) | long-lived PIL child painting strips, cover tiles and letter tiles |
-| `page.js` | page serializer, validator and parser, mirror of the shader |
-| `discover.js` | mDNS for `_nvstream._tcp.local`, answer parser, merge into the host list |
-| `service.js` | attach, publish, command poll, children (helper `list`/`pair`/`quit`, `live.js`), exit |
+- `model.js`: pure state machine; `reduce(model, event)` returns the next model and intents.
+  Item ids per screen are in `ITEM`.
+- `hosts.js`: the host list in `hosts.json` (`$XDG_CONFIG_HOME/hblauncher/moonlight/`) and the
+  helper's app list.
+- `settings.js`: the settings catalog (size, fps, bitrate, codec, audio, present rate),
+  `settings.json` beside `hosts.json`, and `streamArgs` for `live.js`.
+- `pages.js`: one layout per screen; strips and tiles are cached by text and size.
+- `raster.js` + `text.py`: a long-lived PIL child painting strips, cover tiles and letter tiles,
+  in Sora from `fonts/`.
+- `page.js`: page serializer, validator and parser, the mirror of the shader.
+- `discover.js`: mDNS for `_nvstream._tcp.local`, the answer parser, merging into the host list.
+- `service.js`: attach, publish, command poll, children (helper `list`/`pair`/`quit`,
+  `live.js`), exit.
 
 - Attach writes magic 0, reads the stale `uiApplied` and seeds the next sequence after it.
   Commands written before attach are not replayed. A page is republished only when its bytes

@@ -6,7 +6,7 @@ rewrite, `hbl-notes/team/REWRITE.md`). Runtime code only: tests, probes and rese
 
 ## Layout
 
-Phase 1 kept the original HBLauncher paths; lane Z moves the host into `host/` one chunk at a time:
+The host is moving from `tools/moonlight/` into `host/`; until it is done both hold code:
 
 - `apps/moonlight/`: the console app as an HB package (`manifest.json`, `assets/`,
   `backends/hblauncher.gpu-app/`, `build.js`, its own README).
