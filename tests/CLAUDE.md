@@ -88,17 +88,13 @@ compare to every exchange, small ones included.
   make reorder and tearing safe).
 - HBV2 rate control: bisect qp for the largest frame under `budget`; over `cap` at the
   coarsest qp, defer the macroblocks with the lowest distortion per bit; `refresh` chunks per
-  frame are forced intra so losses heal without a keyframe. The sender polls `applied` every
-  500 ms (each poll is a full exchange) and forces a keyframe after `--resync`.
-- The native encoder sets `OMP_WAIT_POLICY=passive`: spinning threads starved capture and RPC
-  on m5 (58 ms vs 6.5 ms per frame).
+  frame are forced intra so losses heal without a keyframe.
 - Measured on a 5.7 MB/s latest-wins replay, 1080p, 120 frames: desktop typing/scroll/drag at
   HBV2 64-96K is 34-52 KiB, 59 fps, coded 51.7-58.2 dB, against HBV1 288K at 19 fps and
   24.5-25.1 dB. Clips (720p upscaled, flattering): HBV2 64-96K holds 56-59 fps; 160K drops
   mandelbrot to 34 fps at 5.7 MB/s but holds 59 at 12 MB/s, so keep the budget near 64-96K on
   the slow link. `displayed` PSNR is low for fast-moving text in both codecs: it measures
-  latency, not reconstruction. Encode is 2.4-5.8 ms per 1080p frame idle (about 6.5 ms under
-  a live screencast); desktop RADV decodes in 1-5 ms. Artifacts in
+  latency, not reconstruction. Encode was 2.4-5.8 ms per 1080p frame idle; desktop RADV decodes in 1-5 ms. Artifacts in
   `~/claude-builds/HBLauncher/hbv2-eval/`.
 - Helper decode on m5 (`hbmoonlight-bench`, 1080p60 testsrc2 at 20 Mb/s): H.264 VAAPI 7.6 ms
   (6.4 with 4 slices), software 3.3 (2.8), HEVC VAAPI 7.0. VAAPI is likely slowed by the NV12
@@ -129,8 +125,8 @@ headroom:
   in series per invocation). Skipping zero IDCT rows or clearing only touched rows is bit-exact
   but slower everywhere (more live state, more spills): don't retry. The console's
   `maxComputeWorkGroupInvocations` was never read; 512 fits any NVIDIA limit.
-- Bridge: 120 fps at `--budget 96` is about 360 video + 60 input + 40-50 audio exchanges/s,
-  above the 412/s wired ceiling.
+- Bridge: 120 fps of HBV2 at a 96K budget was about 360 video + 60 input + 40-50 audio
+  exchanges/s, above the 412/s wired ceiling.
 - Proposals not applied: a wide HBV2 dispatch through the manifest's `computeSequence`
   (pick, N-workgroup decode, commit; today one workgroup on one SM, est. 2-4x); dropping the
   per-frame 8 MB swapchain-to-buffer copy (`vkCmdCopyImageToBuffer2`) in hbl-platform

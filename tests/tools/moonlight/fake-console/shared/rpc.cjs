@@ -1,13 +1,13 @@
-// Fake console for live.js and feed.js: one serial link of 32 KiB exchanges
+// Fake console for feed.js: one serial link of 32 KiB exchanges
 // at RATE bytes/s whose concurrent writes interleave at random, plus a 60 Hz
 // "compute dispatch" running the JS HBV2 decoder over the ring. It lets the
-// sender be developed and its resync path tested without a console.
+// HBV feed be developed and its resync path tested without a console.
 //   RATE    link bytes/s (default 5.7e6, the measured rate)
 //   STALL   ms@at: pause the dispatch once at `at` ms for `ms` ms, like the
 //           HOME menu, to force a broken P-frame chain and a keyframe resync
 //   DECODE  1 runs the full JS decoder (slower); otherwise a light apply that
 //           only advances `applied`, enough for link/fps behaviour
-// Point live.js or feed.js at this directory; it reads app-moonlight-*.json.
+// Point feed.js at this directory; it reads app-moonlight-*.json.
 const ring = require('../../../../../hbl-moonlight/tools/moonlight/ring.js');
 const hbv2 = require('../../../../../hbl-moonlight/tools/moonlight/hbv2.js');
 const {mapped: BASE} = require('../app-moonlight-1.json').privateStorage;

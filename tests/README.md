@@ -56,10 +56,9 @@ HB package backend two (offscreen Vulkan); its README is read by `readme.test.cj
 ## Fake console
 
 `tools/moonlight/fake-console` stands in for a running Moonlight app, so `feed.js` can be
-developed without a console. `shared/rpc.cjs`
-simulates the bridge: one serial link of 32 KiB exchanges whose concurrent writes interleave at
-random, and a 60 Hz dispatch that runs the JS HBV2 decoder over the ring and writes back
-`applied`.
+developed without a console. `shared/rpc.cjs` simulates the bridge: one serial link of 32 KiB
+exchanges whose concurrent writes interleave at random, and a 60 Hz dispatch that runs the JS
+HBV2 decoder over the ring and writes back `applied`.
 
 ```sh
 # HBV1 slots of a clip, fed on the measured 5.7 MB/s link

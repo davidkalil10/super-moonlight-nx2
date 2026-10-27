@@ -63,3 +63,17 @@ test('a valid vsync and decode-wait set passes parsing and stops at the session 
       {status: 1, error: 'Native TCP requires a fresh launcher session from this branch'}
     );
 });
+
+test('live.js streams H.264 by default and refuses any other codec', t => {
+  const directory = runDirectory();
+  t.after(() => fs.rmSync(directory, {recursive: true, force: true}));
+  assert.deepEqual(live(directory, ['--moonlight', 'host', 'Desktop']), {
+    status: 1,
+    error: 'Native TCP requires a fresh launcher session from this branch'
+  });
+  for (const codec of ['hbv1', 'hbv2'])
+    assert.deepEqual(live(directory, ['--codec', codec, '--moonlight', 'host', 'Desktop']), {
+      status: 1,
+      error: '--codec is h264'
+    });
+});
