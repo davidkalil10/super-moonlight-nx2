@@ -41,9 +41,8 @@ HB package backend two (offscreen Vulkan); its README is read by `readme.test.cj
 
 ## Tools
 
-- `tools/moonlight/request-budget.cjs`: offline request budget for the native H.264 host loop.
-  The real workers and sink run against a modelled console on a virtual clock, with the stage
-  labels of `native-h264.js`. Run it before any device run.
+- `tools/moonlight/request-budget.cjs`: offline request budget for the staggered native H.264
+  host loop, a virtual-clock model of its gate cycle. Run it before any device run.
 - `tools/moonlight/encode.cjs CLIP OUT.hbv [--size 640x352] [--frames N]`: the HBV1 slot stream
   the host would write; `hbl-moonlight/tools/moonlight/feed.js` replays it into a live ring.
 - `tools/moonlight/desktop-scenes.py SCENE FRAMES OUT`: synthetic 1920x1080 desktop sequences

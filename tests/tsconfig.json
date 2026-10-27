@@ -43,15 +43,10 @@
     "../hbl-moonlight/tools/moonlight/staggered-output-plan.js",
     "../hbl-moonlight/tools/moonlight/staggered-status.js",
     "../hbl-moonlight/tools/moonlight/staggered-worker.js",
-    "../hbl-moonlight/tools/moonlight/paired-live.js",
-    "../hbl-moonlight/tools/moonlight/paired-loop-plan.js",
-    "../hbl-moonlight/tools/moonlight/paired-loop-worker.js",
-    "../hbl-moonlight/tools/moonlight/paired-output-frame.js",
+    "../hbl-moonlight/tools/moonlight/publication-metadata.js",
     "../hbl-moonlight/tools/moonlight/native-tcp.js",
     "../hbl-moonlight/tools/moonlight/native-sink.js",
     "../hbl-moonlight/tools/moonlight/native-decoder.js",
-    "../hbl-moonlight/tools/moonlight/persistent-decoder-worker.js",
-    "../hbl-moonlight/tools/moonlight/split-decoder-worker.js",
     "../hbl-moonlight/tools/moonlight/socket-audio-source.js"
   ]
 }

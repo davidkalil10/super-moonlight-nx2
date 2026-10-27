@@ -2,7 +2,8 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const {
   instrument,
-  requestsFor
+  requestsFor,
+  watchBridge
 } = require('../../../hbl-moonlight/tools/moonlight/bridge-counter.js');
 
 test('bridge counter attributes requests and elapsed time to the active stage', async () => {
@@ -93,4 +94,22 @@ test('silentMs is how long the console has left a call unanswered', async () => 
   assert.equal(counter.silentMs(), 200, 'an idle bridge is not counted');
   answers[2]();
   await third;
+});
+
+test('a bridge timeout marks the session lost so cleanup skips device calls', async () => {
+  const rpc = watchBridge({
+    a: {session: 'x'},
+    host: '192.0.2.1',
+    read: async () => {
+      throw Error('RPC read timed out');
+    },
+    write: async () => {
+      throw Error('Invalid write');
+    }
+  });
+  assert.equal(rpc.host, '192.0.2.1');
+  await assert.rejects(rpc.write(1, Buffer.alloc(1)), /Invalid write/);
+  assert.equal(rpc.bridgeLost, false);
+  await assert.rejects(rpc.read(1, 4), /timed out/);
+  assert.equal(rpc.bridgeLost, true);
 });

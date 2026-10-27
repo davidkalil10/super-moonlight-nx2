@@ -36,9 +36,9 @@ function live(directory, args) {
 test('live.js hands the staggered skip options to the native H.264 parser', t => {
   const directory = runDirectory();
   t.after(() => fs.rmSync(directory, {recursive: true, force: true}));
-  assert.deepEqual(live(directory, [...H264, '--skip-rule', 'vsync', '--decode-wait']), {
+  assert.deepEqual(live(directory, [...H264, '--decode-wait']), {
     status: 1,
-    error: '--present-hz, --skip-backlog and --skip-rule apply to --staggered'
+    error: '--decode-wait needs --skip-rule vsync'
   });
   assert.deepEqual(live(directory, [...H264, '--staggered', '--decode-wait']), {
     status: 1,
@@ -57,14 +57,9 @@ test('live.js hands the staggered skip options to the native H.264 parser', t =>
 test('a valid vsync and decode-wait set passes parsing and stops at the session check', t => {
   const directory = runDirectory();
   t.after(() => fs.rmSync(directory, {recursive: true, force: true}));
-  assert.deepEqual(
-    live(directory, [...H264, '--staggered', '--skip-rule', 'vsync', '--decode-wait']),
-    {status: 1, error: 'Native TCP requires a fresh launcher session from this branch'}
-  );
-});
-
-test('--ab is checked by live.js before any run starts', t => {
-  const directory = runDirectory();
-  t.after(() => fs.rmSync(directory, {recursive: true, force: true}));
-  assert.deepEqual(live(directory, [...H264, '--ab']), {status: 1, error: '--ab needs --duration'});
+  for (const staggered of [['--staggered'], []])
+    assert.deepEqual(
+      live(directory, [...H264, ...staggered, '--skip-rule', 'vsync', '--decode-wait']),
+      {status: 1, error: 'Native TCP requires a fresh launcher session from this branch'}
+    );
 });

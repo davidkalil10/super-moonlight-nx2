@@ -306,7 +306,6 @@ async function stream(device, live, count, onFrame = () => {}) {
 
 async function modelRequestsPerFrame(retryRate) {
   const result = await simulate({
-    mode: 'staggered',
     frames: 240,
     presentHz: 120,
     retryRate,

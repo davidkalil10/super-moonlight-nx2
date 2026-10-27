@@ -5,9 +5,7 @@ const os = require('node:os');
 const path = require('node:path');
 const {NativeClient} = require('../../../hbl-platform/smilebasic/engine/lib/native.js');
 const definitions = require('../../../hbl-moonlight/sdk/native/movie-functions.json');
-const {
-  create: createDecoder
-} = require('../../../hbl-moonlight/tools/moonlight/native-decoder.js');
+const {create: createDecoder} = require('../../../hbl-moonlight/tools/moonlight/native-decoder.js');
 
 // A faithful in-process console: the real NativeClient frames exchanges onto a
 // fake connection that executes the two call records against a memory model and
@@ -490,34 +488,36 @@ test('submit can stamp SendInput with an SDK call run just before it', async () 
   }
 });
 
-test('persistent mode starts after the first host frame and joins before decoder cleanup', async () => {
+test('split mode registers its workers before Start and stops them before decoder cleanup', async () => {
   const directory = await fixture();
   const consoleMock = createConsole();
   const events = [];
   const destination = {address: 0x70000000, bytes: (1920 * 1080 * 3) / 2 + 0x1000};
+  const publication = {mapped: 0x71000000, color: 1};
+  const transport = {
+    async close() {
+      events.push('transport-close');
+    }
+  };
+  await assert.rejects(
+    createDecoder({rpc: consoleMock.rpc, directory, workerMode: 'split', transport}),
+    /worker factory/
+  );
   const decoder = await createDecoder({
     rpc: consoleMock.rpc,
     directory,
     workerDirectory: path.join(directory, 'worker'),
-    workerMode: 'persistent',
-    async persistentWorkerFactory() {
+    workerMode: 'split',
+    transport,
+    publication,
+    async splitWorkerFactory(options) {
+      events.push({type: 'create', transport: options.transport, publication: options.publication});
       return {
         async register() {
-          events.push('register');
-        },
-        async start() {
-          events.push('start-worker');
-        },
-        async begin(job) {
-          events.push({type: 'begin', job});
-          return {sequence: 1, pts: BigInt(job.pts)};
-        },
-        async finish(job, destination) {
-          events.push({type: 'finish', job, destination});
-          return {pts: job.pts, input: {status: 0, index: 0}};
+          events.push('register:' + consoleMock.log.at(-1));
         },
         async stop() {
-          events.push('stop-worker');
+          events.push('stop-workers:' + consoleMock.log.includes('stop'));
         },
         async finalize() {
           events.push('finalize-events');
@@ -527,93 +527,15 @@ test('persistent mode starts after the first host frame and joins before decoder
   });
   try {
     await decoder.configure(sps, pps, 30);
-    assert.deepEqual(events, ['register']);
-    await assert.rejects(decoder.startPersistent(), /first frame/);
+    assert.deepEqual(events, [{type: 'create', transport, publication}, 'register:configure']);
+    assert.equal(consoleMock.log.at(-1), 'start');
     assert.ok(await frame(decoder, destination, 1000));
-    await decoder.startPersistent();
-    await decoder.beginPersistent({data: Buffer.alloc(4000, 7), pts: 2000});
-    await assert.rejects(
-      decoder.beginPersistent({data: Buffer.alloc(4000, 7), pts: 3000}),
-      /already in flight/
-    );
-    const result = await decoder.finishPersistent(destination);
-    assert.equal(result.pts, '2000');
-    assert.equal(result.stride, 1920);
-    assert.equal(events[1], 'start-worker');
-    assert.equal(events[2].job.length, 4000);
-    assert.equal(events[3].destination, destination);
-    assert.equal(
-      (await decoder.processPersistent({data: Buffer.alloc(4000, 7), pts: 3000}, destination)).pts,
-      '3000'
-    );
+    assert.ok(decoder.lastInput);
     await decoder.close();
-    assert.deepEqual(events.slice(-2), ['stop-worker', 'finalize-events']);
-    assert.ok(consoleMock.log.indexOf('stop') >= 0);
+    assert.deepEqual(events.slice(2), ['stop-workers:false', 'transport-close', 'finalize-events']);
+    assert.ok(consoleMock.log.includes('stop'));
   } finally {
     await decoder.close().catch(() => {});
     await fs.rm(directory, {recursive: true, force: true});
   }
 });
-
-test('TCP persistent mode sends the access unit without an RPC input write', async () => {
-  const directory = await fixture();
-  const consoleMock = createConsole();
-  const events = [];
-  const transport = {
-    fd: 7,
-    recvFunction: SDK + 0x130000,
-    async close() {
-      events.push('close-transport');
-    }
-  };
-  const destination = {address: 0x70000000, bytes: (1920 * 1080 * 3) / 2 + 0x1000};
-  const decoder = await createDecoder({
-    rpc: consoleMock.rpc,
-    directory,
-    workerDirectory: path.join(directory, 'worker'),
-    workerMode: 'persistent',
-    transport,
-    async persistentWorkerFactory(options) {
-      assert.equal(options.transport, transport);
-      return {
-        async register() {},
-        async start() {},
-        async begin(job) {
-          events.push(job);
-          return {sequence: 1, pts: BigInt(job.pts)};
-        },
-        async finish(job) {
-          return {pts: job.pts, input: {status: 0, index: 0}};
-        },
-        async stop() {
-          events.push('stop-worker');
-        },
-        async finalize() {}
-      };
-    }
-  });
-  try {
-    await decoder.configure(sps, pps, 30);
-    assert.ok(await frame(decoder, destination, 1000));
-    await decoder.startPersistent();
-    const payload = Buffer.alloc(4000, 7);
-    const writes = [];
-    const write = consoleMock.rpc.write;
-    consoleMock.rpc.write = (address, bytes) => {
-      writes.push({address, bytes});
-      return write(address, bytes);
-    };
-    await decoder.beginPersistent({data: payload, pts: 2000});
-    assert.equal(events[0].payload, payload);
-    assert.ok(Number.isSafeInteger(events[0].inputAddress));
-    assert.equal(writes.some(entry => entry.bytes === payload), false);
-    assert.equal((await decoder.finishPersistent(destination)).pts, '2000');
-    await decoder.close();
-    assert.deepEqual(events.slice(-2), ['stop-worker', 'close-transport']);
-  } finally {
-    await decoder.close().catch(() => {});
-    await fs.rm(directory, {recursive: true, force: true});
-  }
-});
-
-module.exports = {createConsole};

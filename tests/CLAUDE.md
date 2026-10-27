@@ -151,8 +151,8 @@ headroom:
   unverified, so gains come from fewer exchanges, not overlapping calls. The host-driven frame
   costs 10 exchanges (one finite worker carries SendInput, AcquireOutput and the next
   AcquireInput; the input index is pipelined one frame ahead and `-1` never reaches SendInput).
-  Live streams use the persistent or split workers fed over native TCP; the first frame stays
-  host-driven to establish the output layout.
+  Live streams use the staggered input and output workers fed over native TCP; the first frame
+  stays host-driven to establish the output layout.
 - Validated on SmileBASIC 4.4.9 / Switch 2 23.0.1: a 128x96 test frame decoded and displayed,
   then a 1920x1080 Sunshine stream with sound. The first protocol-2 run presented 1-2 fps and
   dropped audio under the combined RPC load, which led to protocol 3 and the TCP data path.

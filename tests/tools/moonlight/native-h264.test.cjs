@@ -135,6 +135,7 @@ async function fixture({
     },
     storage: {},
     helperPath: 'test-helper',
+    createStaggered: staggeredFake(events),
     sourceRevision: '049e2efe32799194a16c2f2f871025c1961aaade',
     width: 128,
     height: 96,
@@ -179,11 +180,8 @@ async function fixture({
         type: 'create-decoder',
         mode: config.workerMode,
         publication: config.publication,
-        autoQueue: config.autoQueue,
-        linkedGates: config.linkedGates,
         splitWorkerFactory: config.splitWorkerFactory
       });
-      let splitSequence = 0;
       return {
         async configure(sps, pps, fps) {
           events.push({type: 'configure', sps, pps, fps});
@@ -203,59 +201,6 @@ async function fixture({
           if (pipeline <= 0) return null;
           pipeline--;
           return {format: 'nv12', width: 128, height: 96, stride: 128, sliceHeight: 96};
-        },
-        async startPersistent() {
-          events.push({type: 'start-persistent'});
-        },
-        async beginPersistent(unit) {
-          events.push({type: 'begin-persistent', unit});
-        },
-        async finishPersistent(destination) {
-          events.push({type: 'finish-persistent', destination});
-          return {format: 'nv12', width: 128, height: 96, stride: 128, sliceHeight: 96};
-        },
-        async startSplit() {
-          events.push({type: 'start-split'});
-        },
-        async submitSplit(unit) {
-          events.push({type: 'submit-split', unit});
-          return {sequence: ++splitSequence, pts: unit.pts, presentation: {current: 0, applied: 0}};
-        },
-        async stageSplitInput(unit) {
-          events.push({type: 'stage-split', unit});
-          return {sequence: ++splitSequence, pts: unit.pts};
-        },
-        async verifySplitReceive() {
-          events.push({type: 'verify-receive'});
-        },
-        async waitSplitOutputAcquired(job) {
-          events.push({type: 'wait-acquire', job});
-          return {index: 0, presentation: {current: 0, applied: 0}};
-        },
-        async openSplitOutputFetch(job, destination, nextJob) {
-          events.push({type: 'open-fetch', job, destination, nextJob});
-        },
-        async finishSplitInputAfterLinkedGate() {
-          events.push({type: 'finish-linked-input'});
-          return {sequence: splitSequence, pts: 3000, presentation: {current: 0, applied: 0}};
-        },
-        async completeSplitOutputFetch(job) {
-          events.push({type: 'complete-fetch', job});
-          return {format: 'nv12', width: 128, height: 96, stride: 128, sliceHeight: 96};
-        },
-        async queueSplitOutput(job) {
-          events.push({type: 'queue-split', job});
-        },
-        async finishSplitOutput(job, destination, nextJob) {
-          events.push({type: 'finish-split', job, destination, nextJob});
-          return {
-            format: 'nv12',
-            width: 128,
-            height: 96,
-            stride: 128,
-            sliceHeight: 96,
-            pts: String(job.pts)
-          };
         },
         async close() {
           events.push({type: 'decoder-close'});
@@ -398,206 +343,19 @@ test(
   }
 );
 
-test('persistent worker takes over after a host-driven first frame', {timeout: 5000}, async () => {
-  const f = await fixture({
-    units: [
-      {hex: accessUnit.toString('hex'), keyframe: true, pts: 1000},
-      {hex: accessUnit.toString('hex'), keyframe: false, pts: 2000}
-    ]
-  });
-  await exercise(f, async () => {
-    await run(f.options);
-    assert.equal(f.events.find(event => event.type === 'create-decoder').mode, 'persistent');
-    assert.equal(f.events.filter(event => event.type === 'submit').length, 1);
-    assert.equal(f.events.filter(event => event.type === 'receive').length, 1);
-    assert.equal(f.events.filter(event => event.type === 'start-persistent').length, 1);
-    assert.equal(f.events.filter(event => event.type === 'begin-persistent').length, 1);
-    assert.equal(f.events.filter(event => event.type === 'finish-persistent').length, 1);
-    const began = f.events.findIndex(event => event.type === 'begin-persistent');
-    const destination = f.events.findIndex(
-      (event, index) => index > began && event.type === 'destination'
-    );
-    const finished = f.events.findIndex(event => event.type === 'finish-persistent');
-    assert.ok(began < destination && destination < finished);
-    assert.equal(f.events.filter(event => event.type === 'publish').length, 2);
-  });
-});
-
 test(
-  'split workers submit the next input before fetching the previous output',
-  {timeout: 5000},
-  async () => {
-    const f = await fixture({
-      units: [
-        {hex: accessUnit.toString('hex'), keyframe: true, pts: 1000},
-        {hex: accessUnit.toString('hex'), keyframe: false, pts: 2000},
-        {hex: accessUnit.toString('hex'), keyframe: false, pts: 3000}
-      ]
-    });
-    f.options.args.push('--split-decoder');
-    await exercise(f, async () => {
-      await run(f.options);
-      assert.equal(f.events.find(event => event.type === 'create-decoder').mode, 'split');
-      assert.equal(f.events.filter(event => event.type === 'start-split').length, 1);
-      assert.equal(f.events.filter(event => event.type === 'submit').length, 1);
-      assert.equal(f.events.filter(event => event.type === 'submit-split').length, 2);
-      assert.equal(f.events.filter(event => event.type === 'publish').length, 3);
-      const inputThree = f.events.findIndex(
-        event => event.type === 'submit-split' && event.unit.pts === 3000
-      );
-      const firstQueue = f.events.findIndex(event => event.type === 'queue-split');
-      const firstFetch = f.events.findIndex(event => event.type === 'finish-split');
-      assert.ok(firstQueue < inputThree && inputThree < firstFetch);
-      assert.deepEqual(
-        f.events.filter(event => event.type === 'finish-split').map(event => event.job.pts),
-        [2000, 3000]
-      );
-    });
-  }
-);
-
-test(
-  'native split publication leaves frame commits to the output worker',
-  {timeout: 5000},
-  async () => {
-    const f = await fixture({
-      units: [
-        {hex: accessUnit.toString('hex'), keyframe: true, pts: 1000},
-        {hex: accessUnit.toString('hex'), keyframe: false, pts: 2000},
-        {hex: accessUnit.toString('hex'), keyframe: false, pts: 3000}
-      ]
-    });
-    f.options.args.push('--split-decoder', '--native-publish');
-    await exercise(f, async () => {
-      await run(f.options);
-      assert.deepEqual(f.events.find(event => event.type === 'create-decoder').publication, {
-        mapped: 0x1000000,
-        color: 1
-      });
-      assert.equal(f.events.filter(event => event.type === 'publish').length, 1);
-      assert.equal(f.events.filter(event => event.type === 'worker-destination').length, 2);
-      assert.equal(f.events.filter(event => event.type === 'finish-split').length, 2);
-      assert.deepEqual(
-        f.events
-          .filter(event => event.type === 'worker-destination')
-          .map(event => event.presentation),
-        [{current: 0, applied: 0}, null]
-      );
-    });
-  }
-);
-
-test(
-  'automatic output queue passes the next job without a second host queue call',
-  {timeout: 5000},
-  async () => {
-    const f = await fixture({
-      units: [
-        {hex: accessUnit.toString('hex'), keyframe: true, pts: 1000},
-        {hex: accessUnit.toString('hex'), keyframe: false, pts: 2000},
-        {hex: accessUnit.toString('hex'), keyframe: false, pts: 3000}
-      ]
-    });
-    f.options.args.push('--split-decoder', '--native-publish', '--auto-output-queue');
-    await exercise(f, async () => {
-      await run(f.options);
-      assert.equal(f.events.find(event => event.type === 'create-decoder').autoQueue, true);
-      assert.equal(f.events.filter(event => event.type === 'queue-split').length, 1);
-      assert.deepEqual(
-        f.events
-          .filter(event => event.type === 'finish-split')
-          .map(event => [event.job.pts, event.nextJob?.pts]),
-        [
-          [2000, 3000],
-          [3000, undefined]
-        ]
-      );
-      assert.equal(f.events.filter(event => event.type === 'worker-destination').length, 2);
-    });
-  }
-);
-
-test(
-  'linked gates check receive and acquire before opening the fetch gate',
-  {timeout: 5000},
-  async () => {
-    const f = await fixture({
-      units: [
-        {hex: accessUnit.toString('hex'), keyframe: true, pts: 1000},
-        {hex: accessUnit.toString('hex'), keyframe: false, pts: 2000},
-        {hex: accessUnit.toString('hex'), keyframe: false, pts: 3000}
-      ]
-    });
-    f.options.args.push(
-      '--split-decoder',
-      '--native-publish',
-      '--auto-output-queue',
-      '--linked-gates'
-    );
-    await exercise(f, async () => {
-      await run(f.options);
-      assert.equal(f.events.find(event => event.type === 'create-decoder').linkedGates, true);
-      assert.equal(f.events.filter(event => event.type === 'queue-split').length, 1);
-      assert.equal(f.events.filter(event => event.type === 'submit-split').length, 1);
-      const names = f.events.map(event => event.type);
-      const checked = Math.max(names.indexOf('verify-receive'), names.indexOf('wait-acquire'));
-      assert.ok(checked < names.indexOf('open-fetch'));
-      assert.equal(f.events.find(event => event.type === 'open-fetch').nextJob.sequence, 2);
-      assert.equal(f.events.filter(event => event.type === 'complete-fetch').length, 1);
-      assert.equal(f.events.filter(event => event.type === 'finish-split').length, 1);
-    });
-  }
-);
-
-test(
-  'persistent worker waits for a late first output before taking over',
-  {timeout: 5000},
-  async () => {
-    const f = await fixture({
-      emptyPolls: 2,
-      units: [
-        {hex: accessUnit.toString('hex'), keyframe: true, pts: 1000},
-        {hex: accessUnit.toString('hex'), keyframe: false, pts: 2000}
-      ]
-    });
-    await exercise(f, async () => {
-      await run(f.options);
-      assert.equal(f.events.filter(event => event.type === 'submit').length, 1);
-      assert.equal(f.events.filter(event => event.type === 'receive').length, 3);
-      assert.equal(f.events.filter(event => event.type === 'start-persistent').length, 1);
-      assert.equal(f.events.filter(event => event.type === 'begin-persistent').length, 1);
-    });
-  }
-);
-
-test('the persistent decoder gets its own TCP transport', {timeout: 5000}, async () => {
-  const f = await fixture({
-    units: [
-      {hex: accessUnit.toString('hex'), keyframe: true, pts: 1000},
-      {hex: accessUnit.toString('hex'), keyframe: false, pts: 2000}
-    ]
-  });
-  await exercise(f, async () => {
-    await run(f.options);
-    assert.deepEqual(
-      f.events.filter(event => event.type === 'create-transport').map(event => event.host),
-      ['192.0.2.10']
-    );
-    assert.equal(f.events.filter(event => event.type === 'close-transport').length, 1);
-    assert.equal(f.events.filter(event => event.type === 'finish-persistent').length, 1);
-  });
-});
-
-test(
-  'a console that stops answering is reported and stops the stream',
+  'a console that stops answering is reported, stops the stream and retains native objects',
   {timeout: 5000},
   async () => {
     const f = await fixture({hangSubmit: 2500});
     await exercise(f, async () => {
-      const summary = await run({...f.options, consoleStallMs: 300});
-      assert.equal(summary.stopReason, 'console-stalled');
-      assert.equal(summary.pass, false);
-      assert.ok(summary.failures.includes('console stopped answering'));
+      await assert.rejects(run({...f.options, consoleStallMs: 300}), error =>
+        error.errors.some(item => /restart SmileBASIC/.test(item.message))
+      );
+      assert.equal(
+        f.events.some(event => event.type === 'decoder-close'),
+        false
+      );
       const events = (await fs.readFile(path.join(f.directory, 'logs', 'events.jsonl'), 'utf8'))
         .trim()
         .split('\n')
@@ -607,6 +365,7 @@ test(
       assert.ok(
         events.some(event => event.event === 'native-stop' && event.reason === 'console-stalled')
       );
+      assert.ok(events.some(event => event.event === 'native-retained'));
     });
   }
 );
@@ -678,7 +437,7 @@ test('a scored run writes summary.json and rejects a bare --expect', {timeout: 5
     assert.equal(saved.stopReason, 'cleanup');
     assert.ok(saved.failures.includes('ended before duration: cleanup'));
     assert.deepEqual(saved.expect, {fps: 30, idr: 0});
-    assert.equal(saved.workerMode, 'persistent');
+    assert.equal(saved.workerMode, 'staggered');
     const events = (await fs.readFile(path.join(f.directory, 'logs', 'events.jsonl'), 'utf8'))
       .trim()
       .split('\n')
@@ -762,8 +521,8 @@ test(
         }
       );
       assert.deepEqual(
-        f.events.slice(-4).map(event => event.type),
-        ['socket-audio-close', 'decoder-close', 'close-transport', 'sink-close']
+        f.events.slice(-5).map(event => event.type),
+        ['socket-audio-close', 'staggered-stop', 'decoder-close', 'close-transport', 'sink-close']
       );
       assert.equal(summary.audioFrames, 1920);
       assert.equal(summary.socketAudio.sent, 4);
@@ -778,124 +537,12 @@ test(
   }
 );
 
-function pairedFake(events, {stopFails = false} = {}) {
-  return config => {
-    let exists = false;
-    let retained = false;
-    events.push({type: 'paired-create', publication: config.publication});
-    return {
-      async factory() {
-        exists = true;
-      },
-      async start() {
-        events.push({type: 'paired-start'});
-      },
-      async pair({decoder, sink, units, layout, onDecoded, onPresented}) {
-        events.push({type: 'paired-pair', pts: units.map(item => item.pts), layout});
-        for (const item of units) await decoder.submitSplit(item);
-        onDecoded(2);
-        await sink.workerDestination();
-        await sink.workerDestination();
-        onPresented(1);
-        onPresented(1);
-      },
-      async snapshot() {
-        return {};
-      },
-      async stop() {
-        events.push({type: 'paired-stop'});
-        if (stopFails) {
-          retained = true;
-          throw Error('Paired loop worker did not stop; restart SmileBASIC');
-        }
-        exists = false;
-      },
-      get exists() {
-        return exists;
-      },
-      get retained() {
-        return retained;
-      }
-    };
-  };
-}
-
 const pairedUnits = count =>
   Array.from({length: count}, (_, index) => ({
     hex: accessUnit.toString('hex'),
     keyframe: index === 0,
     pts: (index + 1) * 1000
   }));
-
-test('--paired-loop rejects the other split worker flags', {timeout: 5000}, async () => {
-  const f = await fixture();
-  await exercise(f, async () => {
-    f.options.args.push('--paired-loop', '--linked-gates');
-    await assert.rejects(run(f.options), /--paired-loop publishes from its own worker/);
-  });
-});
-
-test(
-  '--paired-loop pairs units after the host IDR and stops the loop before the decoder',
-  {timeout: 5000},
-  async () => {
-    const f = await fixture({units: pairedUnits(6)});
-    f.options.createPaired = pairedFake(f.events);
-    f.options.args.push('--paired-loop', '--queue', '16');
-    await exercise(f, async () => {
-      const summary = await run(f.options);
-      const created = f.events.find(event => event.type === 'create-decoder');
-      assert.equal(created.mode, 'split');
-      assert.deepEqual(created.publication, {mapped: 0x1000000, color: 1});
-      assert.equal(typeof created.splitWorkerFactory, 'function');
-      const names = f.events.map(event => event.type);
-      assert.ok(names.indexOf('publish') < names.indexOf('start-split'));
-      assert.ok(names.indexOf('start-split') < names.indexOf('paired-start'));
-      assert.deepEqual(
-        f.events.filter(event => event.type === 'paired-pair').map(event => event.pts),
-        [
-          [2000, 3000],
-          [4000, 5000]
-        ]
-      );
-      assert.equal(f.events.find(event => event.type === 'paired-pair').layout.width, 128);
-      assert.deepEqual(names.slice(-4), [
-        'paired-stop',
-        'decoder-close',
-        'close-transport',
-        'sink-close'
-      ]);
-      assert.equal(summary.workerMode, 'paired');
-      assert.equal(summary.unpaired, 1);
-    });
-  }
-);
-
-test(
-  'an uncertain paired loop stop leaves decoder and sink retained',
-  {timeout: 5000},
-  async () => {
-    const f = await fixture({units: pairedUnits(3)});
-    f.options.createPaired = pairedFake(f.events, {stopFails: true});
-    const createTransport = f.options.createTransport;
-    f.options.createTransport = async config => ({
-      ...(await createTransport(config)),
-      abort() {
-        f.events.push({type: 'abort-transport'});
-      }
-    });
-    f.options.args.push('--paired-loop');
-    await exercise(f, async () => {
-      await assert.rejects(run(f.options), error =>
-        error.errors.some(item => /restart SmileBASIC/.test(item.message))
-      );
-      const names = f.events.map(event => event.type);
-      assert.deepEqual(names.slice(-2), ['paired-stop', 'abort-transport']);
-      assert.equal(names.includes('decoder-close'), false);
-      assert.equal(names.includes('sink-close'), false);
-    });
-  }
-);
 
 function staggeredFake(events, {pushFails = null, stopFails = false} = {}) {
   return () => {
@@ -941,32 +588,6 @@ function staggeredFake(events, {pushFails = null, stopFails = false} = {}) {
     };
   };
 }
-
-test('--staggered rejects the paired and split worker flags', {timeout: 5000}, async () => {
-  for (const flag of [
-    '--paired-loop',
-    '--native-publish',
-    '--auto-output-queue',
-    '--linked-gates'
-  ]) {
-    const f = await fixture();
-    await exercise(f, async () => {
-      f.options.args.push('--staggered', flag);
-      await assert.rejects(run(f.options), /--staggered drives its own input and output workers/);
-    });
-  }
-});
-
-test('the default path never creates the staggered scheduler', {timeout: 5000}, async () => {
-  const f = await fixture({units: pairedUnits(3)});
-  f.options.createStaggered = () => assert.fail('staggered scheduler created');
-  await exercise(f, async () => {
-    const summary = await run(f.options);
-    assert.equal(summary.workerMode, 'persistent');
-    assert.equal(summary.staggered, undefined);
-    assert.equal(f.events.find(event => event.type === 'create-decoder').publication, null);
-  });
-});
 
 test(
   '--staggered queues 8 units by default so a source burst is not dropped',
@@ -1134,9 +755,7 @@ test(
       [['--staggered', '--skip-backlog', '-1'], /--skip-backlog takes/],
       [['--staggered', '--skip-rule', 'newest'], /--skip-rule takes backlog or vsync/],
       [['--staggered', '--skip-rule', 'vsync', '--skip-backlog', 'off'], /needs a --skip-backlog/],
-      [['--skip-rule', 'vsync'], /apply to --staggered/],
-      [['--staggered', '--decode-wait'], /--decode-wait needs --skip-rule vsync/],
-      [['--present-hz', '120'], /apply to --staggered/]
+      [['--staggered', '--decode-wait'], /--decode-wait needs --skip-rule vsync/]
     ]) {
       const g = await fixture();
       await exercise(g, async () => {
@@ -1221,28 +840,6 @@ test(
   }
 );
 
-test('the default path rows carry no access-unit timing', {timeout: 5000}, async () => {
-  const f = await fixture({units: pairedUnits(3)});
-  f.options.statsMs = 5;
-  f.options.args.push('--warmup', '0');
-  f.options.createDecoder = (create => async config => {
-    const decoder = await create(config);
-    return {
-      ...decoder,
-      async finishPersistent(destination) {
-        await new Promise(resolve => setTimeout(resolve, 20));
-        return decoder.finishPersistent(destination);
-      }
-    };
-  })(f.options.createDecoder);
-  await exercise(f, async () => {
-    const summary = await run(f.options);
-    assert.ok(summary.seconds > 0);
-    assert.equal(summary.au, undefined);
-    assert.equal(summary.stages.input, undefined);
-  });
-});
-
 test('--input-hz 120 reaches the input feeder and the summary', {timeout: 5000}, async () => {
   const f = await fixture();
   const feeders = [];
@@ -1310,7 +907,6 @@ test(
       assert.equal(events.find(event => event.event === 'summary').trimmed, 1);
     });
     for (const [extra, message] of [
-      [['--trim-backlog-ms', '20'], /--trim-backlog-ms applies to --staggered/],
       [['--staggered', '--trim-backlog-ms', '0'], /--trim-backlog-ms takes/],
       [['--staggered', '--trim-backlog-ms', 'soon'], /--trim-backlog-ms takes/],
       [
@@ -1332,7 +928,7 @@ test(
 );
 
 test(
-  '--gate-on-receive reaches the staggered scheduler, needs --staggered and refuses 120 Hz',
+  '--gate-on-receive reaches the staggered scheduler and refuses 120 Hz',
   {timeout: 5000},
   async () => {
     const f = await fixture({units: pairedUnits(4)});
@@ -1347,11 +943,6 @@ test(
       const summary = await run(f.options);
       assert.equal(created[0].gateOnReceive, true);
       assert.equal(summary.gateOnReceive, true);
-    });
-    const g = await fixture();
-    await exercise(g, async () => {
-      g.options.args.push('--gate-on-receive');
-      await assert.rejects(run(g.options), /--gate-on-receive applies to --staggered/);
     });
     const h = await fixture();
     await exercise(h, async () => {
@@ -1376,8 +967,7 @@ test('--output-lag reaches the staggered scheduler and takes 1 or 2', {timeout: 
     assert.equal(summary.outputLag, 1);
   });
   for (const [args, message] of [
-    [['--staggered', '--output-lag', '3'], /--output-lag takes 1 or 2/],
-    [['--output-lag', '1'], /--output-lag applies to --staggered/]
+    [['--staggered', '--output-lag', '3'], /--output-lag takes 1 or 2/]
   ]) {
     const g = await fixture();
     await exercise(g, async () => {
