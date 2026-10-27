@@ -25,6 +25,9 @@ import {create as createModule} from '../../../hbl-platform/sdk/native/module.js
 import {createFinite} from '../../../hbl-platform/sdk/native/jobs.js';
 import {builds} from '../../../hbl-platform/sdk/build.js';
 
+/** The movie module's description, in the directory create() is given. */
+const MODULE_FILE = 'compatibility-module.json';
+
 /**
  * Offsets in the module memory. The decoder, media objects and buffers sit at the start;
  * the control slots from inputIndex to outputCount receive the out-parameters of one worker
@@ -50,6 +53,7 @@ const MEMORY = {
   value: 0x4000
 };
 const WORD_BYTES = 4;
+
 /** inputIndex through outputCount, the out-parameters of a pump frame. */
 const PUMP_CONTROL_BYTES = MEMORY.outputCount + WORD_BYTES - MEMORY.inputIndex;
 /** outputIndex through outputCount, the out-parameters of AcquireOutput. */
@@ -76,20 +80,34 @@ const NAL_SPS = 7;
 const NAL_PPS = 8;
 const MIN_SPS_BYTES = 4;
 const MAX_PARAMETER_SET_BYTES = 4096;
+
 const MIN_FPS = 1;
 const MAX_FPS = 120;
+const DEFAULT_FPS = 60;
+
 const MIN_DIMENSION = 2;
 const MAX_WIDTH = 1920;
 const MAX_HEIGHT = 1088;
 /** The H.264 configuration helper returns 1 on success. */
 const CONFIGURATION_CREATED = 1;
 
+/** The values of DecoderOptions.workerMode; the file header describes both. */
+const WORKER_MODES = ['host', 'split'];
+/** The only pixel format the decoder is built for. */
+const OUTPUT_FORMAT = 'nv12';
+
+/** How long, and how often, the host polls the input queue for a free slot. */
 const QUEUE_TIMEOUT_MS = 5000;
 const QUEUE_POLL_MS = 5;
+/** Native workers get a directory per decoder here, named after its creation time. */
 const DEFAULT_WORKER_ROOT = builds('native-h264');
+const TIMESTAMP_SEPARATORS = /[:.]/g;
+
+/** A movie Result is the low 32 bits of a call's return value. */
+const RESULT_BITS = 32;
 
 /** @param {bigint} value */
-const result = value => Number(BigInt.asUintN(32, value));
+const result = value => Number(BigInt.asUintN(RESULT_BITS, value));
 /** @param {number} milliseconds */
 const sleep = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
 
@@ -117,6 +135,13 @@ const queueFailed = (status, index) =>
   status !== 0 && !(index < 0 && EMPTY_QUEUE_RESULTS.includes(status));
 
 /**
+ * Bytes of an NV12 frame: a full-size luma plane and a half-size chroma plane.
+ * @param {number} stride
+ * @param {number} sliceHeight
+ */
+const nv12Bytes = (stride, sliceHeight) => (stride * sliceHeight * 3) / 2;
+
+/**
  * @param {any} movieModule The compatibility-module.json of the loaded movie module.
  * @returns {boolean}
  */
@@ -130,6 +155,25 @@ function matchesInspectedBuild(movieModule) {
         symbol.size === definition.size
     )
   );
+}
+
+/**
+ * Reads the movie module's description and checks it against the inspected build.
+ * @param {string} directory
+ */
+async function loadMovieModule(directory) {
+  const movieModule = JSON.parse(
+    /** @type {any} */ (await fs.readFile(path.join(directory, MODULE_FILE)))
+  );
+  if (!matchesInspectedBuild(movieModule))
+    throw Error('The loaded movie module differs from the inspected build');
+  return movieModule;
+}
+
+/** A fresh worker directory under DEFAULT_WORKER_ROOT. */
+function defaultWorkerDirectory() {
+  const stamp = new Date().toISOString().replace(TIMESTAMP_SEPARATORS, '-');
+  return path.join(DEFAULT_WORKER_ROOT, stamp);
 }
 
 /**
@@ -148,6 +192,14 @@ function invalidParameterSets(sps, pps) {
     (sps[0] & NAL_TYPE_MASK) !== NAL_SPS ||
     (pps[0] & NAL_TYPE_MASK) !== NAL_PPS
   );
+}
+
+/**
+ * @param {number} fps
+ * @returns {boolean}
+ */
+function invalidFrameRate(fps) {
+  return !Number.isInteger(fps) || fps < MIN_FPS || fps > MAX_FPS;
 }
 
 /**
@@ -203,9 +255,24 @@ function unsupportedLayout({width, height, stride, sliceHeight}, bytes, destinat
     sliceHeight < height ||
     stride % 2 ||
     sliceHeight % 2 ||
-    (stride * sliceHeight * 3) / 2 > destinationBytes ||
-    bytes < (stride * sliceHeight * 3) / 2
+    nv12Bytes(stride, sliceHeight) > destinationBytes ||
+    bytes < nv12Bytes(stride, sliceHeight)
   );
+}
+
+/**
+ * Decodes AcquireOutput's out-parameters from control slots read from `start` on.
+ * @param {Buffer} control
+ * @param {number} start The MEMORY offset `control` was read from.
+ * @param {number} status AcquireOutput's result.
+ */
+function outputAt(control, start, status) {
+  return {
+    status,
+    index: control.readInt32LE(MEMORY.outputIndex - start),
+    pts: control.readBigUInt64LE(MEMORY.timestamp - start),
+    flags: control.readUInt32LE(MEMORY.flags - start)
+  };
 }
 
 /**
@@ -230,69 +297,22 @@ function unsupportedLayout({width, height, stride, sliceHeight}, bytes, destinat
  * @property {() => boolean} [cancelled]
  */
 
-/** @param {DecoderOptions} options */
-async function create({
-  rpc,
-  directory,
-  workerDirectory,
-  workerMode = 'host',
-  transport = null,
-  publication = null,
-  splitWorkerFactory = null,
-  log = () => {},
-  cancelled = () => false
-}) {
-  if (!['host', 'split'].includes(workerMode)) throw Error('Unknown decoder worker mode');
-  if (workerMode === 'split' && (!transport || !splitWorkerFactory))
-    throw Error('Split decoder needs a TCP transport and a worker factory');
-  const movieModule = JSON.parse(
-    /** @type {any} */ (await fs.readFile(path.join(directory, 'compatibility-module.json')))
-  );
-  if (!matchesInspectedBuild(movieModule))
-    throw Error('The loaded movie module differs from the inspected build');
-  workerDirectory ||= path.join(
-    DEFAULT_WORKER_ROOT,
-    new Date().toISOString().replace(/[:.]/g, '-')
-  );
-  const api = await createModule(rpc, {
-    base: movieModule.base,
-    definitions,
-    directory: workerDirectory
-  });
+/**
+ * The movie calls of one decoder: result-checked wrappers around the module api, media
+ * lookups, the host's queue steps and the pump frame.
+ * @param {any} api
+ * @param {Record<string, number>} fn The movie functions' addresses.
+ * @param {any} worker The finite worker that runs pump frames.
+ * @param {any} rpc
+ * @param {() => boolean} cancelled
+ */
+function movieCalls(api, fn, worker, rpc, cancelled) {
   /** @param {keyof typeof MEMORY} field */
   const pointer = field => api.base + MEMORY[field];
-  const fn = api.functions;
-  // Movie functions sit outside the SDK range, so they are the frame's verified targets,
-  // and the frame carries five- and six-argument calls.
-  const worker = await createFinite(rpc, {
-    verified: new Set(Object.values(fn)),
-    wide: true
-  });
-  /** @type {[string, number][]} Destructor and object, in construction order. */
-  const owned = [];
-  let running = false;
-  let configured = false;
-  let closed = false;
-  /** The output buffer the host holds until it is released, or -1. */
-  let outputIndex = -1;
-  let dimensions;
-  /** @type {Layout | null} */
-  let layout = null;
-  /** @type {{bytes: number, alignment: number} | null} */
-  let sizing = null;
   /** @type {Map<number, {address: number, capacity: number}>} */
   const inputs = new Map();
-  /** The input index acquired by the previous frame's tail, waiting for the next unit. */
-  let pendingInput = null;
-  /** The output that submit() acquired, waiting for receive(). */
-  let pendingOutput = null;
-  /** The decoder step in flight, reported by the live stats when a frame stalls. */
-  let step = 'idle';
-  /** The last tail AcquireInput, for probes that watch input readiness. */
-  let lastInput = null;
   /** The raw result of a caller's SDK call run just before SendInput, such as a tick. */
   let lastStamp = null;
-  let split = null;
 
   /**
    * @param {string} name
@@ -328,13 +348,6 @@ async function create({
       return null;
     }
     return (await api.read(MEMORY.value, WORD_BYTES)).readInt32LE();
-  }
-
-  async function release() {
-    if (outputIndex < 0) return;
-    const index = outputIndex;
-    outputIndex = -1;
-    await success('releaseOutput', [pointer('decoder'), index]);
   }
 
   /**
@@ -418,12 +431,155 @@ async function create({
   async function acquireOutput() {
     const [status] = (await worker.run([acquireOutputCall()])).map(result);
     const control = await api.read(MEMORY.outputIndex, OUTPUT_CONTROL_BYTES);
+    return outputAt(control, MEMORY.outputIndex, status);
+  }
+
+  /** GetOutputSize: the output size and the alignment a destination must meet. */
+  async function measureOutput() {
+    await success('getOutputSize', [
+      pointer('decoder'),
+      pointer('outputSize'),
+      pointer('alignment')
+    ]);
+    const value = await api.read(MEMORY.outputSize, SIZING_BYTES);
     return {
-      status,
-      index: control.readInt32LE(0),
-      pts: control.readBigUInt64LE(MEMORY.timestamp - MEMORY.outputIndex),
-      flags: control.readUInt32LE(MEMORY.flags - MEMORY.outputIndex)
+      bytes: value.readUInt32LE(),
+      alignment: value.readUInt32LE(MEMORY.alignment - MEMORY.outputSize)
     };
+  }
+
+  /**
+   * The output layout of the format, falling back on the configured dimensions.
+   * @param {{width: number, height: number}} dimensions
+   * @returns {Promise<Layout>}
+   */
+  async function readLayout(dimensions) {
+    const width = (await integer(pointer('format'), 'width')) ?? dimensions.width;
+    const height = (await integer(pointer('format'), 'height')) ?? dimensions.height;
+    const stride = (await integer(pointer('format'), 'stride')) ?? width;
+    const sliceHeight = (await integer(pointer('format'), 'slice-height')) ?? height;
+    return {width, height, stride, sliceHeight};
+  }
+
+  return {
+    pointer,
+    call,
+    success,
+    integer,
+    acquireInput,
+    cacheInput,
+    /** @param {number} index */
+    input: index => inputs.get(index),
+    pump,
+    acquireOutput,
+    measureOutput,
+    readLayout,
+    get lastStamp() {
+      return lastStamp;
+    }
+  };
+}
+
+/**
+ * Builds the decoder, then the media objects, then the buffers, recording each in `owned`
+ * as it exists so close() destroys exactly those.
+ * @param {any} api
+ * @param {(field: keyof typeof MEMORY) => number} pointer
+ * @param {[string, number][]} owned
+ */
+async function construct(api, pointer, owned) {
+  await api.call('decoderCreate', [pointer('decoder'), DECODER_TYPE, DECODER_OUTPUT_FORMAT]);
+  owned.push(['decoderDestroy', pointer('decoder')]);
+  const implementation = await api.read(
+    MEMORY.decoder + DECODER_IMPLEMENTATION_OFFSET,
+    POINTER_BYTES
+  );
+  if (!implementation.readBigUInt64LE()) throw Error('The movie decoder did not initialize');
+
+  for (const field of /** @type {const} */ (['configuration', 'format'])) {
+    await api.call('mediaCreate', [pointer(field)]);
+    owned.push(['mediaDestroy', pointer(field)]);
+    if (!(await api.read(MEMORY[field], POINTER_BYTES)).readBigUInt64LE())
+      throw Error('Movie metadata allocation failed');
+  }
+  for (const field of /** @type {const} */ (['input', 'output'])) {
+    await api.call('bufferCreate', [pointer(field)]);
+    owned.push(['bufferDestroy', pointer(field)]);
+  }
+}
+
+/**
+ * The decoder object create() returns, with its run state.
+ * @param {object} context
+ * @param {any} context.api
+ * @param {Record<string, number>} context.fn
+ * @param {ReturnType<typeof movieCalls>} context.movie
+ * @param {[string, number][]} context.owned What construct() built, in construction order.
+ * @param {any} context.movieModule
+ * @param {any} context.rpc
+ * @param {'host' | 'split'} context.workerMode
+ * @param {any} context.transport
+ * @param {any} context.publication
+ * @param {((options: object) => Promise<any>) | null} context.splitWorkerFactory
+ * @param {(event: object) => void} context.log
+ * @param {() => boolean} context.cancelled
+ */
+function decoderObject({
+  api,
+  fn,
+  movie,
+  owned,
+  movieModule,
+  rpc,
+  workerMode,
+  transport,
+  publication,
+  splitWorkerFactory,
+  log,
+  cancelled
+}) {
+  const {pointer, call, success, integer} = movie;
+  let running = false;
+  let configured = false;
+  let closed = false;
+  /** The output buffer the host holds until it is released, or -1. */
+  let outputIndex = -1;
+  let dimensions;
+  /** @type {Layout | null} */
+  let layout = null;
+  /** @type {{bytes: number, alignment: number} | null} */
+  let sizing = null;
+  /** The input index acquired by the previous frame's tail, waiting for the next unit. */
+  let pendingInput = null;
+  /** The output that submit() acquired, waiting for receive(). */
+  let pendingOutput = null;
+  /** The decoder step in flight, reported by the live stats when a frame stalls. */
+  let step = 'idle';
+  /** The last tail AcquireInput, for probes that watch input readiness. */
+  let lastInput = null;
+  let split = null;
+
+  async function release() {
+    if (outputIndex < 0) return;
+    const index = outputIndex;
+    outputIndex = -1;
+    await success('releaseOutput', [pointer('decoder'), index]);
+  }
+
+  /** Split mode: creates the console workers and registers them, before Start. */
+  async function registerSplit() {
+    split = await splitWorkerFactory({
+      rpc,
+      module: movieModule,
+      functions: fn,
+      decoder: pointer('decoder'),
+      output: pointer('output'),
+      format: pointer('format'),
+      transport,
+      publication,
+      cancelled
+    });
+    await split.register();
   }
 
   /**
@@ -472,34 +628,6 @@ async function create({
     if (errors.length) throw new AggregateError(errors, 'Movie decoder cleanup failed');
   }
 
-  try {
-    await api.call('decoderCreate', [pointer('decoder'), DECODER_TYPE, DECODER_OUTPUT_FORMAT]);
-    owned.push(['decoderDestroy', pointer('decoder')]);
-    if (
-      !(
-        await api.read(MEMORY.decoder + DECODER_IMPLEMENTATION_OFFSET, POINTER_BYTES)
-      ).readBigUInt64LE()
-    )
-      throw Error('The movie decoder did not initialize');
-    for (const field of /** @type {const} */ (['configuration', 'format'])) {
-      await api.call('mediaCreate', [pointer(field)]);
-      owned.push(['mediaDestroy', pointer(field)]);
-      if (!(await api.read(MEMORY[field], POINTER_BYTES)).readBigUInt64LE())
-        throw Error('Movie metadata allocation failed');
-    }
-    for (const field of /** @type {const} */ (['input', 'output'])) {
-      await api.call('bufferCreate', [pointer(field)]);
-      owned.push(['bufferDestroy', pointer(field)]);
-    }
-  } catch (error) {
-    try {
-      await close();
-    } catch (cleanup) {
-      error.cleanup = cleanup;
-    }
-    throw error;
-  }
-
   return {
     get step() {
       return step;
@@ -515,11 +643,11 @@ async function create({
      *   `beforeStart` runs between Configure and Start, where RegisterClientEvents belongs.
      * @returns {Promise<{width: number, height: number}>}
      */
-    async configure(sps, pps, fps = 60, {beforeStart} = {}) {
+    async configure(sps, pps, fps = DEFAULT_FPS, {beforeStart} = {}) {
       if (configured || closed) throw Error('Decoder configuration is not available');
       if (invalidParameterSets(sps, pps)) throw Error('Expected bounded bare SPS and PPS NALs');
-      if (!Number.isInteger(fps) || fps < MIN_FPS || fps > MAX_FPS)
-        throw Error('Invalid decoder frame rate');
+      if (invalidFrameRate(fps)) throw Error('Invalid decoder frame rate');
+
       await api.write(MEMORY.sps, sps);
       await api.write(MEMORY.pps, pps);
       const made = await call('createH264Configuration', [
@@ -535,28 +663,16 @@ async function create({
       const height = await integer(pointer('configuration'), 'height', true);
       if (outsideSurface(width, height) || width % 2 || height % 2)
         throw Error('Decoded dimensions exceed the Moonlight surface');
+
       await api.write(MEMORY.key, Buffer.from('frame-rate\0'));
       await api.call('mediaSetInt', [pointer('configuration'), pointer('key'), fps]);
       await success('configure', [pointer('decoder'), pointer('configuration')]);
-      if (workerMode === 'split') {
-        split = await splitWorkerFactory({
-          rpc,
-          module: movieModule,
-          functions: fn,
-          decoder: pointer('decoder'),
-          output: pointer('output'),
-          format: pointer('format'),
-          transport,
-          publication,
-          cancelled
-        });
-        await split.register();
-      }
+      if (workerMode === 'split') await registerSplit();
       await beforeStart?.(pointer('decoder'));
       await success('start', [pointer('decoder')]);
       configured = running = true;
       dimensions = {width, height};
-      log({event: 'native-decoder', ...dimensions, format: 'nv12'});
+      log({event: 'native-decoder', ...dimensions, format: OUTPUT_FORMAT});
       return dimensions;
     },
 
@@ -565,7 +681,7 @@ async function create({
     },
 
     get lastStamp() {
-      return lastStamp;
+      return movie.lastStamp;
     },
 
     /**
@@ -577,18 +693,20 @@ async function create({
     async submit(unit, {acquireOutput: withOutput = true, stamp = null} = {}) {
       if (!running || closed) throw Error('Decoder is not running');
       if (invalidUnit(unit)) throw Error('Invalid decoder access unit');
+
       step = 'acquireInput';
-      if (pendingInput === null) pendingInput = await acquireInput();
+      if (pendingInput === null) pendingInput = await movie.acquireInput();
       const index = pendingInput;
       step = 'cacheInput';
-      await cacheInput(index);
-      const {address, capacity} = inputs.get(index);
+      await movie.cacheInput(index);
+      const {address, capacity} = movie.input(index);
       if (!Number.isSafeInteger(address) || address <= 0 || unit.data.length > capacity)
         throw Error('H.264 access unit exceeds the native input buffer');
       step = 'writeUnit';
       await rpc.write(address, unit.data);
+
       step = 'pump';
-      const {statuses, control} = await pump(unit.data.length, unit.pts, withOutput, stamp);
+      const {statuses, control} = await movie.pump(unit.data.length, unit.pts, withOutput, stamp);
       step = 'idle';
       if (statuses[0] !== 0) throw resultError('movie::sendInput', statuses[0]);
       const nextIndex = control.readInt32LE(0);
@@ -597,13 +715,7 @@ async function create({
       if (queueFailed(inputStatus, nextIndex))
         throw resultError('Decoder input queue', inputStatus);
       pendingInput = nextIndex >= 0 ? nextIndex : null;
-      if (!withOutput) return;
-      pendingOutput = {
-        status: statuses[1],
-        index: control.readInt32LE(MEMORY.outputIndex - MEMORY.inputIndex),
-        pts: control.readBigUInt64LE(MEMORY.timestamp - MEMORY.inputIndex),
-        flags: control.readUInt32LE(MEMORY.flags - MEMORY.inputIndex)
-      };
+      if (withOutput) pendingOutput = outputAt(control, MEMORY.inputIndex, statuses[1]);
     },
 
     /**
@@ -614,29 +726,20 @@ async function create({
     async receive(destination) {
       if (!running || closed) throw Error('Decoder is not running');
       if (outputIndex >= 0) throw Error('A decoder output buffer is still owned');
+
       step = 'acquireOutput';
-      const out = pendingOutput ?? (await acquireOutput());
+      const out = pendingOutput ?? (await movie.acquireOutput());
       pendingOutput = null;
       step = 'idle';
       outputIndex = out.index;
       if (outputIndex < 0 && out.status === OUTPUT_NOT_READY) return null;
       if (out.status !== 0) throw resultError('Decoder output queue', out.status);
       if (outputIndex < 0) return null;
+
       const timestamp = out.pts;
       try {
         step = 'getOutputSize';
-        if (!sizing) {
-          await success('getOutputSize', [
-            pointer('decoder'),
-            pointer('outputSize'),
-            pointer('alignment')
-          ]);
-          const value = await api.read(MEMORY.outputSize, SIZING_BYTES);
-          sizing = {
-            bytes: value.readUInt32LE(),
-            alignment: value.readUInt32LE(MEMORY.alignment - MEMORY.outputSize)
-          };
-        }
+        if (!sizing) sizing = await movie.measureOutput();
         const {bytes} = sizing;
         if (unfitDestination(destination, sizing))
           throw Error('Native output does not fit the aligned destination surface');
@@ -654,13 +757,7 @@ async function create({
         const got = result(paired.results[1]);
         if (got !== 0) throw resultError('movie::getOutput', got);
         step = 'outputFormat';
-        if (!layout) {
-          const width = (await integer(pointer('format'), 'width')) ?? dimensions.width;
-          const height = (await integer(pointer('format'), 'height')) ?? dimensions.height;
-          const stride = (await integer(pointer('format'), 'stride')) ?? width;
-          const sliceHeight = (await integer(pointer('format'), 'slice-height')) ?? height;
-          layout = {width, height, stride, sliceHeight};
-        }
+        if (!layout) layout = await movie.readLayout(dimensions);
         if (unsupportedLayout(layout, bytes, destination.bytes))
           throw Error('Unsupported native NV12 output layout');
         const {width, height, stride, sliceHeight} = layout;
@@ -671,7 +768,7 @@ async function create({
           sliceHeight,
           bytes,
           pts: timestamp.toString(),
-          format: 'nv12'
+          format: OUTPUT_FORMAT
         };
       } finally {
         step = 'releaseOutput';
@@ -682,6 +779,70 @@ async function create({
 
     close
   };
+}
+
+/**
+ * Builds a movie decoder in module memory. configure() starts it.
+ * @param {DecoderOptions} options
+ */
+async function create({
+  rpc,
+  directory,
+  workerDirectory,
+  workerMode = 'host',
+  transport = null,
+  publication = null,
+  splitWorkerFactory = null,
+  log = () => {},
+  cancelled = () => false
+}) {
+  if (!WORKER_MODES.includes(workerMode)) throw Error('Unknown decoder worker mode');
+  if (workerMode === 'split' && (!transport || !splitWorkerFactory))
+    throw Error('Split decoder needs a TCP transport and a worker factory');
+
+  const movieModule = await loadMovieModule(directory);
+  workerDirectory ||= defaultWorkerDirectory();
+  const api = await createModule(rpc, {
+    base: movieModule.base,
+    definitions,
+    directory: workerDirectory
+  });
+  const fn = api.functions;
+  // Movie functions sit outside the SDK range, so they are the frame's verified targets,
+  // and the frame carries five- and six-argument calls.
+  const worker = await createFinite(rpc, {
+    verified: new Set(Object.values(fn)),
+    wide: true
+  });
+
+  const movie = movieCalls(api, fn, worker, rpc, cancelled);
+  /** @type {[string, number][]} */
+  const owned = [];
+  const decoder = decoderObject({
+    api,
+    fn,
+    movie,
+    owned,
+    movieModule,
+    rpc,
+    workerMode,
+    transport,
+    publication,
+    splitWorkerFactory,
+    log,
+    cancelled
+  });
+  try {
+    await construct(api, movie.pointer, owned);
+  } catch (error) {
+    try {
+      await decoder.close();
+    } catch (cleanup) {
+      error.cleanup = cleanup;
+    }
+    throw error;
+  }
+  return decoder;
 }
 
 export {create};
