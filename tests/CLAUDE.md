@@ -14,7 +14,7 @@ Everything runs against the runtime code by relative path:
 <dir>/hbl-moonlight      the code under test
 <dir>/hbl-platform       bridge, sdk/host, sdk/native, sdk/package
 <dir>/hbl-platform-dev   sdk/tests/recording-rpc.cjs, audio-out-mock, gate-worker-mock
-<dir>/HBLauncher         package-backend.js and the hello-world template
+<dir>/HBLauncher         package-backend.js and the hb-package hello-world template
 ```
 
 A worktree must see the right `../hbl-moonlight`: the tests import `../../../hbl-moonlight`.
