@@ -68,4 +68,4 @@ async function* split(stream, frameBytes, limit = Infinity) {
   }
 }
 
-export {readFrames, split};
+export {readFrames};

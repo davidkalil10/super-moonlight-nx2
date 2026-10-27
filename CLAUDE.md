@@ -53,8 +53,8 @@ Package `exports` replace the relative paths later in Phase 2.
   fill whole 32 KiB exchanges and the senders are latest-wins (never queue frames, drop on a
   stall).
 - One source of truth per layout: `ring.js` generates `ring.glsl`; `hbv.js`/`hbv2.js` generate
-  their GLSL tables; `ui-page.js` mirrors
-  the shader's page validator. Change the JS and regenerate, never the outputs.
+  their GLSL tables; `ui-page.js` mirrors the shader's page validator. Change the JS and
+  regenerate, never the outputs.
 - HBV2 uses an integer IDCT shared by JS and GLSL; a float transform drifts across P frames.
 - The console UI commands go through plain words in the control page, not the SDK mailbox: a
   pending mailbox request stops the native worker at the next 60-frame boundary and would hitch

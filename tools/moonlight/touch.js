@@ -135,14 +135,4 @@ function touchLine(events) {
   return JSON.stringify({type: 'touch', events});
 }
 
-export {
-  PANEL,
-  MAX_POINTS,
-  TOUCH_BYTES,
-  PRESSURE_UNKNOWN,
-  parseTouch,
-  createTracker,
-  step,
-  flush,
-  touchLine
-};
+export {PANEL, TOUCH_BYTES, PRESSURE_UNKNOWN, parseTouch, createTracker, step, flush, touchLine};
