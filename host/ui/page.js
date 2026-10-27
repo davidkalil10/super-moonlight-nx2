@@ -5,9 +5,12 @@
  * screen positions, plus the item rects the console cursor moves over. The shader validates a
  * page with the same rules as validate() here before it draws it. Contract: team note
  * research/moonlight-ui-design.md, "Memory and words".
+ *
+ * ui.glsl mirrors the layout below; changing a constant or offset changes the format.
  */
 import {UI, UI_OFFSET, UI_PAGE_BYTES, UI_OP} from '../../tools/moonlight/ring.js';
 
+/** "HBPG" read as a little-endian word. */
 const MAGIC = 0x47504248;
 const HEADER_WORDS = 16;
 const ITEM_WORDS = 8;
@@ -16,19 +19,36 @@ const IMAGE_WORDS = 8;
 const MAX_ITEMS = 32;
 const MAX_TEXTS = 48;
 const MAX_IMAGES = 24;
+/** Byte offsets of the three fixed-size tables, which follow the header back to back. */
 const ITEMS_OFFSET = HEADER_WORDS * 4;
 const TEXTS_OFFSET = ITEMS_OFFSET + MAX_ITEMS * ITEM_WORDS * 4;
 const IMAGES_OFFSET = TEXTS_OFFSET + MAX_TEXTS * TEXT_WORDS * 4;
+/** Where the body starts: the strip and image bytes the tables point into. */
 const BODY_OFFSET = 0x1000;
 const MAX_BODY_BYTES = UI_PAGE_BYTES - BODY_OFFSET;
 const SCREEN = {width: 1920, height: 1080};
 const MAX_TEXT = {width: 1920, height: 96};
 const MAX_IMAGE = {width: 320, height: 180};
+/** The only image format the shader reads. */
 const FORMAT_RGBA8 = 1;
 /** Header words covered by the checksum, then the three tables. */
 const CHECKSUM_WORDS = 10;
 const FNV_OFFSET_BASIS = 2166136261;
 const FNV_PRIME = 16777619;
+
+/** Byte offsets of the header words that validate() and parse() read back. */
+const HEADER = {
+  magic: 0,
+  epoch: 4,
+  sequence: 8,
+  flags: 12,
+  items: 16,
+  texts: 20,
+  images: 24,
+  bodyBytes: 28,
+  background: 32,
+  cursorHome: 36
+};
 
 const PAGE_FLAG = {overlay: 1, hideCursor: 2};
 const ITEM_FLAG = {greyed: 1, current: 2, adjustable: 4, pending: 8};
@@ -44,17 +64,53 @@ const COMMAND_READ = {offset: UI.uiApplied, bytes: UI.cmdEpoch + 4 - UI.uiApplie
  *   cursorHome?: number, items?: Item[], texts?: Text[], images?: Image[]}} Page
  */
 
-const check = (v, m) => {
-  if (!v) throw Error(m);
-};
-const u32 = v => Number.isInteger(v) && v >= 0 && v <= 0xffffffff;
-const inScreen = r =>
-  u32(r.x) &&
-  u32(r.y) &&
-  r.w > 0 &&
-  r.h > 0 &&
-  r.x + r.w <= SCREEN.width &&
-  r.y + r.h <= SCREEN.height;
+/** Throws `message` unless `condition` holds. */
+function check(condition, message) {
+  if (!condition) throw Error(message);
+}
+
+/** Whether `value` fits an unsigned 32-bit word. */
+function isU32(value) {
+  return Number.isInteger(value) && value >= 0 && value <= 0xffffffff;
+}
+
+/** Whether the rect is non-empty and lies wholly on the screen. */
+function inScreen(rect) {
+  return (
+    isU32(rect.x) &&
+    isU32(rect.y) &&
+    rect.w > 0 &&
+    rect.h > 0 &&
+    rect.x + rect.w <= SCREEN.width &&
+    rect.y + rect.h <= SCREEN.height
+  );
+}
+
+/** Whether a text rect is on screen and within the strip size limit. */
+function textFits(rect) {
+  return inScreen(rect) && rect.w <= MAX_TEXT.width && rect.h <= MAX_TEXT.height;
+}
+
+/** Whether an image rect is on screen and within the image size limit. */
+function imageFits(rect) {
+  return inScreen(rect) && rect.w <= MAX_IMAGE.width && rect.h <= MAX_IMAGE.height;
+}
+
+/** Writes `words` as consecutive little-endian u32s from byte `at`. */
+function writeWords(buffer, at, words) {
+  words.forEach((word, k) => buffer.writeUInt32LE(word, at + k * 4));
+}
+
+/** Reads `count` consecutive little-endian u32s from byte `at`. */
+function readWords(buffer, at, count) {
+  return Array.from({length: count}, (_, k) => buffer.readUInt32LE(at + k * 4));
+}
+
+/** The x, y, w, h words at the start of a table entry. */
+function readRect(buffer, at) {
+  const [x, y, w, h] = readWords(buffer, at, 4);
+  return {x, y, w, h};
+}
 
 /**
  * FNV-1a over whole little-endian words of `bytes`, as nativeChecksum and the shader do it.
@@ -74,69 +130,83 @@ function checksum(page) {
 }
 
 /**
+ * The body under construction: each placed buffer is padded to a whole word, and the body
+ * may not outgrow the page.
+ */
+function createBody() {
+  const chunks = [];
+  let length = 0;
+
+  /** Appends `bytes`, which must be `expected` long, and returns its offset in the body. */
+  function place(bytes, expected, what) {
+    check(bytes.length === expected, what + ' bytes do not match its size');
+    const offset = length;
+    chunks.push(Buffer.from(bytes.buffer, bytes.byteOffset, bytes.length));
+    length += bytes.length;
+
+    const padding = (4 - (length % 4)) % 4;
+    if (padding) {
+      chunks.push(Buffer.alloc(padding));
+      length += padding;
+    }
+
+    check(length <= MAX_BODY_BYTES, 'UI page body exceeds the page');
+    return offset;
+  }
+
+  return {
+    place,
+    get length() {
+      return length;
+    },
+    chunks
+  };
+}
+
+/**
  * The page as bytes: header, the three tables and the body, ready to write at a buffer's
  * offset. Only the bytes used are returned; the rest of the buffer may hold stale data.
  * @param {Page} page
  * @returns {Buffer}
  */
 function serialize(page) {
-  const items = page.items ?? [],
-    texts = page.texts ?? [],
-    images = page.images ?? [];
-  check(u32(page.epoch) && page.epoch !== 0, 'UI page needs a nonzero epoch');
-  check(u32(page.sequence) && page.sequence !== 0, 'UI page needs a nonzero sequence');
+  const items = page.items ?? [];
+  const texts = page.texts ?? [];
+  const images = page.images ?? [];
+  const cursorHome = page.cursorHome ?? 0;
+
+  check(isU32(page.epoch) && page.epoch !== 0, 'UI page needs a nonzero epoch');
+  check(isU32(page.sequence) && page.sequence !== 0, 'UI page needs a nonzero sequence');
   check(items.length <= MAX_ITEMS, 'Too many UI items');
   check(texts.length <= MAX_TEXTS, 'Too many UI texts');
   check(images.length <= MAX_IMAGES, 'Too many UI images');
-  check((page.cursorHome ?? 0) < Math.max(1, items.length), 'UI cursor home is not an item');
-  const body = [];
-  let bodyBytes = 0;
-  const place = (bytes, expected, what) => {
-    check(bytes.length === expected, what + ' bytes do not match its size');
-    const offset = bodyBytes;
-    body.push(Buffer.from(bytes.buffer, bytes.byteOffset, bytes.length));
-    bodyBytes += bytes.length;
-    const padding = (4 - (bodyBytes % 4)) % 4;
-    if (padding) {
-      body.push(Buffer.alloc(padding));
-      bodyBytes += padding;
-    }
-    check(bodyBytes <= MAX_BODY_BYTES, 'UI page body exceeds the page');
-    return offset;
-  };
+  check(cursorHome < Math.max(1, items.length), 'UI cursor home is not an item');
+
   const out = Buffer.alloc(BODY_OFFSET);
+  const body = createBody();
+
   for (const [i, item] of items.entries()) {
-    check(u32(item.id) && item.id !== 0, 'UI item needs a nonzero id');
+    check(isU32(item.id) && item.id !== 0, 'UI item needs a nonzero id');
     check(inScreen(item), 'UI item rect is off screen');
     const at = ITEMS_OFFSET + i * ITEM_WORDS * 4;
-    for (const [k, v] of [item.id, item.x, item.y, item.w, item.h, item.flags ?? 0].entries())
-      out.writeUInt32LE(v, at + k * 4);
+    writeWords(out, at, [item.id, item.x, item.y, item.w, item.h, item.flags ?? 0]);
   }
+
   for (const [i, text] of texts.entries()) {
-    check(inScreen(text) && text.w <= MAX_TEXT.width && text.h <= MAX_TEXT.height, 'UI text rect');
-    const at = TEXTS_OFFSET + i * TEXT_WORDS * 4,
-      offset = place(text.alpha, text.w * text.h, 'UI text strip');
-    for (const [k, v] of [
-      text.x,
-      text.y,
-      text.w,
-      text.h,
-      offset,
-      text.color ?? 0xffffffff
-    ].entries())
-      out.writeUInt32LE(v, at + k * 4);
+    check(textFits(text), 'UI text rect');
+    const at = TEXTS_OFFSET + i * TEXT_WORDS * 4;
+    const offset = body.place(text.alpha, text.w * text.h, 'UI text strip');
+    writeWords(out, at, [text.x, text.y, text.w, text.h, offset, text.color ?? 0xffffffff]);
   }
+
   for (const [i, image] of images.entries()) {
-    check(
-      inScreen(image) && image.w <= MAX_IMAGE.width && image.h <= MAX_IMAGE.height,
-      'UI image rect'
-    );
-    const at = IMAGES_OFFSET + i * IMAGE_WORDS * 4,
-      offset = place(image.rgba, image.w * image.h * 4, 'UI image');
-    for (const [k, v] of [image.x, image.y, image.w, image.h, offset, FORMAT_RGBA8].entries())
-      out.writeUInt32LE(v, at + k * 4);
+    check(imageFits(image), 'UI image rect');
+    const at = IMAGES_OFFSET + i * IMAGE_WORDS * 4;
+    const offset = body.place(image.rgba, image.w * image.h * 4, 'UI image');
+    writeWords(out, at, [image.x, image.y, image.w, image.h, offset, FORMAT_RGBA8]);
   }
-  const header = [
+
+  writeWords(out, 0, [
     MAGIC,
     page.epoch,
     page.sequence,
@@ -144,13 +214,13 @@ function serialize(page) {
     items.length,
     texts.length,
     images.length,
-    bodyBytes,
+    body.length,
     page.background ?? 0xff000000,
-    page.cursorHome ?? 0
-  ];
-  header.forEach((v, k) => out.writeUInt32LE(v, k * 4));
+    cursorHome
+  ]);
   out.writeUInt32LE(checksum(out), CHECKSUM_WORDS * 4);
-  return Buffer.concat([out, ...body]);
+
+  return Buffer.concat([out, ...body.chunks]);
 }
 
 /**
@@ -161,44 +231,47 @@ function serialize(page) {
  */
 function validate(page, expected = {}) {
   check(page.length >= BODY_OFFSET, 'UI page is shorter than its tables');
-  check(page.readUInt32LE(0) === MAGIC, 'UI page magic');
-  const epoch = page.readUInt32LE(4),
-    sequence = page.readUInt32LE(8),
-    counts = [16, 20, 24].map(at => page.readUInt32LE(at)),
-    bodyBytes = page.readUInt32LE(28),
-    cursorHome = page.readUInt32LE(36);
+  check(page.readUInt32LE(HEADER.magic) === MAGIC, 'UI page magic');
+
+  const epoch = page.readUInt32LE(HEADER.epoch);
+  const sequence = page.readUInt32LE(HEADER.sequence);
+  const items = page.readUInt32LE(HEADER.items);
+  const texts = page.readUInt32LE(HEADER.texts);
+  const images = page.readUInt32LE(HEADER.images);
+  const bodyBytes = page.readUInt32LE(HEADER.bodyBytes);
+  const cursorHome = page.readUInt32LE(HEADER.cursorHome);
+
   check(expected.epoch === undefined || epoch === expected.epoch, 'UI page epoch');
   check(expected.sequence === undefined || sequence === expected.sequence, 'UI page sequence');
-  check(counts[0] <= MAX_ITEMS && counts[1] <= MAX_TEXTS && counts[2] <= MAX_IMAGES, 'UI counts');
+  check(items <= MAX_ITEMS && texts <= MAX_TEXTS && images <= MAX_IMAGES, 'UI counts');
   check(bodyBytes <= MAX_BODY_BYTES && BODY_OFFSET + bodyBytes <= page.length, 'UI body bytes');
-  check(cursorHome < Math.max(1, counts[0]), 'UI cursor home');
+  check(cursorHome < Math.max(1, items), 'UI cursor home');
   check(page.readUInt32LE(CHECKSUM_WORDS * 4) === checksum(page), 'UI page checksum');
-  const rect = at => ({
-    x: page.readUInt32LE(at),
-    y: page.readUInt32LE(at + 4),
-    w: page.readUInt32LE(at + 8),
-    h: page.readUInt32LE(at + 12)
-  });
-  for (let i = 0; i < counts[0]; i++) {
+
+  const inBody = (offset, bytes) => offset % 4 === 0 && offset + bytes <= bodyBytes;
+
+  for (let i = 0; i < items; i++) {
     const at = ITEMS_OFFSET + i * ITEM_WORDS * 4;
     check(page.readUInt32LE(at) !== 0, 'UI item id');
-    check(inScreen(rect(at + 4)), 'UI item rect');
+    check(inScreen(readRect(page, at + 4)), 'UI item rect');
   }
-  const inBody = (offset, bytes) => offset % 4 === 0 && offset + bytes <= bodyBytes;
-  for (let i = 0; i < counts[1]; i++) {
-    const at = TEXTS_OFFSET + i * TEXT_WORDS * 4,
-      r = rect(at);
-    check(inScreen(r) && r.w <= MAX_TEXT.width && r.h <= MAX_TEXT.height, 'UI text rect');
-    check(inBody(page.readUInt32LE(at + 16), r.w * r.h), 'UI text strip bytes');
+
+  for (let i = 0; i < texts; i++) {
+    const at = TEXTS_OFFSET + i * TEXT_WORDS * 4;
+    const rect = readRect(page, at);
+    check(textFits(rect), 'UI text rect');
+    check(inBody(page.readUInt32LE(at + 16), rect.w * rect.h), 'UI text strip bytes');
   }
-  for (let i = 0; i < counts[2]; i++) {
-    const at = IMAGES_OFFSET + i * IMAGE_WORDS * 4,
-      r = rect(at);
-    check(inScreen(r) && r.w <= MAX_IMAGE.width && r.h <= MAX_IMAGE.height, 'UI image rect');
+
+  for (let i = 0; i < images; i++) {
+    const at = IMAGES_OFFSET + i * IMAGE_WORDS * 4;
+    const rect = readRect(page, at);
+    check(imageFits(rect), 'UI image rect');
     check(page.readUInt32LE(at + 20) === FORMAT_RGBA8, 'UI image format');
-    check(inBody(page.readUInt32LE(at + 16), r.w * r.h * 4), 'UI image bytes');
+    check(inBody(page.readUInt32LE(at + 16), rect.w * rect.h * 4), 'UI image bytes');
   }
-  return {epoch, sequence, items: counts[0], texts: counts[1], images: counts[2], bodyBytes};
+
+  return {epoch, sequence, items, texts, images, bodyBytes};
 }
 
 /**
@@ -207,18 +280,19 @@ function validate(page, expected = {}) {
  */
 function parse(page) {
   const {items, texts, images, bodyBytes} = validate(page);
-  const words = (offset, count, n) =>
-    Array.from({length: count}, (_, i) =>
-      Array.from({length: n}, (_, k) => page.readUInt32LE(offset + (i * n + k) * 4))
-    );
   const body = page.subarray(BODY_OFFSET, BODY_OFFSET + bodyBytes);
+
+  /** The first `width` words of each of `count` table entries from `offset`. */
+  const table = (offset, count, width) =>
+    Array.from({length: count}, (_, i) => readWords(page, offset + i * width * 4, width));
+
   return {
-    epoch: page.readUInt32LE(4),
-    sequence: page.readUInt32LE(8),
-    flags: page.readUInt32LE(12),
-    background: page.readUInt32LE(32),
-    cursorHome: page.readUInt32LE(36),
-    items: words(ITEMS_OFFSET, items, ITEM_WORDS).map(([id, x, y, w, h, flags]) => ({
+    epoch: page.readUInt32LE(HEADER.epoch),
+    sequence: page.readUInt32LE(HEADER.sequence),
+    flags: page.readUInt32LE(HEADER.flags),
+    background: page.readUInt32LE(HEADER.background),
+    cursorHome: page.readUInt32LE(HEADER.cursorHome),
+    items: table(ITEMS_OFFSET, items, ITEM_WORDS).map(([id, x, y, w, h, flags]) => ({
       id,
       x,
       y,
@@ -226,7 +300,7 @@ function parse(page) {
       h,
       flags
     })),
-    texts: words(TEXTS_OFFSET, texts, TEXT_WORDS).map(([x, y, w, h, offset, color]) => ({
+    texts: table(TEXTS_OFFSET, texts, TEXT_WORDS).map(([x, y, w, h, offset, color]) => ({
       x,
       y,
       w,
@@ -234,7 +308,7 @@ function parse(page) {
       color,
       alpha: body.subarray(offset, offset + w * h)
     })),
-    images: words(IMAGES_OFFSET, images, IMAGE_WORDS).map(([x, y, w, h, offset]) => ({
+    images: table(IMAGES_OFFSET, images, IMAGE_WORDS).map(([x, y, w, h, offset]) => ({
       x,
       y,
       w,
@@ -261,7 +335,7 @@ function pageAddress(mapped, page) {
  */
 function hostWords({magic, epoch, sequence, page}) {
   const out = Buffer.alloc(16);
-  [magic, epoch, sequence, page].forEach((v, k) => out.writeUInt32LE(v >>> 0, k * 4));
+  writeWords(out, 0, [magic >>> 0, epoch >>> 0, sequence >>> 0, page >>> 0]);
   return out;
 }
 
@@ -272,6 +346,8 @@ function hostWords({magic, epoch, sequence, page}) {
 function readCommand(bytes) {
   check(bytes.length >= COMMAND_READ.bytes, 'UI command read is short');
   const word = name => bytes.readUInt32LE(UI[name] - COMMAND_READ.offset);
+  const value = word('cmdValue');
+
   return {
     applied: word('uiApplied'),
     cursor: word('uiCursor'),
@@ -281,7 +357,7 @@ function readCommand(bytes) {
       sequence: word('cmdSequence'),
       op: word('cmdOp'),
       item: word('cmdItem'),
-      value: word('cmdValue') === 0xffffffff ? -1 : word('cmdValue'),
+      value: value === 0xffffffff ? -1 : value,
       page: word('cmdPage'),
       epoch: word('cmdEpoch')
     }

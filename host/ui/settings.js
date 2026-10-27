@@ -8,8 +8,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {hostsFile} from './hosts.js';
 
-/** Mbps steps the bitrate row walks through. */
+/** Mbps steps the bitrate row walks through: 5 to 40 in steps of 2.5. */
 const BITRATES = Array.from({length: 15}, (_, i) => 5 + i * 2.5);
+
+/** Value text of the on/off toggles. */
+const onOff = value => (value ? 'On' : 'Off');
 
 /**
  * @typedef {{id: string, label: string, values: any[], fallback: any,
@@ -54,7 +57,7 @@ const CATALOG = [
     label: 'Quit host app on return',
     values: [false, true],
     fallback: false,
-    text: value => (value ? 'On' : 'Off'),
+    text: onOff,
     unbacked: true
   },
   {
@@ -62,7 +65,7 @@ const CATALOG = [
     label: 'Optimise game settings',
     values: [false, true],
     fallback: false,
-    text: value => (value ? 'On' : 'Off'),
+    text: onOff,
     unbacked: true
   },
   {
@@ -79,6 +82,7 @@ function settingsFile() {
   return path.join(path.dirname(hostsFile()), 'settings.json');
 }
 
+/** Every setting at its catalog fallback. */
 function defaults() {
   return Object.fromEntries(CATALOG.map(setting => [setting.id, setting.fallback]));
 }
@@ -94,6 +98,7 @@ function load(file) {
     const read = JSON.parse(fs.readFileSync(file, 'utf8'));
     if (read && typeof read === 'object' && !Array.isArray(read)) parsed = read;
   } catch {}
+
   const settings = defaults();
   for (const setting of CATALOG)
     if (setting.values.includes(parsed[setting.id])) settings[setting.id] = parsed[setting.id];
@@ -101,6 +106,7 @@ function load(file) {
 }
 
 /**
+ * Writes the settings as JSON, creating the config directory first.
  * @param {string} file
  * @param {Record<string, any>} settings
  */
@@ -118,6 +124,7 @@ function save(file, settings) {
 function adjust(settings, id, direction) {
   const setting = CATALOG.find(entry => entry.id === id);
   if (!setting || setting.locked || setting.unbacked) return settings;
+
   const index = setting.values.indexOf(settings[id]);
   const next = Math.min(setting.values.length - 1, Math.max(0, index + Math.sign(direction)));
   if (setting.values[next] === settings[id]) return settings;

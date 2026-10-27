@@ -39,6 +39,8 @@ const HOSTS_PER_PAGE = 6;
  *   message: string | null, back: string, from: string, overlay: boolean,
  *   settings: Record<string, any>
  * }} Model
+ * @typedef {{op: string, item: number, value: number}} Command
+ * @typedef {{model: Model, intents: Intent[]}} Step
  */
 
 /**
@@ -68,9 +70,18 @@ function makeModel(hosts, settings = defaults()) {
   };
 }
 
-/** @param {Model} model @param {Partial<Model>} patch @param {Intent[]} [intents] */
+/**
+ * The model with `patch` applied, and the intents to run.
+ * @param {Model} model @param {Partial<Model>} patch @param {Intent[]} [intents]
+ * @returns {Step}
+ */
 const next = (model, patch, intents = []) => ({model: {...model, ...patch}, intents});
-/** @param {Model} model */
+
+/**
+ * The model unchanged, nothing to run.
+ * @param {Model} model
+ * @returns {Step}
+ */
 const same = model => ({model, intents: []});
 
 /** Back to the hosts page, forgetting the host's apps. */
@@ -79,7 +90,10 @@ const LEAVE_HOST = {screen: 'hosts', host: null, apps: [], app: null, appPage: 0
 /** The last page of a list paged by `size`. @param {number} length @param {number} size */
 const lastPage = (length, size) => Math.max(0, Math.ceil(length / size) - 1);
 
-/** @param {Model} model @param {Host} host @param {number} [index] The host's place in the list. */
+/**
+ * Starts listing the host's apps.
+ * @param {Model} model @param {Host} host @param {number} [index] The host's place in the list.
+ */
 function openHost(model, host, index = model.hostIndex) {
   return next(
     model,
@@ -101,23 +115,95 @@ function fail(model, message, back) {
   return next(model, {screen: 'error', message, back, pin: null, url: null, overlay: false});
 }
 
-/** @param {Model} model @param {{op: string, item: number, value: number}} command */
+/** A on a host card opens it; A on the pager turns the page; Y refreshes the list. */
+function onHostsCommand(model, {op, item}) {
+  const host = model.hosts[item - ITEM.host];
+  if (op === 'a' && host) return openHost(model, host, item - ITEM.host);
+
+  const last = lastPage(model.hosts.length, HOSTS_PER_PAGE);
+  if (op === 'a' && item === ITEM.previous)
+    return next(model, {hostPage: Math.max(0, model.hostPage - 1)});
+  if (op === 'a' && item === ITEM.next)
+    return next(model, {hostPage: Math.min(last, model.hostPage + 1)});
+
+  if (op === 'y') return next(model, {}, [{type: 'refreshHosts'}]);
+  return same(model);
+}
+
+/**
+ * A on a cover launches it unless another app is running on the PC; B leaves the host and Y
+ * asks to quit the running app.
+ */
+function onAppsCommand(model, {op, item}) {
+  if (op === 'b') return next(model, LEAVE_HOST);
+  if (op === 'y') return next(model, {screen: 'quitConfirm'});
+  if (op !== 'a') return same(model);
+
+  if (item === ITEM.back) return next(model, LEAVE_HOST);
+  if (item === ITEM.previous) return next(model, {appPage: Math.max(0, model.appPage - 1)});
+  if (item === ITEM.next) {
+    const last = lastPage(model.apps.length, APPS_PER_PAGE);
+    return next(model, {appPage: Math.min(last, model.appPage + 1)});
+  }
+
+  const appIndex = item - ITEM.app;
+  const app = model.apps[appIndex];
+  if (!app) return same(model);
+
+  if (model.currentGame && app.id !== model.currentGame) {
+    const running = model.apps.find(entry => entry.id === model.currentGame)?.name;
+    const message =
+      (running ?? 'Another app') + ' is still running on the PC; press Y to quit it first';
+    return next(model, {message});
+  }
+
+  return next(model, {screen: 'launching', app, appIndex, message: null, overlay: false}, [
+    {type: 'launch', host: model.host, app, settings: model.settings}
+  ]);
+}
+
+/** ADJUST on a setting changes and saves it; Y resets all of them; B goes back. */
+function onSettingsCommand(model, {op, item, value}) {
+  if (op === 'b') return next(model, {screen: model.from});
+  if (op === 'y') return next(model, {settings: defaults()}, [{type: 'saveSettings'}]);
+
+  const setting = CATALOG[item - ITEM.setting];
+  if (op !== 'adjust' || !setting) return same(model);
+
+  const settings = adjust(model.settings, setting.id, value);
+  if (settings === model.settings) return same(model);
+  return next(model, {settings}, [{type: 'saveSettings'}]);
+}
+
+/** The chord shows the overlay; with it shown, B hides it and A picks one of its buttons. */
+function onStreamingCommand(model, {op, item}) {
+  if (op === 'chord') return next(model, {overlay: true}, [{type: 'pauseInput'}]);
+  if (!model.overlay) return same(model);
+
+  if (op === 'b') return next(model, {overlay: false}, [{type: 'resumeInput'}]);
+  if (op === 'a' && item === ITEM.returnToApps)
+    return next(model, {screen: 'connecting', overlay: false}, [{type: 'stopStream'}]);
+  if (op === 'a' && item === ITEM.quitHost)
+    return next(model, {screen: 'quitting', overlay: false}, [
+      {type: 'stopStream'},
+      {type: 'quitHost', host: model.host}
+    ]);
+  return same(model);
+}
+
+/**
+ * A console command on the current screen.
+ * @param {Model} model @param {Command} command
+ * @returns {Step}
+ */
 function onCommand(model, command) {
-  const {op, item, value} = command;
+  const {op, item} = command;
   if (op === 'x' && ['hosts', 'apps'].includes(model.screen))
     return next(model, {screen: 'settings', from: model.screen});
+
   switch (model.screen) {
-    case 'hosts': {
-      const host = model.hosts[item - ITEM.host];
-      if (op === 'a' && host) return openHost(model, host, item - ITEM.host);
-      const last = lastPage(model.hosts.length, HOSTS_PER_PAGE);
-      if (op === 'a' && item === ITEM.previous)
-        return next(model, {hostPage: Math.max(0, model.hostPage - 1)});
-      if (op === 'a' && item === ITEM.next)
-        return next(model, {hostPage: Math.min(last, model.hostPage + 1)});
-      if (op === 'y') return next(model, {}, [{type: 'refreshHosts'}]);
-      return same(model);
-    }
+    case 'hosts':
+      return onHostsCommand(model, command);
     case 'connecting':
       if (op === 'b') return next(model, {screen: 'hosts', host: null}, [{type: 'cancelList'}]);
       return same(model);
@@ -125,74 +211,53 @@ function onCommand(model, command) {
       if (op === 'b')
         return next(model, {screen: 'hosts', pin: null, url: null}, [{type: 'cancelPair'}]);
       return same(model);
-    case 'apps': {
-      if (op === 'b') return next(model, LEAVE_HOST);
-      if (op === 'y') return next(model, {screen: 'quitConfirm'});
-      if (op !== 'a') return same(model);
-      if (item === ITEM.back) return next(model, LEAVE_HOST);
-      if (item === ITEM.previous) return next(model, {appPage: Math.max(0, model.appPage - 1)});
-      if (item === ITEM.next)
-        return next(model, {
-          appPage: Math.min(lastPage(model.apps.length, APPS_PER_PAGE), model.appPage + 1)
-        });
-      const app = model.apps[item - ITEM.app];
-      if (!app) return same(model);
-      if (model.currentGame && app.id !== model.currentGame) {
-        const running = model.apps.find(entry => entry.id === model.currentGame)?.name;
-        return next(model, {
-          message:
-            (running ?? 'Another app') + ' is still running on the PC; press Y to quit it first'
-        });
-      }
-      const appIndex = item - ITEM.app;
-      return next(model, {screen: 'launching', app, appIndex, message: null, overlay: false}, [
-        {type: 'launch', host: model.host, app, settings: model.settings}
-      ]);
-    }
+    case 'apps':
+      return onAppsCommand(model, command);
     case 'quitConfirm':
       if (op === 'a' && item === ITEM.confirmQuit)
         return next(model, {screen: 'quitting'}, [{type: 'quitHost', host: model.host}]);
       if (op === 'b' || (op === 'a' && item === ITEM.cancel)) return next(model, {screen: 'apps'});
       return same(model);
-    case 'settings': {
-      if (op === 'b') return next(model, {screen: model.from});
-      if (op === 'y') return next(model, {settings: defaults()}, [{type: 'saveSettings'}]);
-      const setting = CATALOG[item - ITEM.setting];
-      if (op !== 'adjust' || !setting) return same(model);
-      const settings = adjust(model.settings, setting.id, value);
-      if (settings === model.settings) return same(model);
-      return next(model, {settings}, [{type: 'saveSettings'}]);
-    }
+    case 'settings':
+      return onSettingsCommand(model, command);
     case 'launching':
       if (op === 'b') return next(model, {screen: 'connecting', app: null}, [{type: 'stopStream'}]);
       return same(model);
     case 'streaming':
-      if (op === 'chord') return next(model, {overlay: true}, [{type: 'pauseInput'}]);
-      if (op === 'b' && model.overlay)
-        return next(model, {overlay: false}, [{type: 'resumeInput'}]);
-      if (op === 'a' && model.overlay && item === ITEM.returnToApps)
-        return next(model, {screen: 'connecting', overlay: false}, [{type: 'stopStream'}]);
-      if (op === 'a' && model.overlay && item === ITEM.quitHost)
-        return next(model, {screen: 'quitting', overlay: false}, [
-          {type: 'stopStream'},
-          {type: 'quitHost', host: model.host}
-        ]);
-      return same(model);
+      return onStreamingCommand(model, command);
     case 'error':
-      if (op === 'a' || op === 'b') {
-        if (model.back === 'apps' && model.host) return openHost(model, model.host);
-        return next(model, {screen: 'hosts', host: null, message: null});
-      }
-      return same(model);
+      if (op !== 'a' && op !== 'b') return same(model);
+      if (model.back === 'apps' && model.host) return openHost(model, model.host);
+      return next(model, {screen: 'hosts', host: null, message: null});
     default:
       return same(model);
   }
 }
 
+/** The host's apps arrived: show them and fetch their covers. */
+function onListed(model, {apps, currentGame, message}) {
+  if (!['connecting', 'pairing', 'quitting'].includes(model.screen)) return same(model);
+
+  const appPage = Math.min(model.appPage, lastPage(apps.length, APPS_PER_PAGE));
+  return next(
+    model,
+    {
+      screen: 'apps',
+      apps,
+      currentGame,
+      appPage,
+      pin: null,
+      url: null,
+      message: message ?? null
+    },
+    [{type: 'covers', host: model.host, apps}]
+  );
+}
+
 /**
  * @param {Model} model
  * @param {{type: string, [key: string]: any}} event A console command or a service result.
- * @returns {{model: Model, intents: Intent[]}}
+ * @returns {Step}
  */
 function reduce(model, event) {
   switch (event.type) {
@@ -205,24 +270,8 @@ function reduce(model, event) {
         hosts: event.hosts,
         hostPage: Math.min(model.hostPage, lastPage(event.hosts.length, HOSTS_PER_PAGE))
       });
-    case 'listed': {
-      if (!['connecting', 'pairing', 'quitting'].includes(model.screen)) return same(model);
-      const apps = event.apps;
-      const page = Math.min(model.appPage, lastPage(apps.length, APPS_PER_PAGE));
-      return next(
-        model,
-        {
-          screen: 'apps',
-          apps,
-          currentGame: event.currentGame,
-          appPage: page,
-          pin: null,
-          url: null,
-          message: event.message ?? null
-        },
-        [{type: 'covers', host: model.host, apps}]
-      );
-    }
+    case 'listed':
+      return onListed(model, event);
     case 'notPaired':
       if (model.screen !== 'connecting') return same(model);
       return next(model, {screen: 'pairing', pin: null, url: null}, [
@@ -243,9 +292,7 @@ function reduce(model, event) {
       if (model.screen !== 'launching') return same(model);
       return next(model, {message: event.message});
     case 'streamEnded':
-      if (!['launching', 'streaming', 'connecting', 'quitting'].includes(model.screen))
-        return same(model);
-      if (model.screen === 'quitting') return same(model);
+      if (!['launching', 'streaming', 'connecting'].includes(model.screen)) return same(model);
       return next(model, {screen: 'connecting', app: null, overlay: false}, [
         {type: 'list', host: model.host}
       ]);

@@ -6,6 +6,7 @@
 import path from 'node:path';
 import {spawn} from 'node:child_process';
 
+/** Each reply starts with its width and height as little-endian u32s. */
 const HEADER_BYTES = 8;
 
 /**
@@ -19,35 +20,46 @@ function createRaster({spawnProcess = spawn} = {}) {
   const child = spawnProcess('python3', [path.join(import.meta.dirname, 'text.py')], {
     stdio: ['pipe', 'pipe', 'inherit']
   });
-  /** @type {{resolve: (painted: Painted) => void, reject: (error: Error) => void}[]} */
+  /**
+   * Requests awaiting their reply, oldest first; channels is the bytes per pixel it carries.
+   * @type {{resolve: (painted: Painted) => void, reject: (error: Error) => void,
+   *   channels: number}[]}
+   */
   const queue = [];
+  /** Reply bytes read but not yet handed out. */
   let pending = Buffer.alloc(0);
+  /** Set once the child is gone; every later request fails with it. */
   let failure = null;
-  child.stdout.on('data', chunk => {
-    pending = Buffer.concat([pending, chunk]);
-    for (;;) {
-      if (pending.length < HEADER_BYTES) return;
-      const width = pending.readUInt32LE(0),
-        height = pending.readUInt32LE(4),
-        request = queue[0],
-        bytes = width * height * (request?.channels ?? 1);
-      if (pending.length < HEADER_BYTES + bytes) return;
-      pending = pending.subarray(HEADER_BYTES);
-      const painted = Buffer.from(pending.subarray(0, bytes));
-      pending = pending.subarray(bytes);
-      queue.shift()?.resolve({width, height, bytes: painted});
+
+  /** Hands out every complete reply in `pending`, in order. */
+  function drain() {
+    while (pending.length >= HEADER_BYTES) {
+      const width = pending.readUInt32LE(0);
+      const height = pending.readUInt32LE(4);
+      const channels = queue[0]?.channels ?? 1;
+      const size = width * height * channels;
+      if (pending.length < HEADER_BYTES + size) return;
+
+      const bytes = Buffer.from(pending.subarray(HEADER_BYTES, HEADER_BYTES + size));
+      pending = pending.subarray(HEADER_BYTES + size);
+      queue.shift()?.resolve({width, height, bytes});
     }
-  });
-  child.on('exit', (code, signal) => {
-    failure = Error('text.py exited: ' + (signal || code));
-    for (const request of queue.splice(0)) request.reject(failure);
-  });
-  child.on('error', error => {
+  }
+
+  /** Fails every queued request and every later one with `error`. */
+  function failAll(error) {
     failure = error;
     for (const request of queue.splice(0)) request.reject(error);
-  });
+  }
 
-  /** @param {object} request @param {number} channels */
+  child.stdout.on('data', chunk => {
+    pending = Buffer.concat([pending, chunk]);
+    drain();
+  });
+  child.on('exit', (code, signal) => failAll(Error('text.py exited: ' + (signal || code))));
+  child.on('error', failAll);
+
+  /** Sends one JSON request line; resolves with its reply of `channels` bytes per pixel. */
   function paint(request, channels) {
     if (failure) return Promise.reject(failure);
     return new Promise((resolve, reject) => {
@@ -69,7 +81,12 @@ function createRaster({spawnProcess = spawn} = {}) {
      */
     text: (text, size, width, align = 'left', {weight = 600, tracking = 0} = {}) =>
       paint({kind: 'text', text, size, width, align, weight, tracking}, 1),
-    /** @param {[string, string][]} keys Button and label pairs @param {number} size @param {number} width */
+    /**
+     * Button hints in one alpha-8 strip.
+     * @param {[string, string][]} keys Button and label pairs
+     * @param {number} size
+     * @param {number} width
+     */
     legend: (keys, size, width) => paint({kind: 'legend', keys, size, width}, 1),
     /** A cover PNG fitted inside a width x height RGBA8 tile; 0 x 0 when the file is not usable. */
     tile: (png, width, height) => paint({kind: 'tile', png, width, height}, 4),
