@@ -314,10 +314,145 @@ function holdsOutput(acquired, fetched) {
   const sequence = acquired.readUInt32LE(ACQUIRED.sequence);
   return Boolean(
     sequence &&
-    fetched.readUInt32LE() !== sequence &&
-    acquired.readBigUInt64LE(ACQUIRED.status) === 0n &&
-    acquired.readInt32LE(ACQUIRED.index) >= 0
+      fetched.readUInt32LE() !== sequence &&
+      acquired.readBigUInt64LE(ACQUIRED.status) === 0n &&
+      acquired.readInt32LE(ACQUIRED.index) >= 0
   );
+}
+
+/**
+ * Verifies the code, copy and preamble the frames run through and the movie module's
+ * RegisterClientEvents, and resolves the sync functions the workers call.
+ * @param {StaggeredRpc} rpc
+ * @param {{base: number, symbols: any[]}} module
+ * @returns {Promise<Record<string, number>>}
+ */
+async function verifySetup(rpc, module) {
+  const sdk = rpc.a.sdk;
+  await verifyCode(rpc);
+  await verifyCopy(rpc);
+  await verifyPreamble(rpc);
+  /** @type {Record<string, number>} */
+  const sync = {};
+  for (const name of SYNC_FUNCTIONS) {
+    await verify(rpc, sdk + SYNC[name].offset, SYNC[name].hex);
+    sync[name] = sdk + SYNC[name].offset;
+  }
+  const registration = MOVIE_EVENTS.registerClientEvents;
+  if (!hasRegistration(module, registration))
+    throw Error('The loaded movie module has no matching RegisterClientEvents');
+  await verify(rpc, module.base + registration.offset, registration.hex);
+  return sync;
+}
+
+/**
+ * Allocates both workers' frame regions, the shared control page and the receive scratch.
+ * @param {StaggeredRpc} rpc
+ * @param {NativeTransport} transport
+ */
+async function allocateRegions(rpc, transport) {
+  const inputBase = await allocate(rpc, WORKER_BYTES, {
+    failed: 'Staggered input worker allocation failed',
+    invalid: 'Invalid staggered input worker allocation'
+  });
+  const outputBase = await allocate(rpc, WORKER_BYTES, {
+    failed: 'Staggered output worker allocation failed',
+    invalid: 'Invalid staggered output worker allocation'
+  });
+  const control = await allocate(rpc, CONTROL_BYTES, {
+    failed: 'Staggered control allocation failed',
+    invalid: 'Invalid staggered control allocation'
+  });
+  const scratch = await allocate(rpc, transport.maxAccessUnit, {
+    failed: 'Staggered receive scratch allocation failed',
+    invalid: 'Invalid staggered receive scratch allocation'
+  });
+  return {inputBase, outputBase, control, scratch};
+}
+
+/**
+ * Writes the initial control page and initializes its gates and events.
+ * @param {StaggeredRpc} rpc
+ * @param {Record<string, number>} sync
+ * @param {number} control
+ * @param {boolean} gateOnReceive
+ * @returns {Promise<{offset: number, finalize: number}[]>} The events in initialization order.
+ */
+async function initializeControl(rpc, sync, control, gateOnReceive) {
+  const at = offset => control + offset;
+  await rpc.write(control, initialControl(control));
+  const initialized = [];
+  for (const [offset, signalled] of [
+    [inputPlan.CONTROL.decodeGate, 0],
+    [inputPlan.CONTROL.ignoredFetchGate, 0],
+    [outputPlan.CONTROL.fetchGate, 0],
+    [ACQUIRE_ACK, 1],
+    ...(gateOnReceive ? [[inputPlan.CONTROL.lengthGate, 1]] : [])
+  ]) {
+    await rpc.callAddress(sync.initializeLightEvent, [at(offset), signalled, AUTO_CLEAR, 0], SHORT);
+    initialized.push({offset, finalize: sync.finalizeLightEvent});
+  }
+  await rpc.callAddress(sync.initializeEvent, [at(OUTPUT_EVENT), 0, AUTO_CLEAR, 0], SHORT);
+  initialized.push({offset: OUTPUT_EVENT, finalize: sync.finalizeEvent});
+  return initialized;
+}
+
+/**
+ * Plans both workers' frames over the allocated regions.
+ * @param {object} options
+ * @param {number} options.sdk
+ * @param {Awaited<ReturnType<typeof allocateRegions>>} options.regions
+ * @param {NativeTransport} options.transport
+ * @param {Publication} options.publication
+ * @param {Record<string, number>} options.functions
+ * @param {number} options.decoder
+ * @param {number} options.output
+ * @param {number} options.format
+ * @param {boolean} options.gateOnReceive
+ * @returns {WorkerState[]} The input worker, then the output worker.
+ */
+function planWorkers({
+  sdk,
+  regions,
+  transport,
+  publication,
+  functions,
+  decoder,
+  output,
+  format,
+  gateOnReceive
+}) {
+  const {inputBase, outputBase, control, scratch} = regions;
+  const at = offset => control + offset;
+  const input = inputPlan.plan({
+    sdk,
+    base: inputBase,
+    control,
+    mapped: publication.mapped,
+    scratch,
+    fd: transport.fd,
+    recvFunction: transport.recvFunction,
+    functions,
+    decoder,
+    acquireAck: at(ACQUIRE_ACK),
+    ...(gateOnReceive && {lengthGate: at(inputPlan.CONTROL.lengthGate)})
+  });
+  const video = outputPlan.plan({
+    sdk,
+    base: outputBase,
+    control,
+    mapped: publication.mapped,
+    event: at(OUTPUT_EVENT),
+    acquireAck: at(ACQUIRE_ACK),
+    functions,
+    decoder,
+    output,
+    format
+  });
+  return [
+    {name: 'input', base: inputBase, plan: input, thread: null, joined: false, uncertain: false},
+    {name: 'output', base: outputBase, plan: video, thread: null, joined: false, uncertain: false}
+  ];
 }
 
 /**
@@ -351,83 +486,26 @@ async function create({
   if (isUnboundedSetup(transport, publication))
     throw Error('Staggered worker needs bounded TCP and native publication');
   const sdk = rpc.a.sdk;
-  await verifyCode(rpc);
-  await verifyCopy(rpc);
-  await verifyPreamble(rpc);
-  /** @type {Record<string, number>} */
-  const sync = {};
-  for (const name of SYNC_FUNCTIONS) {
-    await verify(rpc, sdk + SYNC[name].offset, SYNC[name].hex);
-    sync[name] = sdk + SYNC[name].offset;
-  }
-  const registration = MOVIE_EVENTS.registerClientEvents;
-  if (!hasRegistration(module, registration))
-    throw Error('The loaded movie module has no matching RegisterClientEvents');
-  await verify(rpc, module.base + registration.offset, registration.hex);
-
-  const inputBase = await allocate(rpc, WORKER_BYTES, {
-    failed: 'Staggered input worker allocation failed',
-    invalid: 'Invalid staggered input worker allocation'
-  });
-  const outputBase = await allocate(rpc, WORKER_BYTES, {
-    failed: 'Staggered output worker allocation failed',
-    invalid: 'Invalid staggered output worker allocation'
-  });
-  const control = await allocate(rpc, CONTROL_BYTES, {
-    failed: 'Staggered control allocation failed',
-    invalid: 'Invalid staggered control allocation'
-  });
-  const scratch = await allocate(rpc, transport.maxAccessUnit, {
-    failed: 'Staggered receive scratch allocation failed',
-    invalid: 'Invalid staggered receive scratch allocation'
-  });
+  const sync = await verifySetup(rpc, module);
+  const regions = await allocateRegions(rpc, transport);
+  const {control} = regions;
   const at = offset => control + offset;
-  await rpc.write(control, initialControl(control));
-  const initialized = [];
-  for (const [offset, signalled] of [
-    [inputPlan.CONTROL.decodeGate, 0],
-    [inputPlan.CONTROL.ignoredFetchGate, 0],
-    [outputPlan.CONTROL.fetchGate, 0],
-    [ACQUIRE_ACK, 1],
-    ...(gateOnReceive ? [[inputPlan.CONTROL.lengthGate, 1]] : [])
-  ]) {
-    await rpc.callAddress(sync.initializeLightEvent, [at(offset), signalled, AUTO_CLEAR, 0], SHORT);
-    initialized.push({offset, finalize: sync.finalizeLightEvent});
-  }
-  await rpc.callAddress(sync.initializeEvent, [at(OUTPUT_EVENT), 0, AUTO_CLEAR, 0], SHORT);
-  initialized.push({offset: OUTPUT_EVENT, finalize: sync.finalizeEvent});
-
-  const input = inputPlan.plan({
+  const initialized = await initializeControl(rpc, sync, control, gateOnReceive);
+  /** @type {WorkerState[]} */
+  const workers = planWorkers({
     sdk,
-    base: inputBase,
-    control,
-    mapped: publication.mapped,
-    scratch,
-    fd: transport.fd,
-    recvFunction: transport.recvFunction,
-    functions,
-    decoder,
-    acquireAck: at(ACQUIRE_ACK),
-    ...(gateOnReceive && {lengthGate: at(inputPlan.CONTROL.lengthGate)})
-  });
-  const video = outputPlan.plan({
-    sdk,
-    base: outputBase,
-    control,
-    mapped: publication.mapped,
-    event: at(OUTPUT_EVENT),
-    acquireAck: at(ACQUIRE_ACK),
+    regions,
+    transport,
+    publication,
     functions,
     decoder,
     output,
-    format
+    format,
+    gateOnReceive
   });
-  /** @type {WorkerState[]} */
-  const workers = [
-    {name: 'input', base: inputBase, plan: input, thread: null, joined: false, uncertain: false},
-    {name: 'output', base: outputBase, plan: video, thread: null, joined: false, uncertain: false}
-  ];
   const [inputWorker, outputWorker] = workers;
+  const input = inputWorker.plan;
+  const video = outputWorker.plan;
   let started = false;
   let stopped = false;
   let closed = false;
@@ -547,7 +625,7 @@ async function create({
     /** Hands the decoder the client events, so outputs signal the output event. */
     async register() {
       const {result} = await rpc.callAddress(
-        module.base + registration.offset,
+        module.base + MOVIE_EVENTS.registerClientEvents.offset,
         [decoder, at(DECODER_EVENTS)],
         SHORT
       );
