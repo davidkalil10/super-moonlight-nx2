@@ -1,0 +1,373 @@
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const definitions = require('../../../hbl-moonlight/sdk/native/movie-functions.json');
+const registration =
+  require('../../../hbl-moonlight/sdk/native/movie-event-functions.json').registerClientEvents;
+const {CODE} = require('../../../hbl-platform/sdk/native/thread.js');
+const ring = require('../../../hbl-moonlight/tools/moonlight/ring.js');
+const status = require('../../../hbl-moonlight/host/stream/staggered-status.js');
+const inputPlan = require('../../../hbl-moonlight/host/stream/staggered-input-plan.js');
+const outputPlan = require('../../../hbl-moonlight/host/stream/staggered-output-plan.js');
+const SYNC = require('../../../hbl-platform/sdk/native/os-sync-functions.json');
+const {
+  ACQUIRE_ACK,
+  create
+} = require('../../../hbl-moonlight/host/stream/staggered-worker.js');
+
+function fixture() {
+  const sdk = 0x40000000;
+  const moduleBase = 0x50000000;
+  const mapped = 0x80000000;
+  const regions = [{base: mapped, bytes: Buffer.alloc(ring.CONTROL_BYTES)}];
+  const calls = [];
+  let allocations = 0;
+  const regionAt = address =>
+    regions.find(region => address >= region.base && address < region.base + region.bytes.length);
+  const read = (address, length) => {
+    const region = regionAt(address);
+    assert.ok(region, `unmapped read at ${address.toString(16)}`);
+    return Buffer.from(region.bytes.subarray(address - region.base, address - region.base + length));
+  };
+  const write = (address, bytes) => {
+    const region = regionAt(address);
+    assert.ok(region, `unmapped write at ${address.toString(16)}`);
+    bytes.copy(region.bytes, address - region.base);
+  };
+  const rpc = {
+    a: {sdk},
+    output: 0x20000000,
+    async request() {
+      return {verified: true};
+    },
+    async call(_offset, args) {
+      const base = 0x60000000 + allocations++ * 0x1000000;
+      regions.push({base, bytes: Buffer.alloc(args[2])});
+      const output = Buffer.alloc(8);
+      output.writeBigUInt64LE(BigInt(base));
+      return {result: 0n, output};
+    },
+    async callAddress(address, args) {
+      calls.push({address, args});
+      if (address === sdk + CODE.create.offset) {
+        const thread = Buffer.alloc(8);
+        thread.writeBigUInt64LE(BigInt(0x1234 + calls.length));
+        write(args[0], thread);
+      }
+      if (address === sdk + CODE.tryWait.offset) return {result: 1n};
+      if (address === moduleBase + definitions.bufferData.offset)
+        return {result: 0x7900000000n};
+      if (address === moduleBase + definitions.bufferCapacity.offset)
+        return {result: 0x100000n};
+      if (address === moduleBase + definitions.acquireInput.offset) {
+        const index = Buffer.alloc(4);
+        index.writeInt32LE(1);
+        write(args[1], index);
+      }
+      return {result: 0n};
+    },
+    read: async (address, length) => read(address, length),
+    write: async (address, bytes) => write(address, bytes),
+    async writeAndCall(address, bytes, target, args) {
+      write(address, bytes);
+      calls.push({address: target, args, combined: true});
+      return {result: 0n};
+    }
+  };
+  const transport = {
+    fd: 12,
+    maxAccessUnit: 0x100000,
+    recvFunction: sdk + 0x1234,
+    aborted: false,
+    async send() {},
+    abort() {
+      this.aborted = true;
+    }
+  };
+  const module = {
+    base: moduleBase,
+    symbols: [{
+      name: registration.symbol,
+      section: '.text',
+      offset: registration.offset,
+      size: registration.size
+    }]
+  };
+  const functions = Object.fromEntries(
+    Object.entries(definitions).map(([name, definition]) => [name, moduleBase + definition.offset])
+  );
+  const publication = {mapped, color: 1};
+  return {rpc, transport, module, functions, publication, read, write, calls, sdk};
+}
+
+async function started(fixture) {
+  const worker = await create({
+    rpc: fixture.rpc,
+    module: fixture.module,
+    functions: fixture.functions,
+    decoder: 0x70000000,
+    output: 0x70000300,
+    format: 0x70000180,
+    transport: fixture.transport,
+    publication: fixture.publication
+  });
+  await worker.register();
+  await worker.start({sequence: 1, length: 40000, pts: 1n});
+  return worker;
+}
+
+test('staggered workers install two alternating frames and can stop both waits', async () => {
+  const f = fixture();
+  const worker = await started(f);
+  assert.equal(worker.diagnostics.started, true);
+  assert.equal(worker.diagnostics.decodeGateSignals, 0);
+  await worker.stopInput();
+  assert.equal(f.transport.aborted, true);
+  await worker.stopOutput();
+  assert.deepEqual(worker.diagnostics.joined, [true, true]);
+  await worker.stop();
+  await worker.finalize();
+  assert.equal(worker.diagnostics.retained, false);
+  const control = 0x62000000;
+  const inputExit = 0x60000000 + 0x3f0000;
+  const outputExit = 0x61000000 + 0x3f0000;
+  for (const offset of [
+    ...inputPlan.CONTROL.sendDispatch,
+    ...inputPlan.CONTROL.receiveDispatch
+  ])
+    assert.equal(f.read(control + offset, 8).readBigUInt64LE(), BigInt(inputExit));
+  for (const offset of [
+    ...outputPlan.CONTROL.fetchDispatch,
+    ...outputPlan.CONTROL.acquireDispatch
+  ])
+    assert.equal(f.read(control + offset, 8).readBigUInt64LE(), BigInt(outputExit));
+});
+
+test('short receive keeps staggered decode and fetch gates closed', async () => {
+  const f = fixture();
+  const worker = await started(f);
+  const receive = Buffer.alloc(12);
+  receive.writeBigInt64LE(39999n);
+  receive.writeUInt32LE(1, 8);
+  f.write(f.publication.mapped + status.STATUS.receive, receive);
+  const before = f.calls.filter(call => call.combined).length;
+  await assert.rejects(
+    () => worker.openGates({
+      snapshot: status.parse(f.read(
+        f.publication.mapped + status.READ_START,
+        status.READ_END - status.READ_START
+      )),
+      expected: {receive: {sequence: 1, bytes: 40000}},
+      inputSlot: {index: 0, address: 0x7900000000, capacity: 0x100000},
+      current: {sequence: 1, length: 40000, pts: 1n},
+      next: {sequence: 2, length: 40000, pts: 2n}
+    }),
+    /Short receive/
+  );
+  assert.equal(f.calls.filter(call => call.combined).length, before);
+  assert.equal(worker.diagnostics.decodeGateSignals, 0);
+  await worker.stop();
+  await worker.finalize();
+});
+
+test('a checked bootstrap receive opens exactly one combined native gate write', async () => {
+  const f = fixture();
+  const worker = await started(f);
+  const receive = Buffer.alloc(12);
+  receive.writeBigInt64LE(40000n);
+  receive.writeUInt32LE(1, 8);
+  f.write(f.publication.mapped + status.STATUS.receive, receive);
+  await worker.openGates({
+    snapshot: await worker.readStatus(),
+    expected: {receive: {sequence: 1, bytes: 40000}},
+    inputSlot: {index: 0, address: 0x7900000000, capacity: 0x100000},
+    current: {sequence: 1, length: 40000, pts: 1n},
+    next: {sequence: 2, length: 40000, pts: 2n}
+  });
+  const combined = f.calls.filter(call => call.combined);
+  assert.equal(combined.length, 1);
+  assert.equal(combined[0].args[0], 0x62000000 + inputPlan.CONTROL.decodeGate);
+  assert.equal(worker.diagnostics.decodeGateSignals, 1);
+  await worker.stop();
+  await worker.finalize();
+});
+
+test('stopping a held output releases the checked decoder slot once', async () => {
+  const f = fixture();
+  const worker = await started(f);
+  const acquired = Buffer.alloc(28);
+  acquired.writeInt32LE(2, 8);
+  acquired.writeBigUInt64LE(3n, 16);
+  acquired.writeUInt32LE(3, 24);
+  f.write(f.publication.mapped + status.STATUS.acquire, acquired);
+  await worker.stop();
+  await worker.stop();
+  const releases = f.calls.filter(call => call.address === f.functions.releaseOutput);
+  assert.equal(releases.length, 1);
+  assert.equal(releases[0].args[1], 2);
+  await worker.finalize();
+});
+
+test('input buffers are cached and a missing slot can be reacquired exceptionally', async () => {
+  const f = fixture();
+  const worker = await started(f);
+  assert.deepEqual(await worker.inputSlot(1), {
+    index: 1,
+    address: 0x7900000000,
+    capacity: 0x100000
+  });
+  await worker.inputSlot(1);
+  assert.equal(f.calls.filter(call => call.address === f.functions.getInput).length, 1);
+  const pending = Buffer.alloc(16);
+  pending.writeBigUInt64LE(0x100en);
+  pending.writeInt32LE(-1, 8);
+  pending.writeUInt32LE(1, 12);
+  f.write(f.publication.mapped + status.STATUS.input + 8, pending);
+  assert.deepEqual(await worker.retryInputSlot(1), {status: 0, index: 1});
+  assert.equal(
+    f.read(f.publication.mapped + status.STATUS.input + 8, 8).readBigUInt64LE(),
+    0n
+  );
+  await worker.stop();
+  await worker.finalize();
+  assert.equal(f.calls.filter(call => call.address === f.functions.bufferDestroy).length, 1);
+});
+
+test('tail output drain opens only a checked fetch gate', async () => {
+  const f = fixture();
+  const worker = await started(f);
+  const acquired = Buffer.alloc(28);
+  acquired.writeInt32LE(2, 8);
+  acquired.writeBigUInt64LE(1n, 16);
+  acquired.writeUInt32LE(1, 24);
+  f.write(f.publication.mapped + status.STATUS.acquire, acquired);
+  const destination = {
+    index: 0,
+    address: f.publication.mapped + ring.frameOffset(0),
+    bytes: ring.FRAME_BYTES,
+    sequence: 2,
+    color: 1
+  };
+  const frame = {width: 1920, height: 1080, stride: 1920, sliceHeight: 1088};
+  const wrong = await worker.readStatus();
+  wrong.acquire.pts = 2n;
+  await assert.rejects(
+    () => worker.drainOutput({
+      snapshot: wrong,
+      expected: {acquire: {sequence: 1, pts: 1n}},
+      destination,
+      frame
+    }),
+    /output status/
+  );
+  assert.equal(f.calls.filter(call => call.combined).length, 0);
+  await worker.drainOutput({
+    snapshot: await worker.readStatus(),
+    expected: {acquire: {sequence: 1, pts: 1n}},
+    destination,
+    frame
+  });
+  assert.equal(f.calls.filter(call => call.combined).length, 1);
+  const control = 0x62000000;
+  assert.equal(f.read(control + outputPlan.CONTROL.descriptors[0], 4).readUInt32LE(), 1);
+  assert.equal(f.read(control + outputPlan.CONTROL.descriptors[1], 4).readUInt32LE(), 2);
+  assert.equal(f.read(control + outputPlan.CONTROL.descriptors[1] + 8, 8).readBigUInt64LE(), 0n);
+  assert.equal(worker.diagnostics.decodeGateSignals, 0);
+  await worker.stop();
+  await worker.finalize();
+});
+
+test('the acquisition acknowledgement starts signalled and stop wakes it behind the exit', async () => {
+  const f = fixture();
+  const writes = [];
+  const write = f.rpc.write;
+  f.rpc.write = async (address, bytes) => {
+    writes.push({address, at: f.calls.length});
+    return write(address, bytes);
+  };
+  const control = 0x62000000;
+  const ack = control + ACQUIRE_ACK;
+  const worker = await started(f);
+  const sdk = f.sdk;
+  const init = f.calls.find(
+    call => call.address === sdk + SYNC.initializeLightEvent.offset && call.args[0] === ack
+  );
+  assert.deepEqual(init.args, [ack, 1, 1, 0]);
+  for (const slot of inputPlan.CONTROL.descriptors)
+    assert.equal(
+      f.read(control + slot + inputPlan.DESCRIPTOR.fetchGate, 8).readBigUInt64LE(),
+      BigInt(control + inputPlan.CONTROL.ignoredFetchGate)
+    );
+  const before = f.calls.length;
+  await worker.stopInput();
+  const signals = f.calls
+    .map((call, index) => ({...call, index}))
+    .filter(call => call.index >= before && call.address === sdk + SYNC.signalLightEvent.offset);
+  assert.deepEqual(
+    signals.map(call => call.args[0]),
+    [control + inputPlan.CONTROL.decodeGate, ack]
+  );
+  const exits = writes.filter(
+    item =>
+      item.at >= before &&
+      [...inputPlan.CONTROL.sendDispatch, ...inputPlan.CONTROL.receiveDispatch].includes(
+        item.address - control
+      )
+  );
+  assert.equal(exits.length, 4);
+  assert.ok(exits.every(item => item.at <= signals[0].index));
+  await worker.stopOutput();
+  await worker.stop();
+  await worker.finalize();
+  const finalized = f.calls.filter(call => call.address === sdk + SYNC.finalizeLightEvent.offset);
+  assert.equal(finalized[0].args[0], ack);
+});
+
+test('a held fetch opens decode N with the ignored fetch gate in its descriptor', async () => {
+  const control = 0x62000000;
+  const fetchPointer = async holdFetch => {
+    const f = fixture();
+    const worker = await started(f);
+    const ringWord = (offset, size, value) => {
+      const bytes = Buffer.alloc(size);
+      if (size === 8) bytes.writeBigInt64LE(BigInt(value));
+      else bytes.writeInt32LE(value);
+      f.write(f.publication.mapped + offset, bytes);
+    };
+    ringWord(status.STATUS.receive, 8, 40000);
+    ringWord(status.STATUS.receive + 8, 4, 3);
+    ringWord(status.STATUS.input + 16, 4, 1);
+    ringWord(status.STATUS.input + 20, 4, 2);
+    ringWord(status.STATUS.acquire + 8, 4, 0);
+    ringWord(status.STATUS.acquire + 16, 8, 1);
+    ringWord(status.STATUS.acquire + 24, 4, 1);
+    await worker.openGates({
+      holdFetch,
+      snapshot: await worker.readStatus(),
+      expected: {
+        receive: {sequence: 3, bytes: 40000},
+        input: {sequence: 2},
+        acquire: {sequence: 1, pts: 1n}
+      },
+      inputSlot: {index: 1, address: 0x7900000000, capacity: 0x100000},
+      current: {sequence: 3, length: 40000, pts: 3n},
+      next: {sequence: 4, length: 40000, pts: 4n},
+      destination: {
+        index: 1,
+        address: f.publication.mapped + ring.frameOffset(1),
+        bytes: ring.FRAME_BYTES,
+        sequence: 2,
+        color: 1
+      },
+      frame: {width: 1920, height: 1080, stride: 1920, sliceHeight: 1088}
+    });
+    assert.equal(worker.diagnostics.decodeGateSignals, 1);
+    const pointer = f
+      .read(control + inputPlan.CONTROL.descriptors[0] + inputPlan.DESCRIPTOR.fetchGate, 8)
+      .readBigUInt64LE();
+    await worker.stop();
+    await worker.finalize();
+    return pointer;
+  };
+  assert.equal(await fetchPointer(false), BigInt(control + outputPlan.CONTROL.fetchGate));
+  assert.equal(await fetchPointer(true), BigInt(control + inputPlan.CONTROL.ignoredFetchGate));
+});
