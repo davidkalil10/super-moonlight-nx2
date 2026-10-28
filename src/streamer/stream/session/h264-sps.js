@@ -61,7 +61,11 @@ function bitReader(bytes, what) {
   };
   const ue = () => {
     let zeros = 0;
-    while (!u(1)) if (++zeros > MAX_EXP_GOLOMB_ZEROS) throw Error(`Invalid H.264 ${what}`);
+    while (!u(1)) {
+      zeros++;
+      if (zeros > MAX_EXP_GOLOMB_ZEROS) throw Error(`Invalid H.264 ${what}`);
+    }
+
     return 2 ** zeros - 1 + u(zeros);
   };
   const se = () => {
@@ -105,7 +109,9 @@ function skipHrd(r) {
  * @param {ReturnType<typeof bitReader>} r
  */
 function readVui(r) {
-  if (r.flag() && r.u(8) === EXTENDED_SAR) r.u(32);
+  if (r.flag()) {
+    if (r.u(8) === EXTENDED_SAR) r.u(32);
+  }
   if (r.flag()) r.u(1);
   if (r.flag()) {
     r.u(4);
@@ -116,12 +122,14 @@ function readVui(r) {
     r.ue();
   }
   if (r.flag()) r.u(65);
+
   const nalHrd = r.flag();
   if (nalHrd) skipHrd(r);
   const vclHrd = r.flag();
   if (vclHrd) skipHrd(r);
   if (nalHrd || vclHrd) r.u(1);
   r.u(1);
+
   if (!r.flag()) return {bitstreamRestriction: false};
   r.u(1);
   for (let field = 0; field < 4; field++) r.ue();
@@ -157,16 +165,21 @@ function parseSps(nal) {
   const constraintFlags = r.u(8);
   const levelIdc = r.u(8);
   r.ue();
+
   if (HIGH_PROFILES.includes(profileIdc)) {
     const chroma = r.ue();
     if (chroma === CHROMA_444) r.u(1);
     r.ue();
     r.ue();
     r.u(1);
-    if (r.flag())
-      for (let list = 0; list < (chroma === CHROMA_444 ? 12 : 8); list++)
+    const lists = chroma === CHROMA_444 ? 12 : 8;
+    if (r.flag()) {
+      for (let list = 0; list < lists; list++) {
         if (r.flag()) skipScalingList(r, list < 6 ? 16 : 64);
+      }
+    }
   }
+
   r.ue();
   const pocType = r.ue();
   if (pocType === 0) r.ue();
@@ -177,6 +190,7 @@ function parseSps(nal) {
     const cycle = r.ue();
     for (let index = 0; index < cycle; index++) r.se();
   }
+
   const maxNumRefFrames = r.ue();
   r.u(1);
   r.ue();
@@ -184,6 +198,7 @@ function parseSps(nal) {
   if (!r.flag()) r.u(1);
   r.u(1);
   if (r.flag()) for (let edge = 0; edge < 4; edge++) r.ue();
+
   const vui = r.flag();
   const restriction = vui ? readVui(r) : {bitstreamRestriction: false};
   return {
@@ -209,7 +224,9 @@ function parseSps(nal) {
 function reorderOf(sps) {
   if (sps.maxNumReorderFrames) return `max_num_reorder_frames ${sps.maxNumReorderFrames}`;
   if (sps.bitstreamRestriction || sps.pocType === POC_DECODE_ORDER) return null;
-  if (sps.constraintFlags & CONSTRAINT_SET3 && INTRA_PROFILES.includes(sps.profileIdc)) return null;
+
+  const constraintSet3 = Boolean(sps.constraintFlags & CONSTRAINT_SET3);
+  if (constraintSet3 && INTRA_PROFILES.includes(sps.profileIdc)) return null;
   return `pic_order_cnt_type ${sps.pocType} without bitstream_restriction`;
 }
 

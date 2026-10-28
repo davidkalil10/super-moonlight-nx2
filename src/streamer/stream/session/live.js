@@ -1,27 +1,6 @@
 /**
- * Live sender: streams a Moonlight host into the running Moonlight app through the console's
- * native H.264 decoder (native-h264.js).
- *
- * Usage: node src/streamer/stream/session/live.js [runs/launcher-XXXX] --moonlight HOST APP
- *   [--bitrate KBPS|auto] [--codec h264] [--size 1920x1080] [--fps 60]
- *   [--duration S] [--warmup S] [--expect fps=30,dropped=0,idr=0] [--queue 8]
- *   [--input-hz 60] [--audio-frames 960]
- *   [--staggered] (no-op: the staggered workers are the only route)
- *   [--present-hz 60|120] [--skip-backlog 2|off] [--skip-rule backlog|vsync]
- *   [--trim-backlog-ms N] (backlog rule: skip one output once the unit in hand is N ms old
- *     at 3 gates in a row)
- *   [--gate-on-receive] (prime and gate each unit as it arrives instead of on the next one)
- *   [--gate-queue] (with --gate-on-receive: queue each gate instead of awaiting it in push)
- *   [--output-lag 0|1|2] (fetch each output 0, 1 or 2 gates after its decode opened; 2 by
- *     default, 0 only at 60 Hz without --gate-on-receive or --gate-queue)
- *   [--decode-wait] (with --skip-rule vsync) [--receive-wait] [--avoid-window BEFORE-AFTER]
- *   [--socket-audio | --socket-audio-tone] (PCM or a 500 Hz test tone over native TCP to a
- *     console worker)
- *
- * --moonlight runs src/streamer/protocol's hbmoonlight (path from $HBMOONLIGHT) and, unless
- * --no-input / --no-audio, also feeds controller+touch into its stdin (input-feeder.js) and
- * plays its audio on the console (audio-stream.js, or socket-audio-source.js with
- * --socket-audio).
+ * Live sender: streams a Moonlight host into the running Moonlight app through native-h264.js.
+ * Usage: node src/streamer/stream/session/live.js [runs/launcher-XXXX] --moonlight HOST APP [flags]
  */
 import path from 'node:path';
 import * as ring from '../../shared/ring.js';

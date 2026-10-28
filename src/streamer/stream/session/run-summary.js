@@ -1,9 +1,5 @@
 /**
- * Scores a native H.264 live run from its one-second stats rows: `summarize` averages the
- * steady rows after a warmup, `parseExpect` reads the `--expect` limits and `verdict` checks
- * the summary against them. Dropped frames and IDR requests fail a run unless `--expect`
- * allows some. Backlog trims are intended skips: they are counted apart from dropped frames
- * and only fail a run through an explicit `--expect trimmed=N`.
+ * Scores a native H.264 live run from its one-second stats rows against the `--expect` limits.
  */
 
 /** Steady-state rows start after this many seconds by default. */
@@ -20,7 +16,7 @@ const LIMITS = {
   requests: (summary, value) => summary.requestsPerFrame <= value,
   trimmed: (summary, value) => (summary.trimmed ?? 0) <= value
 };
-/** Limits that apply when `--expect` leaves them out. */
+/** Limits that apply when `--expect` leaves them out; trims only fail through `trimmed=N`. */
 const DEFAULT_LIMITS = {dropped: 0, idr: 0};
 
 /**
@@ -34,11 +30,18 @@ function parseExpect(text) {
   const expect = {};
   for (const part of text.split(',')) {
     const [name, value] = part.split('=');
-    if (!(name in LIMITS) || value === undefined || value === '' || !Number.isFinite(+value))
+    if (!isLimit(name, value))
       throw Error('--expect takes ' + Object.keys(LIMITS).join('|') + '=<number>, comma separated');
     expect[name] = +value;
   }
   return expect;
+}
+
+/** Whether `name=value` names a known limit with a finite number. */
+function isLimit(name, value) {
+  if (!(name in LIMITS)) return false;
+  if (value === undefined || value === '') return false;
+  return Number.isFinite(+value);
 }
 
 /**
@@ -70,11 +73,13 @@ function auTotals(steady) {
   const timed = steady.filter(row => row.au?.units);
   if (!timed.length) return null;
   const total = weight => timed.reduce((sum, row) => sum + (row.au[weight] ?? 0), 0);
-  const mean = (key, weight) =>
-    +(
-      timed.reduce((sum, row) => sum + (row.au[key] ?? 0) * (row.au[weight] ?? 0), 0) /
-      (total(weight) || 1)
-    ).toFixed(1);
+  const mean = (key, weight) => {
+    const weighted = timed.reduce(
+      (sum, row) => sum + (row.au[key] ?? 0) * (row.au[weight] ?? 0),
+      0
+    );
+    return +(weighted / (total(weight) || 1)).toFixed(1);
+  };
   return {
     units: total('units'),
     gated: total('gated'),

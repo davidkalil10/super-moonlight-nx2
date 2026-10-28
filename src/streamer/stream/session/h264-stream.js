@@ -1,11 +1,6 @@
 /**
  * Joins the helper's Annex-B pipe with its access-unit metadata without blocking either pipe.
- *
- * The helper writes raw H.264 to one pipe and announces each access unit (sequence, size,
- * keyframe flag, timestamps) on a separate metadata channel. AccessUnits cuts the byte stream
- * into units by those sizes, with bounded buffering: by default it pauses the pipe when the
- * queue is full; with onBacklog it instead drops queued units and skips ahead to the next
- * keyframe.
+ * A full queue pauses the pipe, or with onBacklog drops queued units up to the next keyframe.
  */
 
 import {isBSlice, sliceType} from './h264-sps.js';
@@ -30,7 +25,9 @@ const BUFFERED_UNITS = 2;
  */
 function startCodeLength(bytes, at) {
   if (bytes[at] || bytes[at + 1]) return 0;
-  return bytes[at + 2] === 1 ? 3 : bytes[at + 2] === 0 && bytes[at + 3] === 1 ? 4 : 0;
+  if (bytes[at + 2] === 1) return 3;
+  if (bytes[at + 2] === 0 && bytes[at + 3] === 1) return 4;
+  return 0;
 }
 
 /**
@@ -86,15 +83,14 @@ function isNonNegativeSafeInteger(value) {
 
 /** Whether an 'au' metadata record is well formed for units of at most maxUnitBytes. */
 function isValidRecord(record, maxUnitBytes) {
-  return (
-    isNonNegativeSafeInteger(record.seq) &&
-    isNonNegativeSafeInteger(record.frame) &&
-    Number.isSafeInteger(record.bytes) &&
-    record.bytes >= 1 &&
-    record.bytes <= maxUnitBytes &&
-    typeof record.keyframe === 'boolean' &&
-    isNonNegativeSafeInteger(record.pts)
-  );
+  if (!isNonNegativeSafeInteger(record.seq) || !isNonNegativeSafeInteger(record.frame))
+    return false;
+
+  const sized =
+    Number.isSafeInteger(record.bytes) && record.bytes >= 1 && record.bytes <= maxUnitBytes;
+  if (!sized) return false;
+
+  return typeof record.keyframe === 'boolean' && isNonNegativeSafeInteger(record.pts);
 }
 
 /**
@@ -132,6 +128,7 @@ class AccessUnits {
       maxQueuedUnits > MAX_QUEUED_UNITS_LIMIT
     )
       throw Error('Invalid access-unit queue bound');
+
     this.stream = stream;
     this.maxUnitBytes = maxUnitBytes;
     this.maxQueuedUnits = maxQueuedUnits;
@@ -150,6 +147,7 @@ class AccessUnits {
     this.error = null;
     this.waiter = null;
     this.closed = false;
+
     this.onData = chunk => {
       if (this.error || this.closed) return;
       if (!Buffer.isBuffer(chunk)) return this.fail(Error('H.264 output must be a binary pipe'));
@@ -243,6 +241,7 @@ class AccessUnits {
         this.ready = [];
         this.dropping = true;
       }
+
       if (this.dropping) {
         if (!record.keyframe) {
           this.dropped++;
@@ -253,8 +252,10 @@ class AccessUnits {
       }
       this.ready.push(unit);
     }
+
     if (!this.onBacklog && this.ready.length >= this.maxQueuedUnits) this.stream.pause();
     else this.stream.resume();
+
     if (this.ended && this.metadataEnded && this.ready.length < this.maxQueuedUnits) {
       if (this.metadata.length || this.bytes)
         return this.fail(Error('Truncated H.264 access unit or missing metadata'));

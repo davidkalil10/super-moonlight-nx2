@@ -1,13 +1,5 @@
 /**
- * Native H.264 route: the helper's ordered access units are decoded on the console into
- * console-written NV12 surfaces.
- *
- * run() spawns the helper with its raw H.264 and PCM pipes, the input feeder and the audio
- * stream or the socket audio source. The first frames take the host-driven decoder path, which
- * is drained fully before the staggered workers take over the rest. A stats row goes out every
- * statsMs and the run record keeps manifest.json, events.jsonl, stats.jsonl and summary.json.
- * The stream stops on SIGINT/SIGTERM, --duration, Moonlight leaving the console or a console
- * that stops answering, and the summary scores the steady rows against --expect.
+ * Native H.264 route: the helper's access units are decoded on the console into NV12 surfaces.
  */
 import fs from 'node:fs/promises';
 import fsSync from 'node:fs';
@@ -32,10 +24,7 @@ import * as padAge from '../../input/pad-age.js';
 
 /** Shortest gap between two keyframe requests to Sunshine. */
 const IDR_COOLDOWN_MS = 100;
-/**
- * A backlog while the console is not answering is the console's, so asking Sunshine for a
- * keyframe cannot help; past CONSOLE_STALL_MS the stream reports the console and stops.
- */
+// Invariant 16.
 const IDR_QUIET_MS = 1000;
 const CONSOLE_STALL_MS = 5000;
 /** The host runs at present pace, so it needs room for a source burst (batch C2). */
@@ -141,7 +130,7 @@ function hiddenTiming(samples) {
   // The host leaves its processing time at 0 when it sends none, or for a repeated frame, so
   // hostMs counts its own units.
   const hosted = hidden.map(value => /** @type {any} */ (value).hostMs).filter(ms => ms > 0);
-  return {
+  const timing = {
     units: hidden.length,
     totalMs: spread('totalMs'),
     pipeMs: spread('pipeMs'),
@@ -149,13 +138,11 @@ function hiddenTiming(samples) {
     queueMs: spread('queueMs'),
     queued: spread('queued'),
     unread: spread('unread'),
-    writeMs: spread('writeMs'),
-    ...(hosted.length ? {hostMs: {units: hosted.length, ...meanMax(hosted)}} : {})
+    writeMs: spread('writeMs')
   };
+  if (hosted.length) timing.hostMs = {units: hosted.length, ...meanMax(hosted)};
+  return timing;
 }
-
-/** @param {ReturnType<typeof hiddenTiming>} hidden */
-const withHidden = hidden => (hidden ? {hidden} : {});
 
 /**
  * One stats row's receive-wait sleeps, and the fixed-latency estimate at its end.
@@ -220,9 +207,17 @@ const LINK_VOID = {bad: 0.1, weakOrBad: 0.5};
 function linkQuality(input) {
   if (!input.exchanges) return null;
   const inputMsPerExchange = Math.round((input.bridgeMs / input.exchanges) * 100) / 100;
-  const verdict =
-    inputMsPerExchange <= LINK_MS.ok ? 'ok' : inputMsPerExchange <= LINK_MS.weak ? 'weak' : 'bad';
-  return {inputMsPerExchange, verdict};
+  return {inputMsPerExchange, verdict: linkVerdict(inputMsPerExchange)};
+}
+
+/**
+ * @param {number} msPerExchange
+ * @returns {'ok' | 'weak' | 'bad'}
+ */
+function linkVerdict(msPerExchange) {
+  if (msPerExchange <= LINK_MS.ok) return 'ok';
+  if (msPerExchange <= LINK_MS.weak) return 'weak';
+  return 'bad';
 }
 
 /**
@@ -253,55 +248,84 @@ function linkSeconds(rows) {
   const seconds = {ok: 0, weak: 0, bad: 0};
   for (const row of rows) if (row.link) seconds[row.link.verdict]++;
   const total = seconds.ok + seconds.weak + seconds.bad;
-  const voided =
-    seconds.bad > LINK_VOID.bad * total || seconds.weak + seconds.bad > LINK_VOID.weakOrBad * total;
-  return {...seconds, verdict: total ? (voided ? 'bad' : 'ok') : null};
+  const tooBad = seconds.bad > LINK_VOID.bad * total;
+  const tooWeak = seconds.weak + seconds.bad > LINK_VOID.weakOrBad * total;
+
+  /** @type {'ok' | 'bad' | null} */
+  let verdict = null;
+  if (total) verdict = tooBad || tooWeak ? 'bad' : 'ok';
+  return {...seconds, verdict};
 }
 
 /** The range checks of the stream flags, in the order they are reported. */
 function checkFlags(args, flags) {
-  const {inputHz, presentHz, skipBacklog, skipRule, decodeWait, receiveWait, trimBacklogMs} = flags;
-  const {avoidWindow, gateOnReceive, outputLag, audioFrames, socketAudio, queue} = flags;
-  const {duration, warmup, gateQueue, surfaceCheck} = flags;
+  const {inputHz, presentHz} = flags;
   if (!Number.isInteger(inputHz) || inputHz < 10 || inputHz > 120)
     throw Error('--input-hz takes 10 to 120');
   if (presentHz !== 60 && presentHz !== 120) throw Error('--present-hz takes 60 or 120');
-  if (skipBacklog !== Infinity && !(Number.isInteger(skipBacklog) && skipBacklog >= 0))
+
+  checkSkipFlags(flags);
+  checkGateFlags(flags);
+  checkRunFlags(args, flags);
+}
+
+/** --skip-backlog, --skip-rule, --decode-wait and --trim-backlog-ms. */
+function checkSkipFlags({skipBacklog, skipRule, decodeWait, trimBacklogMs}) {
+  const skipCount = Number.isInteger(skipBacklog) && skipBacklog >= 0;
+  if (skipBacklog !== Infinity && !skipCount)
     throw Error('--skip-backlog takes a unit count or off');
   if (!['backlog', 'vsync'].includes(skipRule)) throw Error('--skip-rule takes backlog or vsync');
   if (skipRule === 'vsync' && skipBacklog === Infinity)
     throw Error('--skip-rule vsync needs a --skip-backlog unit count');
   if (decodeWait && skipRule !== 'vsync') throw Error('--decode-wait needs --skip-rule vsync');
-  if (trimBacklogMs !== null && !(trimBacklogMs > 0))
-    throw Error('--trim-backlog-ms takes a unit age in milliseconds');
-  if (trimBacklogMs !== null && skipRule === 'vsync')
-    throw Error('--trim-backlog-ms needs --skip-rule backlog');
-  if (trimBacklogMs !== null && skipBacklog < 1)
-    throw Error('--trim-backlog-ms needs --skip-backlog 1 or more');
+
+  if (trimBacklogMs === null) return;
+  if (!(trimBacklogMs > 0)) throw Error('--trim-backlog-ms takes a unit age in milliseconds');
+  if (skipRule === 'vsync') throw Error('--trim-backlog-ms needs --skip-rule backlog');
+  if (skipBacklog < 1) throw Error('--trim-backlog-ms needs --skip-backlog 1 or more');
+}
+
+/** --avoid-window, --gate-on-receive, --gate-queue and --output-lag; refusals as in CLAUDE.md. */
+function checkGateFlags(flags) {
+  const {decodeWait, receiveWait, avoidWindow, gateOnReceive, gateQueue, outputLag} = flags;
   if (avoidWindow && !(decodeWait || receiveWait))
     throw Error('--avoid-window needs --decode-wait or --receive-wait to predict the events');
-  if (gateOnReceive && presentHz === 120)
+  if (gateOnReceive && flags.presentHz === 120)
     throw Error('--gate-on-receive is untested at --present-hz 120');
   if (gateQueue && !gateOnReceive) throw Error('--gate-queue needs --gate-on-receive');
-  if (outputLag !== null && outputLag !== 0 && outputLag !== 1 && outputLag !== 2)
-    throw Error('--output-lag takes 0, 1 or 2');
-  if (outputLag === 0 && gateQueue) throw Error('--output-lag 0 is untested with --gate-queue');
-  if (outputLag === 0 && gateOnReceive)
-    throw Error('--output-lag 0 is untested with --gate-on-receive');
-  if (outputLag === 0 && presentHz !== 60)
-    throw Error('--output-lag 0 is untested at --present-hz 120');
+
+  const knownLag = outputLag === 0 || outputLag === 1 || outputLag === 2;
+  if (outputLag !== null && !knownLag) throw Error('--output-lag takes 0, 1 or 2');
+  if (outputLag !== 0) return;
+  if (gateQueue) throw Error('--output-lag 0 is untested with --gate-queue');
+  if (gateOnReceive) throw Error('--output-lag 0 is untested with --gate-on-receive');
+  if (flags.presentHz !== 60) throw Error('--output-lag 0 is untested at --present-hz 120');
+}
+
+/** --surface-check, --audio-frames, --queue, --duration, --warmup and --expect. */
+function checkRunFlags(args, {surfaceCheck, audioFrames, socketAudio, queue, duration, warmup}) {
   if (!Number.isInteger(surfaceCheck) || surfaceCheck < 0)
     throw Error('--surface-check takes a unit interval');
-  if (!Number.isInteger(audioFrames) || audioFrames < FRAME_STEP || audioFrames % FRAME_STEP)
-    throw Error('--audio-frames takes a multiple of 240');
+
+  const audioStep = Number.isInteger(audioFrames) && audioFrames >= FRAME_STEP;
+  if (!audioStep || audioFrames % FRAME_STEP) throw Error('--audio-frames takes a multiple of 240');
   if (socketAudio && audioFrames > SOCKET_AUDIO_FRAMES)
     throw Error('--audio-frames takes up to 3840 with --socket-audio');
+
   if (!Number.isInteger(queue) || queue < 1 || queue > 16)
     throw Error('--queue takes 1 to 16 units');
   if (duration !== null && !(duration > 0)) throw Error('--duration takes seconds');
   if (!Number.isInteger(warmup) || warmup < 0) throw Error('--warmup takes whole seconds');
-  if (args.includes('--expect') && !/^[a-z]/i.test(cli.option(args, '--expect') ?? ''))
+
+  if (!args.includes('--expect')) return;
+  if (!/^[a-z]/i.test(cli.option(args, '--expect') ?? ''))
     throw Error('--expect needs a value such as fps=30,dropped=0,idr=0');
+}
+
+/** Audio buffer frames without --audio-frames: 960 from launcher protocol 3 on. */
+function defaultAudioFrames(socketAudio, rpc) {
+  if (socketAudio) return 1920;
+  return rpc.a.protocol >= 3 ? 960 : 1920;
 }
 
 /** Reads the stream flags; throws on the first one that is missing or out of range. */
@@ -318,6 +342,7 @@ function parseOptions(args, rpc, width, height, fps) {
   if (inputPush && args.includes('--no-input'))
     throw Error('--input-push cannot be combined with --no-input');
   const skipRule = cli.option(args, '--skip-rule') ?? 'backlog';
+  const skipDefault = skipRule === 'vsync' ? 1 : 2;
   const flags = {
     host,
     app,
@@ -342,12 +367,8 @@ function parseOptions(args, rpc, width, height, fps) {
     skipBacklog:
       cli.option(args, '--skip-backlog') === 'off'
         ? Infinity
-        : cli.number(args, '--skip-backlog', skipRule === 'vsync' ? 1 : 2),
-    audioFrames: cli.number(
-      args,
-      '--audio-frames',
-      socketAudio ? 1920 : rpc.a.protocol >= 3 ? 960 : 1920
-    ),
+        : cli.number(args, '--skip-backlog', skipDefault),
+    audioFrames: cli.number(args, '--audio-frames', defaultAudioFrames(socketAudio, rpc)),
     input: !args.includes('--no-input')
   };
   checkFlags(args, flags);
@@ -412,6 +433,22 @@ async function writeManifest(output, session, revision) {
   );
 }
 
+/**
+ * The gate flags that are on, for the summary and the worker-start event.
+ * @param {{trimBacklogMs: number | null, gateOnReceive: boolean, gateQueue: boolean,
+ *   outputLag: number | null}} flags
+ * @returns {{trimBacklogMs?: number, gateOnReceive?: boolean, gateQueue?: boolean,
+ *   outputLag?: number}}
+ */
+function activeGateFlags({trimBacklogMs, gateOnReceive, gateQueue, outputLag}) {
+  const active = {};
+  if (trimBacklogMs !== null) active.trimBacklogMs = trimBacklogMs;
+  if (gateOnReceive) active.gateOnReceive = gateOnReceive;
+  if (gateQueue) active.gateQueue = gateQueue;
+  if (outputLag !== null) active.outputLag = outputLag;
+  return active;
+}
+
 /** The helper's stream command: raw H.264 on H264_FD and, with audio, PCM on AUDIO_FD. */
 function helperArgs(host, app, {width, height, fps, bitrate, audio}) {
   return [
@@ -444,9 +481,9 @@ function buildSummary(
   options,
   {rows, staggeredLive, tail, socketAudioReport, inputPushStop, stopReason, lagEnd, stream}
 ) {
-  const {presentHz, skipBacklog, skipRule, trimBacklogMs, gateOnReceive, outputLag} = options;
-  const {decodeWait, receiveWait, avoidWindow, queue, inputHz, audioFrames, audio} = options;
-  const {socketAudio, input, inputPush, warmup, expect, gateQueue} = options;
+  const {presentHz, skipBacklog, skipRule, decodeWait, receiveWait, avoidWindow} = options;
+  const {queue, inputHz, audioFrames, audio, socketAudio, input, inputPush, warmup, expect} =
+    options;
   const steadyRows = rows.slice(warmup);
   return {
     workerMode: 'staggered',
@@ -454,10 +491,7 @@ function buildSummary(
     presentHz,
     skipBacklog: skipBacklog === Infinity ? 'off' : skipBacklog,
     skipRule,
-    ...(trimBacklogMs !== null && {trimBacklogMs}),
-    ...(gateOnReceive && {gateOnReceive}),
-    ...(gateQueue && {gateQueue}),
-    ...(outputLag !== null && {outputLag}),
+    ...activeGateFlags(options),
     decodeWait,
     receiveWait,
     avoidWindow,
@@ -649,7 +683,8 @@ async function run({
 
   function stop(reason = 'cleanup') {
     if (stopped) return;
-    stopped = stopping = true;
+    stopped = true;
+    stopping = true;
     stopReason = reason;
     log({event: 'native-stop', reason});
     idrRequester.close();
@@ -661,7 +696,7 @@ async function run({
   }
 
   /**
-   * Ends a lag 0 run on a decoder timeout or a stream that can reorder; lag 1 is the advice.
+   * Ends a lag 0 run; invariants 4 and 17.
    * @param {{at: number, reason: string, recommendedLag: number}} fallback
    * @param {string} [reason]
    */
@@ -672,8 +707,7 @@ async function run({
   }
 
   /**
-   * The error that refuses lag 0 for a stream that can reorder: the decoder would hold an
-   * output the next gate waits for (h264-sps.js).
+   * The lag 0 refusal for a stream that can reorder; invariant 17.
    * @param {any} unit
    * @param {string} reorder
    */
@@ -686,8 +720,7 @@ async function run({
   }
 
   /**
-   * Reads and logs what the SPS says about reordering before it is configured; lag 0 refuses
-   * one that allows it or cannot be read.
+   * Reads and logs the SPS reorder before it is configured; invariant 17.
    * @param {any} unit
    */
   function checkSps(unit) {
@@ -709,7 +742,8 @@ async function run({
    * @param {any} unit
    */
   function checkSlices(unit) {
-    if (!stream.bSlices++) log({event: 'h264-b-slice', seq: unit.seq});
+    if (stream.bSlices === 0) log({event: 'h264-b-slice', seq: unit.seq});
+    stream.bSlices++;
     if (outputLag === 0) throw reorderRefusal(unit, 'B slice in unit ' + unit.seq);
   }
 
@@ -833,24 +867,29 @@ async function run({
       lines
         .on('line', line => {
           try {
-            const counts = JSON.parse(line);
-            if (counts.stopped !== undefined) {
-              inputPushStop = counts;
-              return;
-            }
-            inputBridge.exchanges += counts.exchanges;
-            inputBridge.bridgeMs += counts.bridgeMs;
-            if (counts.pad) inputPad.push(counts.pad);
-            if (counts.pushed === undefined) return;
-            pushCounts.pushed += counts.pushed;
-            pushCounts.dropped += counts.dropped;
-            pushCounts.gapMaxMs = Math.max(pushCounts.gapMaxMs, counts.gapMaxMs);
+            addFeederCounts(JSON.parse(line));
           } catch {}
         })
         .on('error', error => log({event: 'input-counts-error', message: error.message}));
     }
     inputFeeder = {child, done: Promise.all(done)};
     watchChild(child, 'Moonlight input feed');
+  }
+
+  /** One counts line of the input feeder: its stop report, or bridge, pad and push counts. */
+  function addFeederCounts(counts) {
+    if (counts.stopped !== undefined) {
+      inputPushStop = counts;
+      return;
+    }
+    inputBridge.exchanges += counts.exchanges;
+    inputBridge.bridgeMs += counts.bridgeMs;
+    if (counts.pad) inputPad.push(counts.pad);
+
+    if (counts.pushed === undefined) return;
+    pushCounts.pushed += counts.pushed;
+    pushCounts.dropped += counts.dropped;
+    pushCounts.gapMaxMs = Math.max(pushCounts.gapMaxMs, counts.gapMaxMs);
   }
 
   /**
@@ -861,20 +900,24 @@ async function run({
   async function awaitInputFeeder(errors) {
     if (!inputFeeder) return;
     let timer;
-    const late = new Promise(resolve => (timer = setTimeout(resolve, feederExitMs, false)));
+    const late = new Promise(resolve => {
+      timer = setTimeout(resolve, feederExitMs, false);
+    });
     const exited = await Promise.race([inputFeeder.done.then(() => true), late]);
     clearTimeout(timer);
     if (!exited) {
       inputFeeder.child.kill('SIGKILL');
       log({event: 'input-feeder-killed', afterMs: feederExitMs});
     }
+
     if (!inputPush) return;
-    if (!exited || !inputPushStop)
+    if (!exited || !inputPushStop) {
       inputPushStop = {
         stopped: false,
         retained: true,
         error: exited ? 'input feeder sent no stop report' : 'input feeder did not exit'
       };
+    }
     log({event: 'input-push-stop', ...inputPushStop});
     if (inputPushStop.retained)
       errors.push(Error('Input push worker retained for safety; restart SmileBASIC'));
@@ -938,27 +981,27 @@ async function run({
   };
 
   function statsRow() {
-    return {
-      codec: 'h264',
-      ...stats,
-      dropped: reader.dropped - dropped,
-      queued,
-      ...(staggeredLive ? {waiting: countsSince(staggeredLive.counts.waiting, waited)} : {}),
-      ...(staggeredLive?.counts.receive
-        ? {receive: receiveRow(staggeredLive.counts.receive, slept)}
-        : {}),
-      au: auTiming(auSamples),
-      ...withHidden(hiddenTiming(auSamples)),
-      ...(trimBacklogMs !== null ? {trimmed} : {}),
-      ...withInputStage(bridge.take(), inputBridge),
-      ...(inputPad.length ? {inputPad: padAge.merge(inputPad)} : {}),
-      link: linkQuality(inputBridge),
-      ...(inputPush ? {inputPush: pushCounts} : {}),
-      ...(surfaceCheck ? {surfaces: staggeredLive?.takeSurfaces() ?? []} : {}),
-      ...(soundSource ? {audio: audioCounters(soundSource.report())} : {}),
-      at: stage + '/' + (decoder?.step ?? '-'),
-      ms: Object.fromEntries(Object.entries(stageMs).map(([k, v]) => [k, Math.round(v)]))
-    };
+    /** @type {any} */
+    const row = {codec: 'h264', ...stats, dropped: reader.dropped - dropped, queued};
+    if (staggeredLive) row.waiting = countsSince(staggeredLive.counts.waiting, waited);
+    if (staggeredLive?.counts.receive)
+      row.receive = receiveRow(staggeredLive.counts.receive, slept);
+
+    row.au = auTiming(auSamples);
+    const hidden = hiddenTiming(auSamples);
+    if (hidden) row.hidden = hidden;
+    if (trimBacklogMs !== null) row.trimmed = trimmed;
+
+    Object.assign(row, withInputStage(bridge.take(), inputBridge));
+    if (inputPad.length) row.inputPad = padAge.merge(inputPad);
+    row.link = linkQuality(inputBridge);
+    if (inputPush) row.inputPush = pushCounts;
+    if (surfaceCheck) row.surfaces = staggeredLive?.takeSurfaces() ?? [];
+    if (soundSource) row.audio = audioCounters(soundSource.report());
+
+    row.at = stage + '/' + (decoder?.step ?? '-');
+    row.ms = Object.fromEntries(Object.entries(stageMs).map(([k, v]) => [k, Math.round(v)]));
+    return row;
   }
 
   function startRow() {
@@ -1031,10 +1074,7 @@ async function run({
     log({
       event: 'staggered-worker',
       started: true,
-      ...(trimBacklogMs !== null && {trimBacklogMs}),
-      ...(gateOnReceive && {gateOnReceive}),
-      ...(gateQueue && {gateQueue}),
-      ...(outputLag !== null && {outputLag}),
+      ...activeGateFlags(options),
       ...(stream.sps && {sps: stream.sps})
     });
   }
@@ -1045,10 +1085,10 @@ async function run({
     await decoder.submit(unit);
     stats.submitted++;
     outstanding++;
-    // Frames before the staggered workers take the host-driven path, which is
-    // drained fully so the workers start with no output owed.
+
+    // Drained fully so the workers start with no output owed.
     const drainUntil = Date.now() + DRAIN_MS;
-    for (let pull = true; pull || outstanding > 0; pull = false) {
+    do {
       enter('destination');
       const destination = await sink.destination();
       enter('receive');
@@ -1068,7 +1108,7 @@ async function run({
         await sink.wait();
         startWorkers();
       }
-    }
+    } while (outstanding > 0);
   }
 
   /** Socket audio report, written next to the run directory's other Moonlight records. */
@@ -1093,10 +1133,7 @@ async function run({
     if (socketAudioReport.retainedForSafety) errors.push(Error(socketAudioReport.error));
   }
 
-  /**
-   * Stops the workers, then closes the decoder and the sink; with a lost bridge or a failed
-   * worker stop the native objects are left alone instead.
-   */
+  /** Stops the workers, then closes the decoder and the sink; invariant 8. */
   async function releaseNative(errors) {
     let retained = Boolean(rpc.bridgeLost);
     if (staggeredLive && !retained) {
@@ -1106,14 +1143,17 @@ async function run({
         errors.push(error);
         retained = true;
       }
-      const dropped = staggeredLive.gateError;
-      if (dropped && dropped !== failed)
+
+      const gateError = staggeredLive.gateError;
+      if (gateError && gateError !== failed) {
         log({
           event: 'staggered-gate-dropped-error',
-          error: dropped.message,
-          ...(dropped.expected && {expected: dropped.expected, checked: dropped.checked})
+          error: gateError.message,
+          ...(gateError.expected && {expected: gateError.expected, checked: gateError.checked})
         });
+      }
     }
+
     if (retained) {
       transport?.abort?.();
       errors.push(Error('Native objects retained for safety; restart SmileBASIC'));
@@ -1166,16 +1206,22 @@ async function run({
   async function readyToDecode(unit) {
     const sets = scanUnit(unit.data);
     if (sets.bSlice) checkSlices(unit);
-    if (configured && ((sets.sps && !sets.sps.equals(sps)) || (sets.pps && !sets.pps.equals(pps))))
-      await resync(Error('H.264 parameter sets changed'));
+    if (configured && setsChanged(sets)) await resync(Error('H.264 parameter sets changed'));
     sps = sets.sps || sps;
     pps = sets.pps || pps;
     if (configured) return true;
+
     if (!unit.keyframe || !sps || !pps) return false;
     checkSps(unit);
     await decoder.configure(sps, pps, fps);
     configured = true;
     return true;
+  }
+
+  /** Whether a configured stream's unit carries a different SPS or PPS. */
+  function setsChanged(sets) {
+    if (sets.sps && !sets.sps.equals(sps)) return true;
+    return Boolean(sets.pps && !sets.pps.equals(pps));
   }
 
   /** Hands a unit to the running staggered workers, timing it into the row's samples. */
@@ -1238,29 +1284,35 @@ async function run({
       } finally {
         pairing = false;
       }
-    } else tail = {drained: 0, skipped: stopReason};
+    } else {
+      tail = {drained: 0, skipped: stopReason};
+    }
     log({event: 'staggered-tail', ...tail});
   }
 
   async function streamUnits() {
-    for await (const unit of reader) if (await feedUnit(unit)) break;
+    for await (const unit of reader) {
+      if (await feedUnit(unit)) break;
+    }
     if (staggeredLive?.pending) await finishTail();
   }
 
   /** Logs a failed stream, with the workers' snapshot while the bridge still answers. */
   async function logFailure(error) {
-    if (staggeredLive?.exists && !rpc.bridgeLost)
+    if (staggeredLive?.exists && !rpc.bridgeLost) {
+      const snapshot = await staggeredLive
+        .snapshot()
+        .catch(snapshotError => ({error: snapshotError.message}));
       log({
         event: 'staggered-snapshot',
-        snapshot: await staggeredLive
-          .snapshot()
-          .catch(snapshotError => ({error: snapshotError.message})),
+        snapshot,
         ...(error.expected && {
           expected: error.expected,
           checked: error.checked,
           previous: error.previous
         })
       });
+    }
     log({
       event: 'native-error',
       message: error.message,
