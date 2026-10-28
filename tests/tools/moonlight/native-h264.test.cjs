@@ -1308,6 +1308,38 @@ test('a stop cancels nothing while a queued gate still runs', {timeout: 5000}, a
   assert.deepEqual(seen, [false, true]);
 });
 
+test('a queued gate that runs after its push still times its unit', {timeout: 5000}, async () => {
+  const f = await fixture({units: pairedUnits(6)});
+  const fake = staggeredFake(f.events)();
+  let late = null;
+  f.options.createStaggered = () =>
+    Object.create(fake, {
+      push: {
+        // Each gate runs at the next push, a stats row after its own push returned.
+        async value(unit, hooks) {
+          await new Promise(resolve => setTimeout(resolve, 15));
+          late?.hooks.onGate(late.arrivedAt + 20);
+          late = {hooks, arrivedAt: unit.arrivedAt};
+          return fake.push(unit, hooks);
+        }
+      },
+      queued: {get: () => (late ? 1 : 0)}
+    });
+  f.options.now = () => 1000;
+  f.options.statsMs = 10;
+  f.options.args.push('--staggered', '--gate-on-receive', '--gate-queue', '--warmup', '0');
+  await exercise(f, async () => {
+    const summary = await run(f.options);
+    const rows = (await fs.readFile(path.join(f.directory, 'logs', 'stats.jsonl'), 'utf8'))
+      .trim()
+      .split('\n')
+      .map(JSON.parse);
+    for (const row of rows) assert.equal(row.au.gated, row.au.units, 'no row books a unit ungated');
+    assert.ok(rows.reduce((sum, row) => sum + row.au.gated, 0) >= 2);
+    assert.equal(summary.au.gateAgeMs, 20);
+  });
+});
+
 test('a gate error that stop dropped is logged', {timeout: 5000}, async () => {
   const f = await fixture({units: pairedUnits(4)});
   const fake = staggeredFake(f.events);
