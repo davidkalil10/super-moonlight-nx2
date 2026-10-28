@@ -178,7 +178,7 @@ async function run({
   let inputBridge = {exchanges: 0, bridgeMs: 0};
   /** @type {import('../../input/pad-age.js').PadRow[]} */
   let inputPad = [];
-  let pushCounts = {pushed: 0, dropped: 0, gapMaxMs: 0};
+  let pushCounts = {pushed: 0, dropped: 0, gapMaxMs: 0, applied: 0, changes: 0};
   let trimmed = 0;
   let auSamples = [];
   const stats = freshStats();
@@ -369,6 +369,8 @@ async function run({
     pushCounts.pushed += counts.pushed;
     pushCounts.dropped += counts.dropped;
     pushCounts.gapMaxMs = Math.max(pushCounts.gapMaxMs, counts.gapMaxMs);
+    pushCounts.applied += counts.applied;
+    pushCounts.changes += counts.changes;
   }
 
   /** Closes this decoder generation and opens the next, unless resyncs come too often. */
@@ -434,7 +436,7 @@ async function run({
     stageMs = {};
     inputBridge = {exchanges: 0, bridgeMs: 0};
     inputPad = [];
-    pushCounts = {pushed: 0, dropped: 0, gapMaxMs: 0};
+    pushCounts = {pushed: 0, dropped: 0, gapMaxMs: 0, applied: 0, changes: 0};
     auSamples = [];
     trimmed = 0;
     dropped = procs.reader.dropped;

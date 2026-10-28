@@ -205,6 +205,16 @@ function readStorage(directory) {
 }
 
 /**
+ * Push counts since the last take.
+ * @typedef {object} PushCounts
+ * @property {number} pushed records that arrived
+ * @property {number} dropped records a backlog burst dropped
+ * @property {number} gapMaxMs the longest gap between arrivals
+ * @property {number} applied records that stepped the app frame count outside the overlay
+ * @property {number} changes the controller and touch lines those sent
+ */
+
+/**
  * The push mode reader: records arrive whole or split and are applied in order. A repeated
  * STATE.frames is a launcher frame already seen (the push outruns the pad copy) and only feeds
  * the overlay gate; a count going back means a new launcher session. Not frameIndex: it stays
@@ -239,7 +249,7 @@ function createPushReader({
   let sawMagic = false;
   let recordBytes = 0;
   let pending = Buffer.alloc(0);
-  let counts = {pushed: 0, dropped: 0, gapMaxMs: 0};
+  let counts = {pushed: 0, dropped: 0, gapMaxMs: 0, applied: 0, changes: 0};
 
   const liftTouches = () => {
     const ups = flush(tracker);
@@ -271,9 +281,11 @@ function createPushReader({
     lastFrame = frames;
     if (paused) return;
 
+    counts.applied++;
     const state = record.subarray(0, STATE_BYTES);
     const result = frame(previous, state, tracker, layout, startChord);
     previous = result.controller;
+    counts.changes += result.lines.length;
     for (const line of result.lines) write(line);
 
     const note = keys(state);
@@ -348,11 +360,14 @@ function createPushReader({
       heardAt = null;
       stalled = false;
     },
-    /** @returns {{pushed: number, dropped: number, gapMaxMs: number}} Since the last take. */
+    /**
+     * Since the last take.
+     * @returns {PushCounts}
+     */
     take() {
       const open = lastAt === null ? 0 : now() - lastAt;
       const result = {...counts, gapMaxMs: Math.round(Math.max(counts.gapMaxMs, open))};
-      counts = {pushed: 0, dropped: 0, gapMaxMs: 0};
+      counts = {pushed: 0, dropped: 0, gapMaxMs: 0, applied: 0, changes: 0};
 
       return result;
     }
@@ -376,7 +391,7 @@ function createPushReader({
  * @param {typeof session.readSource} [options.readSource]
  * @param {typeof readStorage} [options.readAppStorage]
  * @param {() => number} [options.now]
- * @returns {{take: () => {pushed: number, dropped: number, gapMaxMs: number},
+ * @returns {{take: () => PushCounts,
  *   stop: () => Promise<void>, retained: boolean}}
  */
 function runPush({

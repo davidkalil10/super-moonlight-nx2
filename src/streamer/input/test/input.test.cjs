@@ -729,7 +729,8 @@ test('the push reader skips repeated frames, follows the overlay and resets on a
   assert.match(logs[0], /went back from 7 to 2/);
   assert.equal(parsed(lines).at(-1).buttonFlags, 0x2000);
   clock = 40;
-  assert.deepEqual(reader.take(), {pushed: 5, dropped: 0, gapMaxMs: 40});
+  // Frames 5 and 2 are applied; the repeat and the overlay frames are not.
+  assert.deepEqual(reader.take(), {pushed: 5, dropped: 0, gapMaxMs: 40, applied: 2, changes: 3});
   clock = 1999;
   reader.check();
   clock = 2000;
@@ -772,6 +773,8 @@ test('the push reader steps on the app frame count, not on frameIndex', () => {
   const before = lines.length;
   reader.data(pushRecord(3, {frameIndex: 7}));
   assert.equal(lines.length, before, 'a frame already seen stays skipped whatever frameIndex says');
+  const {applied, changes} = reader.take();
+  assert.deepEqual({applied, changes}, {applied: 3, changes: 3});
 });
 
 test('once the UI magic was seen, a shifted idle record no longer passes as detached', () => {

@@ -1137,6 +1137,7 @@ test(
         feeders.push(args);
         child.stdio[3] = new PassThrough();
         const counts = {exchanges: 0, bridgeMs: 0, pushed: 120, dropped: 1, gapMaxMs: 14};
+        Object.assign(counts, {applied: 60, changes: 4});
         child.stdio[3].write(JSON.stringify(counts) + '\n');
         const kill = child.kill;
         child.kill = signal => {
@@ -1158,7 +1159,13 @@ test(
         .split('\n')
         .map(JSON.parse);
       const pushed = rows.find(row => row.inputPush.pushed);
-      assert.deepEqual(pushed.inputPush, {pushed: 120, dropped: 1, gapMaxMs: 14});
+      assert.deepEqual(pushed.inputPush, {
+        pushed: 120,
+        dropped: 1,
+        gapMaxMs: 14,
+        applied: 60,
+        changes: 4
+      });
       assert.ok(
         rows.every(row => !row.bridgeByStage.input),
         'a push run has no input stage'

@@ -40,7 +40,9 @@ the panel and read-size facts.
   every N ms (plus up to 16 ms of jitter) and held 100 ms, and each change logs a `probe-press`
   line with its wall time on stderr. Pull mode only; unset or empty leaves the feeder as is.
 - `--counts-fd N`: once a second `{exchanges, bridgeMs, pad}` (stats stage "input"); under push
-  `{exchanges, bridgeMs, pushed, dropped, gapMaxMs}`, then the final report of rule 4.
+  `{exchanges, bridgeMs, pushed, dropped, gapMaxMs, applied, changes}`, then the final report of
+  rule 4. `applied` is records that stepped the app frame count outside the overlay (about 60 a
+  second), `changes` the controller and touch lines they sent: a moving pad keeps it above 0.
 
 ## Controller (controller.js)
 
