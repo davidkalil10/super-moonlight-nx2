@@ -1,11 +1,6 @@
 /**
- * The console UI page the host publishes into one of the two UI buffers of the Moonlight
- * app's private memory, and the command words the compute shader writes back. Layout is the
- * host's: a page is text strips (alpha-8, rasterised on the PC) and RGBA8 images at absolute
- * screen positions, plus the item rects the console cursor moves over. The shader validates a
- * page with the same rules as validate() here before it draws it. Contract: team note
- * `moonlight-ui-design.md`, "Memory and words".
- *
+ * The UI page the host publishes into the Moonlight app's private memory and the command words
+ * the shader writes back (CLAUDE.md; team note `moonlight-ui-design.md`, "Memory and words").
  * ui.glsl mirrors the layout below; changing a constant or offset changes the format.
  */
 import {UI, UI_OFFSET, UI_PAGE_BYTES, UI_OP} from '../shared/ring.js';
@@ -76,14 +71,12 @@ function isU32(value) {
 
 /** Whether the rect is non-empty and lies wholly on the screen. */
 function inScreen(rect) {
-  return (
-    isU32(rect.x) &&
-    isU32(rect.y) &&
-    rect.w > 0 &&
-    rect.h > 0 &&
-    rect.x + rect.w <= SCREEN.width &&
-    rect.y + rect.h <= SCREEN.height
-  );
+  const placed = isU32(rect.x) && isU32(rect.y);
+  if (!placed) return false;
+
+  const sized = rect.w > 0 && rect.h > 0;
+  const fits = rect.x + rect.w <= SCREEN.width && rect.y + rect.h <= SCREEN.height;
+  return sized && fits;
 }
 
 /** Whether a text rect is on screen and within the strip size limit. */
@@ -188,12 +181,14 @@ function serialize(page) {
   for (const [i, item] of items.entries()) {
     check(isU32(item.id) && item.id !== 0, 'UI item needs a nonzero id');
     check(inScreen(item), 'UI item rect is off screen');
+
     const at = ITEMS_OFFSET + i * ITEM_WORDS * 4;
     writeWords(out, at, [item.id, item.x, item.y, item.w, item.h, item.flags ?? 0]);
   }
 
   for (const [i, text] of texts.entries()) {
     check(textFits(text), 'UI text rect');
+
     const at = TEXTS_OFFSET + i * TEXT_WORDS * 4;
     const offset = body.place(text.alpha, text.w * text.h, 'UI text strip');
     writeWords(out, at, [text.x, text.y, text.w, text.h, offset, text.color ?? 0xffffffff]);
@@ -201,6 +196,7 @@ function serialize(page) {
 
   for (const [i, image] of images.entries()) {
     check(imageFits(image), 'UI image rect');
+
     const at = IMAGES_OFFSET + i * IMAGE_WORDS * 4;
     const offset = body.place(image.rgba, image.w * image.h * 4, 'UI image');
     writeWords(out, at, [image.x, image.y, image.w, image.h, offset, FORMAT_RGBA8]);

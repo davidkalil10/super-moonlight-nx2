@@ -1,11 +1,7 @@
 /**
- * The console UI state machine: pure, so the tests drive it without a console. The host
- * service feeds it the commands the console forwards (A/B/X/Y/ADJUST/CHORD on an item) and the
- * results of its own work (lists, PINs, stream events); it answers with the next model and the
- * intents the service must run. Screens and transitions: team note `moonlight-ui-design.md`.
- *
- * Item ids are the host's: ITEM groups a page's rows into id ranges so a command names a host,
- * an app or a setting without the console knowing what a row is.
+ * The console UI state machine, pure so the tests drive it without a console: console commands
+ * and service results in, the next model and the intents to run out. Screens and transitions:
+ * team note `moonlight-ui-design.md`; the item id scheme is in CLAUDE.md.
  */
 import {CATALOG, adjust, defaults} from './settings.js';
 
@@ -171,6 +167,16 @@ function onAppsCommand(model, {op, item}) {
   ]);
 }
 
+/** A on Quit quits the host app; B or A on Cancel goes back to the apps. */
+function onQuitConfirmCommand(model, {op, item}) {
+  if (op === 'a' && item === ITEM.confirmQuit)
+    return next(model, {screen: 'quitting'}, [{type: 'quitHost', host: model.host}]);
+
+  const cancelled = op === 'b' || (op === 'a' && item === ITEM.cancel);
+  if (cancelled) return next(model, {screen: 'apps'});
+  return same(model);
+}
+
 /** ADJUST on a setting changes and saves it; Y resets all of them; B goes back. */
 function onSettingsCommand(model, {op, item, value}) {
   if (op === 'b') return next(model, {screen: model.from});
@@ -206,7 +212,7 @@ function onStreamingCommand(model, {op, item}) {
  * @returns {Step}
  */
 function onCommand(model, command) {
-  const {op, item} = command;
+  const {op} = command;
   if (op === 'x' && ['hosts', 'apps'].includes(model.screen))
     return next(model, {screen: 'settings', from: model.screen});
 
@@ -223,10 +229,7 @@ function onCommand(model, command) {
     case 'apps':
       return onAppsCommand(model, command);
     case 'quitConfirm':
-      if (op === 'a' && item === ITEM.confirmQuit)
-        return next(model, {screen: 'quitting'}, [{type: 'quitHost', host: model.host}]);
-      if (op === 'b' || (op === 'a' && item === ITEM.cancel)) return next(model, {screen: 'apps'});
-      return same(model);
+      return onQuitConfirmCommand(model, command);
     case 'settings':
       return onSettingsCommand(model, command);
     case 'launching':

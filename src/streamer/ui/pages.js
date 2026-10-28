@@ -1,8 +1,6 @@
 /**
  * The console UI pages: one layout per screen of the state machine, as the items, text strips
- * and images page.js serializes. Layout is the host's; the console only draws what it is
- * given, moves the cursor over the items and forwards presses with the item ids model.js
- * assigns. Strips are painted once per text, size and width and kept.
+ * and images page.js serializes. Strips are painted once per text, size and width and kept.
  */
 import {ITEM, APPS_PER_PAGE, HOSTS_PER_PAGE} from './model.js';
 import {PAGE_FLAG, ITEM_FLAG, MAX_ITEMS, MAX_TEXTS, MAX_IMAGES} from './page.js';
@@ -22,13 +20,10 @@ const COLOR = {
   background: 0xff17191c,
   clear: 0x00000000
 };
-/** The screen the pages are laid out on. */
 const SCREEN_WIDTH = 1920;
 /** The margin left and right of every page. */
 const SIDE = 96;
-/** The width between the margins. */
 const CONTENT_WIDTH = SCREEN_WIDTH - 2 * SIDE;
-/** Cover tiles on the apps page. */
 const COVER = {width: 240, height: 135};
 /** Two rows of five covers, centred, a name under each. */
 const GRID = {y: 380, columns: 5, gap: 48, name: 16, row: 135 + 16 + 34 + 24};
@@ -110,13 +105,14 @@ function createPages(raster) {
    * @param {() => Promise<Painted>} paint
    */
   function remember(cache, key, paint) {
-    let painted = cache.get(key);
-    if (!painted) {
-      painted = paint();
-      painted.catch(() => cache.delete(key));
-      cache.set(key, painted);
-      if (cache.size > CACHE_LIMIT) cache.delete(cache.keys().next().value);
-    }
+    const cached = cache.get(key);
+    if (cached) return cached;
+
+    const painted = paint();
+    painted.catch(() => cache.delete(key));
+    cache.set(key, painted);
+    if (cache.size > CACHE_LIMIT) cache.delete(cache.keys().next().value);
+
     return painted;
   }
 
@@ -204,9 +200,11 @@ function createPages(raster) {
           texts: await Promise.all(texts),
           images: await Promise.all(images)
         };
+
         if (built.items.length > MAX_ITEMS || built.texts.length > MAX_TEXTS)
           throw Error('UI page over the item or text limit');
         if (built.images.length > MAX_IMAGES) throw Error('UI page over the image limit');
+
         return built;
       }
     };
@@ -331,9 +329,9 @@ function createPages(raster) {
       cursorHome: homeSlot(model.hostIndex, start, shown)
     });
 
-    if (!shown.length)
+    if (!shown.length) {
       heading(page, 'No PCs yet', 'Add a PC to hosts.json', 'The service reads it on this PC');
-    else {
+    } else {
       const line = `${count(model.hosts.length, 'PC', 'PCs')} in hosts.json`;
       heading(page, 'Moonlight', 'Choose a PC', line);
     }
@@ -477,7 +475,9 @@ function createPages(raster) {
     const {x, y} = cardAt(i, CARDS.y);
     const inner = CARDS.width - 2 * CARDS.pad;
     const left = x + CARDS.pad;
-    const flags = (row.adjustable ? ITEM_FLAG.adjustable : 0) | (row.greyed ? ITEM_FLAG.greyed : 0);
+    let flags = 0;
+    if (row.adjustable) flags |= ITEM_FLAG.adjustable;
+    if (row.greyed) flags |= ITEM_FLAG.greyed;
 
     page.item({id: ITEM.setting + i, x, y, w: CARDS.width, h: CARDS.height, flags});
     page.solid(x, y, CARDS.width, CARDS.height, row.greyed ? COLOR.dim : COLOR.card);

@@ -1,14 +1,7 @@
 /**
- * The host side of the console Moonlight UI: publishes the pages of pages.js into the
- * private storage of the running Moonlight app, reads the commands the console writes back and
- * drives the helper and the stream child from the state machine in model.js.
- *
- *   node src/streamer/ui/service.js [RUN_DIR]
- *
- * The console owns the cursor, the overlay and the command words; this service owns the pages,
- * the epoch and sequence, hostAck and hostBusy. It exits when the Moonlight app leaves the
- * console (app-runtime.json) or on SIGINT/SIGTERM, writing magic 0 so the console shows the
- * static splash again.
+ * `node src/streamer/ui/service.js [RUN_DIR]`: publishes the pages of pages.js into the running
+ * Moonlight app, reads the console's commands back and drives the helper and live.js from
+ * model.js. Word ownership: CLAUDE.md; attach, exit and run log: README.md.
  */
 import fs from 'node:fs';
 import os from 'node:os';
@@ -68,6 +61,12 @@ function u32(value) {
   return out;
 }
 
+/** The u32 after `value`, skipping 0 when it wraps. */
+function followingSequence(value) {
+  const next = (value + 1) >>> 0;
+  return next === 0 ? 1 : next;
+}
+
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
@@ -97,8 +96,12 @@ function createChildren({
     let err = '';
 
     if (collect) {
-      child.stdout.on('data', chunk => (out += chunk));
-      child.stderr.on('data', chunk => (err += chunk));
+      child.stdout.on('data', chunk => {
+        out += chunk;
+      });
+      child.stderr.on('data', chunk => {
+        err += chunk;
+      });
     } else {
       readline.createInterface({input: child.stdout}).on('line', line => onLine('stdout', line));
       readline.createInterface({input: child.stderr}).on('line', line => onLine('stderr', line));
@@ -108,6 +111,7 @@ function createChildren({
       child.on('close', (code, signal) => resolve({code, signal, out, err}));
       child.on('error', error => resolve({code: -1, signal: null, out, err: error.message}));
     });
+
     return {
       exited,
       cancel: (/** @type {NodeJS.Signals} */ signal = 'SIGINT') => child.kill(signal)
@@ -191,7 +195,11 @@ function createService({
   let queue = Promise.resolve();
 
   /** @template T @param {() => Promise<T>} work @returns {Promise<T>} */
-  const transfer = work => (chain = chain.then(work, work));
+  const transfer = work => {
+    const done = chain.then(work, work);
+    chain = done;
+    return done;
+  };
   /** Skipped once the bridge is gone, so stopping a stream after that cannot reject. */
   const writeWord = (address, value) =>
     transfer(async () => {
@@ -221,23 +229,28 @@ function createService({
 
   /** The sequence after this one: never 0, and never on the page the console last applied. */
   function nextSequence() {
-    let next = (sequence + 1) >>> 0 || 1;
-    if ((next & 1) === (applied & 1) && applied !== 0) next = (next + 1) >>> 0 || 1;
-    return next;
+    const next = followingSequence(sequence);
+    const onAppliedPage = (next & 1) === (applied & 1) && applied !== 0;
+    if (!onAppliedPage) return next;
+
+    return followingSequence(next);
   }
 
   /** Publishes the page of the model; `again` republishes one the console never applied. */
   async function publish(again = false) {
     const page = await pages.page(model, covers);
     if (!page) return;
+
     const same = published && serialize({...page, epoch, sequence}).equals(published);
-    if ((same && !again) || stopped) return;
+    if (same && !again) return;
+    if (stopped) return;
 
     const next = nextSequence();
     const bytes = serialize({...page, epoch, sequence: next});
     const header = hostWords({magic: UI_MAGIC, epoch, sequence: next, page: next & 1});
     await transfer(() => memory.write(pageAddress(mapped, next & 1), bytes));
     await transfer(() => memory.write(mapped + UI.uiMagic, header));
+
     const since = Date.now();
     await keepHeader(header, since);
 
@@ -251,7 +264,9 @@ function createService({
       const block = await transfer(() => memory.read(mapped + UI.uiMagic, HEADER_READ));
       applied = block.readUInt32LE(UI.uiApplied - UI.uiMagic);
       if (applied === sequence) break;
-      if (!block.subarray(0, header.length).equals(header)) await keepHeader(header, since);
+
+      const reverted = !block.subarray(0, header.length).equals(header);
+      if (reverted) await keepHeader(header, since);
 
       if (Date.now() > deadline) {
         const dump = await transfer(() => memory.read(mapped + UI.uiMagic, UI_BLOCK_BYTES));
@@ -302,8 +317,10 @@ function createService({
       model = result.model;
       log({event: 'model', type: event.type, screen: model.screen});
 
-      for (const intent of result.intents)
+      for (const intent of result.intents) {
         run(intent).catch(error => failed('intent-failed', error, {type: intent.type}));
+      }
+
       if (changed) await publish();
     });
   }
@@ -329,13 +346,16 @@ function createService({
 
     if (result.signal === 'SIGKILL') result.err += '\nhelper timed out';
     const error = result.code ? helperError(result) : null;
-    log({
+
+    const entry = {
       event: 'helper',
       args: args.slice(0, 2),
       code: result.code,
-      signal: result.signal,
-      ...(error && {error})
-    });
+      signal: result.signal
+    };
+    if (error) entry.error = error;
+    log(entry);
+
     return result;
   }
 
@@ -359,12 +379,16 @@ function createService({
 
   /** What the app list says about the last quit, if there was one. */
   function quitMessage(currentGame) {
-    if (quitResult === 'cancelled')
-      return currentGame === 0 ? 'Quit confirmed' : 'Quit failed: the host game is still running';
-    if (quitResult && currentGame === 0)
-      return 'Host closed the game on its own; the quit request failed';
-    if (quitResult) return quitResult;
-    return null;
+    if (!quitResult) return null;
+
+    const gameClosed = currentGame === 0;
+    if (quitResult === 'cancelled') {
+      if (gameClosed) return 'Quit confirmed';
+      return 'Quit failed: the host game is still running';
+    }
+
+    if (gameClosed) return 'Host closed the game on its own; the quit request failed';
+    return quitResult;
   }
 
   async function list(host, token) {
@@ -412,13 +436,13 @@ function createService({
     if (current === child) current = null;
     if (token !== generation || result.signal === 'SIGINT') return;
 
-    if (result.code === 0) await dispatch({type: 'paired'});
-    else
-      await dispatch({
-        type: 'failed',
-        message: 'Pairing failed: ' + (pairError ?? 'the helper exited ' + result.code),
-        back: 'hosts'
-      });
+    if (result.code === 0) {
+      await dispatch({type: 'paired'});
+      return;
+    }
+
+    const reason = pairError ?? 'the helper exited ' + result.code;
+    await dispatch({type: 'failed', message: 'Pairing failed: ' + reason, back: 'hosts'});
   }
 
   /** Logs each live.js line and turns its events into model events. */
@@ -433,15 +457,17 @@ function createService({
     }
     log({...event, event: 'stream-event', name: event.event});
 
-    if (event.event === 'connected') background({type: 'streamStarted'});
-    else if (event.event === 'console-stalled')
+    if (event.event === 'connected') {
+      background({type: 'streamStarted'});
+    } else if (event.event === 'console-stalled') {
       background({
         type: 'failed',
         message: 'The console stopped answering, so the stream was stopped',
         back: 'apps'
       });
-    else if (event.event === 'log' && event.message)
+    } else if (event.event === 'log' && event.message) {
       background({type: 'stage', message: event.message});
+    }
   }
 
   function launch(host, app, streamSettings, token) {
@@ -455,13 +481,17 @@ function createService({
         log({event: 'stream-exit', code: result.code, signal: result.signal});
         if (token !== generation) return;
 
-        if (model.screen === 'launching' && result.code !== 0 && !result.signal)
+        const startFailed = model.screen === 'launching' && result.code !== 0 && !result.signal;
+        if (startFailed) {
           await dispatch({
             type: 'failed',
             message: 'The stream did not start (exit ' + result.code + ')',
             back: 'apps'
           });
-        else await dispatch({type: 'streamEnded'});
+          return;
+        }
+
+        await dispatch({type: 'streamEnded'});
       })
       .catch(error => failed('stream-exit-failed', error));
   }
@@ -546,15 +576,18 @@ function createService({
     log({event: 'discovered', found: found.length, added: hosts.length - manual.length});
 
     if (hosts.length !== manual.length) writeHosts(hosts);
-    if (JSON.stringify(hosts) !== JSON.stringify(model.hosts))
+    if (JSON.stringify(hosts) !== JSON.stringify(model.hosts)) {
       await dispatch({type: 'hosts', hosts});
+    }
   }
 
   /** Covers arrive with the helper's `list --covers`; until then every app gets a letter tile. */
   async function coverTiles(host, apps) {
     const tiles = new Map();
-    for (const app of apps)
+    for (const app of apps) {
       if (app.cover) tiles.set(app.id, pages.cover(host.address + ':' + app.id, app.cover));
+    }
+
     return tiles;
   }
 
@@ -567,8 +600,10 @@ function createService({
     const stale = block.readUInt32LE(UI.uiApplied - UI.uiMagic);
     const shown = block.readUInt32LE(UI.uiShown - UI.uiMagic) & 1;
     const header = await transfer(() => memory.read(pageAddress(mapped, shown), 8));
-    if (header.readUInt32LE(0) === MAGIC)
-      epoch = Math.max(epoch, (header.readUInt32LE(4) + 1) >>> 0) || 1;
+    if (header.readUInt32LE(0) === MAGIC) {
+      const above = (header.readUInt32LE(4) + 1) >>> 0;
+      epoch = Math.max(epoch, above) || 1;
+    }
 
     seen = block.readUInt32LE(UI.cmdSequence - UI.uiMagic);
     applied = stale;
@@ -598,10 +633,12 @@ function createService({
     await writeWord(UI.hostAck, command.sequence);
 
     const op = OP_NAME[command.op];
-    if (!op || command.epoch !== epoch || command.page !== sequence) {
+    const otherPage = command.epoch !== epoch || command.page !== sequence;
+    if (!op || otherPage) {
       log({event: 'command-dropped', ...command, expected: {epoch, page: sequence}});
       return;
     }
+
     log({event: 'command', op, item: command.item, value: command.value});
     await dispatch({type: 'command', op, item: command.item, value: command.value});
   }
@@ -619,8 +656,10 @@ function createService({
     current?.cancel('SIGINT');
     await queue.catch(() => {});
     await stopStream();
-    if (!lost)
+    if (!lost) {
       await transfer(() => memory.write(mapped + UI.uiMagic, splashHeader())).catch(() => {});
+    }
+
     log({event: 'detach'});
   }
 
@@ -721,9 +760,16 @@ function openRun(directory, rpc) {
   };
 }
 
+/** The RUN_DIR argument, or undefined when the first argument is missing or an option. */
+function runDirectoryArg(args) {
+  const first = args[0];
+  if (!first || first.startsWith('--')) return undefined;
+  return first;
+}
+
 async function main() {
   const args = process.argv.slice(2);
-  const directory = session.resolve(args[0] && !args[0].startsWith('--') ? args[0] : undefined);
+  const directory = session.resolve(runDirectoryArg(args));
   const rpc = session.rpc(directory);
   const storage = await findPrivateStorage(directory);
   if (storage.bytes < MEMORY_BYTES)

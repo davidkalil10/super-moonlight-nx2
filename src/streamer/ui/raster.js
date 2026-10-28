@@ -20,6 +20,7 @@ function createRaster({spawnProcess = spawn} = {}) {
   const child = spawnProcess('python3', [path.join(import.meta.dirname, 'text.py')], {
     stdio: ['pipe', 'pipe', 'inherit']
   });
+
   /**
    * Requests awaiting their reply, oldest first; channels is the bytes per pixel it carries.
    * @type {{resolve: (painted: Painted) => void, reject: (error: Error) => void,
@@ -62,6 +63,7 @@ function createRaster({spawnProcess = spawn} = {}) {
   /** Sends one JSON request line; resolves with its reply of `channels` bytes per pixel. */
   function paint(request, channels) {
     if (failure) return Promise.reject(failure);
+
     return new Promise((resolve, reject) => {
       queue.push({resolve, reject, channels});
       child.stdin.write(JSON.stringify(request) + '\n');

@@ -15,6 +15,12 @@ function hostsFile() {
   return path.join(base, 'hblauncher', 'moonlight', 'hosts.json');
 }
 
+/** A saved host's name, or its address when the name is missing or empty. */
+function savedName(host) {
+  if (typeof host.name !== 'string' || !host.name) return host.address;
+  return host.name;
+}
+
 /**
  * The hosts saved in `file`: entries without an address are dropped, a missing name becomes
  * the address. An unreadable or malformed file reads as no hosts.
@@ -27,10 +33,7 @@ function loadHosts(file) {
 
     return parsed
       .filter(host => host && typeof host.address === 'string')
-      .map(host => ({
-        name: typeof host.name === 'string' && host.name ? host.name : host.address,
-        address: host.address
-      }));
+      .map(host => ({name: savedName(host), address: host.address}));
   } catch {
     return [];
   }
@@ -43,6 +46,7 @@ function loadHosts(file) {
  */
 function saveHosts(file, hosts) {
   fs.mkdirSync(path.dirname(file), {recursive: true});
+
   const partial = file + '.part';
   fs.writeFileSync(partial, JSON.stringify(hosts, null, 2) + '\n');
   fs.renameSync(partial, file);
@@ -68,6 +72,7 @@ function seedHosts(existing, extra = []) {
   for (const host of existing) add(host);
   for (const address of extra) add({name: address, address});
   add(DEFAULT_HOST);
+
   return hosts;
 }
 
@@ -83,11 +88,11 @@ function parseList(stdout) {
   const parsed = JSON.parse(line);
   return {
     currentGame: parsed.currentGame || 0,
-    apps: (parsed.apps || []).map(app => ({
-      id: app.id,
-      name: app.name,
-      ...(typeof app.cover === 'string' ? {cover: app.cover} : {})
-    }))
+    apps: (parsed.apps || []).map(app => {
+      const entry = {id: app.id, name: app.name};
+      if (typeof app.cover === 'string') entry.cover = app.cover;
+      return entry;
+    })
   };
 }
 

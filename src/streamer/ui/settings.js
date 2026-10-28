@@ -1,8 +1,6 @@
 /**
  * Stream settings the console UI offers, persisted next to hosts.json and turned into the
- * arguments of the next launch. Only values the console path has run are offered (team note
- * `ui-settings-catalog.md`); the two toggles without host plumbing stay greyed until it
- * lands, so the page shows them without pretending they work.
+ * arguments of the next launch. Catalog rules: CLAUDE.md.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -96,13 +94,21 @@ function load(file) {
   let parsed = {};
   try {
     const read = JSON.parse(fs.readFileSync(file, 'utf8'));
-    if (read && typeof read === 'object' && !Array.isArray(read)) parsed = read;
+    if (isPlainObject(read)) parsed = read;
   } catch {}
 
   const settings = defaults();
-  for (const setting of CATALOG)
-    if (setting.values.includes(parsed[setting.id])) settings[setting.id] = parsed[setting.id];
+  for (const setting of CATALOG) {
+    const saved = parsed[setting.id];
+    if (setting.values.includes(saved)) settings[setting.id] = saved;
+  }
+
   return settings;
+}
+
+/** Whether the parsed JSON is an object rather than null, a scalar or an array. */
+function isPlainObject(value) {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
 /**
@@ -128,6 +134,7 @@ function adjust(settings, id, direction) {
   const index = setting.values.indexOf(settings[id]);
   const next = Math.min(setting.values.length - 1, Math.max(0, index + Math.sign(direction)));
   if (setting.values[next] === settings[id]) return settings;
+
   return {...settings, [id]: setting.values[next]};
 }
 
@@ -163,6 +170,7 @@ function streamArgs(settings) {
     '--staggered',
     '--socket-audio'
   ];
+
   if (settings.presentHz === 120) args.push('--present-hz', '120');
   return args;
 }

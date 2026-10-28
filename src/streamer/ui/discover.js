@@ -1,9 +1,6 @@
 /**
- * Sunshine and GeForce Experience announce `_nvstream._tcp.local` over mDNS. This asks for it
- * once with Node's own dgram socket, collects the answers for a short window and returns host
- * candidates: the service instance as the name, the SRV target and port, the A record address.
- * Candidates only; pairing and /serverinfo stay the judges of what a host is. hosts.json stays
- * the manual source: merge() keeps every existing entry as it is and appends new hosts.
+ * One mDNS query for the `_nvstream._tcp.local` hosts Sunshine and GeForce Experience announce,
+ * answers collected for a short window and turned into host candidates (CLAUDE.md).
  */
 import dgram from 'node:dgram';
 
@@ -64,7 +61,9 @@ function readName(packet, offset) {
 
     if ((length & 0xc0) === 0xc0) {
       if (offset + 1 >= packet.length) throw Error('mDNS pointer runs past the packet');
-      if (++jumps > MAX_JUMPS) throw Error('mDNS name pointer loop');
+      jumps++;
+      if (jumps > MAX_JUMPS) throw Error('mDNS name pointer loop');
+
       next ??= offset + 2;
       offset = ((length & 0x3f) << 8) | packet[offset + 1];
       continue;
@@ -99,6 +98,7 @@ function parsePacket(packet) {
   const total = packet.readUInt16BE(6) + packet.readUInt16BE(8) + packet.readUInt16BE(10);
   if (total > MAX_RECORDS) throw Error('mDNS packet has too many records');
 
+  // Each question is a name, then its type and class words.
   let offset = HEADER_BYTES;
   for (let i = 0; i < questions; i++) offset = readName(packet, offset).next + 4;
 
@@ -118,6 +118,7 @@ function parsePacket(packet) {
     records.push({name: owner.name, type, ttl, data: readData(packet, type, start, end)});
     offset = end;
   }
+
   return records;
 }
 
@@ -193,6 +194,7 @@ function candidates(records) {
       port: service.data.port
     });
   }
+
   return hosts;
 }
 
@@ -212,6 +214,7 @@ function merge(existing, discovered) {
     );
     if (!known) hosts.push({name: found.name, address});
   }
+
   return hosts;
 }
 
@@ -248,7 +251,9 @@ function discover({windowMs = 1500, createSocket = dgram.createSocket} = {}) {
       try {
         socket.addMembership(MDNS_ADDRESS);
       } catch {}
-      socket.send(query(), MDNS_PORT, MDNS_ADDRESS, error => error && finish());
+      socket.send(query(), MDNS_PORT, MDNS_ADDRESS, error => {
+        if (error) finish();
+      });
     });
   });
 }
