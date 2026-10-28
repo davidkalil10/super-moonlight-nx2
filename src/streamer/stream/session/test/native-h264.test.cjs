@@ -1317,6 +1317,69 @@ test(
 );
 
 test(
+  '--drain-gates reaches the scheduler with the reader depth and counts each drain',
+  {timeout: 5000},
+  async () => {
+    const f = await fixture({units: pairedUnits(6)});
+    const created = [];
+    const depths = [];
+    const timed = timedStaggeredFake(f.events, []);
+    f.options.createStaggered = options => {
+      created.push(options);
+      const live = timed();
+      return {
+        ...live,
+        async push(unit, hooks) {
+          await live.push(unit, hooks);
+          depths.push(hooks.queued());
+          if (unit.pts === 4000) hooks.onDrained(2);
+        },
+        get pending() {
+          return live.pending;
+        }
+      };
+    };
+    f.options.now = () => 1000;
+    f.options.statsMs = 10;
+    f.options.args.push('--staggered', '--queue', '16', '--warmup', '0', '--drain-gates', '3');
+    await exercise(f, async () => {
+      const summary = await run(f.options);
+      assert.equal(created[0].drainGates, 3);
+      assert.ok(depths.every(depth => Number.isInteger(depth) && depth >= 0));
+      assert.equal(summary.drained, 1);
+      assert.equal(summary.dropped, 0);
+      const events = (await fs.readFile(path.join(f.directory, 'logs', 'events.jsonl'), 'utf8'))
+        .trim()
+        .split('\n')
+        .map(JSON.parse);
+      const drains = events.filter(event => event.event === 'backlog-drain');
+      assert.deepEqual(
+        drains.map(({queued, drainGates}) => ({queued, drainGates})),
+        [{queued: 2, drainGates: 3}]
+      );
+    });
+    for (const [extra, message] of [
+      [['--staggered', '--drain-gates', '0'], /--drain-gates takes 1 to 8/],
+      [['--staggered', '--drain-gates', '1.5'], /--drain-gates takes 1 to 8/],
+      [
+        ['--staggered', '--skip-rule', 'vsync', '--skip-backlog', '1', '--drain-gates', '3'],
+        /--drain-gates needs --skip-rule backlog/
+      ],
+      [
+        ['--staggered', '--gate-on-receive', '--gate-queue', '--drain-gates', '3'],
+        /--drain-gates is untested with --gate-queue/
+      ]
+    ]) {
+      const g = await fixture();
+      await exercise(g, async () => {
+        g.options.args.push(...extra);
+        await assert.rejects(run(g.options), message);
+      });
+    }
+  }
+);
+
+test(
   '--gate-on-receive reaches the staggered scheduler and refuses 120 Hz',
   {timeout: 5000},
   async () => {

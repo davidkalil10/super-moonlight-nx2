@@ -1062,6 +1062,77 @@ test('the backlog trim needs the backlog skip rule', () => {
   );
 });
 
+async function drainRun(queued, options = {drainGates: 3}, nullDiscards = 0) {
+  const device = simulatedDevice();
+  const discard = device.sink.discardDestination;
+  let refused = 0;
+  device.sink.discardDestination = async presentation => {
+    if (refused++ < nullDiscards) return null;
+    return discard(presentation);
+  };
+  const live = await liveOn(device, noPause, null, options);
+  const drains = [];
+  for (let sequence = 1; sequence <= 16; sequence++) {
+    const unit = unitAt(sequence);
+    device.pts.set(sequence, BigInt(unit.pts));
+    await live.push(unit, {
+      sink: device.sink,
+      backlog: 0,
+      queued: () => queued(sequence),
+      onDrained: waiting => drains.push({sequence, waiting})
+    });
+  }
+  await live.finish({sink: device.sink});
+  const counts = live.counts;
+  assert.equal(counts.presented + counts.skipped, 16);
+  await live.stop();
+  return {counts, drains};
+}
+
+test('units waiting at three gates in a row drain one output, then cool down', async () => {
+  const {counts, drains} = await drainRun(() => 1);
+  assert.deepEqual(drains, [
+    {sequence: 6, waiting: 1},
+    {sequence: 12, waiting: 1}
+  ]);
+  assert.equal(counts.drained, 2);
+  assert.equal(counts.skipped, 2);
+});
+
+test('a refused discard keeps the drain armed for the next gate', async () => {
+  const {counts, drains} = await drainRun(() => 1, {drainGates: 3}, 1);
+  assert.deepEqual(
+    drains.map(drain => drain.sequence),
+    [7, 13]
+  );
+  assert.equal(counts.drained, 2);
+});
+
+test('an empty gate restarts the drain count, and no wait never drains', async () => {
+  const broken = await drainRun(sequence => (sequence === 5 ? 0 : 1));
+  assert.deepEqual(
+    broken.drains.map(drain => drain.sequence),
+    [8, 14]
+  );
+  const idle = await drainRun(() => 0);
+  assert.deepEqual(idle.drains, []);
+  assert.equal(idle.counts.skipped, 0);
+  const off = await drainRun(() => 1, {});
+  assert.deepEqual(off.drains, []);
+  assert.equal('drained' in off.counts, false);
+});
+
+test('the backlog drain needs the backlog rule and refuses the gate queue', () => {
+  assert.throws(
+    () => create({skipRule: 'vsync', skipBacklog: 1, drainGates: 3}),
+    /backlog drain needs the backlog rule/
+  );
+  assert.throws(
+    () => create({gateOnReceive: true, gateQueue: true, drainGates: 3}),
+    /backlog drain is untested with the queue/
+  );
+});
+
 async function defaultStreamDigest() {
   const device = simulatedDevice();
   const hash = require('node:crypto').createHash('sha256');

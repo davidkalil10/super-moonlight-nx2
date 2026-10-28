@@ -146,7 +146,8 @@ async function run({
   const options = parseOptions(args, rpc, width, height, fps);
   const {audio, socketTone, socketAudio, duration, inputPush, audioFrames} = options;
   const {presentHz, skipRule, trimBacklogMs, gateOnReceive, outputLag, surfaceCheck} = options;
-  const {decodeWait, receiveWait, avoidWindow, skipBacklog, gateQueue, stageTicks} = options;
+  const {decodeWait, receiveWait, avoidWindow, skipBacklog, gateQueue, stageTicks, drainGates} =
+    options;
   if (!rpc.host) throw Error('Native TCP requires a fresh launcher session from this branch');
   /** Moves `now` onto CLOCK_MONOTONIC, the clock of the helper's writtenAt. */
   const monotonicOffset = Number(process.hrtime.bigint()) / 1e6 - now();
@@ -180,6 +181,7 @@ async function run({
   let inputPad = [];
   let pushCounts = {pushed: 0, dropped: 0, gapMaxMs: 0, applied: 0, changes: 0};
   let trimmed = 0;
+  let drained = 0;
   let auSamples = [];
   // The last unit pushed, which the default gate opens on the next push.
   let heldSample = null;
@@ -331,6 +333,7 @@ async function run({
       skipBacklog,
       skipRule: /** @type {'backlog' | 'vsync'} */ (skipRule),
       ...(trimBacklogMs !== null && {trimBacklogMs}),
+      ...(drainGates !== null && {drainGates}),
       ...(gateOnReceive && {gateOnReceive}),
       ...(gateQueue && {gateQueue}),
       ...(outputLag !== null && {lag: /** @type {0 | 1 | 2} */ (outputLag)}),
@@ -423,6 +426,7 @@ async function run({
     const hidden = hiddenTiming(auSamples);
     if (hidden) row.hidden = hidden;
     if (trimBacklogMs !== null) row.trimmed = trimmed;
+    if (drainGates !== null) row.drained = drained;
 
     Object.assign(row, withInputStage(bridge.take(), inputBridge));
     if (inputPad.length) row.inputPad = padAge.merge(inputPad);
@@ -443,6 +447,7 @@ async function run({
     pushCounts = {pushed: 0, dropped: 0, gapMaxMs: 0, applied: 0, changes: 0};
     auSamples = [];
     trimmed = 0;
+    drained = 0;
     dropped = procs.reader.dropped;
     queued = 0;
     waited = staggeredLive?.counts.waiting ?? {};
@@ -492,9 +497,14 @@ async function run({
       onSent: at => {
         sample.sentAt = at;
       },
+      queued: () => procs.reader.ready.length,
       onTrimmed: ageMs => {
         trimmed++;
         log({event: 'backlog-trim', ageMs: tenths(ageMs), trimBacklogMs});
+      },
+      onDrained: queued => {
+        drained++;
+        log({event: 'backlog-drain', queued, drainGates});
       },
       onSkipped: countSkipped,
       onDecoded: countDecoded,
@@ -782,6 +792,7 @@ async function run({
       minFps: summary.minFps,
       dropped: summary.dropped,
       ...(summary.trimmed !== undefined && {trimmed: summary.trimmed}),
+      ...(summary.drained !== undefined && {drained: summary.drained}),
       idr: summary.idr,
       requestsPerFrame: summary.requestsPerFrame,
       bridgeMsPerFrame: summary.bridgeMsPerFrame,

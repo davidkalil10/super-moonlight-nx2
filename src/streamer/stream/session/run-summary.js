@@ -115,6 +115,7 @@ function summarize(rows, {warmup = DEFAULT_WARMUP} = {}) {
     decodedFps: steady.length ? +(sum('decoded') / steady.length).toFixed(2) : 0,
     skipped: sum('skipped'),
     ...(steady.some(row => 'trimmed' in row) && {trimmed: sum('trimmed')}),
+    ...(steady.some(row => 'drained' in row) && {drained: sum('drained')}),
     maxQueued: steady.length ? Math.max(...steady.map(row => row.queued || 0)) : 0,
     dropped: sum('dropped'),
     idr: sum('idr'),

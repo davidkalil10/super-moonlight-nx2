@@ -33,6 +33,8 @@ const SKIP_BACKLOG = 2;
 const MAX_SKIPS = 4;
 /** Gates in a row the unit in hand must be stale at before one output is trimmed. */
 const TRIM_FRAMES = 3;
+/** Gates a drain skip waits out before the rule looks again; its freed slot shows at the next. */
+const DRAIN_COOL = 3;
 const SKIP_RULES = ['backlog', 'vsync'];
 const DEFAULT_PRESENT_HZ = 60;
 
@@ -43,8 +45,9 @@ const DEFAULT_PRESENT_HZ = 60;
  * The staggered scheduler. push() and finish() take hooks: `sink` gives each output a
  * destination (workerDestination, or discardDestination when skipping), `enter` names each
  * step, and onDecoded, onPresented and onSkipped count outputs. push() also calls onGate with
- * the time its gate write starts, onSent with the time its unit went out and onTrimmed with
- * the age of the unit in hand when a trim skips an output.
+ * the time its gate write starts, onSent with the time its unit went out, onTrimmed with
+ * the age of the unit in hand when a trim skips an output, and onDrained with the units waiting
+ * when a drain does. `queued` reads how many units wait behind the one in hand.
  * @param {object} [options]
  * @param {(options: any) => Promise<any>} [options.createWorker]
  * @param {number} [options.timeoutMs]
@@ -53,6 +56,8 @@ const DEFAULT_PRESENT_HZ = 60;
  * @param {number} [options.skipBacklog] host backlog above which an output is skipped
  * @param {'backlog' | 'vsync'} [options.skipRule]
  * @param {number | null} [options.trimBacklogMs] age of the unit in hand that counts as stale
+ * @param {number | null} [options.drainGates] gates in a row with units waiting at the gate
+ *   before one output is skipped to drain them
  * @param {boolean} [options.gateOnReceive] gate each unit as soon as it is sent
  * @param {boolean} [options.gateQueue] run those gates off push() (gate on receive only)
  * @param {0 | 1 | 2} [options.lag] fetch each output this many gates after its decode opened
@@ -72,6 +77,7 @@ function create({
   skipBacklog = SKIP_BACKLOG,
   skipRule = 'backlog',
   trimBacklogMs = null,
+  drainGates = null,
   gateOnReceive = false,
   gateQueue = false,
   lag = gates.OUTPUT_LAG,
@@ -91,6 +97,8 @@ function create({
   if (lag !== 0 && lag !== 1 && lag !== gates.OUTPUT_LAG)
     throw Error('The staggered output lag is 0, 1 or 2');
   if (gateQueue && !gateOnReceive) throw Error('The gate queue needs gate on receive');
+  if (drainGates !== null && vsyncRule) throw Error('The backlog drain needs the backlog rule');
+  if (drainGates !== null && gateQueue) throw Error('The backlog drain is untested with the queue');
 
   const periodMs = 1000 / presentHz;
   let worker = null;
@@ -120,7 +128,8 @@ function create({
     tailDrained: 0,
     rereads: 0,
     appliedPeriodMs: periodMs,
-    ...(trimBacklogMs !== null && {trimmed: 0})
+    ...(trimBacklogMs !== null && {trimmed: 0}),
+    ...(drainGates !== null && {drained: 0})
   };
   let published = null;
   /** The publication before `published`, logged with a failed check. */
@@ -138,6 +147,8 @@ function create({
   let skips = 0;
   let stale = 0;
   let cooling = 0;
+  let behind = 0;
+  let drainCooling = 0;
   const waiting = {};
   const acquireWaits = createAcquireWaits();
   const fetchWaits = createAcquireWaits();
@@ -335,6 +346,21 @@ function create({
     return stale >= TRIM_FRAMES;
   }
 
+  /**
+   * Whether units have waited behind the one in hand, read at the gate, at drainGates gates in a
+   * row since the last drain's cooldown (backlog-drain note: push-time depth can't see them).
+   * @param {number} queued
+   */
+  function drainDue(queued) {
+    if (drainGates === null) return false;
+    if (drainCooling > 0) {
+      drainCooling--;
+      return false;
+    }
+    behind = queued >= 1 ? behind + 1 : 0;
+    return behind >= drainGates;
+  }
+
   /** Reserves the next publication and keeps the one before it. */
   async function nextPublication(sink, presentation) {
     const next = await sink.workerDestination(presentation);
@@ -381,7 +407,8 @@ function create({
    * or a due trim calls for a skip and the skip run is short enough, else a published one.
    * Under the vsync rule it is a discard surface while a publication is pending.
    */
-  async function target(sink, snapshot, backlog, arrivedAt, onTrimmed) {
+  async function target(sink, snapshot, hooks) {
+    const {backlog = 0, arrivedAt, onTrimmed, onDrained, queued} = hooks;
     const presentation = {current: snapshot.current, applied: snapshot.nativeApplied};
     if (vsyncRule) {
       if (pending) return sink.discardDestination(presentation);
@@ -391,17 +418,26 @@ function create({
     }
 
     const trim = trimDue(arrivedAt, backlog);
-    const wantsSkip = backlog > skipBacklog || trim;
+    const depth = queued?.() ?? 0;
+    const drain = drainDue(depth);
+    const wantsSkip = backlog > skipBacklog || trim || drain;
     if (published && wantsSkip && skips < MAX_SKIPS) {
       const discard = await sink.discardDestination(presentation);
       if (discard) {
         skips++;
         stale = 0;
-        // Not over the backlog, so the trim asked for this skip.
-        if (backlog <= skipBacklog) {
+        behind = 0;
+        if (backlog > skipBacklog) return discard;
+
+        // Not over the backlog, so the trim or the drain asked for this skip.
+        if (trim) {
           cooling = TRIM_FRAMES;
           counts.trimmed++;
           onTrimmed?.(now() - arrivedAt);
+        } else {
+          drainCooling = DRAIN_COOL;
+          counts.drained++;
+          onDrained?.(depth);
         }
         return discard;
       }
@@ -440,8 +476,8 @@ function create({
    * @returns {Promise<{destination: any, snapshot: any}>} The status the gate opens on too.
    */
   async function pickDestination(sequence, snapshot, expected, watch, link, hooks) {
-    const {sink, onPresented, onTrimmed, arrivedAt, backlog} = hooks;
-    let destination = await target(sink, snapshot, backlog, arrivedAt, onTrimmed);
+    const {sink, onPresented} = hooks;
+    let destination = await target(sink, snapshot, hooks);
 
     if (!destination && vsyncRule) {
       expected.ack = {
@@ -454,7 +490,7 @@ function create({
         withPrevious
       );
       confirm(snapshot, onPresented);
-      destination = await target(sink, snapshot, backlog);
+      destination = await target(sink, snapshot, hooks);
     }
 
     destinations.set(sequence - lag, destination);
@@ -522,6 +558,8 @@ function create({
       onSkipped,
       onGate,
       onTrimmed,
+      onDrained,
+      queued,
       arrivedAt,
       backlog = 0
     }
@@ -547,7 +585,7 @@ function create({
     let destination = null;
     if (sequence > lag) {
       enter('destination');
-      const hooks = {sink, onPresented, onTrimmed, arrivedAt, backlog};
+      const hooks = {sink, onPresented, onTrimmed, onDrained, queued, arrivedAt, backlog};
       ({destination, snapshot} = await pickDestination(
         sequence,
         snapshot,

@@ -24,6 +24,7 @@ function checkFlags(args, flags) {
   if (presentHz !== 60 && presentHz !== 120) throw Error('--present-hz takes 60 or 120');
 
   checkSkipFlags(flags);
+  checkDrainFlag(flags);
   checkGateFlags(flags);
   checkRunFlags(args, flags);
   if (flags.stageTicks && !args.includes('--staggered'))
@@ -44,6 +45,15 @@ function checkSkipFlags({skipBacklog, skipRule, decodeWait, trimBacklogMs}) {
   if (!(trimBacklogMs > 0)) throw Error('--trim-backlog-ms takes a unit age in milliseconds');
   if (skipRule === 'vsync') throw Error('--trim-backlog-ms needs --skip-rule backlog');
   if (skipBacklog < 1) throw Error('--trim-backlog-ms needs --skip-backlog 1 or more');
+}
+
+/** --drain-gates: a gate count, on the backlog rule, without the gate queue. */
+function checkDrainFlag({drainGates, skipRule, gateQueue}) {
+  if (drainGates === null) return;
+  if (!Number.isInteger(drainGates) || drainGates < 1 || drainGates > 8)
+    throw Error('--drain-gates takes 1 to 8 gates');
+  if (skipRule === 'vsync') throw Error('--drain-gates needs --skip-rule backlog');
+  if (gateQueue) throw Error('--drain-gates is untested with --gate-queue');
 }
 
 /** --avoid-window, --gate-on-receive, --gate-queue and --output-lag; refusals as in CLAUDE.md. */
@@ -121,6 +131,7 @@ function parseOptions(args, rpc, width, height, fps, env = process.env) {
     presentHz: cli.number(args, '--present-hz', 60),
     skipRule,
     trimBacklogMs: cli.number(args, '--trim-backlog-ms', null),
+    drainGates: cli.number(args, '--drain-gates', null),
     gateOnReceive: args.includes('--gate-on-receive'),
     gateQueue: args.includes('--gate-queue'),
     outputLag: cli.number(args, '--output-lag', null),

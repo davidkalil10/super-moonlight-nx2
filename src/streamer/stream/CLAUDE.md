@@ -75,6 +75,7 @@ staggered-output-plan.js). Their status words are read by staggered-status.js.
 | `--skip-backlog N\|off`      | skip an output once more than N units are queued             | 2 (1 under vsync) |
 | `--skip-rule backlog\|vsync` | publish by backlog, or by the predicted vsync                | backlog           |
 | `--trim-backlog-ms N`        | skip one output after 3 gates whose unit in hand is N ms old | off               |
+| `--drain-gates N`            | skip one output after N gates with units waiting at the gate | off               |
 | `--gate-on-receive`          | prime and gate N when it arrives, not on N+1 (60 Hz)         | off               |
 | `--gate-queue`               | run those gates off push(), at most one unit primed ahead    | off               |
 | `--decode-wait`              | sleep through a pending acquire (vsync rule only)            | off               |
@@ -105,6 +106,9 @@ the child processes in stream-children.js.
 - The run stops on SIGINT/SIGTERM, `--duration`, Moonlight leaving the console, or a console that
   stops answering (invariant 16).
 - Run record: manifest.json, events.jsonl, stats.jsonl (one row per statsMs) and summary.json.
+- Why the drain reads the reader at the gate: units step up during the status wait, so the
+  push-time `backlog` the skip and trim rules read stays 0 at a standing step 2. A skipped
+  output has no applied-ack, so the next gate skips one refresh wait and the step drains.
 - A row's `au.gateAgeMs` is the age of the unit whose push ran the gate. Under the default gate
   that gate opens the unit before it, whose age is `au.ownGateMs` and includes the wait for N+1.
   Under `--gate-on-receive` the two are equal.
