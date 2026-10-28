@@ -284,6 +284,7 @@ function checkFlags(args, flags) {
   if (gateQueue && !gateOnReceive) throw Error('--gate-queue needs --gate-on-receive');
   if (outputLag !== null && outputLag !== 0 && outputLag !== 1 && outputLag !== 2)
     throw Error('--output-lag takes 0, 1 or 2');
+  if (outputLag === 0 && gateQueue) throw Error('--output-lag 0 is untested with --gate-queue');
   if (outputLag === 0 && gateOnReceive)
     throw Error('--output-lag 0 is untested with --gate-on-receive');
   if (outputLag === 0 && presentHz !== 60)

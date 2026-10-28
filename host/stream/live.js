@@ -13,7 +13,7 @@
  *   [--gate-on-receive] (prime and gate each unit as it arrives instead of on the next one)
  *   [--gate-queue] (with --gate-on-receive: queue each gate instead of awaiting it in push)
  *   [--output-lag 0|1|2] (fetch each output 0, 1 or 2 gates after its decode opened; 2 by
- *     default, 0 only at 60 Hz without --gate-on-receive)
+ *     default, 0 only at 60 Hz without --gate-on-receive or --gate-queue)
  *   [--decode-wait] (with --skip-rule vsync) [--receive-wait] [--avoid-window BEFORE-AFTER]
  *   [--socket-audio | --socket-audio-tone] (PCM or a 500 Hz test tone over native TCP to a
  *     console worker)

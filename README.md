@@ -134,7 +134,7 @@ node host/ui/service.js [RUN_DIR]
 | `--trim-backlog-ms N` | off | staggered, backlog rule, `--skip-backlog` 1 or more: skip one output once the unit in hand is N ms old with a unit queued, at 3 gates in a row, at most once per 6 gates; counted as `trimmed`. Pick N above the default run's `au.gateAgeMs` plus a margin |
 | `--gate-on-receive` | off | staggered, 60 Hz only: open decode N when unit N arrives instead of on N+1 |
 | `--gate-queue` | off | with `--gate-on-receive`: queue each gate behind its send instead of awaiting it, at most one unit primed ahead of the console's receive |
-| `--output-lag 0\|1\|2` | `2` | staggered: fetch each output 0, 1 or 2 gates after its decode; 0 is 60 Hz only, without `--gate-on-receive` |
+| `--output-lag 0\|1\|2` | `2` | staggered: fetch each output 0, 1 or 2 gates after its decode; 0 is 60 Hz only, without `--gate-on-receive` or `--gate-queue` |
 | `--receive-wait` | off | sleep to the predicted receive |
 | `--avoid-window B-A` | off | keep status reads out of B ms before to A ms after a predicted event (needs a wait flag) |
 | `--queue N` | `8` | host access-unit queue, 1 to 16 |

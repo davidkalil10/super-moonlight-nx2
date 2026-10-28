@@ -1358,6 +1358,10 @@ test('--output-lag reaches the staggered scheduler and takes 0 to 2', {timeout: 
       /--output-lag 0 is untested with --gate-on-receive/
     ],
     [
+      ['--staggered', '--output-lag', '0', '--gate-on-receive', '--gate-queue'],
+      /--output-lag 0 is untested with --gate-queue/
+    ],
+    [
       ['--staggered', '--output-lag', '0', '--present-hz', '120'],
       /--output-lag 0 is untested at --present-hz 120/
     ]
