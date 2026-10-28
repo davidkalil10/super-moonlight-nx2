@@ -266,15 +266,6 @@ const SEND_RESULTS = {1: STAMP.sendStatus, 2: STAMP.nextSlotStatus};
 const TICKED_SEND_RESULTS = {1: STAMP.sendStatus, 2: STAMP.submitTick, 3: STAMP.nextSlotStatus};
 
 /**
- * The console tick call of the stage measurement, or none while it is off.
- * @param {number | null} ticks
- */
-function tickCall(ticks) {
-  if (ticks === null) return [];
-  return [{function: ticks, args: [0, 0, 0, 0]}];
-}
-
-/**
  * Address helpers for one plan: the worker's regions, control page and ring words, and the
  * sdk entry points every frame calls.
  * @param {{sdk: number, base: number, control: number, mapped: number}} options
@@ -315,7 +306,7 @@ function receiveCalls(
       function: recvFunction,
       args: [fd, scratch, {u32: descriptor + DESCRIPTOR.length}, MSG_WAITALL]
     },
-    ...tickCall(ticks),
+    ...status.tickCall(ticks),
     {
       function: copy,
       args: [ringAt(STAMP.receiveSequence), descriptor + DESCRIPTOR.sequence, SEQUENCE_BYTES, 0]
@@ -383,7 +374,7 @@ function sendCalls({at, ringAt, copy, jump}, slot, {scratch, functions, decoder,
         0
       ]
     },
-    ...tickCall(ticks),
+    ...status.tickCall(ticks),
     {
       function: functions.acquireInput,
       args: [decoder, ringAt(STAMP.nextIndex), ringAt(STAMP.inputCount), 0]

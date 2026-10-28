@@ -26,6 +26,15 @@ const FETCH = {setStatus: 0, getStatus: 8, releaseStatus: 16, sequence: 24};
 const TICKS = {receive: 0x210, submit: 0x240, ready: 0x288, publish: 0x290};
 const SEQUENCE_BYTES = 4;
 
+/**
+ * The console tick call both plans stamp into TICKS of the stage measurement, or none while it is off.
+ * @param {number | null} ticks
+ */
+function tickCall(ticks) {
+  if (ticks === null) return [];
+  return [{function: ticks, args: [0, 0, 0, 0]}];
+}
+
 const READ_START = ring.CONTROL.current;
 const READ_END = STATUS.fetch + FETCH.sequence + SEQUENCE_BYTES;
 
@@ -268,4 +277,4 @@ function check(snapshot, expected) {
   };
 }
 
-export {STATUS, TICKS, READ_START, READ_END, parse, check, checkOutput};
+export {STATUS, TICKS, READ_START, READ_END, parse, check, checkOutput, tickCall};

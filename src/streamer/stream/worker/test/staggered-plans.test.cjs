@@ -1206,7 +1206,7 @@ test('without stage ticks the output frames are the plain ones', () => {
   }
 });
 
-test('stage ticks stamp the ready after the output wait and the publish before its sequence', () => {
+test('stage ticks stamp the ready after the output wait, the publish before its sequence', () => {
   const ticks = outAddresses.sdk + timing.functions.tick.offset;
   const plain = output.plan(outAddresses);
   const ticked = output.plan({...outAddresses, ticks});

@@ -190,15 +190,6 @@ const ACQUIRE_RESULTS = {1: STAMP.acquireStatus};
 const TICKED_ACQUIRE_RESULTS = {1: STAMP.readyTick, 2: STAMP.acquireStatus};
 
 /**
- * The console tick call of the stage measurement, or none while it is off.
- * @param {number | null} ticks
- */
-function tickCall(ticks) {
-  if (ticks === null) return [];
-  return [{function: ticks, args: [0, 0, 0, 0]}];
-}
-
-/**
  * Address helpers for one plan: the worker's regions, control page and ring words, and the
  * sdk entry points every frame calls.
  * @param {{sdk: number, base: number, control: number, mapped: number}} options
@@ -230,7 +221,7 @@ function acquireCalls(
   const descriptor = at(CONTROL.descriptors[slot]);
   return [
     {function: sync('waitEvent'), args: [event, 0, 0, 0]},
-    ...tickCall(ticks),
+    ...status.tickCall(ticks),
     {
       function: functions.acquireOutput,
       args: [
@@ -315,7 +306,7 @@ function fetchCalls(
         0
       ]
     },
-    ...tickCall(ticks),
+    ...status.tickCall(ticks),
     {
       function: copy,
       args: [
