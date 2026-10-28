@@ -11,6 +11,9 @@
  * sender. --sources is intentionally not supported here; the extra pad sources live far outside
  * that window.
  *
+ * Each change of the console + or - goes to stderr with the wall time, so a console hang can be
+ * matched against a + press (SB4 may act on + itself).
+ *
  * With --counts-fd N, the reads' bridge exchanges and time go out on that descriptor once a
  * second as {exchanges, bridgeMs, pad} lines, for the stream's stats rows (stage "input"); pad
  * is how fresh the pad state was at each read (pad-age.js).
@@ -23,7 +26,7 @@ import path from 'node:path';
 import * as session from '../../../hbl-platform/sdk/host/session.js';
 import * as cli from '../../../hbl-platform/sdk/cli.js';
 import {STATE} from '../../../hbl-platform/sdk/host/layout.js';
-import {NEUTRAL, decode, toMoonlight, same, NPAD_BYTES} from './controller.js';
+import {FLAG, NEUTRAL, decode, toMoonlight, same, NPAD_BYTES} from './controller.js';
 import {TOUCH_BYTES, parseTouch, createTracker, step, flush, touchLine} from './touch.js';
 import {UI, UI_MAGIC} from '../../tools/moonlight/ring.js';
 import {instrument} from '../stream/bridge-counter.js';
@@ -38,6 +41,8 @@ const SOURCE_CHECK_MS = 250;
 const OVERLAY_CHECK_MS = 100;
 /** How often the bridge counts go out on --counts-fd. */
 const COUNTS_MS = 1000;
+/** Console + and -, which reach the game as Start and Back. */
+const KEYS = FLAG.play | FLAG.back;
 
 /**
  * @param {object} controller toMoonlight fields
@@ -48,13 +53,25 @@ function controllerLine(controller) {
 }
 
 /**
+ * @param {object | null} previous the controller state of the last frame
+ * @param {ReturnType<typeof toMoonlight>} controller
+ * @returns {string | null} the + and - state when either changed
+ */
+function keysNote(previous, controller) {
+  const keys = controller.buttonFlags & KEYS;
+  if (keys === ((previous?.buttonFlags ?? 0) & KEYS)) return null;
+  const state = flag => (keys & flag ? 'down' : 'up');
+  return `Input keys: + ${state(FLAG.play)}, - ${state(FLAG.back)}`;
+}
+
+/**
  * Pure per-frame mapping, shared with the tests: one state buffer in, the lines to emit plus
  * the controller state to remember next frame out.
  * @param {object | null} previous the controller state of the last frame
  * @param {Buffer} bytes READ_BYTES of state
  * @param {import('./touch.js').Tracker} tracker
  * @param {'position' | 'labels'} layout
- * @returns {{lines: string[], controller: ReturnType<typeof toMoonlight>}}
+ * @returns {{lines: string[], controller: ReturnType<typeof toMoonlight>, keys: string | null}}
  */
 function frame(previous, bytes, tracker, layout) {
   const lines = [];
@@ -62,7 +79,7 @@ function frame(previous, bytes, tracker, layout) {
   if (!same(previous, controller)) lines.push(controllerLine(controller));
   const {events} = step(tracker, parseTouch(bytes.subarray(STATE.touch)));
   if (events.length) lines.push(touchLine(events));
-  return {lines, controller};
+  return {lines, controller, keys: keysNote(previous, controller)};
 }
 
 /** The UI block words the gate reads in one go: uiMagic through uiOverlay. */
@@ -161,6 +178,7 @@ async function main() {
           const result = frame(previous, bytes, tracker, layout);
           previous = result.controller;
           for (const line of result.lines) write(line);
+          if (result.keys) process.stderr.write(`${result.keys} at ${new Date().toISOString()}\n`);
         }
       } catch (error) {
         process.stderr.write('Input read failed: ' + error.message + '\n');

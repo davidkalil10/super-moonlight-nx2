@@ -6,7 +6,8 @@ const {
   toMoonlight,
   same,
   readController,
-  NEUTRAL
+  NEUTRAL,
+  NPAD
 } = require('../../../host/input/controller.js');
 const {
   TOUCH_BYTES,
@@ -346,4 +347,20 @@ test('pad rows from one stats row merge with means weighted by reads', () => {
     ageMaxMs: 9
   });
   assert.deepEqual(padAge.merge([{reads: 0}]), {reads: 0});
+});
+
+test('frame notes each change of + and -, and nothing else', () => {
+  const tracker = createTracker();
+  const plus = NPAD.plus;
+  const minus = NPAD.minus;
+  const run = (previous, buttons) => frame(previous, stateBytes({buttons}), tracker);
+  const idle = run(null, 0);
+  assert.equal(idle.keys, null);
+  const down = run(idle.controller, plus);
+  assert.equal(down.keys, 'Input keys: + down, - up');
+  assert.equal(run(down.controller, plus | NPAD.a).keys, null);
+  const both = run(down.controller, plus | minus);
+  assert.equal(both.keys, 'Input keys: + down, - down');
+  assert.equal(run(both.controller, 0).keys, 'Input keys: + up, - up');
+  assert.equal(run(null, minus).keys, 'Input keys: + up, - down');
 });
