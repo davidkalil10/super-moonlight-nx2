@@ -1,9 +1,6 @@
 /**
- * The host's checked gate write for the staggered lag-2 path. One write covers the input
- * worker's descriptors and the output worker's descriptors, which sit together in the shared
- * control block, so a single exchange both opens decode of access unit N and names the outputs
- * the output worker handles next: N-2 (acquired, or a placeholder before it exists) and N-1.
- * With lag 0 they are N itself, fetched as soon as it is acquired, and N+1.
+ * The host's checked gate write: one exchange opens decode of unit N and names the next two
+ * outputs, N-2 (or a placeholder) and N-1 at lag 2, N and N+1 at lag 0.
  */
 import * as input from './staggered-input-plan.js';
 import * as output from './staggered-output-plan.js';
@@ -74,6 +71,7 @@ function gateWrite({
   });
   const bytes = Buffer.alloc(WRITE_BYTES);
   inputBytes.copy(bytes, 0);
+
   const outputSequence = lagged(current.sequence, lag);
   const acquired = lag === 0 ? current.sequence - 1 : outputSequence;
   const behind = lag === OUTPUT_LAG ? 'two AUs' : 'one AU';
@@ -81,19 +79,21 @@ function gateWrite({
     throw Error(`Staggered acquire is not ${behind} behind decode`);
   if (!expected.acquire && current.sequence > Math.max(lag, 1))
     throw Error('Staggered output acquisition is missing');
-  // One fetch signal at a time: the fetch gate is a single auto-clear event.
-  if (lag === 0 && expected.acquire && expected.fetch?.sequence !== acquired)
+  // Invariant 3.
+  const fetchChecked = expected.fetch?.sequence === acquired;
+  if (lag === 0 && expected.acquire && !fetchChecked)
     throw Error('Staggered fetch of the acquired output is not checked');
-  const first =
-    lag === 0 || expected.acquire
-      ? output.outputDescriptor({
-          auSequence: outputSequence,
-          destination,
-          frame,
-          publication,
-          published
-        })
-      : output.placeholderDescriptor(outputSequence);
+
+  const named = lag === 0 || expected.acquire;
+  const first = named
+    ? output.outputDescriptor({
+        auSequence: outputSequence,
+        destination,
+        frame,
+        publication,
+        published
+      })
+    : output.placeholderDescriptor(outputSequence);
   const second = output.placeholderDescriptor(outputSequence + 1);
   placeOutput(bytes, first);
   placeOutput(bytes, second);

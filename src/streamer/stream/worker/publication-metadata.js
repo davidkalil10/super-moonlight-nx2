@@ -1,10 +1,6 @@
 /**
- * The publication metadata of a native ring surface.
- *
- * metadata() packs the 32 bytes that tell the ring shader which native surface to show and
- * how the decoded frame is laid out in it: the surface index, the frame geometry and color
- * space, a checksum over all of them and the sequence. The staggered output frames publish
- * through it.
+ * The 32-byte publication metadata that tells the ring shader which native surface to show
+ * and how the frame is laid out in it. The staggered output frames publish through it.
  */
 import * as ring from '../../shared/ring.js';
 
@@ -29,35 +25,48 @@ const METADATA = {
 const WORD_BYTES = 4;
 
 /**
+ * @param {any} value
+ * @param {number} min
+ * @param {number} max
+ * @returns {boolean}
+ */
+function outsideRange(value, min, max) {
+  return !Number.isInteger(value) || value < min || value > max;
+}
+
+/**
+ * @param {any} destination
+ * @returns {boolean}
+ */
+function invalidDestination(destination) {
+  if (!destination) return true;
+  if (!SURFACES.includes(destination.index)) return true;
+  if (!Number.isSafeInteger(destination.address) || destination.address <= 0) return true;
+  if (!Number.isInteger(destination.bytes) || destination.bytes < ring.FRAME_BYTES) return true;
+  if (outsideRange(destination.sequence, 1, MAX_SEQUENCE)) return true;
+  return !COLORS.includes(destination.color);
+}
+
+/**
+ * @param {any} frame
+ * @returns {boolean}
+ */
+function invalidFrame(frame) {
+  if (!frame) return true;
+  if (outsideRange(frame.width, MIN_DIMENSION, MAX_WIDTH)) return true;
+  if (outsideRange(frame.height, MIN_DIMENSION, MAX_HEIGHT)) return true;
+  if (!Number.isInteger(frame.stride) || frame.stride < frame.width) return true;
+  return !Number.isInteger(frame.sliceHeight) || frame.sliceHeight < frame.height;
+}
+
+/**
  * @param {any} destination
  * @param {any} frame
  * @returns {boolean}
  */
 function invalidLayout(destination, frame) {
-  return (
-    !destination ||
-    !SURFACES.includes(destination.index) ||
-    !Number.isSafeInteger(destination.address) ||
-    destination.address <= 0 ||
-    !Number.isInteger(destination.bytes) ||
-    destination.bytes < ring.FRAME_BYTES ||
-    !Number.isInteger(destination.sequence) ||
-    destination.sequence < 1 ||
-    destination.sequence > MAX_SEQUENCE ||
-    !COLORS.includes(destination.color) ||
-    !frame ||
-    !Number.isInteger(frame.width) ||
-    frame.width < MIN_DIMENSION ||
-    frame.width > MAX_WIDTH ||
-    !Number.isInteger(frame.height) ||
-    frame.height < MIN_DIMENSION ||
-    frame.height > MAX_HEIGHT ||
-    !Number.isInteger(frame.stride) ||
-    frame.stride < frame.width ||
-    !Number.isInteger(frame.sliceHeight) ||
-    frame.sliceHeight < frame.height ||
-    (frame.stride * frame.sliceHeight * 3) / 2 > destination.bytes
-  );
+  if (invalidDestination(destination) || invalidFrame(frame)) return true;
+  return (frame.stride * frame.sliceHeight * 3) / 2 > destination.bytes;
 }
 
 /**
@@ -70,6 +79,7 @@ function invalidLayout(destination, frame) {
 function metadata(destination, frame) {
   if (invalidLayout(destination, frame))
     throw Error('Invalid native output surface or frame layout');
+
   const fields = [
     destination.index,
     frame.width,
@@ -78,6 +88,7 @@ function metadata(destination, frame) {
     frame.sliceHeight,
     destination.color
   ];
+
   const value = Buffer.alloc(METADATA.bytes);
   fields.forEach((word, index) => value.writeUInt32LE(word, index * WORD_BYTES));
   value.writeUInt32LE(ring.nativeChecksum(destination.sequence, fields), METADATA.checksum);

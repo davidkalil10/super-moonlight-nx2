@@ -1,20 +1,6 @@
 /**
- * Lifecycle of the staggered input and output workers, two console threads that run the
- * frames of staggered-input-plan.js and staggered-output-plan.js.
- *
- * The control page holds the light events (decode gate 0x00, ignored fetch gate 0x10, fetch
- * gate 0x20, acquisition acknowledgement 0x30, and under gate on receive the length gate 0x80,
- * which starts signalled for AU 1), the dispatch words 0x40-0x7f, the descriptors
- * 0x100-0x2ff, the decoder output event 0x400 and its registration 0x440. The acknowledgement
- * is auto-clear and starts signalled for AU 1; the output worker signals it once per acquired
- * output (see staggered-input-plan.js for the order). A drain also stamps the next output's
- * placeholder, so the last tail output acquires under its own sequence instead of the one its
- * slot held two AUs earlier.
- *
- * Stopping the input worker points its dispatches at the exit frame first, then wakes the
- * decode gate and the acknowledgement, so a worker parked on either exits without another
- * SendInput. Whenever a worker may still be running or a gate write may have half landed, the
- * native objects are retained: nothing is finalized and SmileBASIC has to be restarted.
+ * Lifecycle of the staggered input and output workers, the console threads that run the frames
+ * of staggered-input-plan.js and staggered-output-plan.js. Control page: src/streamer/stream/CLAUDE.md.
  */
 import {allocate, release} from '../../../../../hbl-platform/sdk/native/allocate.js';
 import {verify} from '../../../../../hbl-platform/sdk/native/symbols.js';
@@ -143,18 +129,13 @@ const SEQUENCE_BYTES = 4;
  * @returns {boolean}
  */
 function isUnboundedSetup(transport, publication) {
-  return (
-    !transport ||
-    !Number.isInteger(transport.fd) ||
-    transport.fd < 0 ||
-    transport.maxAccessUnit !== 0x100000 ||
-    !Number.isSafeInteger(transport.recvFunction) ||
-    typeof transport.send !== 'function' ||
-    typeof transport.abort !== 'function' ||
-    !Number.isSafeInteger(publication?.mapped) ||
-    publication.mapped <= 0 ||
-    ![1, 2].includes(publication.color)
-  );
+  if (!transport || !Number.isInteger(transport.fd) || transport.fd < 0) return true;
+  if (transport.maxAccessUnit !== 0x100000) return true;
+  if (!Number.isSafeInteger(transport.recvFunction)) return true;
+  if (typeof transport.send !== 'function' || typeof transport.abort !== 'function') return true;
+
+  if (!Number.isSafeInteger(publication?.mapped) || publication.mapped <= 0) return true;
+  return ![1, 2].includes(publication.color);
 }
 
 /**
@@ -163,13 +144,17 @@ function isUnboundedSetup(transport, publication) {
  * @returns {boolean}
  */
 function hasRegistration(module, registration) {
-  return module.symbols.some(
-    symbol =>
-      symbol.name === registration.symbol &&
-      symbol.section &&
-      symbol.offset === registration.offset &&
-      symbol.size === registration.size
-  );
+  return module.symbols.some(symbol => isRegistration(symbol, registration));
+}
+
+/**
+ * @param {any} symbol
+ * @param {{symbol: string, offset: number, size: number}} registration
+ * @returns {boolean}
+ */
+function isRegistration(symbol, registration) {
+  if (symbol.name !== registration.symbol || !symbol.section) return false;
+  return symbol.offset === registration.offset && symbol.size === registration.size;
 }
 
 /**
@@ -239,16 +224,10 @@ function exitContext(sdk, base) {
  * @returns {boolean} True unless `initial` is a valid first access unit.
  */
 function isInvalidFirstUnit(initial, maxAccessUnit) {
-  return (
-    !initial ||
-    initial.sequence !== 1 ||
-    !Number.isInteger(initial.length) ||
-    initial.length < 1 ||
-    initial.length > maxAccessUnit ||
-    typeof initial.pts !== 'bigint' ||
-    initial.pts < 0n ||
-    initial.pts > MAX_PTS
-  );
+  if (!initial || initial.sequence !== 1) return true;
+  if (!Number.isInteger(initial.length) || initial.length < 1 || initial.length > maxAccessUnit)
+    return true;
+  return typeof initial.pts !== 'bigint' || initial.pts < 0n || initial.pts > MAX_PTS;
 }
 
 /**
@@ -264,11 +243,14 @@ function startDescriptors(initial, control) {
   descriptors.writeUInt32LE(initial.sequence, inputPlan.DESCRIPTOR.sequence);
   descriptors.writeUInt32LE(initial.length, inputPlan.DESCRIPTOR.length);
   descriptors.writeBigUInt64LE(initial.pts, inputPlan.DESCRIPTOR.pts);
-  for (const slot of inputPlan.CONTROL.descriptors)
+
+  for (const slot of inputPlan.CONTROL.descriptors) {
     descriptors.writeBigUInt64LE(
       BigInt(control + inputPlan.CONTROL.ignoredFetchGate),
       slot - gates.WRITE_OFFSET + inputPlan.DESCRIPTOR.fetchGate
     );
+  }
+
   for (const sequence of [1, 2]) {
     const descriptor = outputPlan.placeholderDescriptor(sequence);
     descriptor.copy(
@@ -276,6 +258,7 @@ function startDescriptors(initial, control) {
       outputPlan.CONTROL.descriptors[(sequence - 1) % 2] - gates.WRITE_OFFSET
     );
   }
+
   return descriptors;
 }
 
@@ -300,12 +283,8 @@ function drainDescriptors(sequence, descriptor) {
  * @returns {boolean}
  */
 function isInvalidInputBuffer(slot) {
-  return (
-    !Number.isSafeInteger(slot.address) ||
-    slot.address <= 0 ||
-    !Number.isSafeInteger(slot.capacity) ||
-    slot.capacity < 1
-  );
+  if (!Number.isSafeInteger(slot.address) || slot.address <= 0) return true;
+  return !Number.isSafeInteger(slot.capacity) || slot.capacity < 1;
 }
 
 /**
@@ -315,12 +294,19 @@ function isInvalidInputBuffer(slot) {
  */
 function holdsOutput(acquired, fetched) {
   const sequence = acquired.readUInt32LE(ACQUIRED.sequence);
-  return Boolean(
-    sequence &&
-      fetched.readUInt32LE() !== sequence &&
-      acquired.readBigUInt64LE(ACQUIRED.status) === 0n &&
-      acquired.readInt32LE(ACQUIRED.index) >= 0
-  );
+  if (!sequence || fetched.readUInt32LE() === sequence) return false;
+
+  const acquireSucceeded = acquired.readBigUInt64LE(ACQUIRED.status) === 0n;
+  return acquireSucceeded && acquired.readInt32LE(ACQUIRED.index) >= 0;
+}
+
+/**
+ * @param {WorkerState} worker
+ * @returns {boolean} True while the worker's thread may exist and is not joined.
+ */
+function mayBeRunning(worker) {
+  if (worker.uncertain) return true;
+  return Boolean(worker.thread) && !worker.joined;
 }
 
 /**
@@ -335,12 +321,14 @@ async function verifySetup(rpc, module) {
   await verifyCode(rpc);
   await verifyCopy(rpc);
   await verifyPreamble(rpc);
+
   /** @type {Record<string, number>} */
   const sync = {};
   for (const name of SYNC_FUNCTIONS) {
     await verify(rpc, sdk + SYNC[name].offset, SYNC[name].hex);
     sync[name] = sdk + SYNC[name].offset;
   }
+
   const registration = MOVIE_EVENTS.registerClientEvents;
   if (!hasRegistration(module, registration))
     throw Error('The loaded movie module has no matching RegisterClientEvents');
@@ -384,17 +372,22 @@ async function allocateRegions(rpc, transport) {
 async function initializeControl(rpc, sync, control, gateOnReceive) {
   const at = offset => control + offset;
   await rpc.write(control, initialControl(control));
-  const initialized = [];
-  for (const [offset, signalled] of [
+
+  // Invariant 6: the ack starts signalled for AU 1; so does the length gate.
+  const lightEvents = [
     [inputPlan.CONTROL.decodeGate, 0],
     [inputPlan.CONTROL.ignoredFetchGate, 0],
     [outputPlan.CONTROL.fetchGate, 0],
-    [ACQUIRE_ACK, 1],
-    ...(gateOnReceive ? [[inputPlan.CONTROL.lengthGate, 1]] : [])
-  ]) {
+    [ACQUIRE_ACK, 1]
+  ];
+  if (gateOnReceive) lightEvents.push([inputPlan.CONTROL.lengthGate, 1]);
+
+  const initialized = [];
+  for (const [offset, signalled] of lightEvents) {
     await rpc.callAddress(sync.initializeLightEvent, [at(offset), signalled, AUTO_CLEAR, 0], SHORT);
     initialized.push({offset, finalize: sync.finalizeLightEvent});
   }
+
   await rpc.callAddress(sync.initializeEvent, [at(OUTPUT_EVENT), 0, AUTO_CLEAR, 0], SHORT);
   initialized.push({offset: OUTPUT_EVENT, finalize: sync.finalizeEvent});
   return initialized;
@@ -438,8 +431,9 @@ function planWorkers({
     functions,
     decoder,
     acquireAck: at(ACQUIRE_ACK),
-    ...(gateOnReceive && {lengthGate: at(inputPlan.CONTROL.lengthGate)})
+    lengthGate: gateOnReceive ? at(inputPlan.CONTROL.lengthGate) : null
   });
+
   const video = outputPlan.plan({
     sdk,
     base: outputBase,
@@ -452,6 +446,7 @@ function planWorkers({
     output,
     format
   });
+
   return [
     {name: 'input', base: inputBase, plan: input, thread: null, joined: false, uncertain: false},
     {name: 'output', base: outputBase, plan: video, thread: null, joined: false, uncertain: false}
@@ -488,6 +483,7 @@ async function create({
 }) {
   if (isUnboundedSetup(transport, publication))
     throw Error('Staggered worker needs bounded TCP and native publication');
+
   const sdk = rpc.a.sdk;
   const sync = await verifySetup(rpc, module);
   const regions = await allocateRegions(rpc, transport);
@@ -509,6 +505,7 @@ async function create({
   const [inputWorker, outputWorker] = workers;
   const input = inputWorker.plan;
   const video = outputWorker.plan;
+
   let started = false;
   let stopped = false;
   let closed = false;
@@ -516,6 +513,16 @@ async function create({
   let decodeGateSignals = 0;
   let inputBufferCreated = false;
   const cachedInputs = new Map();
+
+  /** @returns {boolean} True once started, unless closed or retained. */
+  function isLive() {
+    return started && !closed && !retained;
+  }
+
+  /** @returns {boolean} True between start() and stop(), unless closed or retained. */
+  function isRunning() {
+    return isLive() && !stopped;
+  }
 
   async function destroyInputBuffer() {
     if (!inputBufferCreated) return;
@@ -534,6 +541,7 @@ async function create({
     const plan = worker.plan;
     for (const [address, bytes] of frameWrites(plan, first, second))
       await rpc.write(address, bytes);
+
     for (const name of [first, second]) {
       for (let slot = 0; slot < 2; slot++) {
         const bytes = plan[name][slot].frame;
@@ -541,6 +549,7 @@ async function create({
         if (!actual.equals(bytes)) throw Error(`Staggered ${worker.name} frame readback differs`);
       }
     }
+
     await rpc.write(plan.locations.exit, exitContext(sdk, worker.base));
   }
 
@@ -566,12 +575,14 @@ async function create({
         video.locations.exit
       ]
     ];
-    for (const [offsets, destinations, exit] of pairs)
-      for (let slot = 0; slot < 2; slot++)
-        bytes.writeBigUInt64LE(
-          BigInt(stopping ? exit : destinations[slot]),
-          offsets[slot] - DISPATCH_OFFSET
-        );
+
+    for (const [offsets, destinations, exit] of pairs) {
+      for (let slot = 0; slot < 2; slot++) {
+        const target = stopping ? exit : destinations[slot];
+        bytes.writeBigUInt64LE(BigInt(target), offsets[slot] - DISPATCH_OFFSET);
+      }
+    }
+
     return bytes;
   }
 
@@ -582,13 +593,16 @@ async function create({
    */
   async function stopWorker(worker) {
     if (!worker.thread || worker.joined) return;
+
     try {
+      // Invariant 7: dispatches lead to the exit before any wake.
       const offsets =
         worker === inputWorker
           ? [...inputPlan.CONTROL.sendDispatch, ...inputPlan.CONTROL.receiveDispatch]
           : [...outputPlan.CONTROL.fetchDispatch, ...outputPlan.CONTROL.acquireDispatch];
       for (const offset of offsets)
         await rpc.write(at(offset), addressWord(worker.plan.locations.exit));
+
       if (worker === inputWorker) {
         transport.abort();
         await rpc.callAddress(sync.signalLightEvent, [at(inputPlan.CONTROL.decodeGate)], SHORT);
@@ -599,6 +613,7 @@ async function create({
         await rpc.callAddress(sync.signalEvent, [at(OUTPUT_EVENT)], SHORT);
         await rpc.callAddress(sync.signalLightEvent, [at(outputPlan.CONTROL.fetchGate)], SHORT);
       }
+
       const done = await wait(rpc, worker.thread, {
         timeoutMs: stopTimeoutMs,
         pollMs: STOP_POLL_MS,
@@ -606,6 +621,7 @@ async function create({
         outputBytes: SHORT
       });
       if (!done) throw Error(`Staggered ${worker.name} did not stop; restart SmileBASIC`);
+
       await join(rpc, worker.thread, worker.base + EXIT_SLOT_OFFSET, {
         failed: `Staggered ${worker.name} pthread join failed`,
         outputBytes: SHORT
@@ -641,14 +657,10 @@ async function create({
      * @param {{sequence: number, length: number, pts: bigint}} initial The first access unit.
      */
     async start(initial) {
-      if (
-        started ||
-        stopped ||
-        closed ||
-        retained ||
-        isInvalidFirstUnit(initial, transport.maxAccessUnit)
-      )
+      const used = started || stopped || closed || retained;
+      if (used || isInvalidFirstUnit(initial, transport.maxAccessUnit))
         throw Error('Invalid first staggered access unit');
+
       await install(inputWorker, 'receive', 'send');
       await install(outputWorker, 'acquire', 'fetch');
       await rpc.write(at(DISPATCH_OFFSET), dispatchBytes());
@@ -658,10 +670,12 @@ async function create({
         Buffer.alloc(status.READ_END - status.STATUS.receive)
       );
       await rpc.callAddress(sync.clearEvent, [at(OUTPUT_EVENT)], SHORT);
+
       try {
         for (const worker of workers) {
           worker.uncertain = true;
-          const entry = worker.plan.locations[worker === inputWorker ? 'receive' : 'acquire'][0];
+          const first = worker === inputWorker ? 'receive' : 'acquire';
+          const entry = worker.plan.locations[first][0];
           worker.thread = await spawn(rpc, worker.base, entry, {
             failed: `Staggered ${worker.name} worker creation failed`,
             outputBytes: SHORT
@@ -672,6 +686,7 @@ async function create({
         retained = workers.some(worker => worker.uncertain);
         throw error;
       }
+
       started = true;
     },
 
@@ -689,16 +704,19 @@ async function create({
      * @param {any} options gates.gateWrite's options, less the gates and publication.
      */
     async openGates({holdFetch = false, ...options}) {
-      if (!started || closed || retained || workers.some(worker => worker.joined))
+      if (!isLive() || workers.some(worker => worker.joined))
         throw Error('Staggered gates are unavailable');
+
+      const fetchGate = holdFetch
+        ? inputPlan.CONTROL.ignoredFetchGate
+        : outputPlan.CONTROL.fetchGate;
       const encoded = gates.gateWrite({
         ...options,
-        fetchGate: at(
-          holdFetch ? inputPlan.CONTROL.ignoredFetchGate : outputPlan.CONTROL.fetchGate
-        ),
+        fetchGate: at(fetchGate),
         ignoredFetchGate: at(inputPlan.CONTROL.ignoredFetchGate),
         publication
       });
+
       try {
         await rpc.writeAndCall(at(encoded.offset), encoded.bytes, sync.signalLightEvent, [
           at(inputPlan.CONTROL.decodeGate)
@@ -707,6 +725,7 @@ async function create({
         retained = true;
         throw error;
       }
+
       decodeGateSignals++;
     },
 
@@ -718,8 +737,9 @@ async function create({
      * @param {{sequence: number, length: number, pts: bigint}} unit
      */
     async primeInput(unit) {
-      if (!gateOnReceive || !started || closed || retained || inputWorker.joined)
+      if (!gateOnReceive || !isLive() || inputWorker.joined)
         throw Error('Staggered input prime is unavailable');
+
       const encoded = inputPlan.primeWrite(unit, at(inputPlan.CONTROL.ignoredFetchGate));
       try {
         await rpc.writeAndCall(at(encoded.offset), encoded.bytes, sync.signalLightEvent, [
@@ -736,8 +756,8 @@ async function create({
      * opens the fetch gate in one exchange.
      */
     async drainOutput({snapshot, expected, destination, frame}) {
-      if (!started || stopped || closed || retained || outputWorker.joined)
-        throw Error('Staggered output drain is unavailable');
+      if (!isRunning() || outputWorker.joined) throw Error('Staggered output drain is unavailable');
+
       status.checkOutput(snapshot, expected);
       const sequence = expected.acquire.sequence;
       const descriptor = outputPlan.outputDescriptor({
@@ -746,7 +766,9 @@ async function create({
         frame,
         publication
       });
+      // Invariant 12.
       const bytes = drainDescriptors(sequence, descriptor);
+
       try {
         await rpc.writeAndCall(
           at(outputPlan.CONTROL.descriptors[0]),
@@ -766,19 +788,22 @@ async function create({
      * @returns {Promise<{index: number, address: number, capacity: number}>}
      */
     async inputSlot(index) {
-      if (!started || stopped || closed || retained || !Number.isInteger(index) || index < 0)
+      if (!isRunning() || !Number.isInteger(index) || index < 0)
         throw Error('Staggered input slot is unavailable');
       if (cachedInputs.has(index)) return cachedInputs.get(index);
+
       if (!inputBufferCreated) {
         await rpc.callAddress(functions.bufferCreate, [at(INPUT_BUFFER)], SHORT);
         inputBufferCreated = true;
       }
+
       const {result: got} = await rpc.callAddress(
         functions.getInput,
         [decoder, index, at(INPUT_BUFFER)],
         SHORT
       );
       if (resultCode(got) !== 0) throw Error('Staggered decoder input buffer lookup failed');
+
       const {result: pointer} = await rpc.callAddress(
         functions.bufferData,
         [at(INPUT_BUFFER)],
@@ -789,6 +814,7 @@ async function create({
         [at(INPUT_BUFFER)],
         SHORT
       );
+
       const slot = {index, address: Number(pointer), capacity: Number(capacityValue)};
       if (isInvalidInputBuffer(slot)) throw Error('Invalid staggered decoder input buffer');
       cachedInputs.set(index, slot);
@@ -802,16 +828,16 @@ async function create({
      * @returns {Promise<{status: number, index: number}>}
      */
     async retryInputSlot(sequence) {
-      if (!started || stopped || closed || retained || !Number.isInteger(sequence) || sequence < 1)
+      if (!isRunning() || !Number.isInteger(sequence) || sequence < 1)
         throw Error('Staggered input slot retry is unavailable');
+
       const prior = await rpc.read(publication.mapped + NEXT_SLOT.offset, NEXT_SLOT.bytes);
       const priorStatus = prior.readBigUInt64LE(NEXT_SLOT.status);
-      if (
-        prior.readUInt32LE(NEXT_SLOT.sequence) !== sequence ||
-        prior.readInt32LE(NEXT_SLOT.index) >= 0 ||
-        !NO_INPUT_SLOT.includes(priorStatus)
-      )
+      const sameSequence = prior.readUInt32LE(NEXT_SLOT.sequence) === sequence;
+      const noSlot = prior.readInt32LE(NEXT_SLOT.index) < 0 && NO_INPUT_SLOT.includes(priorStatus);
+      if (!sameSequence || !noSlot)
         throw Error('Staggered input slot retry does not match a pending sequence');
+
       const {result} = await rpc.callAddress(
         functions.acquireInput,
         [decoder, publication.mapped + NEXT_INDEX, publication.mapped + INPUT_COUNT, 0],
@@ -820,10 +846,10 @@ async function create({
       const value = Buffer.alloc(8);
       value.writeBigUInt64LE(BigInt.asUintN(64, result));
       await rpc.write(publication.mapped + NEXT_SLOT.offset, value);
-      return {
-        status: resultCode(result),
-        index: (await rpc.read(publication.mapped + NEXT_INDEX, 4)).readInt32LE()
-      };
+
+      const code = resultCode(result);
+      const next = await rpc.read(publication.mapped + NEXT_INDEX, 4);
+      return {status: code, index: next.readInt32LE()};
     },
 
     stopInput: () => stopWorker(inputWorker),
@@ -837,13 +863,16 @@ async function create({
       if (retained || workers.some(worker => worker.uncertain))
         throw Error('Staggered worker state uncertain; native objects retained');
       if (stopped) return;
+
       if (!started) {
         await destroyInputBuffer();
         stopped = true;
         return;
       }
+
       await stopWorker(inputWorker);
       await stopWorker(outputWorker);
+
       const acquired = await rpc.read(publication.mapped + ACQUIRED.offset, ACQUIRED.bytes);
       const fetched = await rpc.read(publication.mapped + FETCH_SEQUENCE, SEQUENCE_BYTES);
       if (holdsOutput(acquired, fetched)) {
@@ -857,15 +886,17 @@ async function create({
           throw Error('Staggered held output release failed');
         }
       }
+
       await destroyInputBuffer();
       stopped = true;
     },
 
     /** Finalizes the events, then frees the regions, once no worker can be running. */
     async finalize() {
-      if (retained || workers.some(worker => worker.uncertain || (worker.thread && !worker.joined)))
+      if (retained || workers.some(mayBeRunning))
         throw Error('Staggered events retained while a worker may be running');
       if (closed) return;
+
       await destroyInputBuffer();
       for (const item of initialized.reverse())
         await rpc.callAddress(item.finalize, [at(item.offset)], SHORT);

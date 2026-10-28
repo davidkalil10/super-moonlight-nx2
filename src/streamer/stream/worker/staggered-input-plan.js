@@ -1,27 +1,6 @@
 /**
- * Input worker frames for the staggered lag-2 path.
- *
- * Per access unit N the receive frame reads N over native TCP and parks on the decode gate.
- * Once the host's checked gate write opens it, the frame signals the descriptor's fetch gate
- * (held output N-2, or the ignored gate before N=3), then waits for the output worker's
- * acquisition acknowledgement of N-1, and only then jumps through sendDispatch to the send
- * frame that submits N. Each submit therefore follows the acquisition of every earlier output,
- * so the auto-clear decoder event never carries two unacquired outputs. Releasing N-2 before
- * that wait is what lets the output worker reach N-1. The acknowledgement event starts
- * signalled for N=1, standing in for the host-decoded IDR. With output lag 0 the descriptor's
- * fetch gate is N's own, from N=1 on, so the fetch of N follows its acquire.
- *
- * Stop rewrites the dispatches to the exit frame before it signals the gate and the
- * acknowledgement, so a stop wake never reaches SendInput. A descriptor the worker can reach
- * before its checked gate write always names the ignored fetch gate (start and every gate
- * write fill the next descriptor that way), so a stop wake cannot open a fetch either.
- *
- * Each frame ends by restoring both of its slot's frames from their snapshots, since a frame
- * consumes itself as it runs, and jumping through a dispatch word to the other frame.
- *
- * With a length gate (gate on receive), the receive frame first waits on it: the host primes
- * unit N's descriptor and signals the gate when N arrives, so the gate write for N no longer
- * needs N+1 and can go out as soon as N is received. Its next descriptor is a placeholder.
+ * Input worker frames for the staggered lag-2 path: receive N, wait on the decode gate, open
+ * the fetch gate, wait for N-1's acquire ack, then SendInput N (Invariants 5-7).
  */
 import {build, CALL4_X19} from '../../../../../hbl-platform/smilebasic/engine/shared/frames.js';
 import {CODE, IPC_COPY} from '../../../../../hbl-platform/sdk/native/thread.js';
@@ -110,37 +89,49 @@ function locations(base) {
 }
 
 /**
+ * @param {any} value
+ * @returns {boolean} True for a positive safe integer.
+ */
+function isAddress(value) {
+  return Number.isSafeInteger(value) && value > 0;
+}
+
+/**
+ * @param {any} length
+ * @returns {boolean}
+ */
+function isUnitLength(length) {
+  return Number.isInteger(length) && length >= 1 && length <= MAX_ACCESS_UNIT_BYTES;
+}
+
+/**
+ * @param {any} pts
+ * @returns {boolean} True for a bigint that fits a u64.
+ */
+function isPts(pts) {
+  return typeof pts === 'bigint' && pts >= 0n && pts <= MAX_PTS;
+}
+
+/**
  * @param {InputSlot} input
  * @param {import('./staggered-status.js').Expected} expected
  * @param {number | null} checkedIndex
  * @returns {boolean} True unless `input` is the decoder buffer the status checked.
  */
 function isUncheckedSlot(input, expected, checkedIndex) {
-  return (
-    !Number.isInteger(input?.index) ||
-    input.index < 0 ||
-    !Number.isSafeInteger(input.address) ||
-    input.address <= 0 ||
-    !Number.isInteger(input.capacity) ||
-    input.capacity < expected.receive.bytes ||
-    (checkedIndex !== null && checkedIndex !== input.index)
-  );
+  if (!Number.isInteger(input?.index) || input.index < 0) return true;
+  if (!isAddress(input.address)) return true;
+  if (!Number.isInteger(input.capacity) || input.capacity < expected.receive.bytes) return true;
+  return checkedIndex !== null && checkedIndex !== input.index;
 }
 
 /**
  * @returns {boolean} True unless `next` follows `current` with a later PTS.
  */
 function isInvalidNext(current, next) {
-  return (
-    !next ||
-    next.sequence !== current.sequence + 1 ||
-    !Number.isInteger(next.length) ||
-    next.length < 1 ||
-    next.length > MAX_ACCESS_UNIT_BYTES ||
-    typeof next.pts !== 'bigint' ||
-    next.pts <= current.pts ||
-    next.pts > MAX_PTS
-  );
+  if (!next || next.sequence !== current.sequence + 1) return true;
+  if (!isUnitLength(next.length)) return true;
+  return typeof next.pts !== 'bigint' || next.pts <= current.pts || next.pts > MAX_PTS;
 }
 
 /**
@@ -148,20 +139,12 @@ function isInvalidNext(current, next) {
  *   a later PTS (or is null, under gate on receive) and both gates are addresses.
  */
 function isInvalidGate(current, next, expected, fetchGate, ignoredFetchGate) {
-  return (
-    !current ||
-    current.sequence !== expected.receive.sequence ||
-    current.length !== expected.receive.bytes ||
-    current.length > MAX_ACCESS_UNIT_BYTES ||
-    typeof current.pts !== 'bigint' ||
-    current.pts < 0n ||
-    current.pts > MAX_PTS ||
-    (next !== null && isInvalidNext(current, next)) ||
-    !Number.isSafeInteger(fetchGate) ||
-    fetchGate <= 0 ||
-    !Number.isSafeInteger(ignoredFetchGate) ||
-    ignoredFetchGate <= 0
-  );
+  if (!current || current.sequence !== expected.receive.sequence) return true;
+  if (current.length !== expected.receive.bytes || current.length > MAX_ACCESS_UNIT_BYTES)
+    return true;
+  if (!isPts(current.pts)) return true;
+  if (next !== null && isInvalidNext(current, next)) return true;
+  return !isAddress(fetchGate) || !isAddress(ignoredFetchGate);
 }
 
 /**
@@ -214,25 +197,25 @@ function gateWrite({
     throw Error('Staggered input slot is not the checked decoder buffer');
   if (isInvalidGate(current, next, expected, fetchGate, ignoredFetchGate))
     throw Error('Invalid staggered current or next access unit');
+
   const descriptors = Buffer.alloc(SLOTS * DESCRIPTOR.bytes);
   const currentSlot = (current.sequence - 1) % SLOTS;
-  putDescriptor(
-    descriptors,
-    currentSlot,
-    current,
-    input.address,
-    input.index,
-    fetchCurrent || expected.acquire ? fetchGate : ignoredFetchGate
-  );
-  putDescriptor(
-    descriptors,
-    1 - currentSlot,
-    next ?? {sequence: 0, length: 0, pts: 0n},
-    0,
-    0,
-    ignoredFetchGate
-  );
+  const fetches = fetchCurrent || expected.acquire;
+  const currentFetchGate = fetches ? fetchGate : ignoredFetchGate;
+  putDescriptor(descriptors, currentSlot, current, input.address, input.index, currentFetchGate);
+
+  const nextUnit = next ?? {sequence: 0, length: 0, pts: 0n};
+  putDescriptor(descriptors, 1 - currentSlot, nextUnit, 0, 0, ignoredFetchGate);
   return descriptors;
+}
+
+/**
+ * @param {AccessUnit} unit
+ * @returns {boolean} True for a unit after the first with a valid length and PTS.
+ */
+function isPrimable(unit) {
+  if (!Number.isInteger(unit?.sequence) || unit.sequence < 2) return false;
+  return isUnitLength(unit.length) && isPts(unit.pts);
 }
 
 /**
@@ -243,19 +226,9 @@ function gateWrite({
  * @returns {{offset: number, bytes: Buffer}}
  */
 function primeWrite(unit, ignoredFetchGate) {
-  if (
-    !Number.isInteger(unit?.sequence) ||
-    unit.sequence < 2 ||
-    !Number.isInteger(unit.length) ||
-    unit.length < 1 ||
-    unit.length > MAX_ACCESS_UNIT_BYTES ||
-    typeof unit.pts !== 'bigint' ||
-    unit.pts < 0n ||
-    unit.pts > MAX_PTS ||
-    !Number.isSafeInteger(ignoredFetchGate) ||
-    ignoredFetchGate <= 0
-  )
+  if (!isPrimable(unit) || !isAddress(ignoredFetchGate))
     throw Error('Invalid staggered primed access unit');
+
   const bytes = Buffer.alloc(DESCRIPTOR.bytes);
   putDescriptor(bytes, 0, unit, 0, 0, ignoredFetchGate);
   return {offset: CONTROL.descriptors[(unit.sequence - 1) % SLOTS], bytes};
@@ -272,6 +245,7 @@ function primeWrite(unit, ignoredFetchGate) {
  */
 function buildFrame(address, sdk, calls, verified, mapped, results) {
   const built = build(address, sdk, calls, CODE, false, verified);
+
   for (const [logical, destination] of Object.entries(results)) {
     const native = built.proof.logicalResultIndices[Number(logical)];
     built.frame.writeBigUInt64LE(
@@ -279,6 +253,7 @@ function buildFrame(address, sdk, calls, verified, mapped, results) {
       built.proof.stackOffsets[native] + CALL4_X19
     );
   }
+
   if (built.frame.length > MAX_FRAME_BYTES) throw Error('Staggered input frame exceeds its region');
   return built;
 }
@@ -317,10 +292,12 @@ function receiveCalls(
   {scratch, fd, recvFunction, acquireAck, lengthGate}
 ) {
   const descriptor = at(CONTROL.descriptors[slot]);
+  const lengthWait = [];
+  if (lengthGate !== null)
+    lengthWait.push({function: sync('waitLightEvent'), args: [lengthGate, 0, 0, 0]});
+
   return [
-    ...(lengthGate === null
-      ? []
-      : [{function: sync('waitLightEvent'), args: [lengthGate, 0, 0, 0]}]),
+    ...lengthWait,
     {
       function: recvFunction,
       args: [fd, scratch, {u32: descriptor + DESCRIPTOR.length}, MSG_WAITALL]
@@ -420,6 +397,21 @@ function sizedFrame(frame, address, calls, restore, results) {
 }
 
 /**
+ * @param {number[]} addresses
+ * @param {number | null} lengthGate
+ * @param {number} fd
+ * @param {Record<string, number>} functions
+ * @returns {boolean} True when every address, the length gate if any, fd and the decoder
+ *   functions are valid.
+ */
+function isPlannable(addresses, lengthGate, fd, functions) {
+  if (!addresses.every(isAddress)) return false;
+  if (lengthGate !== null && !isAddress(lengthGate)) return false;
+  if (!Number.isInteger(fd) || fd < 0) return false;
+  return ['sendInput', 'acquireInput'].every(name => isAddress(functions?.[name]));
+}
+
+/**
  * Plans both slots' receive and send frames.
  * @param {object} options
  * @param {number} options.sdk
@@ -449,16 +441,9 @@ function plan({
   lengthGate = null
 }) {
   const addresses = [sdk, base, control, mapped, scratch, recvFunction, decoder, acquireAck];
-  if (
-    addresses.some(value => !Number.isSafeInteger(value) || value <= 0) ||
-    (lengthGate !== null && !(Number.isSafeInteger(lengthGate) && lengthGate > 0)) ||
-    !Number.isInteger(fd) ||
-    fd < 0 ||
-    ['sendInput', 'acquireInput'].some(
-      name => !Number.isSafeInteger(functions?.[name]) || functions[name] <= 0
-    )
-  )
+  if (!isPlannable(addresses, lengthGate, fd, functions))
     throw Error('Invalid staggered input frame addresses');
+
   const a = addressing({sdk, base, control, mapped});
   const verified = new Set([recvFunction, functions.sendInput, functions.acquireInput]);
   const frame = (address, calls, results = {}) =>
@@ -466,6 +451,7 @@ function plan({
   const units = {scratch, fd, recvFunction, functions, decoder, acquireAck, lengthGate};
   /** The recv call's logical index: after the length-gate wait when there is one. */
   const recvCall = lengthGate === null ? 0 : 1;
+
   const receive = [];
   const send = [];
   const calls = {receive: [], send: []};
@@ -474,12 +460,14 @@ function plan({
     receive.push(frame(a.loc.receive[slot], list, {[recvCall]: STAMP.receiveCount}));
     calls.receive.push(list);
   }
+
   for (let slot = 0; slot < SLOTS; slot++) {
     const restore = restoreCalls(a, slot, receive[slot].frame.length);
     const list = sendCalls(a, slot, units, restore);
     send.push(sizedFrame(frame, a.loc.send[slot], list, restore, SEND_RESULTS));
     calls.send.push(list);
   }
+
   return {control: CONTROL, descriptor: DESCRIPTOR, locations: a.loc, receive, send, calls};
 }
 

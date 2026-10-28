@@ -1,15 +1,6 @@
 /**
- * Output worker frames for the staggered lag-2 path.
- *
- * The acquire frame waits once on the auto-clear decoder output event, acquires one output,
- * stamps its status and sequence, then signals the input worker's acquisition acknowledgement
- * before it parks on the fetch gate. The acknowledgement comes only after the stamps, so the
- * input worker's next SendInput can never race the host-visible acquire status.
- *
- * The fetch frame copies the held output into the descriptor's ring surface, releases it,
- * publishes the descriptor's metadata to the shader (the native sequence last) and stamps the
- * fetch status. Like the input frames, each fetch frame restores both of its slot's frames from
- * their snapshots and jumps through a dispatch word to the other frame.
+ * Output worker frames for the staggered lag-2 path: acquire and stamp one output, then ack it
+ * (Invariant 13); fetch copies it into the ring surface, releases it and publishes it.
  */
 import {build, CALL4_X19} from '../../../../../hbl-platform/smilebasic/engine/shared/frames.js';
 import {CODE, IPC_COPY} from '../../../../../hbl-platform/sdk/native/thread.js';
@@ -96,6 +87,38 @@ function isSequence(auSequence) {
 }
 
 /**
+ * @param {any} value
+ * @returns {boolean} True for a positive safe integer.
+ */
+function isAddress(value) {
+  return Number.isSafeInteger(value) && value > 0;
+}
+
+/**
+ * @param {any} surface
+ * @param {{mapped: number, color: number}} publication
+ * @returns {boolean} True when `surface` is one of the publication's ring surfaces.
+ */
+function isPublicationSurface(surface, publication) {
+  if (!surface) return false;
+  if (surface.address !== publication.mapped + ring.frameOffset(surface.index)) return false;
+  return surface.color === publication.color;
+}
+
+/**
+ * @param {number} auSequence
+ * @param {{mapped: number, color: number}} publication
+ * @param {any} destination
+ * @param {any} published
+ * @returns {boolean}
+ */
+function isPublicationTarget(auSequence, publication, destination, published) {
+  if (!isSequence(auSequence) || !Number.isSafeInteger(publication?.mapped)) return false;
+  if (!isPublicationSurface(destination, publication)) return false;
+  return isPublicationSurface(published, publication);
+}
+
+/**
  * The descriptor that fetches output `auSequence` into `destination` and publishes
  * `published`, which is the destination itself unless the output is being skipped.
  * @param {object} options
@@ -107,17 +130,9 @@ function isSequence(auSequence) {
  * @returns {Buffer}
  */
 function outputDescriptor({auSequence, destination, frame, publication, published = destination}) {
-  const target = surface =>
-    surface &&
-    surface.address === publication.mapped + ring.frameOffset(surface.index) &&
-    surface.color === publication.color;
-  if (
-    !isSequence(auSequence) ||
-    !Number.isSafeInteger(publication?.mapped) ||
-    !target(destination) ||
-    !target(published)
-  )
+  if (!isPublicationTarget(auSequence, publication, destination, published))
     throw Error('Invalid staggered output publication target');
+
   const bytes = Buffer.alloc(DESCRIPTOR.size);
   bytes.writeUInt32LE(auSequence, DESCRIPTOR.sequence);
   bytes.writeBigUInt64LE(BigInt(destination.address), DESCRIPTOR.address);
@@ -133,6 +148,7 @@ function outputDescriptor({auSequence, destination, frame, publication, publishe
  */
 function placeholderDescriptor(auSequence) {
   if (!isSequence(auSequence)) throw Error('Invalid staggered output sequence');
+
   const bytes = Buffer.alloc(DESCRIPTOR.size);
   bytes.writeUInt32LE(auSequence, DESCRIPTOR.sequence);
   return bytes;
@@ -149,6 +165,7 @@ function placeholderDescriptor(auSequence) {
  */
 function buildFrame(address, sdk, calls, verified, mapped, results) {
   const built = build(address, sdk, calls, CODE, false, verified);
+
   for (const [logical, destination] of Object.entries(results)) {
     const native = built.proof.logicalResultIndices[Number(logical)];
     built.frame.writeBigUInt64LE(
@@ -156,6 +173,7 @@ function buildFrame(address, sdk, calls, verified, mapped, results) {
       built.proof.stackOffsets[native] + CALL4_X19
     );
   }
+
   if (built.frame.length > MAX_FRAME_BYTES)
     throw Error('Staggered output frame exceeds its region');
   return built;
@@ -325,18 +343,16 @@ function sizedFrame(frame, address, calls, restore, results) {
  */
 function plan({sdk, base, control, mapped, event, acquireAck, functions, decoder, output, format}) {
   const addresses = [sdk, base, control, mapped, event, acquireAck, decoder, output, format];
-  if (
-    addresses.some(value => !Number.isSafeInteger(value) || value <= 0) ||
-    ['acquireOutput', 'bufferSetData', 'getOutput', 'releaseOutput'].some(
-      name => !Number.isSafeInteger(functions?.[name]) || functions[name] <= 0
-    )
-  )
+  const names = ['acquireOutput', 'bufferSetData', 'getOutput', 'releaseOutput'];
+  if (!addresses.every(isAddress) || !names.every(name => isAddress(functions?.[name])))
     throw Error('Invalid staggered output frame addresses');
+
   const a = addressing({sdk, base, control, mapped});
   const verified = new Set(Object.values(functions));
   const frame = (address, calls, results = {}) =>
     buildFrame(address, sdk, calls, verified, mapped, results);
   const units = {functions, decoder, event, acquireAck, output, format};
+
   const acquire = [];
   const fetch = [];
   const calls = {acquire: [], fetch: []};
@@ -345,12 +361,14 @@ function plan({sdk, base, control, mapped, event, acquireAck, functions, decoder
     acquire.push(frame(a.loc.acquire[slot], list, {1: STAMP.acquireStatus}));
     calls.acquire.push(list);
   }
+
   for (let slot = 0; slot < SLOTS; slot++) {
     const restore = restoreCalls(a, slot, acquire[slot].frame.length);
     const list = fetchCalls(a, slot, units, restore);
     fetch.push(sizedFrame(frame, a.loc.fetch[slot], list, restore, FETCH_RESULTS));
     calls.fetch.push(list);
   }
+
   return {control: CONTROL, descriptor: DESCRIPTOR, locations: a.loc, acquire, fetch, calls};
 }
 

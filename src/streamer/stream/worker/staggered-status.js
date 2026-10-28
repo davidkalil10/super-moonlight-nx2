@@ -1,19 +1,6 @@
 /**
- * Status words of the staggered lag-2 path. The input and output workers stamp their native
- * results and a sequence number into the shader control block of the mapped ring, just past
- * the words the shader owns, so the host learns everything about one access unit from a single
- * read that runs from ring.CONTROL.current to the fetch sequence.
- *
- *   receive  the recv byte count and the sequence of the access unit received
- *   input    SendInput's status, the next AcquireInputBufferIndex status and index, and the
- *            sequence submitted
- *   acquire  AcquireOutputBufferIndex's status, index and PTS, and the sequence acquired
- *   fetch    the SetDataAndCapacity, GetOutputBuffer and ReleaseOutputBufferIndex statuses, and
- *            the sequence fetched
- *
- * check() and checkOutput() compare a snapshot with what the host expects for the next gate.
- * Their errors carry `retryable` when the worker simply has not got there yet, and `pending`
- * names what it is still waiting for, so the scheduler knows whether to read again.
+ * Status words both staggered workers stamp just past the shader's control words, so one read
+ * covers an access unit. check() and checkOutput() test a snapshot against the next gate.
  */
 import * as ring from '../../shared/ring.js';
 
@@ -88,6 +75,7 @@ function parse(bytes) {
   const i32 = offset => bytes.readInt32LE(offset - READ_START);
   const u64 = offset => bytes.readBigUInt64LE(offset - READ_START);
   const i64 = offset => bytes.readBigInt64LE(offset - READ_START);
+
   return {
     current: u32(ring.CONTROL.current),
     nativeApplied: u32(ring.CONTROL.nativeApplied),
@@ -134,8 +122,10 @@ function gateError(message, retryable = false, pending = null) {
 function checkSequence(actual, expected, name) {
   if (!Number.isInteger(expected) || expected < 1 || expected > MAX_SEQUENCE)
     throw Error(`Invalid expected ${name} sequence`);
+
   if (actual < expected)
     throw gateError(`${name} ${expected} is pending`, true, name.toLowerCase());
+
   if (actual !== expected) throw gateError(`${name} sequence ${actual}/${expected} differs`);
 }
 
@@ -158,13 +148,39 @@ function isApplied(nativeApplied, sequence) {
 function acquireFault({status, index, pts: actual}, pts) {
   if (status !== 0n || index < 0) {
     const code = '0x' + status.toString(16);
-    return index < 0
-      ? `Decoder output event woke with no output ready (${code})`
-      : `Decoder output acquire failed (${code})`;
+    if (index < 0) return `Decoder output event woke with no output ready (${code})`;
+    return `Decoder output acquire failed (${code})`;
   }
+
   if (actual !== BigInt(pts))
     return `Decoder output PTS ${actual} is not the expected ${pts}: an extra or held output`;
   return null;
+}
+
+/**
+ * @param {Snapshot['fetch']} fetch
+ * @returns {boolean} True when the set, get or release of the previous fetch failed.
+ */
+function fetchFailed(fetch) {
+  if (fetch.setStatus !== 0n || fetch.getStatus !== 0n) return true;
+  return fetch.releaseStatus !== 0n;
+}
+
+/**
+ * Throws until the shader applied the expected publication on its surface. An optional one
+ * only has to match its surface once it is applied.
+ * @param {Snapshot} snapshot
+ * @param {NonNullable<Expected['ack']>} ack
+ */
+function checkApplied(snapshot, ack) {
+  if (!isApplied(snapshot.nativeApplied, ack.sequence)) {
+    if (ack.optional) return;
+    throw gateError('Previous publication is not applied', true, 'applied');
+  }
+
+  // Invariant 14 (staggered-live.js tearOf retries it).
+  if (snapshot.current !== ack.index)
+    throw gateError('Applied publication surface differs', true, 'torn');
 }
 
 /**
@@ -177,28 +193,17 @@ function acquireFault({status, index, pts: actual}, pts) {
 function checkOutput(snapshot, expected) {
   if (!expected.acquire) throw Error('Missing expected staggered output acquire');
   checkSequence(snapshot.acquire.sequence, expected.acquire.sequence, 'Acquire');
+
   const fault = acquireFault(snapshot.acquire, expected.acquire.pts);
   if (fault) throw gateError(fault);
 
   if (expected.fetch) {
     checkSequence(snapshot.fetch.sequence, expected.fetch.sequence, 'Fetch');
-    if (
-      snapshot.fetch.setStatus !== 0n ||
-      snapshot.fetch.getStatus !== 0n ||
-      snapshot.fetch.releaseStatus !== 0n
-    )
-      throw gateError('Previous output fetch or release failed');
+    if (fetchFailed(snapshot.fetch)) throw gateError('Previous output fetch or release failed');
   }
 
-  if (expected.ack) {
-    if (!isApplied(snapshot.nativeApplied, expected.ack.sequence)) {
-      if (!expected.ack.optional)
-        throw gateError('Previous publication is not applied', true, 'applied');
-    } else if (snapshot.current !== expected.ack.index)
-      // The shader stores current before nativeApplied, but one bridge read can still see the
-      // new nativeApplied with the old current; the reader retries it (see tearOf).
-      throw gateError('Applied publication surface differs', true, 'torn');
-  }
+  if (expected.ack) checkApplied(snapshot, expected.ack);
+
   return {
     outputIndex: snapshot.acquire.index,
     current: snapshot.current,
@@ -214,6 +219,7 @@ function checkOutput(snapshot, expected) {
 function checkInput(snapshot, expected) {
   checkSequence(snapshot.input.sequence, expected.input.sequence, 'Input');
   if (snapshot.input.sendStatus !== 0n) throw gateError('Decoder input submit failed');
+
   if (snapshot.input.nextIndex < 0 && NO_INPUT_SLOT.includes(snapshot.input.nextSlotStatus))
     throw gateError('Decoder has no checked next input slot', true, 'slot');
   if (snapshot.input.nextSlotStatus !== 0n || snapshot.input.nextIndex < 0)
@@ -230,6 +236,7 @@ function check(snapshot, expected) {
   const receive = expected.receive;
   if (!receive || !Number.isInteger(receive.bytes) || receive.bytes < 1)
     throw Error('Missing expected staggered receive');
+
   checkSequence(snapshot.receive.sequence, receive.sequence, 'Receive');
   if (snapshot.receive.count !== BigInt(receive.bytes))
     throw gateError(`Short receive ${snapshot.receive.count}/${receive.bytes}`);
@@ -241,6 +248,7 @@ function check(snapshot, expected) {
     : {outputIndex: null, current: snapshot.current, nativeApplied: snapshot.nativeApplied};
   if (!expected.acquire && (expected.fetch || expected.ack))
     throw Error('Staggered fetch/ack check requires an acquired output');
+
   return {
     inputIndex: expected.input ? snapshot.input.nextIndex : null,
     ...output
