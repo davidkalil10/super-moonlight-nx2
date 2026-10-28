@@ -7,7 +7,8 @@
  * s16 and gives it two buffer slots. start() sends two chunks, receives and appends them
  * with finite native jobs (the prime), then starts AudioOut and spawns a repeating worker
  * that recycles the slots as they are released (see audio-socket-plan.js). Every later
- * send() feeds that worker.
+ * send() feeds that worker. start() runs once: a start that failed after its chunk checks
+ * cannot be retried, since the prime may already have queued a slot.
  *
  * The worker blocks in recv and in the release event wait, so stop() points it at its exit
  * and sends two silent chunks to unblock it before waiting and joining. Whenever a native
@@ -294,6 +295,7 @@ async function create({
   const {audio, slots} = region;
   await openAudioOut(rpc, call, region);
   let opened = true;
+  let attempted = false;
   let started = false;
   let running = false;
   let stopped = false;
@@ -335,9 +337,10 @@ async function create({
      * @param {Buffer} second
      */
     async function start(first, second) {
-      if (started || stopped || retained) throw Error('Socket audio start is not available');
+      if (attempted || stopped) throw Error('Socket audio start is not available');
       checkedPcm(first, bufferBytes);
       checkedPcm(second, bufferBytes);
+      attempted = true;
       await send(first);
       await send(second);
       const received = await runRetaining(

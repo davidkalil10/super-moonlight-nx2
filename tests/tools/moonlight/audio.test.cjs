@@ -897,6 +897,58 @@ test('a rejected prime append closes AudioOut without starting it', async () => 
   assert.deepEqual(afterStop(fake.log, from), ['FlushAudioOutBuffers', 'CloseAudioOut']);
 });
 
+const inRecycleWorker = address => address >= region(2) && address < region(3);
+const START_FAILURES = [
+  [
+    'the second chunk',
+    {
+      on: {
+        send: (bytes, sends) => {
+          if (sends === 2) throw Error('send failed');
+        }
+      }
+    },
+    /send failed/
+  ],
+  [
+    'a short prime receive',
+    {finite: (job, index) => (job === 1 ? BigInt(index === 1 ? CHUNK - 4 : CHUNK) : 1n)},
+    /prime receive was short/
+  ],
+  [
+    'a rejected prime append',
+    {finite: (job, index) => (job === 1 ? BigInt(CHUNK) : index === 1 ? 0n : 1n)},
+    /rejected prime buffer/
+  ],
+  [
+    'the recycle frame readback',
+    {
+      on: {
+        read: address => {
+          if (inRecycleWorker(address)) throw Error('readback failed');
+        }
+      }
+    },
+    /readback failed/
+  ],
+  [
+    'StartAudioOut',
+    {on: {call: name => (name === 'StartAudioOut' ? 1n : undefined)}},
+    /AudioOut start failed/
+  ]
+];
+
+for (const [point, options, error] of START_FAILURES)
+  test(`a start that failed on ${point} is not retried`, async () => {
+    const fake = fakeConsole(options);
+    const socket = await createWorker({rpc: fake.rpc, transport: fake.transport});
+    await assert.rejects(socket.start(chunk(1), chunk(2)), error);
+    assert.equal(socket.retained, false);
+    const from = fake.log.length;
+    await assert.rejects(socket.start(chunk(1), chunk(2)), /start is not available/);
+    assert.deepEqual(afterStop(fake.log, from), []);
+  });
+
 test('start is refused once started and after stop', async () => {
   const {socket, log} = await started();
   const sends = named(log, 'send').length;
@@ -921,4 +973,6 @@ test('a bad second chunk is refused before the first is sent', async () => {
   const socket = await createWorker({rpc: fake.rpc, transport: fake.transport});
   await assert.rejects(socket.start(chunk(1), Buffer.alloc(CHUNK - 4)), /one complete PCM chunk/);
   assert.equal(named(fake.log, 'send').length, 0);
+  await socket.start(chunk(1), chunk(2));
+  assert.equal(named(fake.log, 'send').length, 2);
 });
