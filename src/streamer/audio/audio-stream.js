@@ -1,17 +1,6 @@
 /**
- * Continuous PCM playback on the console AudioOut, fed by the Moonlight helper.
- *
- * Reads interleaved 48 kHz stereo s16le from stdin (default), a numeric fd (--fd N) or a
- * file (--file PATH, offline test), keeps a small ring of console AudioOut buffers primed and
- * appended back to back, and measures underruns and overruns. The host writes every chunk
- * over the bridge into its slot and appends it in the same exchange when the rpc can.
- *
- * Releases are not signalled: each appended buffer gets an expected release time on a host
- * playhead, and GetReleasedAudioOutBuffer is only polled for buffers that should be done.
- * Functions resolve through hbl-platform/sdk/native/symbols.js like game-audio.js.
- *
- * Usage: node src/streamer/audio/audio-stream.js [runs/launcher-XXXX] [--fd N | --file PATH]
- *        [--buffer-frames 3840] [--queue 3] [--prime 2] [--stats]
+ * Continuous PCM playback on the console AudioOut, each chunk written over the bridge
+ * (src/streamer/audio/CLAUDE.md has the release playhead and usage).
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -85,17 +74,21 @@ const check = (value, message) => {
  */
 function resolver(rpc, counted = () => {}) {
   const resolve = sdkResolver(rpc, {ambiguous: 'Ambiguous audio symbol '});
+
   async function call(name, ...args) {
     counted();
     return (await rpc.callAddress(await resolve(name), args, SHORT)).result;
   }
+
   call.writeAndCall = async (address, bytes, name, ...args) => {
     counted();
     const target = await resolve(name);
     if (rpc.writeAndCall) return (await rpc.writeAndCall(address, bytes, target, args)).result;
+
     await rpc.write(address, bytes);
     return (await rpc.callAddress(target, args, SHORT)).result;
   };
+
   return call;
 }
 
@@ -106,6 +99,7 @@ class ByteQueue {
     this.chunks = [];
     this.bytes = 0;
   }
+
   /** @param {Buffer} buf */
   push(buf) {
     if (buf.length) {
@@ -113,6 +107,7 @@ class ByteQueue {
       this.bytes += buf.length;
     }
   }
+
   /**
    * Removes the oldest `n` bytes, which must be queued.
    * @param {number} n
@@ -129,9 +124,11 @@ class ByteQueue {
       if (take === head.length) this.chunks.shift();
       else this.chunks[0] = head.subarray(take);
     }
+
     this.bytes -= n;
     return out;
   }
+
   /**
    * Discards up to `n` of the oldest bytes.
    * @param {number} n
@@ -147,6 +144,7 @@ class ByteQueue {
       else this.chunks[0] = head.subarray(take);
       dropped += take;
     }
+
     this.bytes -= dropped;
     return dropped;
   }
@@ -215,8 +213,12 @@ function stream(options) {
     pending.push(chunk);
     dropOverflow();
   });
-  input.on('end', () => (inputEnded = true));
-  input.on('close', () => (inputEnded = true));
+  input.on('end', () => {
+    inputEnded = true;
+  });
+  input.on('close', () => {
+    inputEnded = true;
+  });
   input.on('error', error => {
     if (!stopped) inputError = error;
     inputEnded = true;
@@ -269,6 +271,7 @@ function stream(options) {
       for (let i = 0; i < due; i++) {
         const address = await call('GetReleasedAudioOutBuffer', base);
         if (address === 0n) break;
+
         const slot = index.get(Number(address));
         check(slot !== undefined, 'Unknown released descriptor');
         if (!free.has(Number(address))) {
@@ -287,77 +290,93 @@ function stream(options) {
      */
     async function append(descriptor, pcm) {
       const slot = index.get(descriptor);
-      check(
-        (await call.writeAndCall(
-          slotAddress(slot),
-          pcm,
-          'AppendAudioOutBuffer',
-          base,
-          descriptor
-        )) === APPENDED,
-        'Append rejected'
+      const appended = await call.writeAndCall(
+        slotAddress(slot),
+        pcm,
+        'AppendAudioOutBuffer',
+        base,
+        descriptor
       );
+      check(appended === APPENDED, 'Append rejected');
+
       stats.written++;
       free.delete(descriptor);
+
       const playhead = inFlight.length ? inFlight[inFlight.length - 1].releaseAt : now();
       inFlight.push({descriptor, releaseAt: Math.max(playhead, now()) + bufferMs});
       stats.appended++;
     }
 
     const firstFree = () => free.values().next().value;
+
     /** Input ended with a partial buffer left, which goes out padded with silence. */
-    const hasTail = () =>
-      inputEnded &&
-      pending.bytes > 0 &&
-      pending.bytes < bufferBytes &&
-      free.size > 0 &&
-      inFlight.length < queueMax;
+    function hasTail() {
+      const partialLeft = inputEnded && pending.bytes > 0 && pending.bytes < bufferBytes;
+      if (!partialLeft) return false;
+
+      return free.size > 0 && inFlight.length < queueMax;
+    }
+
     const isPrimed = () => inFlight.length >= prime || (inputEnded && inFlight.length > 0);
+
     /** Until the next expected release, bounded to [bufferMs / 8, bufferMs]. */
-    const nextSleep = () =>
-      inFlight.length
-        ? Math.max(bufferMs / MIN_SLEEP_DIVISOR, Math.min(bufferMs, inFlight[0].releaseAt - now()))
-        : bufferMs / IDLE_SLEEP_DIVISOR;
+    function nextSleep() {
+      if (!inFlight.length) return bufferMs / IDLE_SLEEP_DIVISOR;
+
+      const untilRelease = Math.min(bufferMs, inFlight[0].releaseAt - now());
+      return Math.max(bufferMs / MIN_SLEEP_DIVISOR, untilRelease);
+    }
 
     try {
       while (true) {
         if (inFlight.length) await drain();
+
         const cap = started ? queueMax : prime;
         while (free.size > 0 && inFlight.length < cap && pending.bytes >= bufferBytes) {
           await append(firstFree(), pending.pull(bufferBytes));
         }
+
         if (hasTail()) {
           const tail = Buffer.alloc(bufferBytes);
           pending.pull(pending.bytes).copy(tail);
           await append(firstFree(), tail);
           stats.tail++;
         }
+
         if (!started && isPrimed()) {
-          check((await call('StartAudioOut', base)) === 0n, 'StartAudioOut failed');
+          const startResult = await call('StartAudioOut', base);
+          check(startResult === 0n, 'StartAudioOut failed');
           started = true;
         }
-        if (inFlight.length > 0) underflowing = false;
-        else if (started && !inputEnded && !stopped && !underflowing) {
+
+        const playing = started && !inputEnded && !stopped;
+        if (inFlight.length > 0) {
+          underflowing = false;
+        } else if (playing && !underflowing) {
           stats.underruns++;
           underflowing = true;
         }
 
-        const done =
-          (stopped || inputEnded) && inFlight.length === 0 && pending.bytes < bufferBytes;
-        if (done) break;
+        const ending = stopped || inputEnded;
+        const drained = inFlight.length === 0 && pending.bytes < bufferBytes;
+        if (ending && drained) break;
 
         await sleep(nextSleep());
       }
     } finally {
-      if (started)
+      if (started) {
         try {
           await call('StopAudioOut', base);
         } catch {}
+      }
     }
 
     await call('FlushAudioOutBuffers', base);
     await drain();
-    check(Number(await call('GetAudioOutBufferCount', base)) === 0, 'AudioOut queue did not drain');
+
+    const queued = Number(await call('GetAudioOutBufferCount', base));
+    check(queued === 0, 'AudioOut queue did not drain');
+
     // Only a closed AudioOut no longer touches its region.
     if (
       await call('CloseAudioOut', base).then(
@@ -403,11 +422,14 @@ async function main() {
   process.on('SIGINT', () => playback.stop());
   process.on('SIGTERM', () => playback.stop());
   console.log('Continuous audio stream ready.');
-  const printing = args.includes('--stats')
-    ? setInterval(() => {
-        console.log(JSON.stringify({event: 'audio-stats', ...playback.stats}));
-      }, STATS_INTERVAL_MS)
-    : null;
+
+  let printing = null;
+  if (args.includes('--stats')) {
+    printing = setInterval(() => {
+      console.log(JSON.stringify({event: 'audio-stats', ...playback.stats}));
+    }, STATS_INTERVAL_MS);
+  }
+
   let error;
   try {
     await playback.done;
@@ -416,6 +438,7 @@ async function main() {
   } finally {
     clearInterval(printing);
   }
+
   const file = path.join(directory, `moonlight-audio-${Date.now()}.json`);
   await fs.promises.writeFile(
     file,
@@ -430,6 +453,7 @@ async function main() {
       2
     )
   );
+
   console.log(JSON.stringify(playback.stats));
   console.log('Saved ' + file);
   if (error) throw error;
@@ -438,8 +462,9 @@ async function main() {
 const newestRun = session.newest;
 export {stream, ByteQueue, newestRun};
 
-if (cli.isMain(import.meta))
+if (cli.isMain(import.meta)) {
   main().catch(error => {
     console.error(error.message);
     process.exitCode = 1;
   });
+}

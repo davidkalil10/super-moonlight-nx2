@@ -1,21 +1,6 @@
 /**
- * Moonlight PCM paced over a native TCP stream into the console socket audio worker.
- *
- * Incoming PCM is queued on the host and sent one chunk per chunk duration, on a clock of
- * its own: when the queue runs dry a silent chunk goes out instead, so the console worker,
- * which blocks in recv, always gets a steady stream. A queue that grows past maxPending
- * drops its oldest whole chunks. With `tone`, a 500 Hz test tone replaces the input, which
- * is still drained.
- *
- * A pacer that falls more than the console's two slots behind (an event-loop stall) refills
- * both slots at once, which the console has played out by then, and skips the rest of the
- * stall in whole chunks. The audio of the skipped chunks lands in the queue after the stall;
- * that many chunks, no more, are trimmed from its head at the next on-time sends that find a
- * spare chunk queued, so the host does not keep them as latency until an overflow throws
- * them away. Trimmed chunks count in droppedBytes as well.
- *
- * The rpc is wrapped so a lost bridge is noticed: the console objects are then retained
- * rather than closed, and the report asks for a SmileBASIC restart.
+ * Moonlight PCM paced over a native TCP stream into the console socket audio worker. Pacing,
+ * stall skip and trim rules: src/streamer/audio/CLAUDE.md.
  */
 import {ByteQueue} from './audio-stream.js';
 import {create as createNativeTransport} from '../stream/native/native-tcp.js';
@@ -114,8 +99,10 @@ function peakOf(chunk) {
  */
 function watched(rpc, state) {
   const device = {...rpc};
+
   for (const name of RPC_METHODS) {
     if (typeof rpc[name] !== 'function') continue;
+
     device[name] = async (...args) => {
       try {
         return await rpc[name](...args);
@@ -125,6 +112,7 @@ function watched(rpc, state) {
       }
     };
   }
+
   return device;
 }
 
@@ -190,16 +178,18 @@ async function create({
         failure = error;
       }
     }
+
     const retained = Boolean(audio?.retained || state.bridgeLost);
-    if (transport) {
-      if (retained) transport.abort();
-      else
-        try {
-          await transport.close();
-        } catch (error) {
-          failure ||= error;
-        }
+    if (transport && retained) {
+      transport.abort();
+    } else if (transport) {
+      try {
+        await transport.close();
+      } catch (error) {
+        failure ||= error;
+      }
     }
+
     stats.retainedForSafety = retained;
     if (failure) stats.error ||= failure.message;
     if (retained) {
@@ -309,6 +299,8 @@ async function create({
         slept = true;
         continue;
       }
+
+      // A stall past both slots: refill them now and skip the rest in whole chunks.
       const behind = now() - due;
       if (behind > PRIMED * bufferMs) {
         stats.late++;
@@ -317,9 +309,11 @@ async function create({
         owed += skipped;
         settleUntil = now() + SETTLE_MS;
       }
+
       if (now() > settleUntil) owed = 0;
       if (slept && behind < bufferMs) trimSurplus();
       slept = false;
+
       const chunk = nextChunk();
       await audio.send(chunk);
       stats.sent++;
@@ -371,15 +365,17 @@ async function create({
     };
   }
 
+  async function closeOnce() {
+    halt();
+    await pacing;
+    await polling;
+    await release();
+    return report();
+  }
+
   /** Halts, waits for the pacer and any health poll, then releases. Idempotent. */
   function close() {
-    closing ||= (async () => {
-      halt();
-      await pacing;
-      await polling;
-      await release();
-      return report();
-    })();
+    if (!closing) closing = closeOnce();
     return closing;
   }
 

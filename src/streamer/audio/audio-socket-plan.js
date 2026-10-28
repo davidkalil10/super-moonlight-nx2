@@ -1,12 +1,6 @@
 /**
- * Native call plans for socket audio: PCM arrives on a console TCP socket and is received
- * straight into two AudioOut buffers, so the host never writes sample data over the bridge.
- *
- * Playback starts with a prime: one receive per slot, then, only when both receives filled a
- * whole buffer, one append per slot. After that a repeating worker recycles each slot in turn:
- * wait for the AudioOut release event, take the released buffer, receive the next chunk into
- * it and append it again. The checked* functions validate the native results so a short
- * receive never reaches AudioOut.
+ * Native call plans for socket audio: the prime, the recycle cycle and the checks on their
+ * results (src/streamer/audio/CLAUDE.md).
  */
 import {build, SENTINEL} from '../../../../hbl-platform/smilebasic/engine/shared/frames.js';
 import {repeatingFrame} from '../../../../hbl-platform/sdk/native/jobs.js';
@@ -82,12 +76,10 @@ function isSlot(slot) {
  * @returns {boolean}
  */
 function isChunkSize(bufferBytes) {
-  return (
-    Number.isInteger(bufferBytes) &&
-    bufferBytes >= FRAME_BYTES &&
-    bufferBytes <= MAX_PCM_BYTES &&
-    !(bufferBytes % FRAME_BYTES)
-  );
+  if (!Number.isInteger(bufferBytes)) return false;
+
+  const fitsSlot = bufferBytes >= FRAME_BYTES && bufferBytes <= MAX_PCM_BYTES;
+  return fitsSlot && !(bufferBytes % FRAME_BYTES);
 }
 
 /**
@@ -95,29 +87,29 @@ function isChunkSize(bufferBytes) {
  * @returns {boolean}
  */
 function areDistinctSlots(slots) {
-  return (
-    Array.isArray(slots) &&
-    slots.length === SLOT_COUNT &&
-    slots.every(isSlot) &&
-    slots[0].data !== slots[1].data &&
-    slots[0].descriptor !== slots[1].descriptor
-  );
+  const shapeOk = Array.isArray(slots) && slots.length === SLOT_COUNT && slots.every(isSlot);
+  if (!shapeOk) return false;
+
+  return slots[0].data !== slots[1].data && slots[0].descriptor !== slots[1].descriptor;
+}
+
+/**
+ * @param {SocketAudioOptions} options
+ * @returns {boolean}
+ */
+function isValidPlan({fd, audio, event, recv, append, getReleased, slots, bufferBytes}) {
+  const fdOk = Number.isInteger(fd) && fd >= 0;
+  if (!fdOk) return false;
+
+  const addressesOk = [audio, event, recv, append, getReleased].every(isAddress);
+  if (!addressesOk) return false;
+
+  return isChunkSize(bufferBytes) && areDistinctSlots(slots);
 }
 
 /** @param {SocketAudioOptions} options */
 function validate(options) {
-  const {fd, audio, event, recv, append, getReleased, slots, bufferBytes} = options;
-  const valid =
-    Number.isInteger(fd) &&
-    fd >= 0 &&
-    isAddress(audio) &&
-    isAddress(event) &&
-    isAddress(recv) &&
-    isAddress(append) &&
-    isAddress(getReleased) &&
-    isChunkSize(bufferBytes) &&
-    areDistinctSlots(slots);
-  if (!valid) throw Error('Socket audio needs two distinct bounded AudioOut slots');
+  if (!isValidPlan(options)) throw Error('Socket audio needs two distinct bounded AudioOut slots');
 }
 
 /**
@@ -160,9 +152,11 @@ function checkedPrimeCounts(program, results, bufferBytes) {
     results.length !== program.proof.resultOffsets.length * RESULT_BYTES
   )
     throw Error('Invalid socket audio prime results');
+
   return program.proof.logicalResultIndices.map((nativeIndex, index) => {
     const value = results.readBigUInt64LE(nativeIndex * RESULT_BYTES);
     const count = Number(BigInt.asIntN(64, value));
+
     if (value === SENTINEL || count !== bufferBytes)
       throw Error(`Socket audio prime receive ${index} was short; append gate remains closed`);
     return count;
@@ -176,12 +170,14 @@ function checkedPrimeCounts(program, results, bufferBytes) {
 function primeAppend({sdk, base, receivedCounts, ...options}) {
   validate(options);
   const {append, slots, bufferBytes} = options;
+
   if (
     !Array.isArray(receivedCounts) ||
     receivedCounts.length !== SLOT_COUNT ||
     receivedCounts.some(count => count !== bufferBytes)
   )
     throw Error('Socket audio prime receive was short; append gate remains closed');
+
   const calls = slots.map(slot => appendCall(options, slot));
   return build(base, sdk, calls, CODE, false, new Set([append]));
 }
@@ -196,8 +192,13 @@ function primeAppend({sdk, base, receivedCounts, ...options}) {
 function cycle({sdk, base, ...options}) {
   validate(options);
   const {audio, event, recv, append, getReleased, slots} = options;
+
   const calls = [];
-  const add = call => calls.push(call) - 1;
+  const add = call => {
+    calls.push(call);
+    return calls.length - 1;
+  };
+
   /** @type {CycleRow[]} */
   const rows = [];
   for (const [index, slot] of slots.entries()) {
@@ -209,39 +210,49 @@ function cycle({sdk, base, ...options}) {
       append: add(appendCall(options, slot))
     });
   }
+
   const verified = new Set([recv, append, getReleased]);
   const program = repeatingFrame({base, sdk, calls, code: CODE, verified});
   return {program, rows, calls, verified};
 }
 
 /**
- * Checks a stopped recycle worker's last results: each slot released its own descriptor,
- * received a whole chunk and was appended again.
+ * True when the row's slot released its own descriptor, received a whole chunk and was
+ * appended again.
+ * @param {bigint[]} results
+ * @param {CycleRow} row
+ * @param {Slot[]} slots
+ * @param {number} bufferBytes
+ * @returns {boolean}
+ */
+function isRecycledRow(results, row, slots, bufferBytes) {
+  const released = results[row.released];
+  const received = results[row.receive];
+  const appended = results[row.append];
+
+  const wordsOk =
+    typeof released === 'bigint' && typeof received === 'bigint' && typeof appended === 'bigint';
+  if (!wordsOk) return false;
+
+  if (released !== BigInt(slots[row.index].descriptor)) return false;
+
+  return Number(BigInt.asIntN(64, received)) === bufferBytes && appended === APPENDED;
+}
+
+/**
+ * Checks a stopped recycle worker's last results, row by row.
  * @param {bigint[]} results The cycle's result words, in call order.
  * @param {CycleRow[]} rows
  * @param {Slot[]} slots
  * @param {number} bufferBytes
  */
 function checkedCycle(results, rows, slots, bufferBytes) {
-  if (
-    !Array.isArray(results) ||
-    results.length < CYCLE_CALLS ||
-    !Array.isArray(rows) ||
-    rows.length !== SLOT_COUNT
-  )
-    throw Error('Invalid socket audio recycle results');
+  const resultsOk = Array.isArray(results) && results.length >= CYCLE_CALLS;
+  const rowsOk = Array.isArray(rows) && rows.length === SLOT_COUNT;
+  if (!resultsOk || !rowsOk) throw Error('Invalid socket audio recycle results');
+
   for (const row of rows) {
-    const released = results[row.released];
-    const received = results[row.receive];
-    const appended = results[row.append];
-    if (
-      typeof released !== 'bigint' ||
-      typeof received !== 'bigint' ||
-      typeof appended !== 'bigint' ||
-      released !== BigInt(slots[row.index].descriptor) ||
-      Number(BigInt.asIntN(64, received)) !== bufferBytes ||
-      appended !== APPENDED
-    )
+    if (!isRecycledRow(results, row, slots, bufferBytes))
       throw Error(`Socket audio recycle ${row.index} returned an invalid descriptor or count`);
   }
 }

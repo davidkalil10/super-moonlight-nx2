@@ -1,19 +1,6 @@
 /**
- * Socket audio on the console: the host sends PCM over a native TCP socket and a console
- * worker thread receives it straight into AudioOut buffers, so sample data never crosses the
- * bridge.
- *
- * create() opens the default AudioOut with a release event, checks it plays 48 kHz stereo
- * s16 and gives it two buffer slots. start() sends two chunks, receives and appends them
- * with finite native jobs (the prime), then starts AudioOut and spawns a repeating worker
- * that recycles the slots as they are released (see audio-socket-plan.js). Every later
- * send() feeds that worker. start() runs once: a start that failed after its chunk checks
- * cannot be retried, since the prime may already have queued a slot.
- *
- * The worker blocks in recv and in the release event wait, so stop() points it at its exit
- * and sends two silent chunks to unblock it before waiting and joining. Whenever a native
- * job or the worker may still hold the AudioOut or its buffers, the objects are retained:
- * nothing is closed and SmileBASIC has to be restarted.
+ * Socket audio on the console: a console worker receives PCM from a native TCP socket straight
+ * into AudioOut buffers. Prime, stop and retain rules: src/streamer/audio/CLAUDE.md.
  */
 import {allocate, release} from '../../../../hbl-platform/sdk/native/allocate.js';
 import {sdkResolver, verify} from '../../../../hbl-platform/sdk/native/symbols.js';
@@ -129,21 +116,22 @@ function checkedPcm(bytes, length) {
  * @returns {boolean}
  */
 function isBoundedSetup(rpc, transport, bufferBytes, timeoutMs) {
-  return (
-    Boolean(rpc?.a?.sdk) &&
-    Boolean(transport) &&
-    Number.isInteger(transport.fd) &&
-    transport.fd >= 0 &&
-    Number.isSafeInteger(transport.recvFunction) &&
-    typeof transport.send === 'function' &&
+  if (!rpc?.a?.sdk || !transport) return false;
+
+  const fdOk = Number.isInteger(transport.fd) && transport.fd >= 0;
+  const callsOk =
+    Number.isSafeInteger(transport.recvFunction) && typeof transport.send === 'function';
+  if (!fdOk || !callsOk) return false;
+
+  const bufferOk =
     Number.isInteger(bufferBytes) &&
     bufferBytes >= FRAME_BYTES &&
     bufferBytes <= PCM_STRIDE &&
-    !(bufferBytes % FRAME_BYTES) &&
-    Number.isInteger(timeoutMs) &&
-    timeoutMs >= MIN_TIMEOUT_MS &&
-    timeoutMs <= MAX_TIMEOUT_MS
-  );
+    bufferBytes % FRAME_BYTES === 0;
+  const timeoutOk =
+    Number.isInteger(timeoutMs) && timeoutMs >= MIN_TIMEOUT_MS && timeoutMs <= MAX_TIMEOUT_MS;
+
+  return bufferOk && timeoutOk;
 }
 
 /**
@@ -176,10 +164,12 @@ async function verifySetup(rpc) {
   await verifyCode(rpc);
   await verifyCopy(rpc);
   await verify(rpc, rpc.a.sdk + SYNC.waitSystemEvent.offset, SYNC.waitSystemEvent.hex);
+
   const resolve = sdkResolver(rpc, {ambiguous: 'Ambiguous socket audio function '});
   /** @type {Record<string, number>} */
   const functions = {};
   for (const name of FUNCTION_NAMES) functions[name] = await resolve(name);
+
   return functions;
 }
 
@@ -206,6 +196,7 @@ async function allocateAudio(rpc) {
     invalid: 'Invalid socket audio allocation'
   });
   await rpc.write(audio, Buffer.alloc(PCM_OFFSET));
+
   return {audio, event: audio + EVENT_OFFSET, param: audio + PARAM_OFFSET, slots: slotsAt(audio)};
 }
 
@@ -222,8 +213,9 @@ async function openAudioOut(rpc, call, {audio, event, param}) {
   parameter.writeUInt32LE(SAMPLE_RATE, PARAMETER_RATE_OFFSET);
   parameter.writeUInt16LE(CHANNELS, PARAMETER_CHANNELS_OFFSET);
   await rpc.write(param, parameter);
-  if ((await call(OPEN_WITH_EVENT, [audio, event, param])) !== 0n)
-    throw Error('Socket AudioOut event overload failed');
+
+  const opened = await call(OPEN_WITH_EVENT, [audio, event, param]);
+  if (opened !== 0n) throw Error('Socket AudioOut event overload failed');
 }
 
 /**
@@ -233,12 +225,17 @@ async function openAudioOut(rpc, call, {audio, event, param}) {
  * @param {number} bufferBytes
  */
 async function initializeSlots(call, {audio, slots}, bufferBytes) {
-  if (
-    (await call('GetAudioOutSampleRate', [audio])) !== BigInt(SAMPLE_RATE) ||
-    (await call('GetAudioOutChannelCount', [audio])) !== BigInt(CHANNELS) ||
-    (await call('GetAudioOutSampleFormat', [audio])) !== SAMPLE_FORMAT_PCM_INT16
-  )
-    throw Error('Unexpected socket AudioOut format');
+  const formatError = 'Unexpected socket AudioOut format';
+
+  const rate = await call('GetAudioOutSampleRate', [audio]);
+  if (rate !== BigInt(SAMPLE_RATE)) throw Error(formatError);
+
+  const channels = await call('GetAudioOutChannelCount', [audio]);
+  if (channels !== BigInt(CHANNELS)) throw Error(formatError);
+
+  const format = await call('GetAudioOutSampleFormat', [audio]);
+  if (format !== SAMPLE_FORMAT_PCM_INT16) throw Error(formatError);
+
   for (const slot of slots)
     await call('SetAudioOutBufferInfo', [slot.descriptor, slot.data, PCM_STRIDE, bufferBytes]);
 }
@@ -260,6 +257,7 @@ async function planWorker(rpc, transport, functions, {audio, event, slots}, buff
     failed: 'Socket audio recycle worker allocation failed',
     invalid: 'Invalid socket audio recycle worker allocation'
   });
+
   const options = {
     sdk: rpc.a.sdk,
     base: workerBase,
@@ -289,11 +287,13 @@ async function create({
 }) {
   if (!isBoundedSetup(rpc, transport, bufferBytes, timeoutMs))
     throw Error('Socket audio needs a bounded native TCP transport');
+
   const functions = await verifySetup(rpc);
   const call = nativeCaller(rpc, functions);
   const region = await allocateAudio(rpc);
   const {audio, slots} = region;
   await openAudioOut(rpc, call, region);
+
   let opened = true;
   let attempted = false;
   let started = false;
@@ -305,6 +305,7 @@ async function create({
   let cycleRows = null;
   let cycleCallCount = 0;
   let sent = 0;
+
   try {
     await initializeSlots(call, region, bufferBytes);
     const {finite, workerBase, options} = await planWorker(
@@ -340,25 +341,30 @@ async function create({
       if (attempted || stopped) throw Error('Socket audio start is not available');
       checkedPcm(first, bufferBytes);
       checkedPcm(second, bufferBytes);
+
       attempted = true;
       await send(first);
       await send(second);
+
       const received = await runRetaining(
         slots.map(slot => ({
           function: transport.recvFunction,
           args: [transport.fd, slot.data, bufferBytes, MSG_WAITALL]
         }))
       );
-      if (received.some(value => Number(BigInt.asIntN(64, value)) !== bufferBytes))
+      const shortReceive = received.some(value => Number(BigInt.asIntN(64, value)) !== bufferBytes);
+      if (shortReceive)
         throw Error('Socket audio prime receive was short; append gate remains closed');
+
       const appended = await runRetaining(
         slots.map(slot => ({
           function: functions.AppendAudioOutBuffer,
           args: [audio, slot.descriptor, 0, 0]
         }))
       );
-      if (appended.some(value => value !== APPENDED))
-        throw Error('Socket AudioOut rejected prime buffer');
+      const rejected = appended.some(value => value !== APPENDED);
+      if (rejected) throw Error('Socket AudioOut rejected prime buffer');
+
       const cycle = audioSocket.cycle(options);
       cycleRows = cycle.rows;
       cycleCallCount = cycle.calls.length;
@@ -368,9 +374,11 @@ async function create({
         calls: cycle.calls,
         verified: cycle.verified
       });
-      if ((await call('StartAudioOut', [audio])) !== 0n)
-        throw Error('Socket AudioOut start failed');
+
+      const startResult = await call('StartAudioOut', [audio]);
+      if (startResult !== 0n) throw Error('Socket AudioOut start failed');
       started = true;
+
       try {
         thread = await spawn(rpc, workerBase, program.live, {
           failed: 'Socket audio recycle worker creation failed',
@@ -380,6 +388,7 @@ async function create({
         retained = true;
         throw error;
       }
+
       running = true;
     }
 
@@ -392,6 +401,7 @@ async function create({
     /** Reads inline: one more await before the snapshot lets a concurrent send() into sent. */
     async function health() {
       if (!running || !program) return {sent, running, retained};
+
       const bytes = await rpc.read(program.results, cycleCallCount * RESULT_BYTES);
       return {sent, running, retained, results: resultWords(bytes, cycleCallCount).map(String)};
     }
@@ -411,6 +421,7 @@ async function create({
         retained = true;
         throw error;
       }
+
       try {
         const done = await wait(rpc, thread, {
           timeoutMs,
@@ -427,8 +438,10 @@ async function create({
         retained = true;
         throw error;
       }
+
       running = false;
       const results = await latestResults();
+
       try {
         audioSocket.checkedCycle(results, cycleRows, slots, bufferBytes);
         return null;
@@ -443,15 +456,18 @@ async function create({
         if (retained) throw Error('Socket audio objects retained for safety');
         return;
       }
+
       stopped = true;
       const cycleError = running ? await stopWorker() : null;
       if (retained) throw Error('Socket audio objects retained for safety');
+
       if (started) await call('StopAudioOut', [audio]);
       if (opened) {
         await call('FlushAudioOutBuffers', [audio]);
         await call('CloseAudioOut', [audio]);
         opened = false;
       }
+
       // The worker is joined and AudioOut closed. A busy prime job may still receive into
       // the slots, so the AudioOut region goes only with the finite worker.
       await release(rpc, workerBase);
