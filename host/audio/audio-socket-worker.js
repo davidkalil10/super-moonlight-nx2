@@ -166,6 +166,115 @@ function resultWords(bytes, count) {
 }
 
 /**
+ * Verifies the worker code, the copy and the release event wait the recycle frame runs
+ * through, then resolves the AudioOut functions.
+ * @param {Rpc} rpc
+ * @returns {Promise<Record<string, number>>} Each name in FUNCTION_NAMES and its address.
+ */
+async function verifySetup(rpc) {
+  await verifyCode(rpc);
+  await verifyCopy(rpc);
+  await verify(rpc, rpc.a.sdk + SYNC.waitSystemEvent.offset, SYNC.waitSystemEvent.hex);
+  const resolve = sdkResolver(rpc, {ambiguous: 'Ambiguous socket audio function '});
+  /** @type {Record<string, number>} */
+  const functions = {};
+  for (const name of FUNCTION_NAMES) functions[name] = await resolve(name);
+  return functions;
+}
+
+/**
+ * @param {Rpc} rpc
+ * @param {Record<string, number>} functions
+ * @returns {(name: string, args?: any[]) => Promise<bigint>} Calls a resolved function and
+ *   returns its result.
+ */
+function nativeCaller(rpc, functions) {
+  return async (name, args = []) => (await rpc.callAddress(functions[name], args, SHORT)).result;
+}
+
+/**
+ * Allocates the AudioOut region and zeroes everything below the PCM slots.
+ * @param {Rpc} rpc
+ * @returns {Promise<{audio: number, event: number, param: number,
+ *   slots: {descriptor: number, data: number}[]}>}
+ */
+async function allocateAudio(rpc) {
+  const audio = await allocate(rpc, AUDIO_BYTES, {
+    align: AUDIO_ALIGN,
+    failed: 'Socket audio allocation failed',
+    invalid: 'Invalid socket audio allocation'
+  });
+  await rpc.write(audio, Buffer.alloc(PCM_OFFSET));
+  return {audio, event: audio + EVENT_OFFSET, param: audio + PARAM_OFFSET, slots: slotsAt(audio)};
+}
+
+/**
+ * Sets the open parameter to 48 kHz stereo and opens the default AudioOut with its release
+ * event.
+ * @param {Rpc} rpc
+ * @param {ReturnType<typeof nativeCaller>} call
+ * @param {{audio: number, event: number, param: number}} region
+ */
+async function openAudioOut(rpc, call, {audio, event, param}) {
+  await call('InitializeAudioOutParameter', [param]);
+  const parameter = await rpc.read(param, PARAMETER_BYTES);
+  parameter.writeUInt32LE(SAMPLE_RATE, PARAMETER_RATE_OFFSET);
+  parameter.writeUInt16LE(CHANNELS, PARAMETER_CHANNELS_OFFSET);
+  await rpc.write(param, parameter);
+  if ((await call(OPEN_WITH_EVENT, [audio, event, param])) !== 0n)
+    throw Error('Socket AudioOut event overload failed');
+}
+
+/**
+ * Checks the opened AudioOut plays 48 kHz stereo s16 and describes its buffer slots.
+ * @param {ReturnType<typeof nativeCaller>} call
+ * @param {{audio: number, slots: {descriptor: number, data: number}[]}} region
+ * @param {number} bufferBytes
+ */
+async function initializeSlots(call, {audio, slots}, bufferBytes) {
+  if (
+    (await call('GetAudioOutSampleRate', [audio])) !== BigInt(SAMPLE_RATE) ||
+    (await call('GetAudioOutChannelCount', [audio])) !== BigInt(CHANNELS) ||
+    (await call('GetAudioOutSampleFormat', [audio])) !== SAMPLE_FORMAT_PCM_INT16
+  )
+    throw Error('Unexpected socket AudioOut format');
+  for (const slot of slots)
+    await call('SetAudioOutBufferInfo', [slot.descriptor, slot.data, PCM_STRIDE, bufferBytes]);
+}
+
+/**
+ * Creates the finite job runner for the prime and allocates the recycle worker, and gathers
+ * the options its cycle is planned from (see audio-socket-plan.js).
+ * @param {Rpc} rpc
+ * @param {NativeTransport} transport
+ * @param {Record<string, number>} functions
+ * @param {{audio: number, event: number, slots: {descriptor: number, data: number}[]}} region
+ * @param {number} bufferBytes
+ */
+async function planWorker(rpc, transport, functions, {audio, event, slots}, bufferBytes) {
+  const finite = await createFinite(rpc, {
+    verified: new Set([transport.recvFunction, functions.AppendAudioOutBuffer])
+  });
+  const workerBase = await allocate(rpc, WORKER_BYTES, {
+    failed: 'Socket audio recycle worker allocation failed',
+    invalid: 'Invalid socket audio recycle worker allocation'
+  });
+  const options = {
+    sdk: rpc.a.sdk,
+    base: workerBase,
+    fd: transport.fd,
+    audio,
+    event,
+    recv: transport.recvFunction,
+    append: functions.AppendAudioOutBuffer,
+    getReleased: functions.GetReleasedAudioOutBuffer,
+    slots,
+    bufferBytes
+  };
+  return {finite, workerBase, options};
+}
+
+/**
  * Opens the default AudioOut over a native TCP transport and returns its controls.
  * @param {{rpc: Rpc, transport: NativeTransport, bufferBytes?: number, timeoutMs?: number}}
  *   options timeoutMs bounds the wait for the worker to stop.
@@ -179,31 +288,11 @@ async function create({
 }) {
   if (!isBoundedSetup(rpc, transport, bufferBytes, timeoutMs))
     throw Error('Socket audio needs a bounded native TCP transport');
-  await verifyCode(rpc);
-  await verifyCopy(rpc);
-  await verify(rpc, rpc.a.sdk + SYNC.waitSystemEvent.offset, SYNC.waitSystemEvent.hex);
-  const resolve = sdkResolver(rpc, {ambiguous: 'Ambiguous socket audio function '});
-  /** @type {Record<string, number>} */
-  const functions = {};
-  for (const name of FUNCTION_NAMES) functions[name] = await resolve(name);
-  const call = async (name, args = []) =>
-    (await rpc.callAddress(functions[name], args, SHORT)).result;
-  const audio = await allocate(rpc, AUDIO_BYTES, {
-    align: AUDIO_ALIGN,
-    failed: 'Socket audio allocation failed',
-    invalid: 'Invalid socket audio allocation'
-  });
-  await rpc.write(audio, Buffer.alloc(PCM_OFFSET));
-  const event = audio + EVENT_OFFSET;
-  const param = audio + PARAM_OFFSET;
-  const slots = slotsAt(audio);
-  await call('InitializeAudioOutParameter', [param]);
-  const parameter = await rpc.read(param, PARAMETER_BYTES);
-  parameter.writeUInt32LE(SAMPLE_RATE, PARAMETER_RATE_OFFSET);
-  parameter.writeUInt16LE(CHANNELS, PARAMETER_CHANNELS_OFFSET);
-  await rpc.write(param, parameter);
-  if ((await call(OPEN_WITH_EVENT, [audio, event, param])) !== 0n)
-    throw Error('Socket AudioOut event overload failed');
+  const functions = await verifySetup(rpc);
+  const call = nativeCaller(rpc, functions);
+  const region = await allocateAudio(rpc);
+  const {audio, slots} = region;
+  await openAudioOut(rpc, call, region);
   let opened = true;
   let started = false;
   let running = false;
@@ -215,33 +304,14 @@ async function create({
   let cycleCallCount = 0;
   let sent = 0;
   try {
-    if (
-      (await call('GetAudioOutSampleRate', [audio])) !== BigInt(SAMPLE_RATE) ||
-      (await call('GetAudioOutChannelCount', [audio])) !== BigInt(CHANNELS) ||
-      (await call('GetAudioOutSampleFormat', [audio])) !== SAMPLE_FORMAT_PCM_INT16
-    )
-      throw Error('Unexpected socket AudioOut format');
-    for (const slot of slots)
-      await call('SetAudioOutBufferInfo', [slot.descriptor, slot.data, PCM_STRIDE, bufferBytes]);
-    const finite = await createFinite(rpc, {
-      verified: new Set([transport.recvFunction, functions.AppendAudioOutBuffer])
-    });
-    const workerBase = await allocate(rpc, WORKER_BYTES, {
-      failed: 'Socket audio recycle worker allocation failed',
-      invalid: 'Invalid socket audio recycle worker allocation'
-    });
-    const options = {
-      sdk: rpc.a.sdk,
-      base: workerBase,
-      fd: transport.fd,
-      audio,
-      event,
-      recv: transport.recvFunction,
-      append: functions.AppendAudioOutBuffer,
-      getReleased: functions.GetReleasedAudioOutBuffer,
-      slots,
+    await initializeSlots(call, region, bufferBytes);
+    const {finite, workerBase, options} = await planWorker(
+      rpc,
+      transport,
+      functions,
+      region,
       bufferBytes
-    };
+    );
 
     /** Runs a finite native job; a failed job may still hold the buffers, so retain. */
     function runRetaining(calls) {
@@ -310,64 +380,68 @@ async function create({
       running = true;
     }
 
+    /** @returns {Promise<bigint[]>} The recycle worker's latest result words. */
+    async function latestResults() {
+      const bytes = await rpc.read(program.results, cycleCallCount * RESULT_BYTES);
+      return resultWords(bytes, cycleCallCount);
+    }
+
+    /** Reads inline: one more await before the snapshot lets a concurrent send() into sent. */
     async function health() {
       if (!running || !program) return {sent, running, retained};
       const bytes = await rpc.read(program.results, cycleCallCount * RESULT_BYTES);
-      return {
-        sent,
-        running,
-        retained,
-        results: resultWords(bytes, cycleCallCount).map(String)
-      };
+      return {sent, running, retained, results: resultWords(bytes, cycleCallCount).map(String)};
     }
 
     /**
      * Sends the worker to its exit and unblocks its recv and release wait with two silent
      * chunks, then waits for it and joins it. The objects are retained when any of that
-     * fails, since the worker may still be running. A bad recycle result is thrown only
-     * after AudioOut is closed.
+     * fails, since the worker may still be running.
+     * @returns {Promise<Error | null>} What is wrong with the last recycle results, if anything.
      */
+    async function stopWorker() {
+      try {
+        await program.stop();
+        await transport.send(Buffer.alloc(bufferBytes));
+        await transport.send(Buffer.alloc(bufferBytes));
+      } catch (error) {
+        retained = true;
+        throw error;
+      }
+      try {
+        const done = await wait(rpc, thread, {
+          timeoutMs,
+          pollMs: STOP_POLL_MS,
+          invalid: 'Socket audio recycle worker state invalid',
+          outputBytes: SHORT
+        });
+        if (!done) throw Error('Socket audio recycle worker did not stop; restart SmileBASIC');
+        await join(rpc, thread, workerBase + EXIT_SLOT_OFFSET, {
+          failed: 'Socket audio recycle worker join failed',
+          outputBytes: SHORT
+        });
+      } catch (error) {
+        retained = true;
+        throw error;
+      }
+      running = false;
+      const results = await latestResults();
+      try {
+        audioSocket.checkedCycle(results, cycleRows, slots, bufferBytes);
+        return null;
+      } catch (error) {
+        return error;
+      }
+    }
+
+    /** Stops the worker, then AudioOut; a bad recycle result is thrown once it is closed. */
     async function stop() {
       if (stopped) {
         if (retained) throw Error('Socket audio objects retained for safety');
         return;
       }
       stopped = true;
-      let cycleError = null;
-      if (running) {
-        try {
-          await program.stop();
-          await transport.send(Buffer.alloc(bufferBytes));
-          await transport.send(Buffer.alloc(bufferBytes));
-        } catch (error) {
-          retained = true;
-          throw error;
-        }
-        try {
-          const done = await wait(rpc, thread, {
-            timeoutMs,
-            pollMs: STOP_POLL_MS,
-            invalid: 'Socket audio recycle worker state invalid',
-            outputBytes: SHORT
-          });
-          if (!done) throw Error('Socket audio recycle worker did not stop; restart SmileBASIC');
-          await join(rpc, thread, workerBase + EXIT_SLOT_OFFSET, {
-            failed: 'Socket audio recycle worker join failed',
-            outputBytes: SHORT
-          });
-        } catch (error) {
-          retained = true;
-          throw error;
-        }
-        running = false;
-        const bytes = await rpc.read(program.results, cycleCallCount * RESULT_BYTES);
-        const results = resultWords(bytes, cycleCallCount);
-        try {
-          audioSocket.checkedCycle(results, cycleRows, slots, bufferBytes);
-        } catch (error) {
-          cycleError = error;
-        }
-      }
+      const cycleError = running ? await stopWorker() : null;
       if (retained) throw Error('Socket audio objects retained for safety');
       if (started) await call('StopAudioOut', [audio]);
       if (opened) {
