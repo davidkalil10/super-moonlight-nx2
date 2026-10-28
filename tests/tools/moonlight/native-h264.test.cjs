@@ -1057,6 +1057,11 @@ test(
         child.stdio[3] = new PassThrough();
         const counts = {exchanges: 0, bridgeMs: 0, pushed: 120, dropped: 1, gapMaxMs: 14};
         child.stdio[3].write(JSON.stringify(counts) + '\n');
+        const kill = child.kill;
+        child.kill = signal => {
+          child.stdio[3].end(JSON.stringify({stopped: true, retained: false, error: null}) + '\n');
+          return kill(signal);
+        };
       }
       return child;
     };
@@ -1065,6 +1070,8 @@ test(
       const summary = await run(f.options);
       assert.deepEqual(feeders[0].slice(-5), ['--hz', '120', '--counts-fd', '3', '--push']);
       assert.equal(summary.inputPush, true);
+      assert.deepEqual(summary.inputPushStop, {stopped: true, retained: false, error: null});
+      assert.ok(!summary.failures.some(failure => failure.startsWith('input push')));
       const rows = (await fs.readFile(path.join(f.directory, 'logs', 'stats.jsonl'), 'utf8'))
         .trim()
         .split('\n')
@@ -1083,6 +1090,68 @@ test(
     });
   }
 );
+
+/**
+ * Makes the fixture's input feeder a push feeder whose SIGINT writes `report` on fd 3 and
+ * exits; with `hang` it ignores SIGINT and only a SIGKILL ends it. Returns the signals.
+ */
+function pushFeeder(f, {report = null, hang = false} = {}) {
+  const spawnProcess = f.options.spawnProcess;
+  const signals = [];
+  f.options.spawnProcess = (command, args, spawnOptions) => {
+    const child = spawnProcess(command, args, spawnOptions);
+    if (path.basename(args[0] ?? '') !== 'input-feeder.js') return child;
+    child.stdio[3] = new PassThrough();
+    const kill = child.kill;
+    child.kill = signal => {
+      signals.push(signal);
+      if (hang && signal === 'SIGINT') return true;
+      child.stdio[3].end(report ? JSON.stringify(report) + '\n' : undefined);
+      return kill(signal);
+    };
+    return child;
+  };
+  f.options.createStaggered = timedStaggeredFake(f.events, []);
+  f.options.now = () => 1000;
+  f.options.args.push('--staggered', '--queue', '16', '--warmup', '0', '--input-push');
+  return signals;
+}
+
+const retainedPush = error =>
+  error.errors.some(item => /Input push worker retained for safety/.test(item.message));
+
+test('a failed push feeder stop fails the summary and a retained one fails the run', async () => {
+  const failed = await fixture({units: pairedUnits(6)});
+  const error = 'Input push send was short or failed';
+  pushFeeder(failed, {report: {stopped: false, retained: false, error}});
+  await exercise(failed, async () => {
+    const summary = await run(failed.options);
+    assert.deepEqual(summary.inputPushStop, {stopped: false, retained: false, error});
+    assert.ok(summary.failures.includes('input push: ' + error));
+    assert.equal(summary.pass, false);
+  });
+  const retained = await fixture({units: pairedUnits(6)});
+  const report = {stopped: false, retained: true, error: 'Input push worker did not stop'};
+  pushFeeder(retained, {report});
+  await exercise(retained, async () => {
+    await assert.rejects(run(retained.options), retainedPush);
+  });
+  const silent = await fixture({units: pairedUnits(6)});
+  pushFeeder(silent);
+  await exercise(silent, async () => {
+    await assert.rejects(run(silent.options), retainedPush);
+  });
+});
+
+test('native-h264 kills a push feeder that does not exit and counts it as retained', async () => {
+  const f = await fixture({units: pairedUnits(6)});
+  const signals = pushFeeder(f, {hang: true});
+  f.options.feederExitMs = 50;
+  await exercise(f, async () => {
+    await assert.rejects(run(f.options), retainedPush);
+  });
+  assert.deepEqual(signals, ['SIGINT', 'SIGKILL']);
+});
 
 test(
   '--trim-backlog-ms reaches the scheduler, logs each trim and counts it apart from drops',

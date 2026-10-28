@@ -21,7 +21,9 @@
  * With --push, a console worker sends each record (the 784 bytes, then the UI overlay words)
  * on a native TCP socket at --hz instead (input-push-worker.js), so no input crosses the
  * bridge once it runs; the lines out are the same. The counts lines add pushed, dropped and
- * gapMaxMs: records received, records dropped as backlog and the longest arrival gap.
+ * gapMaxMs: records received, records dropped as backlog and the longest arrival gap. At the
+ * end it writes {stopped, retained, error} there: whether the worker stopped cleanly, was
+ * retained, and what failed.
  *
  * --start-chord names the NPAD buttons that press PC Start while all are held ('none' for no
  * chord, default stickL+stickR), since + alone stops SmileBASIC 4.
@@ -316,7 +318,7 @@ function createPushReader({
  * @param {typeof readStorage} [options.readAppStorage]
  * @param {() => number} [options.now]
  * @returns {{take: () => {pushed: number, dropped: number, gapMaxMs: number},
- *   stop: () => Promise<void>}}
+ *   stop: () => Promise<void>, retained: boolean}}
  */
 function runPush({
   rpc,
@@ -338,6 +340,7 @@ function runPush({
   let running = null;
   let busy = null;
   let failed = false;
+  let retained = false;
   let sourceChecked = -Infinity;
 
   /** @param {Error} error */
@@ -378,6 +381,9 @@ function runPush({
     try {
       const {pushed} = await stopping.stop();
       log(`Input push stopped; the console counted ${pushed} records`);
+    } catch (error) {
+      retained ||= stopping.retained;
+      throw error;
     } finally {
       reader.detach();
     }
@@ -414,6 +420,10 @@ function runPush({
       await busy;
       if (worker) await stopWorker();
       else reader.detach();
+    },
+    /** True once a worker that would not stop was kept for safety. */
+    get retained() {
+      return retained;
     }
   };
 }
@@ -435,6 +445,7 @@ async function mainPush(bridge, {directory, hz, layout, startChord, countsFd}) {
   });
   process.on('SIGINT', () => finish());
   process.on('SIGTERM', () => finish());
+  let failure = null;
   const push = runPush({
     rpc: bridge.rpc,
     directory,
@@ -443,7 +454,8 @@ async function mainPush(bridge, {directory, hz, layout, startChord, countsFd}) {
     startChord,
     write: line => closed || process.stdout.write(line + '\n'),
     log: message => process.stderr.write(message + '\n'),
-    onFailure: () => {
+    onFailure: error => {
+      failure = error;
       process.exitCode = 1;
       finish();
     }
@@ -455,7 +467,19 @@ async function mainPush(bridge, {directory, hz, layout, startChord, countsFd}) {
       fs.write(countsFd, line + '\n', () => {});
     }, COUNTS_MS).unref();
   await finished;
-  await push.stop();
+  let stopError = null;
+  try {
+    await push.stop();
+  } catch (error) {
+    stopError = error;
+  }
+  const errors = [failure, stopError].filter(Boolean).map(error => error.message);
+  const report = {stopped: !stopError, retained: push.retained, error: errors.join('; ') || null};
+  if (countsFd !== null)
+    try {
+      fs.writeSync(countsFd, JSON.stringify(report) + '\n');
+    } catch {}
+  if (stopError) throw stopError;
 }
 
 async function main() {

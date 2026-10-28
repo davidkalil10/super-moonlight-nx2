@@ -41,6 +41,8 @@ const CONSOLE_STALL_MS = 5000;
 const QUEUE = 8;
 /** Default stats row interval. */
 const STATS_MS = 1000;
+/** How long the input feeder gets to exit after SIGINT: its 5 s worker stop and the calls around. */
+const FEEDER_EXIT_MS = 8000;
 /** How often app-runtime.json is read to see whether Moonlight still runs. */
 const RUNTIME_CHECK_MS = 500;
 /** Decoder resyncs allowed inside RESYNC_WINDOW_MS; the next error ends the stream. */
@@ -421,7 +423,10 @@ function helperArgs(host, app, {width, height, fps, bitrate, audio}) {
  * The run's summary record, before scoring; the steady rows are those after the warmup.
  * @param {ReturnType<typeof parseOptions>} options
  */
-function buildSummary(options, {rows, staggeredLive, tail, socketAudioReport, stopReason}) {
+function buildSummary(
+  options,
+  {rows, staggeredLive, tail, socketAudioReport, inputPushStop, stopReason}
+) {
   const {presentHz, skipBacklog, skipRule, trimBacklogMs, gateOnReceive, outputLag} = options;
   const {decodeWait, receiveWait, avoidWindow, queue, inputHz, audioFrames, audio} = options;
   const {socketAudio, input, inputPush, warmup, expect} = options;
@@ -441,7 +446,7 @@ function buildSummary(options, {rows, staggeredLive, tail, socketAudioReport, st
     staggered: {...(staggeredLive?.counts ?? {}), tail},
     queue,
     inputHz,
-    ...(inputPush && {inputPush}),
+    ...(inputPush && {inputPush, inputPushStop}),
     audioFrames,
     audio,
     ...(socketAudio ? {socketAudio: socketAudioReport} : {}),
@@ -456,9 +461,11 @@ function buildSummary(options, {rows, staggeredLive, tail, socketAudioReport, st
 /** @typedef {ReturnType<typeof buildSummary> & ReturnType<typeof scoring.verdict>} Scored */
 
 /** Scores the summary against --expect and the stop reason, and merges the verdict into it. */
-function score(summary, {expect, duration, socketAudioReport, stopReason}) {
+function score(summary, {expect, duration, socketAudioReport, inputPushStop, stopReason}) {
   const result = scoring.verdict(summary, expect);
   if (socketAudioReport?.error) result.failures.push('socket audio: ' + socketAudioReport.error);
+  if (inputPushStop?.error || inputPushStop?.retained)
+    result.failures.push('input push: ' + (inputPushStop.error ?? 'worker retained'));
   if (stopReason === 'console-stalled') result.failures.push('console stopped answering');
   if (duration !== null && stopReason !== 'duration')
     result.failures.push('ended before duration: ' + stopReason);
@@ -486,6 +493,7 @@ function score(summary, {expect, duration, socketAudioReport, stopReason}) {
  * @property {typeof spawn} [spawnProcess]
  * @property {number} [consoleStallMs]
  * @property {number} [statsMs]
+ * @property {number} [feederExitMs]
  * @property {() => number} [now]
  */
 
@@ -513,6 +521,7 @@ async function run({
   spawnProcess = spawn,
   consoleStallMs = CONSOLE_STALL_MS,
   statsMs = STATS_MS,
+  feederExitMs = FEEDER_EXIT_MS,
   now = () => performance.now()
 }) {
   const options = parseOptions(args, rpc, width, height, fps);
@@ -552,6 +561,10 @@ async function run({
   /** @type {import('../input/pad-age.js').PadRow[]} */
   let inputPad = [];
   let pushCounts = {pushed: 0, dropped: 0, gapMaxMs: 0};
+  /** @type {{child: any, done: Promise<unknown>} | null} */
+  let inputFeeder = null;
+  /** @type {{stopped: boolean, retained: boolean, error: string | null} | null} */
+  let inputPushStop = null;
   let trimmed = 0;
   let auSamples = [];
   const stats = freshStats();
@@ -703,7 +716,7 @@ async function run({
 
   /**
    * The input feeder writes to the helper's stdin and its bridge counts to fd 3, plus its
-   * record counts with --input-push.
+   * record counts and, last, its stop report with --input-push.
    */
   function spawnInputFeeder() {
     const child = spawnProcess(
@@ -721,12 +734,20 @@ async function run({
         stdio: ['ignore', helper.stdin, 'inherit', 'pipe']
       }
     );
-    if (child.stdio?.[3])
-      readline
-        .createInterface({input: /** @type {import('node:stream').Readable} */ (child.stdio[3])})
+    const done = [new Promise(resolve => child.once('exit', resolve))];
+    if (child.stdio?.[3]) {
+      const lines = readline.createInterface({
+        input: /** @type {import('node:stream').Readable} */ (child.stdio[3])
+      });
+      if (inputPush) done.push(new Promise(resolve => lines.once('close', resolve)));
+      lines
         .on('line', line => {
           try {
             const counts = JSON.parse(line);
+            if (counts.stopped !== undefined) {
+              inputPushStop = counts;
+              return;
+            }
             inputBridge.exchanges += counts.exchanges;
             inputBridge.bridgeMs += counts.bridgeMs;
             if (counts.pad) inputPad.push(counts.pad);
@@ -737,7 +758,36 @@ async function run({
           } catch {}
         })
         .on('error', error => log({event: 'input-counts-error', message: error.message}));
+    }
+    inputFeeder = {child, done: Promise.all(done)};
     watchChild(child, 'Moonlight input feed');
+  }
+
+  /**
+   * Waits for the input feeder to stop its console worker and report, and kills it past
+   * feederExitMs. A push feeder that was killed or did not report may have left its worker
+   * running, so that counts as retained.
+   */
+  async function awaitInputFeeder(errors) {
+    if (!inputFeeder) return;
+    let timer;
+    const late = new Promise(resolve => (timer = setTimeout(resolve, feederExitMs, false)));
+    const exited = await Promise.race([inputFeeder.done.then(() => true), late]);
+    clearTimeout(timer);
+    if (!exited) {
+      inputFeeder.child.kill('SIGKILL');
+      log({event: 'input-feeder-killed', afterMs: feederExitMs});
+    }
+    if (!inputPush) return;
+    if (!exited || !inputPushStop)
+      inputPushStop = {
+        stopped: false,
+        retained: true,
+        error: exited ? 'input feeder sent no stop report' : 'input feeder did not exit'
+      };
+    log({event: 'input-push-stop', ...inputPushStop});
+    if (inputPushStop.retained)
+      errors.push(Error('Input push worker retained for safety; restart SmileBASIC'));
   }
 
   /** The audio stream reads the helper's PCM pipe as its stdin. */
@@ -1121,6 +1171,7 @@ async function run({
     stop('cleanup');
     statusLines?.close();
     const errors = [];
+    await awaitInputFeeder(errors);
     if (soundSource) await closeSocketAudio(errors);
     await releaseNative(errors);
     process.removeListener('SIGINT', onInterrupt);
@@ -1135,12 +1186,14 @@ async function run({
       staggeredLive,
       tail,
       socketAudioReport,
+      inputPushStop,
       stopReason
     });
     const result = score(summary, {
       expect: options.expect,
       duration,
       socketAudioReport,
+      inputPushStop,
       stopReason
     });
     await fs.writeFile(path.join(output, 'summary.json'), JSON.stringify(summary, null, 2) + '\n', {
