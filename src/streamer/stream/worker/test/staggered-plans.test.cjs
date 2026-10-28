@@ -1,6 +1,8 @@
 // The staggered console workers: the barrier, the input and output plans and the worker.
 const test = require('node:test');
 const assert = require('node:assert/strict');
+// hbl-platform release() frees only with HBL_NATIVE_FREE=1; these tests check the frees.
+process.env.HBL_NATIVE_FREE = '1';
 const {ADDRESS} = require('../../../../../../hbl-platform/tests/recording-rpc.cjs');
 const {gateConsole, BLOCK} = require('../../../../../../hbl-platform/tests/gate-worker-mock.cjs');
 const definitions = require('../../../console-api/movie-functions.json');

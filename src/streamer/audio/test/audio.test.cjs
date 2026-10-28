@@ -1,6 +1,8 @@
 // Host audio: the socket plan, the AudioOut stream, the socket audio source and its worker.
 const test = require('node:test');
 const assert = require('node:assert/strict');
+// hbl-platform release() frees only with HBL_NATIVE_FREE=1; these tests check the frees.
+process.env.HBL_NATIVE_FREE = '1';
 const {PassThrough} = require('node:stream');
 const {EventEmitter} = require('node:events');
 const {

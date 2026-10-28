@@ -1,6 +1,8 @@
 // The staggered scheduler, and the gate and status checks it runs every frame.
 const test = require('node:test');
 const assert = require('node:assert/strict');
+// hbl-platform release() frees only with HBL_NATIVE_FREE=1; these tests check the frees.
+process.env.HBL_NATIVE_FREE = '1';
 const definitions = require('../../../console-api/movie-functions.json');
 const registration =
   require('../../../console-api/movie-event-functions.json').registerClientEvents;

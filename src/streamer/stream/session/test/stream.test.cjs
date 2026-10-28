@@ -1,6 +1,8 @@
 // The rest of src/streamer/stream: the native decoder, sink and TCP, live.js, pacing and summaries.
 const test = require('node:test');
 const assert = require('node:assert/strict');
+// hbl-platform release() frees only with HBL_NATIVE_FREE=1; these tests check the frees.
+process.env.HBL_NATIVE_FREE = '1';
 const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
