@@ -49,7 +49,7 @@ import {helperArgs, H264_FD, AUDIO_FD} from './stream-options.js';
  */
 function createChildren(ctx) {
   const {options, spawnProcess, helperPath, directory, rpc, width, height, fps} = ctx;
-  const {host, app, audio, queue, inputHz, inputPush, audioFrames, bitrate} = options;
+  const {host, app, audio, queue, inputHz, inputPush, inputPushPad, audioFrames, bitrate} = options;
   const {feederExitMs, now, log, requestIdr, addFeederCounts, isStopping} = ctx;
 
   /** @type {Children} */
@@ -135,7 +135,8 @@ function createChildren(ctx) {
         String(inputHz),
         '--counts-fd',
         '3',
-        ...(inputPush ? ['--push'] : [])
+        ...(inputPush ? ['--push'] : []),
+        ...(inputPushPad ? ['--push-pad'] : [])
       ],
       {
         stdio: ['ignore', state.helper.stdin, 'inherit', 'pipe']

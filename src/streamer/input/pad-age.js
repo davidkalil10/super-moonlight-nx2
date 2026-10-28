@@ -100,4 +100,25 @@ function merge(rows) {
   };
 }
 
-export {create, merge};
+/**
+ * Folds the push pad read's takes of one stats row: the arrival intervals become
+ * {p50, p95, max} and the samplingStep histograms (UNVERIFIED as HID's sampling number, stats
+ * only) are summed.
+ * @param {{arrivals: number[], samplingStep: Record<string, number>}[]} takes
+ */
+function mergePushPad(takes) {
+  const sorted = takes.flatMap(take => take.arrivals).sort((a, b) => a - b);
+  /** @param {number} p */
+  const at = p => sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * p))] ?? null;
+
+  /** @type {Record<string, number>} */
+  const samplingStep = {};
+  for (const take of takes) {
+    for (const [step, count] of Object.entries(take.samplingStep))
+      samplingStep[step] = (samplingStep[step] ?? 0) + count;
+  }
+
+  return {arrivalMs: {p50: at(0.5), p95: at(0.95), max: sorted.at(-1) ?? null}, samplingStep};
+}
+
+export {create, merge, mergePushPad};

@@ -407,6 +407,7 @@ const {gateConsole, BLOCK} = require('../../../../../hbl-platform/tests/gate-wor
 const {prepareRepeating} = require('../../../../../hbl-platform/sdk/native/jobs.js');
 const {CODE, spawn} = require('../../../../../hbl-platform/sdk/native/thread.js');
 const socketFunctions = require('../../../../../hbl-platform/sdk/native/socket-functions.json');
+const hidFunctions = require('../../../../../hbl-platform/sdk/native/hid-functions.json');
 const pushPlan = require('../input-push-plan.js');
 
 const PUSH_FD = 9;
@@ -416,16 +417,32 @@ const UI_AT = ADDRESS.mapped + 0x10c000;
 const PUSH_BASE = ADDRESS.heap + 0x1000000;
 const PUSH_COUNTER = ADDRESS.heap + 0x2000000;
 const PUSH_BUFFER = PUSH_COUNTER + 0x100;
+const PUSH_PAD_ID = PUSH_COUNTER + 0x10;
+const PAD_HANDHELD = ADDRESS.sdk + hidFunctions.padHandheld.offset;
+
+/** The 40-byte NpadState the fake handheld read writes on its nth call: sampling n, then 0x33. */
+function padSample(n) {
+  const bytes = Buffer.alloc(40, 0x33);
+  bytes.writeBigUInt64LE(BigInt(n), 0);
+  return bytes;
+}
 
 /**
  * A gate console whose send logs each block and hands it to deliver; short(count) may replace
- * a send's result, and hang keeps the worker asleep for good.
+ * a send's result, and hang keeps the worker asleep for good. The handheld pad read logs the
+ * npad id it was given and writes padSample.
  */
 function pushConsole({short = () => null, deliver = () => {}, hang = false} = {}) {
   const sends = [];
+  const padIds = [];
   let asleep = false;
   const fake = gateConsole({
     natives: {
+      'hid.padHandheld'([out, id], memory) {
+        padIds.push(memory.read(id, 4).readUInt32LE());
+        memory.write(out, padSample(padIds.length));
+        return 0;
+      },
       'socket.send'([fd, address, length], memory) {
         const bytes = memory.read(address, length);
         sends.push({fd, address, length, bytes});
@@ -439,11 +456,12 @@ function pushConsole({short = () => null, deliver = () => {}, hang = false} = {}
     }
   });
   fake.rpc.names.set(SEND, 'socket.send');
-  return {...fake, sends};
+  fake.rpc.names.set(PAD_HANDHELD, 'hid.padHandheld');
+  return {...fake, sends, padIds};
 }
 
-/** Writes and spawns the push frame the way the worker does. */
-async function startPush(fake, ui = UI_AT) {
+/** Writes and spawns the push frame the way the worker does; `pad` adds the handheld read. */
+async function startPush(fake, ui = UI_AT, pad = false) {
   const plan = pushPlan.cycle({
     sdk: ADDRESS.sdk,
     base: PUSH_BASE,
@@ -451,9 +469,10 @@ async function startPush(fake, ui = UI_AT) {
     send: SEND,
     state: STATE_AT,
     ui,
-    buffer: ui === null ? null : PUSH_BUFFER,
+    buffer: ui === null && !pad ? null : PUSH_BUFFER,
     counter: PUSH_COUNTER,
-    hz: 120
+    hz: 120,
+    ...(pad && {padId: PUSH_PAD_ID})
   });
   const program = await prepareRepeating(fake.rpc, {
     base: PUSH_BASE,
@@ -546,12 +565,95 @@ test('the input push plan refuses a bad rate or block and drops the UI send with
   assert.throws(() => pushPlan.checkedPush([784n, 0n], plan.row), /Invalid input push results/);
 });
 
+// sha256 of the flag-off frames and exit contexts for these inputs, computed on be4d481.
+const PUSH_PLAN_SHA256 = 'cc9be187264c60ecfff1a853208f67ad4f6ad568b03b7865831e47697a4c1162';
+
+test('the push plan without the pad read builds the same frames as before the flag', () => {
+  const hash = require('node:crypto').createHash('sha256');
+  for (const ui of [UI_AT, null]) {
+    const {program} = pushPlan.cycle({
+      sdk: ADDRESS.sdk,
+      base: PUSH_BASE,
+      fd: PUSH_FD,
+      send: SEND,
+      state: STATE_AT,
+      ui,
+      buffer: ui === null ? null : PUSH_BUFFER,
+      counter: PUSH_COUNTER,
+      hz: 120
+    });
+    hash.update(program.frame).update(program.stop);
+  }
+  assert.equal(hash.digest('hex'), PUSH_PLAN_SHA256);
+});
+
+test('the pad read overwrites the copied pad and the record ends with its count', async () => {
+  const fake = pushConsole();
+  fake.memory.write(STATE_AT, Buffer.alloc(pushPlan.STATE_BYTES, 0x11));
+  fake.memory.write(UI_AT, Buffer.alloc(pushPlan.UI_BYTES, 0x22));
+  fake.memory.write(PUSH_PAD_ID, Buffer.from([0x20, 0, 0, 0]));
+  const {plan, results} = await startPush(fake, UI_AT, true);
+
+  const {copies, pad, sequence, send, count, sleep} = plan.row;
+  assert.deepEqual([...copies, pad, sequence, send, count, sleep], [0, 1, 2, 3, 4, 5, 6]);
+  assert.equal(plan.calls.length, 7);
+  assert.deepEqual(plan.calls[pad], {
+    function: PAD_HANDHELD,
+    args: [PUSH_BUFFER, PUSH_PAD_ID, 0, 0]
+  });
+  assert.deepEqual(plan.calls[sequence].args, [PUSH_BUFFER + 812, PUSH_COUNTER, 4, 0]);
+  assert.equal(plan.recordBytes, 812 + 4);
+
+  for (let period = 1; period < 4; period++) fake.advanceAll();
+  assert.equal(fake.sends.length, 4);
+  fake.sends.forEach((sent, index) => {
+    assert.deepEqual([sent.fd, sent.address, sent.length], [PUSH_FD, PUSH_BUFFER, 816]);
+    assert.ok(sent.bytes.subarray(0, 40).equals(padSample(index + 1)), 'a fresh pad per pass');
+    assert.ok(sent.bytes.subarray(40, 784).every(byte => byte === 0x11));
+    assert.ok(sent.bytes.subarray(784, 812).every(byte => byte === 0x22));
+    assert.equal(sent.bytes.readUInt32LE(812), index, 'the count before this pass');
+  });
+
+  assert.deepEqual(fake.padIds, [32, 32, 32, 32]);
+  assert.ok(
+    fake.memory.read(STATE_AT, 40).every(byte => byte === 0x11),
+    'STATE is not written'
+  );
+  assert.deepEqual(fake.trace.slice(0, 3), ['hid.padHandheld', 'socket.send', 'add']);
+  const last = await results();
+  assert.doesNotThrow(() => pushPlan.checkedPush(last, plan.row));
+});
+
+test('without a UI block the pad read still copies into the buffer and sends 788 bytes', () => {
+  const options = {
+    sdk: ADDRESS.sdk,
+    base: PUSH_BASE,
+    fd: PUSH_FD,
+    send: SEND,
+    state: STATE_AT,
+    ui: null,
+    buffer: PUSH_BUFFER,
+    counter: PUSH_COUNTER,
+    hz: 240,
+    padId: PUSH_PAD_ID
+  };
+  const plan = pushPlan.cycle(options);
+  assert.deepEqual(plan.calls[plan.row.copies[0]].args, [PUSH_BUFFER, STATE_AT, 784, 0]);
+  assert.deepEqual(plan.calls[plan.row.sequence].args, [PUSH_BUFFER + 784, PUSH_COUNTER, 4, 0]);
+  assert.deepEqual(plan.calls[plan.row.send].args, [PUSH_FD, PUSH_BUFFER, 788, 0]);
+  assert.equal(plan.calls.length, 6);
+  assert.equal(plan.calls[plan.row.sleep].args[0], 4166667);
+
+  for (const bad of [{buffer: null}, {padId: PUSH_PAD_ID + 2}, {padId: 0}, {hz: 241}])
+    assert.throws(() => pushPlan.cycle({...options, ...bad}), /Input push needs/);
+});
+
 // input-push-worker.js: the real worker on the same fake console, behind a host transport
 // that hands each console send to onData.
 const {create: createPushWorker} = require('../input-push-worker.js');
 
 /** Creates and, unless `before` throws, starts a push worker; `before(fake)` runs first. */
-async function pushWorker({before = () => {}, ...options} = {}) {
+async function pushWorker({before = () => {}, pad = false, ...options} = {}) {
   let listener = null;
   const fake = pushConsole({...options, deliver: bytes => listener?.(bytes)});
   const received = [];
@@ -574,6 +676,7 @@ async function pushWorker({before = () => {}, ...options} = {}) {
     host: '192.0.2.10',
     state: STATE_AT,
     ui: UI_AT,
+    pad,
     onData: bytes => received.push(bytes),
     timeoutMs: 1000,
     createTransport: async ({host}) => {
@@ -672,6 +775,26 @@ test('a push setup that fails after the connection closes it', async () => {
   );
   assert.deepEqual(closed, [1]);
   await assert.rejects(createPushWorker({rpc: fake.rpc, state: STATE_AT}), /data callback/);
+});
+
+test('a pad-reading push worker verifies the read, gives it the handheld id and counts', async () => {
+  const {fake, worker, received} = await pushWorker({pad: true});
+  const verified = fake.rpc.lines.filter(line => line.startsWith('verify '));
+  assert.ok(verified.some(line => line.startsWith('verify hid.padHandheld ')));
+  assert.equal(worker.recordBytes, 816);
+
+  await worker.start();
+  fake.advanceAll();
+  assert.deepEqual(await worker.stop(), {pushed: 2});
+  const records = Buffer.concat(received);
+  assert.equal(records.length, 2 * 816);
+  assert.deepEqual([records.readUInt32LE(812), records.readUInt32LE(816 + 812)], [0, 1]);
+  assert.deepEqual(fake.padIds, [32, 32]);
+});
+
+test('a push worker without the pad read does not verify it', async () => {
+  const {fake} = await pushWorker();
+  assert.ok(!fake.rpc.lines.some(line => line.startsWith('verify hid.padHandheld ')));
 });
 
 // input-feeder.js --push: the record reader's rules, then end to end through the real native
@@ -1015,4 +1138,126 @@ test('push mode fails when the console never sends or closes the socket', async 
     }
     assert.equal(failures.length, 1, 'the stop is no second failure');
   }
+});
+
+// input-feeder.js --push --push-pad: records carry their own pad read and end with the worker's
+// record count, which the reader steps on instead of STATE.frames.
+const fsSync = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const {checkHandheld} = require('../input-feeder.js');
+
+/** A pad-reading record: pushRecord with the pad's sampling word, then the record count. */
+function padRecord(sequence, frames, {sampling = 0, ...fields} = {}) {
+  const record = pushRecord(frames, fields);
+  record.writeBigUInt64LE(BigInt(sampling), 0);
+  const count = Buffer.alloc(4);
+  count.writeUInt32LE(sequence);
+  return Buffer.concat([record, count]);
+}
+
+function padReader(clock = () => 0) {
+  const lines = [];
+  const logs = [];
+  const reader = createPushReader({
+    layout: 'position',
+    write: line => lines.push(line),
+    log: message => logs.push(message),
+    pad: true,
+    now: clock
+  });
+  reader.attach(816);
+  const flags = () =>
+    parsed(lines)
+      .filter(line => line.type === 'controller')
+      .map(line => line.buttonFlags);
+  return {reader, lines, logs, flags};
+}
+
+test('with the pad read every new record count applies, even on a repeated STATE.frames', () => {
+  const {reader, flags} = padReader();
+  reader.data(padRecord(0, 5, {buttons: BUTTON_A}));
+  reader.data(padRecord(1, 5));
+  reader.data(padRecord(1, 5, {buttons: BUTTON_A}));
+  reader.data(padRecord(2, 5, {buttons: BUTTON_A}));
+
+  assert.deepEqual(flags(), [0x2000, 0, 0x2000], 'the repeated count 1 is dropped');
+  const {pushed, applied} = reader.take();
+  assert.deepEqual({pushed, applied}, {pushed: 4, applied: 3});
+});
+
+test('a record count going back is a new worker: logged, released, then applied', () => {
+  const {reader, logs, flags} = padReader();
+  reader.data(padRecord(7, 1, {buttons: BUTTON_A}));
+  reader.data(padRecord(3, 1, {buttons: BUTTON_A}));
+
+  assert.match(logs[0], /record count went back from 7 to 3; new worker/);
+  assert.deepEqual(flags(), [0x2000, 0, 0x2000]);
+  assert.equal(reader.take().applied, 2);
+});
+
+test('the pad read keeps the overlay gate and the framing check', () => {
+  const {reader, flags} = padReader();
+  reader.data(padRecord(0, 1, {buttons: BUTTON_A}));
+  reader.data(padRecord(1, 1, {buttons: BUTTON_A, overlay: true}));
+  reader.data(padRecord(2, 1, {buttons: BUTTON_A, overlay: true}));
+  assert.deepEqual(flags(), [0x2000, 0], 'the overlay releases and holds the pad');
+  assert.equal(reader.take().applied, 1);
+
+  const cut = padRecord(3, 1).subarray(0, 40);
+  const later = [4, 5, 6].map(sequence => padRecord(sequence, 1));
+  assert.throws(() => reader.data(Buffer.concat([cut, ...later])), /lost the record framing/);
+});
+
+test('pad read stats: arrival intervals and sampling steps of the applied records', () => {
+  let clock = 0;
+  const {reader} = padReader(() => clock);
+  const at = (time, ...records) => {
+    clock = time;
+    reader.data(Buffer.concat(records));
+  };
+  at(0, padRecord(0, 1, {sampling: 100}));
+  at(4, padRecord(1, 1, {sampling: 101}));
+  at(8, padRecord(1, 1, {sampling: 102}));
+  at(12, padRecord(2, 1, {sampling: 103}));
+  at(20, padRecord(3, 1, {sampling: 104}), padRecord(4, 2, {sampling: 105}));
+
+  const taken = reader.take();
+  assert.deepEqual(taken.arrivals, [4, 8, 8, 0]);
+  assert.deepEqual(taken.samplingStep, {1: 3, 2: 1});
+  assert.deepEqual(reader.take().arrivals, [], 'a take empties the window');
+
+  const row = padAge.mergePushPad([taken, {arrivals: [2], samplingStep: {1: 1}}]);
+  assert.deepEqual(row, {arrivalMs: {p50: 4, p95: 8, max: 8}, samplingStep: {1: 4, 2: 1}});
+  assert.deepEqual(padAge.mergePushPad([]), {
+    arrivalMs: {p50: null, p95: null, max: null},
+    samplingStep: {}
+  });
+});
+
+test('without the pad read a repeated STATE.frames stays dropped and takes carry no pad stats', () => {
+  const lines = [];
+  const reader = createPushReader({layout: 'position', write: line => lines.push(line), log() {}});
+  reader.attach(812);
+  reader.data(pushRecord(4, {buttons: BUTTON_A}));
+  reader.data(pushRecord(4));
+  reader.data(pushRecord(4, {buttons: BUTTON_A}));
+
+  assert.equal(lines.length, 1);
+  const taken = reader.take();
+  assert.deepEqual({pushed: taken.pushed, applied: taken.applied}, {pushed: 3, applied: 1});
+  assert.ok(!('arrivals' in taken) && !('samplingStep' in taken));
+});
+
+test('the pad read needs a session recorded as handheld', () => {
+  const directory = fsSync.mkdtempSync(path.join(os.tmpdir(), 'hbl-push-pad-'));
+  const launch = dock =>
+    fsSync.writeFileSync(path.join(directory, 'auto-launch.json'), JSON.stringify({dock}));
+
+  assert.throws(() => checkHandheld(directory), /handheld session; .* no auto-launch.json/);
+  launch('docked');
+  assert.throws(() => checkHandheld(directory), /handheld session; this run has dock=docked/);
+  launch('handheld');
+  assert.doesNotThrow(() => checkHandheld(directory));
+  fsSync.rmSync(directory, {recursive: true});
 });

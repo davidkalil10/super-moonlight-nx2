@@ -5,6 +5,7 @@ import * as cli from '../../../../../hbl-platform/sdk/cli.js';
 import * as scoring from './run-summary.js';
 import {bitrate as streamBitrate} from './bitrate.js';
 import * as exchangeTiming from '../scheduler/exchange-timing.js';
+import {MAX_HZ as MAX_PUSH_HZ} from '../../input/input-push-plan.js';
 
 /** The host runs at present pace, so it needs room for a source burst (batch C2). */
 const QUEUE = 8;
@@ -18,9 +19,8 @@ const SOCKET_AUDIO_FRAMES = 3840;
 
 /** The range checks of the stream flags, in the order they are reported. */
 function checkFlags(args, flags) {
-  const {inputHz, presentHz} = flags;
-  if (!Number.isInteger(inputHz) || inputHz < 10 || inputHz > 120)
-    throw Error('--input-hz takes 10 to 120');
+  checkInputFlags(flags);
+  const {presentHz} = flags;
   if (presentHz !== 60 && presentHz !== 120) throw Error('--present-hz takes 60 or 120');
 
   checkSkipFlags(flags);
@@ -29,6 +29,16 @@ function checkFlags(args, flags) {
   checkRunFlags(args, flags);
   if (flags.stageTicks && !args.includes('--staggered'))
     throw Error('HBL_STAGE_TICKS=1 needs --staggered');
+}
+
+/** --input-hz and --input-push-pad, whose pad read per pass may run at the push plan's cap. */
+function checkInputFlags({inputHz, inputPush, inputPushPad}) {
+  if (inputPushPad && !inputPush) throw Error('--input-push-pad needs --input-push');
+
+  const hzUpTo = max => Number.isInteger(inputHz) && inputHz >= 10 && inputHz <= max;
+  if (inputPushPad && !hzUpTo(MAX_PUSH_HZ))
+    throw Error(`--input-hz takes 10 to ${MAX_PUSH_HZ} with --input-push-pad`);
+  if (!inputPushPad && !hzUpTo(120)) throw Error('--input-hz takes 10 to 120');
 }
 
 /** --skip-backlog, --skip-rule, --decode-wait and --trim-backlog-ms. */
@@ -128,6 +138,7 @@ function parseOptions(args, rpc, width, height, fps, env = process.env) {
     queue: cli.number(args, '--queue', QUEUE),
     inputHz: cli.number(args, '--input-hz', inputPush ? 120 : 60),
     inputPush,
+    inputPushPad: args.includes('--input-push-pad'),
     presentHz: cli.number(args, '--present-hz', 60),
     skipRule,
     trimBacklogMs: cli.number(args, '--trim-backlog-ms', null),

@@ -22,7 +22,7 @@ import {TOUCH_BYTES, parseTouch, createTracker, step, flush, touchLine} from './
 import {UI, UI_MAGIC} from '../shared/ring.js';
 import {instrument} from '../stream/native/bridge-counter.js';
 import * as padAge from './pad-age.js';
-import {STATE_BYTES} from './input-push-plan.js';
+import {STATE_BYTES, SEQUENCE_BYTES} from './input-push-plan.js';
 import {create as createPushWorker} from './input-push-worker.js';
 
 /** One read from the start of the state buffer to the end of the touch block. */
@@ -205,20 +205,54 @@ function readStorage(directory) {
 }
 
 /**
+ * The session's dock state from the automatic launch record behind `SESSION READY dock=...`,
+ * or null when the run has none (a manual or resident launch).
+ * @param {string} directory
+ * @returns {string | null}
+ */
+function launchDock(directory) {
+  try {
+    const launch = JSON.parse(fs.readFileSync(path.join(directory, 'auto-launch.json'), 'utf8'));
+    return typeof launch.dock === 'string' ? launch.dock : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The push pad read calls the handheld overload, so it refuses any session not recorded as
+ * handheld (docked-input.md).
+ * @param {string} directory
+ */
+function checkHandheld(directory) {
+  const dock = launchDock(directory);
+  if (dock === 'handheld') return;
+
+  const seen = dock === null ? 'no auto-launch.json dock record' : `dock=${dock}`;
+  throw Error(`--input-push-pad needs a handheld session; this run has ${seen}`);
+}
+
+/**
  * Push counts since the last take.
  * @typedef {object} PushCounts
  * @property {number} pushed records that arrived
  * @property {number} dropped records a backlog burst dropped
  * @property {number} gapMaxMs the longest gap between arrivals
- * @property {number} applied records that stepped the app frame count outside the overlay
+ * @property {number} applied records that stepped the app frame count (with the pad read, the
+ *   record count) outside the overlay
  * @property {number} changes the controller and touch lines those sent
+ * @property {number[]} [arrivals] with the pad read: ms between consecutive applied records
+ * @property {Record<string, number>} [samplingStep] with the pad read: how often each step of
+ *   NpadState bytes 0..8 (u64) came between applied records. UNVERIFIED as HID's sampling
+ *   number; stats only.
  */
 
 /**
  * The push mode reader: records arrive whole or split and are applied in order. A repeated
  * STATE.frames is a launcher frame already seen (the push outruns the pad copy) and only feeds
  * the overlay gate; a count going back means a new launcher session. Not frameIndex: it stays
- * 0 under time service version 1 (pad-age.js). More than
+ * 0 under time service version 1 (pad-age.js). With `pad` each record carries its own pad read
+ * and ends with the worker's record count, which takes the place of STATE.frames. More than
  * MAX_BACKLOG records waiting at once keeps only the newest, after lifting open touches. With
  * no record for STALL_MS, check() lifts every touch and sends the pad back to neutral; with
  * none for SILENT_MS since the attach or the last record, it throws once. A record that is
@@ -228,6 +262,7 @@ function readStorage(directory) {
  * @param {(line: string) => void} options.write
  * @param {(message: string) => void} options.log
  * @param {string[]} [options.startChord]
+ * @param {boolean} [options.pad] Records end with the record count (`--push-pad`).
  * @param {() => number} [options.now]
  */
 function createPushReader({
@@ -235,6 +270,7 @@ function createPushReader({
   write,
   log,
   startChord = START_CHORD,
+  pad = false,
   now = () => performance.now()
 }) {
   const tracker = createTracker();
@@ -242,6 +278,9 @@ function createPushReader({
   let previous = null;
   let paused = false;
   let lastFrame = null;
+  let lastSequence = null;
+  let lastAppliedAt = null;
+  let lastSampling = null;
   let lastAt = null;
   let heardAt = null;
   let stalled = false;
@@ -250,6 +289,10 @@ function createPushReader({
   let recordBytes = 0;
   let pending = Buffer.alloc(0);
   let counts = {pushed: 0, dropped: 0, gapMaxMs: 0, applied: 0, changes: 0};
+  /** @type {number[]} */
+  let arrivals = [];
+  /** @type {Record<string, number>} */
+  let samplingStep = {};
 
   const liftTouches = () => {
     const ups = flush(tracker);
@@ -263,25 +306,77 @@ function createPushReader({
     previous = null;
   };
 
-  /** @param {Buffer} record */
-  function apply(record) {
-    if (record.length > STATE_BYTES) {
-      const next = gate(paused, record.subarray(STATE_BYTES));
-      paused = next.paused;
-      if (next.release) release();
-    }
-
+  /**
+   * Whether the record shows a launcher frame not seen yet.
+   * @param {Buffer} record
+   */
+  function newFrame(record) {
     const frames = record.readUInt32LE(STATE.frames);
-    if (frames === lastFrame) return;
+    if (frames === lastFrame) return false;
 
     if (lastFrame !== null && frames < lastFrame) {
       log(`Input push frame count went back from ${lastFrame} to ${frames}; new session`);
       release();
     }
     lastFrame = frames;
-    if (paused) return;
+    return true;
+  }
+
+  /**
+   * Whether the record count is new; a count going back means a new worker. STATE.frames is
+   * kept for the stall log only.
+   * @param {Buffer} record
+   * @param {number} sequence
+   */
+  function newSequence(record, sequence) {
+    if (sequence === lastSequence) return false;
+
+    if (lastSequence !== null && sequence < lastSequence) {
+      log(`Input push record count went back from ${lastSequence} to ${sequence}; new worker`);
+      release();
+      lastAppliedAt = null;
+      lastSampling = null;
+    }
+    lastSequence = sequence;
+    lastFrame = record.readUInt32LE(STATE.frames);
+    return true;
+  }
+
+  /**
+   * Books an applied record's arrival interval and pad sampling step.
+   * @param {Buffer} record
+   * @param {number} at
+   */
+  function sample(record, at) {
+    if (lastAppliedAt !== null) arrivals.push(Math.round((at - lastAppliedAt) * 10) / 10);
+    lastAppliedAt = at;
+
+    const sampling = record.readBigUInt64LE(0);
+    if (lastSampling !== null) {
+      const delta = String(sampling - lastSampling);
+      samplingStep[delta] = (samplingStep[delta] ?? 0) + 1;
+    }
+    lastSampling = sampling;
+  }
+
+  /**
+   * @param {Buffer} record The record without its record count.
+   * @param {number | null} sequence The record count with `pad`, else null.
+   * @param {number} at When its chunk arrived.
+   */
+  function apply(record, sequence, at) {
+    if (record.length > STATE_BYTES) {
+      const next = gate(paused, record.subarray(STATE_BYTES));
+      paused = next.paused;
+      if (next.release) release();
+    }
+
+    const fresh = sequence === null ? newFrame(record) : newSequence(record, sequence);
+    if (!fresh || paused) return;
 
     counts.applied++;
+    if (sequence !== null) sample(record, at);
+
     const state = record.subarray(0, STATE_BYTES);
     const result = frame(previous, state, tracker, layout, startChord);
     previous = result.controller;
@@ -299,6 +394,9 @@ function createPushReader({
       pending = Buffer.alloc(0);
       sawMagic = false;
       lastFrame = null;
+      lastSequence = null;
+      lastAppliedAt = null;
+      lastSampling = null;
       heardAt = now();
     },
     /** @param {Buffer} chunk */
@@ -309,7 +407,11 @@ function createPushReader({
       const count = Math.floor(pending.length / recordBytes);
       if (!count) return;
 
-      const record = index => pending.subarray(index * recordBytes, (index + 1) * recordBytes);
+      const coreBytes = pad ? recordBytes - SEQUENCE_BYTES : recordBytes;
+      const record = index =>
+        pending.subarray(index * recordBytes, index * recordBytes + coreBytes);
+      const sequence = index =>
+        pad ? pending.readUInt32LE((index + 1) * recordBytes - SEQUENCE_BYTES) : null;
       for (let index = 0; index < count; index++) {
         if (!framed(record(index), sawMagic)) {
           broken = true;
@@ -318,7 +420,7 @@ function createPushReader({
         }
 
         // Latched per record, since the next record in this chunk is framed against it.
-        if (!sawMagic && recordBytes > STATE_BYTES) {
+        if (!sawMagic && coreBytes > STATE_BYTES) {
           sawMagic = record(index).readUInt32LE(STATE_BYTES) !== 0;
         }
       }
@@ -337,7 +439,7 @@ function createPushReader({
         first = count - 1;
       }
 
-      for (let index = first; index < count; index++) apply(record(index));
+      for (let index = first; index < count; index++) apply(record(index), sequence(index), at);
       pending = pending.subarray(count * recordBytes);
     },
     check() {
@@ -366,9 +468,14 @@ function createPushReader({
      */
     take() {
       const open = lastAt === null ? 0 : now() - lastAt;
+      /** @type {PushCounts} */
       const result = {...counts, gapMaxMs: Math.round(Math.max(counts.gapMaxMs, open))};
       counts = {pushed: 0, dropped: 0, gapMaxMs: 0, applied: 0, changes: 0};
+      if (!pad) return result;
 
+      Object.assign(result, {arrivals, samplingStep});
+      arrivals = [];
+      samplingStep = {};
       return result;
     }
   };
@@ -382,6 +489,7 @@ function createPushReader({
  * @param {any} options.rpc The session rpc.
  * @param {string} options.directory The session directory.
  * @param {number} options.hz
+ * @param {boolean} [options.pad] The worker reads the handheld pad every pass.
  * @param {'position' | 'labels'} options.layout
  * @param {string[]} [options.startChord]
  * @param {(line: string) => void} options.write
@@ -398,6 +506,7 @@ function runPush({
   rpc,
   directory,
   hz,
+  pad = false,
   layout,
   startChord,
   write,
@@ -408,7 +517,7 @@ function runPush({
   readAppStorage = readStorage,
   now = () => performance.now()
 }) {
-  const reader = createPushReader({layout, write, log, startChord, now});
+  const reader = createPushReader({layout, write, log, startChord, pad, now});
   /** @type {Awaited<ReturnType<typeof createPushWorker>> | null} */
   let worker = null;
   let running = null;
@@ -445,6 +554,7 @@ function runPush({
       state,
       ui,
       hz,
+      pad,
       onData: bytes => {
         if (current()) feed(bytes);
       },
@@ -522,10 +632,10 @@ function runPush({
 /**
  * Runs push mode until SIGINT or SIGTERM, or until the worker fails.
  * @param {ReturnType<typeof instrument>} bridge
- * @param {{directory: string, hz: number, layout: 'position' | 'labels', startChord: string[],
- *   countsFd: number | null}} options
+ * @param {{directory: string, hz: number, pad: boolean, layout: 'position' | 'labels',
+ *   startChord: string[], countsFd: number | null}} options
  */
-async function mainPush(bridge, {directory, hz, layout, startChord, countsFd}) {
+async function mainPush(bridge, {directory, hz, pad, layout, startChord, countsFd}) {
   let finish;
   const finished = new Promise(resolve => {
     finish = resolve;
@@ -545,6 +655,7 @@ async function mainPush(bridge, {directory, hz, layout, startChord, countsFd}) {
     rpc: bridge.rpc,
     directory,
     hz,
+    pad,
     layout,
     startChord,
     write: line => {
@@ -594,6 +705,7 @@ async function mainPush(bridge, {directory, hz, layout, startChord, countsFd}) {
 async function main() {
   const args = process.argv.slice(2);
   const push = args.includes('--push');
+  const pushPad = args.includes('--push-pad');
   const hz = cli.number(args, '--hz', push ? PUSH_HZ : DEFAULT_HZ);
   const layout = args.includes('--labels') ? 'labels' : 'position';
   const startChord = parseStartChord(cli.option(args, '--start-chord', START_CHORD.join('+')));
@@ -601,13 +713,15 @@ async function main() {
   const countsFd = cli.number(args, '--counts-fd', null);
   const probe = probeFromEnv(process.env);
   if (probe && push) throw Error('HBL_PROBE_PRESS_MS needs pull mode, not --push');
+  if (pushPad && !push) throw Error('--push-pad needs --push');
+  if (pushPad) checkHandheld(directory);
   if (probe) {
     const announce = {event: 'probe-press', periodMs: probe.periodMs, pad: 'ignored'};
     process.stderr.write(JSON.stringify(announce) + '\n');
   }
 
   const bridge = instrument(session.rpc(directory), () => 'input');
-  if (push) return mainPush(bridge, {directory, hz, layout, startChord, countsFd});
+  if (push) return mainPush(bridge, {directory, hz, pad: pushPad, layout, startChord, countsFd});
 
   const rpc = bridge.rpc;
   const pad = countsFd === null ? null : padAge.create();
@@ -704,6 +818,8 @@ export {
   keysWatch,
   gate,
   readStorage,
+  launchDock,
+  checkHandheld,
   createProbe,
   probeFromEnv,
   OVERLAY_READ,

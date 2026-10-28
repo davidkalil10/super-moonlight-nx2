@@ -14,6 +14,7 @@ import {create as createNativeSink} from '../native/native-sink.js';
 import {create as createSocketAudioSource} from '../../audio/socket-audio-source.js';
 import {create as createStaggeredLive} from '../scheduler/staggered-live.js';
 import * as padAge from '../../input/pad-age.js';
+import {checkHandheld} from '../../input/input-feeder.js';
 import {parseOptions, AUDIO_FD} from './stream-options.js';
 import {createChildren} from './stream-children.js';
 import {
@@ -144,11 +145,12 @@ async function run({
   now = () => performance.now()
 }) {
   const options = parseOptions(args, rpc, width, height, fps);
-  const {audio, socketTone, socketAudio, duration, inputPush, audioFrames} = options;
+  const {audio, socketTone, socketAudio, duration, inputPush, inputPushPad, audioFrames} = options;
   const {presentHz, skipRule, trimBacklogMs, gateOnReceive, outputLag, surfaceCheck} = options;
   const {decodeWait, receiveWait, avoidWindow, skipBacklog, gateQueue, stageTicks, drainGates} =
     options;
   if (!rpc.host) throw Error('Native TCP requires a fresh launcher session from this branch');
+  if (inputPushPad) checkHandheld(directory);
   /** Moves `now` onto CLOCK_MONOTONIC, the clock of the helper's writtenAt. */
   const monotonicOffset = Number(process.hrtime.bigint()) / 1e6 - now();
   const revision = sourceRevision || headRevision();
@@ -180,6 +182,8 @@ async function run({
   /** @type {import('../../input/pad-age.js').PadRow[]} */
   let inputPad = [];
   let pushCounts = {pushed: 0, dropped: 0, gapMaxMs: 0, applied: 0, changes: 0};
+  /** @type {{arrivals: number[], samplingStep: Record<string, number>}[]} */
+  let pushPad = [];
   let trimmed = 0;
   let drained = 0;
   let auSamples = [];
@@ -378,6 +382,8 @@ async function run({
     pushCounts.gapMaxMs = Math.max(pushCounts.gapMaxMs, counts.gapMaxMs);
     pushCounts.applied += counts.applied;
     pushCounts.changes += counts.changes;
+    if (counts.arrivals)
+      pushPad.push({arrivals: counts.arrivals, samplingStep: counts.samplingStep});
   }
 
   /** Closes this decoder generation and opens the next, unless resyncs come too often. */
@@ -431,7 +437,8 @@ async function run({
     Object.assign(row, withInputStage(bridge.take(), inputBridge));
     if (inputPad.length) row.inputPad = padAge.merge(inputPad);
     row.link = linkQuality(inputBridge);
-    if (inputPush) row.inputPush = pushCounts;
+    if (inputPush)
+      row.inputPush = inputPushPad ? {...pushCounts, ...padAge.mergePushPad(pushPad)} : pushCounts;
     if (surfaceCheck) row.surfaces = staggeredLive?.takeSurfaces() ?? [];
     if (soundSource) row.audio = audioCounters(soundSource.report());
 
@@ -445,6 +452,7 @@ async function run({
     inputBridge = {exchanges: 0, bridgeMs: 0};
     inputPad = [];
     pushCounts = {pushed: 0, dropped: 0, gapMaxMs: 0, applied: 0, changes: 0};
+    pushPad = [];
     auSamples = [];
     trimmed = 0;
     drained = 0;

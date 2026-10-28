@@ -1192,6 +1192,96 @@ test(
   }
 );
 
+test('--input-push-pad needs --input-push, a handheld session and --input-hz up to 240', async () => {
+  const refusals = [
+    [['--input-push-pad'], null, /--input-push-pad needs --input-push/],
+    [['--input-push', '--input-push-pad'], null, /no auto-launch.json dock record/],
+    [['--input-push', '--input-push-pad'], 'docked', /handheld session; this run has dock=docked/],
+    [
+      ['--input-push', '--input-push-pad', '--input-hz', '241'],
+      'handheld',
+      /--input-hz takes 10 to 240 with --input-push-pad/
+    ],
+    [['--input-push', '--input-hz', '121'], 'handheld', /--input-hz takes 10 to 120/]
+  ];
+  for (const [flags, dock, refusal] of refusals) {
+    const f = await fixture();
+    if (dock)
+      await fs.writeFile(path.join(f.directory, 'auto-launch.json'), JSON.stringify({dock}));
+    await exercise(f, async () => {
+      f.options.args.push(...flags);
+      await assert.rejects(run(f.options), refusal);
+    });
+  }
+});
+
+test(
+  '--input-push-pad at 240 Hz passes --push-pad and rows carry the arrival and step stats',
+  {timeout: 5000},
+  async () => {
+    const f = await fixture({units: pairedUnits(6)});
+    await fs.writeFile(
+      path.join(f.directory, 'auto-launch.json'),
+      JSON.stringify({dock: 'handheld'})
+    );
+    const counts = {exchanges: 0, bridgeMs: 0, pushed: 240, dropped: 0, gapMaxMs: 9};
+    Object.assign(counts, {applied: 238, changes: 2});
+    Object.assign(counts, {arrivals: [4, 8, 4.2], samplingStep: {1: 2, 2: 1}});
+    const spawnProcess = f.options.spawnProcess;
+    const feeders = [];
+    f.options.spawnProcess = (command, args, spawnOptions) => {
+      const child = spawnProcess(command, args, spawnOptions);
+      if (path.basename(args[0] ?? '') !== 'input-feeder.js') return child;
+
+      feeders.push(args);
+      child.stdio[3] = new PassThrough();
+      child.stdio[3].write(JSON.stringify(counts) + '\n');
+      const kill = child.kill;
+      child.kill = signal => {
+        child.stdio[3].end(JSON.stringify({stopped: true, retained: false, error: null}) + '\n');
+        return kill(signal);
+      };
+      return child;
+    };
+    f.options.createStaggered = timedStaggeredFake(f.events, []);
+    f.options.now = () => 1000;
+    f.options.statsMs = 10;
+    f.options.args.push('--staggered', '--queue', '16', '--warmup', '0');
+    f.options.args.push('--input-push', '--input-push-pad', '--input-hz', '240');
+
+    await exercise(f, async () => {
+      const summary = await run(f.options);
+      assert.deepEqual(feeders[0].slice(-6), [
+        '--hz',
+        '240',
+        '--counts-fd',
+        '3',
+        '--push',
+        '--push-pad'
+      ]);
+      assert.equal(summary.inputPushPad, true);
+      assert.equal(summary.inputHz, 240);
+
+      const rows = (await fs.readFile(path.join(f.directory, 'logs', 'stats.jsonl'), 'utf8'))
+        .trim()
+        .split('\n')
+        .map(JSON.parse);
+      const pushed = rows.find(row => row.inputPush.pushed);
+      assert.deepEqual(pushed.inputPush, {
+        pushed: 240,
+        dropped: 0,
+        gapMaxMs: 9,
+        applied: 238,
+        changes: 2,
+        arrivalMs: {p50: 4.2, p95: 8, max: 8},
+        samplingStep: {1: 2, 2: 1}
+      });
+      const idle = rows.find(row => !row.inputPush.pushed);
+      assert.deepEqual(idle.inputPush.arrivalMs, {p50: null, p95: null, max: null});
+    });
+  }
+);
+
 /**
  * Makes the fixture's input feeder a push feeder whose SIGINT writes `report` on fd 3 and
  * exits; with `hang` it ignores SIGINT and only a SIGKILL ends it. Returns the signals.

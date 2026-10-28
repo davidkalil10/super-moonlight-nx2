@@ -11,6 +11,7 @@ the panel and read-size facts.
   input-push-plan.js) sends pad, touch and UI words over native TCP, so input costs no bridge
   exchange. The feeder reads them with `--push`, and `--input-hz` defaults to 120 under push.
   pad-age.js measures record age and stalls.
+- **Push pad (`--input-push-pad`, feeder `--push-pad`):** see "Push pad read" below.
 
 ## Rules
 
@@ -28,7 +29,7 @@ the panel and read-size facts.
 ## Feeder
 
 `node src/streamer/input/input-feeder.js [runs/launcher-XXXX] [--hz 60] [--labels]
-[--counts-fd N] [--push] [--start-chord stickL+stickR]`
+[--counts-fd N] [--push [--push-pad]] [--start-chord stickL+stickR]`
 
 - Attaches to the newest (or named) runs/launcher-\* session. Lines out:
   `{"type":"controller",...}` on change and `{"type":"touch","events":[...]}` when touch changes.
@@ -88,6 +89,23 @@ the period, so take once per stats row to keep a stall to one row.
   only sleeps it leaves within one period; the host keeps reading until the join so a send
   never blocks. If the worker may still hold the socket
   it is retained: host end dropped, console descriptor open, SmileBASIC needs a restart.
+
+## Push pad read (`--input-push-pad`)
+
+- Why: the launcher copies the pad into STATE once per 60 Hz frame, so push v1 applies ~60
+  records a second whatever `--input-hz` is. With this flag each pass calls
+  `padHandheld(buffer, &id)` (id 0x20) after the STATE copy, over the record's pad bytes
+  0..40 (NpadState is 40 B: npad.js and the 0x28 stride in docked-input.md), so every record
+  carries a fresh sample. `--input-hz` may then go up to the plan's 240.
+- The record ends with 4 bytes, the u32 record count before the pass. The reader dedups on it,
+  not on STATE.frames: a repeat drops, a step back logs, releases and starts over (new worker).
+  The flag-off plan is pinned by a golden sha256 in the tests.
+- Handheld only: the read is the handheld overload, so the stream and feeder refuse a run whose
+  `auto-launch.json` does not say `dock: handheld` (none for manual or resident launches).
+  Docked would need the launcher's style choice (team docked-input.md).
+- Stats, flag on only: `inputPush.arrivalMs` {p50, p95, max} between applied records and
+  `samplingStep`, a histogram of the u64 at NpadState 0..8 between them. That word is
+  INFERRED to be HID's sampling number, unverified on the console: stats only, never logic.
 
 ## Test
 

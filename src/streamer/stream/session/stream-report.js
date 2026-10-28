@@ -274,6 +274,7 @@ function buildSummary(
   const {presentHz, skipBacklog, skipRule, decodeWait, receiveWait, avoidWindow} = options;
   const {queue, inputHz, audioFrames, audio, socketAudio, input, inputPush, warmup, expect} =
     options;
+  const {inputPushPad} = options;
   const steadyRows = rows.slice(warmup);
   return {
     workerMode: 'staggered',
@@ -289,6 +290,7 @@ function buildSummary(
     queue,
     inputHz,
     ...(inputPush && {inputPush, inputPushStop}),
+    ...(inputPushPad && {inputPushPad}),
     audioFrames,
     audio,
     ...(socketAudio ? {socketAudio: socketAudioReport} : {}),

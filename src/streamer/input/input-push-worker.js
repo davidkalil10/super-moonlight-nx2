@@ -14,6 +14,7 @@ import {
   join
 } from '../../../../hbl-platform/sdk/native/thread.js';
 import SYNC from '../../../../hbl-platform/sdk/native/os-sync-functions.json' with {type: 'json'};
+import HID from '../../../../hbl-platform/sdk/native/hid-functions.json' with {type: 'json'};
 import {create as createNativeTransport} from '../stream/native/native-tcp.js';
 import * as pushPlan from './input-push-plan.js';
 
@@ -25,6 +26,10 @@ const EXIT_SLOT_OFFSET = 8;
 const COUNTER_BYTES = 0x1000;
 const COUNT_BYTES = 4;
 const BUFFER_OFFSET = 0x100;
+/** The npad id word the pad read takes by reference, between the counter and the buffer. */
+const PAD_ID_OFFSET = 0x10;
+/** The handheld npad id, as HBLauncher's launcher-loop.js and sdk/host/hardware.js use it. */
+const NPAD_ID_HANDHELD = 0x20;
 const DEFAULT_HZ = 120;
 
 const DEFAULT_TIMEOUT_MS = 5000;
@@ -47,6 +52,8 @@ const SYNC_NAMES = ['sleepThread', 'atomicAddU32'];
  * @property {number | null} [ui] Address of the app's UI block, or null to push the state
  *   block alone.
  * @property {number} [hz] Records per second.
+ * @property {boolean} [pad] Each pass reads the handheld pad itself and appends the record
+ *   count (`--input-push-pad`, handheld sessions only).
  * @property {(bytes: Buffer) => void} onData Gets every chunk the console sends.
  * @property {() => void} [onClose] Called once if the connection ends before stop() closes it.
  * @property {string} [host] Host address the console connects back to; defaults to rpc.host.
@@ -82,28 +89,38 @@ function isBoundedSetup(rpc, onData, timeoutMs) {
 
 /**
  * Verifies the worker code, the copy the frame restores itself with and the sync functions
- * it calls.
+ * it calls, plus the handheld pad read with `pad`.
  * @param {Rpc} rpc
+ * @param {boolean} pad
  */
-async function verifySetup(rpc) {
+async function verifySetup(rpc, pad) {
   await verifyCode(rpc);
   await verifyCopy(rpc);
   for (const name of SYNC_NAMES) await verify(rpc, rpc.a.sdk + SYNC[name].offset, SYNC[name].hex);
+
+  if (pad) await verify(rpc, rpc.a.sdk + HID.padHandheld.offset, HID.padHandheld.hex);
 }
 
 /**
  * Allocates and zeroes the record counter beside the record buffer, allocates the worker and
- * plans its frame.
+ * plans its frame. With `pad` the handheld npad id goes in its word first.
  * @param {Rpc} rpc
  * @param {{fd: number, sendFunction: number}} transport
- * @param {{state: number, ui: number | null, hz: number}} options
+ * @param {{state: number, ui: number | null, hz: number, pad: boolean}} options
  */
-async function planWorker(rpc, transport, {state, ui, hz}) {
+async function planWorker(rpc, transport, {state, ui, hz, pad}) {
   const counter = await allocate(rpc, COUNTER_BYTES, {
     failed: 'Input push counter allocation failed',
     invalid: 'Invalid input push counter allocation'
   });
   await rpc.write(counter, Buffer.alloc(COUNT_BYTES));
+
+  const padId = pad ? counter + PAD_ID_OFFSET : null;
+  if (pad) {
+    const id = Buffer.alloc(4);
+    id.writeUInt32LE(NPAD_ID_HANDHELD);
+    await rpc.write(padId, id);
+  }
 
   const base = await allocate(rpc, WORKER_BYTES, {
     failed: 'Input push worker allocation failed',
@@ -117,9 +134,10 @@ async function planWorker(rpc, transport, {state, ui, hz}) {
     send: transport.sendFunction,
     state,
     ui,
-    buffer: ui === null ? null : counter + BUFFER_OFFSET,
+    buffer: ui === null && !pad ? null : counter + BUFFER_OFFSET,
     counter,
-    hz
+    hz,
+    padId
   });
 
   return {counter, base, plan};
@@ -135,6 +153,7 @@ async function create({
   state,
   ui = null,
   hz = DEFAULT_HZ,
+  pad = false,
   onData,
   onClose = () => {},
   host = rpc?.host,
@@ -144,12 +163,12 @@ async function create({
   if (!isBoundedSetup(rpc, onData, timeoutMs))
     throw Error('Input push needs a session rpc, a data callback and a bounded timeout');
 
-  await verifySetup(rpc);
+  await verifySetup(rpc, pad);
   const transport = await createTransport({rpc, host});
   let planned;
   try {
     transport.receive(onData, onClose);
-    planned = await planWorker(rpc, transport, {state, ui, hz});
+    planned = await planWorker(rpc, transport, {state, ui, hz, pad});
   } catch (error) {
     await transport.close().catch(() => {});
     throw error;
