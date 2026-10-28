@@ -106,7 +106,10 @@ function load(file) {
   return settings;
 }
 
-/** Whether the parsed JSON is an object rather than null, a scalar or an array. */
+/**
+ * Whether the parsed JSON is an object rather than null, a scalar or an array.
+ * @param {unknown} value
+ */
 function isPlainObject(value) {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }

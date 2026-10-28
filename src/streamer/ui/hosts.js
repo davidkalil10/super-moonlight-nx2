@@ -15,7 +15,10 @@ function hostsFile() {
   return path.join(base, 'hblauncher', 'moonlight', 'hosts.json');
 }
 
-/** A saved host's name, or its address when the name is missing or empty. */
+/**
+ * A saved host's name, or its address when the name is missing or empty.
+ * @param {{name?: unknown, address: string}} host
+ */
 function savedName(host) {
   if (typeof host.name !== 'string' || !host.name) return host.address;
   return host.name;
