@@ -462,7 +462,7 @@ function create({
   /** The publication before `published`, logged with a failed check. */
   let previous = null;
   let pending = null;
-  /** The lag 0 gate that timed out on the decoder, see lagFallback(). */
+  /** The lag 0 gate that timed out on the decoder, see lagEnd(). */
   let fallback = null;
   let sampleSink = null;
   const surfaces = surfaceCheck
@@ -673,7 +673,7 @@ function create({
    * @param {number} sequence
    * @param {Expected} expected
    */
-  function lagFallback(error, sequence, expected) {
+  function lagEnd(error, sequence, expected) {
     const waitedFor = expected[error.pending]?.sequence;
     if (lag === 0 && error.timedOut && ['acquire', 'fetch'].includes(error.pending)) {
       fallback = {
@@ -682,7 +682,7 @@ function create({
         reason: `${error.pending} ${waitedFor} timed out at lag 0`,
         recommendedLag: 1
       };
-      error.lagFallback = {...fallback};
+      error.lagEnd = {...fallback};
     }
     return error;
   }
@@ -846,7 +846,7 @@ function create({
     const watch = acquireWatch(expected);
     const link = receiveWatch(expected);
     let snapshot = await waitChecked(worker, expected, rereadsFor(expected, watch, link)).catch(
-      error => withPrevious(lagFallback(error, sequence, expected))
+      error => withPrevious(lagEnd(error, sequence, expected))
     );
     countRead(expected, snapshot, onDecoded, onPresented, onSkipped);
     enter('staggered-input');
@@ -1079,7 +1079,7 @@ function create({
         ...(receive && {receive: {...receiveSlept, fixedMs: receive.fixedMs}}),
         acquireWaits: acquireWaits.counts,
         fetchWaits: fetchWaits.counts,
-        ...(fallback && {lagFallback: {...fallback}}),
+        ...(fallback && {lagEnd: {...fallback}}),
         ...(surfaces && {surfaceCheck: surfaces.counts})
       };
     },

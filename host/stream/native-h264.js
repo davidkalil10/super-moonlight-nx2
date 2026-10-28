@@ -436,7 +436,7 @@ function helperArgs(host, app, {width, height, fps, bitrate, audio}) {
  */
 function buildSummary(
   options,
-  {rows, staggeredLive, tail, socketAudioReport, inputPushStop, stopReason, lagFallback, stream}
+  {rows, staggeredLive, tail, socketAudioReport, inputPushStop, stopReason, lagEnd, stream}
 ) {
   const {presentHz, skipBacklog, skipRule, trimBacklogMs, gateOnReceive, outputLag} = options;
   const {decodeWait, receiveWait, avoidWindow, queue, inputHz, audioFrames, audio} = options;
@@ -467,7 +467,7 @@ function buildSummary(
     ...scoring.summarize(rows, {warmup}),
     expect,
     stopReason,
-    ...(lagFallback && {lagFallback}),
+    ...(lagEnd && {lagEnd}),
     ...(stream.sps && {sps: stream.sps}),
     ...(stream.bSlices && {bSlices: stream.bSlices})
   };
@@ -579,8 +579,8 @@ async function run({
   let ending = null;
   let stopped = false;
   let stopReason = null;
-  /** Set when a lag 0 decoder wait timed out (staggered-live.js lagFallback). */
-  let lagFallback = null;
+  /** Set when a lag 0 decoder wait timed out (staggered-live.js lagEnd). */
+  let lagEnd = null;
   const rows = [];
   const children = [];
   let inputBridge = {exchanges: 0, bridgeMs: 0};
@@ -660,8 +660,8 @@ async function run({
    * @param {string} [reason]
    */
   function endLagZero(fallback, reason = 'lag0-timeout') {
-    lagFallback = fallback;
-    log({event: 'lag-fallback', lagFallback: fallback});
+    lagEnd = fallback;
+    log({event: 'lag-end', lagEnd: fallback});
     stop(reason);
   }
 
@@ -674,7 +674,7 @@ async function run({
   function reorderRefusal(unit, reorder) {
     const fallback = {at: unit.seq, reason: reorder, recommendedLag: 1};
     return Object.assign(Error('--output-lag 0 refused: ' + reorder), {
-      lagFallback: fallback,
+      lagEnd: fallback,
       stopReason: 'lag0-reorder'
     });
   }
@@ -1288,7 +1288,7 @@ async function run({
       socketAudioReport,
       inputPushStop,
       stopReason,
-      lagFallback,
+      lagEnd,
       stream
     });
     const result = score(summary, {
@@ -1325,7 +1325,7 @@ async function run({
   } catch (error) {
     failed = error;
     await logFailure(error);
-    if (error.lagFallback && !stopping) endLagZero(error.lagFallback, error.stopReason);
+    if (error.lagEnd && !stopping) endLagZero(error.lagEnd, error.stopReason);
     if (!stopping) throw error;
   } finally {
     await shutdown();

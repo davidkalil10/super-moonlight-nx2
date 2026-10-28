@@ -1121,8 +1121,8 @@ test('a lag 0 acquire that times out ends the run with lag 1 as the advice', asy
   assert.equal(failure.timedOut, true);
   assert.equal(failure.pending, 'acquire');
   const fallback = {at: 2, waitedFor: 1, reason: 'acquire 1 timed out at lag 0', recommendedLag: 1};
-  assert.deepEqual(failure.lagFallback, fallback);
-  assert.deepEqual(live.counts.lagFallback, fallback);
+  assert.deepEqual(failure.lagEnd, fallback);
+  assert.deepEqual(live.counts.lagEnd, fallback);
   assert.equal(failure.expected.acquire.sequence, 1, 'the timeout logs what it expected');
   await live.stop();
 });
@@ -1135,8 +1135,8 @@ test('a timeout at lag 1 carries no lag fallback', async () => {
     error => error
   );
   assert.equal(failure?.pending, 'acquire');
-  assert.equal(failure.lagFallback, undefined);
-  assert.equal(live.counts.lagFallback, undefined);
+  assert.equal(failure.lagEnd, undefined);
+  assert.equal(live.counts.lagEnd, undefined);
   await live.stop();
 });
 
