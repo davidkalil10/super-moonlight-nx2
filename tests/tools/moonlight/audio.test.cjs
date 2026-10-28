@@ -872,29 +872,41 @@ test('a failed prime job retains the objects and leaves AudioOut open', async ()
 });
 
 test('a short prime receive appends nothing and closes AudioOut', async () => {
-  const fake = fakeConsole({
-    finite: (job, index) => (job === 1 ? BigInt(index === 1 ? CHUNK - 4 : CHUNK) : 1n)
-  });
-  const socket = await createWorker({rpc: fake.rpc, transport: fake.transport});
-  await assert.rejects(socket.start(chunk(1), chunk(2)), /prime receive was short/);
-  assert.equal(primeJobs(fake.log).length, 1);
-  assert.equal(socket.retained, false);
-  const from = fake.log.length;
-  await socket.stop();
-  assert.deepEqual(afterStop(fake.log, from), ['FlushAudioOutBuffers', 'CloseAudioOut']);
+  for (const bad of [0, 1]) {
+    const fake = fakeConsole({
+      finite: (job, index) => (job === 1 ? BigInt(index === bad ? CHUNK - 4 : CHUNK) : 1n)
+    });
+    const socket = await createWorker({rpc: fake.rpc, transport: fake.transport});
+    await assert.rejects(socket.start(chunk(1), chunk(2)), /prime receive was short/);
+    assert.equal(primeJobs(fake.log).length, 1);
+    assert.equal(socket.retained, false);
+    const from = fake.log.length;
+    await socket.stop();
+    assert.deepEqual(
+      afterStop(fake.log, from),
+      ['FlushAudioOutBuffers', 'CloseAudioOut'],
+      'slot ' + bad
+    );
+  }
 });
 
 test('a rejected prime append closes AudioOut without starting it', async () => {
-  const fake = fakeConsole({
-    finite: (job, index) => (job === 1 ? BigInt(CHUNK) : index === 1 ? 0n : 1n)
-  });
-  const socket = await createWorker({rpc: fake.rpc, transport: fake.transport});
-  await assert.rejects(socket.start(chunk(1), chunk(2)), /rejected prime buffer/);
-  assert.equal(named(fake.log, 'StartAudioOut').length, 0);
-  assert.equal(socket.retained, false);
-  const from = fake.log.length;
-  await socket.stop();
-  assert.deepEqual(afterStop(fake.log, from), ['FlushAudioOutBuffers', 'CloseAudioOut']);
+  for (const bad of [0, 1]) {
+    const fake = fakeConsole({
+      finite: (job, index) => (job === 1 ? BigInt(CHUNK) : index === bad ? 0n : 1n)
+    });
+    const socket = await createWorker({rpc: fake.rpc, transport: fake.transport});
+    await assert.rejects(socket.start(chunk(1), chunk(2)), /rejected prime buffer/);
+    assert.equal(named(fake.log, 'StartAudioOut').length, 0);
+    assert.equal(socket.retained, false);
+    const from = fake.log.length;
+    await socket.stop();
+    assert.deepEqual(
+      afterStop(fake.log, from),
+      ['FlushAudioOutBuffers', 'CloseAudioOut'],
+      'slot ' + bad
+    );
+  }
 });
 
 const inRecycleWorker = address => address >= region(2) && address < region(3);
