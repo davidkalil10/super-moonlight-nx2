@@ -1,18 +1,6 @@
 /**
- * Pushed input on the console: a repeating worker sends the launcher's state block and the
- * app's UI words to the host on a native TCP socket once per period (see
- * input-push-plan.js), so the input feeder reads no input over the bridge.
- *
- * create() verifies the worker code and the sleep and atomic add the frame runs through,
- * opens the native TCP connection, which here carries data from the console to the host, and
- * allocates the record counter and the worker. From then on every byte the console sends
- * goes to onData. start() spawns the worker.
- *
- * The worker only sleeps, so stop() just points it at its exit and it leaves within one
- * period. The host end keeps reading until the join, so a send never blocks on a full
- * window; then the counter is read back and the socket closed. Whenever the worker may still
- * hold the socket, it is retained: the host end is dropped, the console descriptor stays open
- * and SmileBASIC has to be restarted.
+ * Pushed input on the console: owns the native TCP connection and the repeating worker that
+ * input-push-plan.js plans. Stop and retain rules are in CLAUDE.md.
  */
 import {allocate} from '../../../../hbl-platform/sdk/native/allocate.js';
 import {verify} from '../../../../hbl-platform/sdk/native/symbols.js';
@@ -84,13 +72,12 @@ const SYNC_NAMES = ['sleepThread', 'atomicAddU32'];
  * @returns {boolean}
  */
 function isBoundedSetup(rpc, onData, timeoutMs) {
-  return (
-    Boolean(rpc?.a?.sdk) &&
-    typeof onData === 'function' &&
-    Number.isInteger(timeoutMs) &&
-    timeoutMs >= MIN_TIMEOUT_MS &&
-    timeoutMs <= MAX_TIMEOUT_MS
-  );
+  const sessionOk = Boolean(rpc?.a?.sdk);
+  const callbackOk = typeof onData === 'function';
+  const timeoutOk =
+    Number.isInteger(timeoutMs) && timeoutMs >= MIN_TIMEOUT_MS && timeoutMs <= MAX_TIMEOUT_MS;
+
+  return sessionOk && callbackOk && timeoutOk;
 }
 
 /**
@@ -117,10 +104,12 @@ async function planWorker(rpc, transport, {state, ui, hz}) {
     invalid: 'Invalid input push counter allocation'
   });
   await rpc.write(counter, Buffer.alloc(COUNT_BYTES));
+
   const base = await allocate(rpc, WORKER_BYTES, {
     failed: 'Input push worker allocation failed',
     invalid: 'Invalid input push worker allocation'
   });
+
   const plan = pushPlan.cycle({
     sdk: rpc.a.sdk,
     base,
@@ -132,6 +121,7 @@ async function planWorker(rpc, transport, {state, ui, hz}) {
     counter,
     hz
   });
+
   return {counter, base, plan};
 }
 
@@ -153,6 +143,7 @@ async function create({
 }) {
   if (!isBoundedSetup(rpc, onData, timeoutMs))
     throw Error('Input push needs a session rpc, a data callback and a bounded timeout');
+
   await verifySetup(rpc);
   const transport = await createTransport({rpc, host});
   let planned;
@@ -163,6 +154,7 @@ async function create({
     await transport.close().catch(() => {});
     throw error;
   }
+
   const {counter, base, plan} = planned;
   let started = false;
   let running = false;
@@ -181,6 +173,7 @@ async function create({
 
   async function start() {
     if (started || stopped || retained) throw Error('Input push start is not available');
+
     started = true;
     program = await prepareRepeating(rpc, {
       base,
@@ -188,6 +181,7 @@ async function create({
       calls: plan.calls,
       verified: plan.verified
     });
+
     try {
       thread = await spawn(rpc, base, program.live, {
         failed: 'Input push worker creation failed',
@@ -224,10 +218,13 @@ async function create({
       retain();
       throw error;
     }
+
     running = false;
     const bytes = await rpc.read(program.results, plan.calls.length * RESULT_BYTES);
     const results = plan.calls.map((_, index) => bytes.readBigUInt64LE(index * RESULT_BYTES));
-    const pushed = (await rpc.read(counter, COUNT_BYTES)).readUInt32LE();
+    const countWord = await rpc.read(counter, COUNT_BYTES);
+    const pushed = countWord.readUInt32LE();
+
     try {
       pushPlan.checkedPush(results, plan.row);
       return {pushed, error: null};
@@ -242,9 +239,11 @@ async function create({
       if (retained) throw Error('Input push objects retained for safety');
       return report;
     }
+
     stopped = true;
     const checked = running ? await stopWorker() : {pushed: 0, error: null};
     if (retained) throw Error('Input push objects retained for safety');
+
     await transport.close();
     report = {pushed: checked.pushed};
     if (checked.error) throw Object.assign(checked.error, report);

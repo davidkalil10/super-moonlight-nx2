@@ -1,14 +1,6 @@
 /**
- * How fresh the pad state is when the feeder reads it. The app's logic shader bumps
- * STATE.frames once per launcher frame, right after the launcher copies the pad, so the
- * counter tells a stalled launcher (no step between reads) from missed frames (a step over
- * one). The console's time service words (clockMs, frameIndex) stay zero under service
- * version 1, which Moonlight uses, so they can't be used here.
- *
- * Age is the read's end minus the frame's nominal time (frames x period), taken relative to
- * the freshest read since the last take: 0 for the freshest, and the extra staleness for the
- * rest. It assumes the launcher runs at the period, so a long window stretches a stall into
- * every later read; one take per stats row keeps that to one row.
+ * How fresh the pad state is at each feeder read, from the STATE.frames counter the logic
+ * shader bumps once per launcher frame. CLAUDE.md has how age is defined.
  */
 import {STATE} from '../../../../hbl-platform/sdk/host/layout.js';
 
@@ -33,6 +25,7 @@ function create({periodMs = 1000 / 60} = {}) {
   let last = null;
   /** @type {{readMs: number, step: number | null, offset: number}[]} */
   let samples = [];
+
   return {
     /**
      * One feeder read of the state block.
@@ -44,6 +37,7 @@ function create({periodMs = 1000 / 60} = {}) {
       const frames = bytes.readUInt32LE(STATE.frames);
       const step = last === null ? null : (frames - last) >>> 0;
       last = frames;
+
       samples.push({readMs: endedAt - startedAt, step, offset: endedAt - frames * periodMs});
     },
     /** @returns {PadRow} the reads since the last take */
@@ -51,6 +45,7 @@ function create({periodMs = 1000 / 60} = {}) {
       const taken = samples;
       samples = [];
       if (!taken.length) return {reads: 0};
+
       const steps = /** @type {number[]} */ (
         taken.map(sample => sample.step).filter(step => step !== null)
       );
@@ -59,6 +54,7 @@ function create({periodMs = 1000 / 60} = {}) {
       const reads = taken.map(sample => sample.readMs);
       /** @param {number[]} values */
       const mean = values => values.reduce((sum, value) => sum + value, 0) / values.length;
+
       return {
         reads: taken.length,
         readMeanMs: tenths(mean(reads)),
@@ -83,6 +79,7 @@ function merge(rows) {
   const read = rows.filter(row => row.reads);
   const reads = read.reduce((sum, row) => sum + row.reads, 0);
   if (!reads) return {reads: 0};
+
   /** @param {keyof PadRow} key */
   const weighted = key =>
     tenths(read.reduce((sum, row) => sum + (row[key] ?? 0) * row.reads, 0) / reads);
@@ -90,6 +87,7 @@ function merge(rows) {
   const most = key => Math.max(...read.map(row => row[key] ?? 0));
   /** @param {keyof PadRow} key */
   const total = key => read.reduce((sum, row) => sum + (row[key] ?? 0), 0);
+
   return {
     reads,
     readMeanMs: weighted('readMeanMs'),

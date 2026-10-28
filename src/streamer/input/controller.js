@@ -1,17 +1,6 @@
 /**
- * Console controller state to moonlight-common-c gamepad state.
- *
- * The launcher worker writes the selected NpadState to binding 0 every frame (and five pad
- * sources at 0x7f0000 + 640, see HBLauncher/sdk/host/hardware.js). This module reads those
- * bytes and maps them to the fields of LiSendMultiControllerEvent: buttonFlags (Limelight.h
- * *_FLAG bits), leftTrigger/rightTrigger 0-255, stick axes int16 with Y up.
- *
- * Face buttons map by position by default (Nintendo B to A_FLAG, A to B_FLAG, Y to X_FLAG,
- * X to Y_FLAG); layout 'labels' maps by printed letter. HOME and Capture are not in NpadState,
- * so SPECIAL_FLAG is never set.
- *
- * Pressing + alone stops SmileBASIC 4, so PC Start also comes from a chord: while every button
- * of the start chord (L3+R3 by default) is held, the PC sees Start instead of those buttons.
+ * Console controller state (NpadState in binding 0) to moonlight-common-c gamepad fields
+ * (LiSendMultiControllerEvent). Mapping rules are in CLAUDE.md.
  */
 import {NPAD, NPAD_BYTES, readPad} from '../../../../hbl-platform/sdk/host/npad.js';
 import {OFFSET, FIELD} from '../../../../hbl-platform/sdk/host/layout.js';
@@ -74,6 +63,7 @@ const NEUTRAL = {connected: false, buttons: 0, lx: 0, ly: 0, rx: 0, ry: 0};
 function decode(selected, sources) {
   const pad = readPad(selected);
   if (!sources) return pad.connected ? pad : NEUTRAL;
+
   let buttons = pad.connected ? pad.buttons : 0;
   let connected = pad.connected;
   for (let i = 0; i < PAD_SOURCES.count; i++) {
@@ -82,6 +72,7 @@ function decode(selected, sources) {
     connected = true;
     buttons |= source.buttons;
   }
+
   if (!connected) return NEUTRAL;
   return pad.connected ? {...pad, buttons} : {...NEUTRAL, connected, buttons};
 }
@@ -99,11 +90,15 @@ const int16 = value => Math.max(INT16_MIN, Math.min(INT16_MAX, value | 0));
  */
 function parseStartChord(text) {
   if (text === 'none') return [];
+
   const names = text.split('+');
   const known = {...FACE.position, ...SHARED};
+  const tooFew = names.length < 2;
   const unknown = names.some(name => !(name in known));
-  if (names.length < 2 || unknown || new Set(names).size < names.length)
+  const repeated = new Set(names).size < names.length;
+  if (tooFew || unknown || repeated)
     throw Error(`Invalid start chord ${text}: two or more of ${Object.keys(known).join(', ')}`);
+
   return names;
 }
 
@@ -117,14 +112,21 @@ function parseStartChord(text) {
 function toMoonlight(pad, layout = 'position', startChord = START_CHORD) {
   const held = bit => (pad.buttons & bit) !== 0;
   const flags = {...FACE[layout], ...SHARED};
+
   let buttonFlags = 0;
-  for (const [name, flag] of Object.entries(flags)) if (held(NPAD[name])) buttonFlags |= flag;
-  if (startChord.length && startChord.every(name => held(NPAD[name]))) {
+  for (const [name, flag] of Object.entries(flags)) {
+    if (held(NPAD[name])) buttonFlags |= flag;
+  }
+
+  const chordHeld = startChord.length > 0 && startChord.every(name => held(NPAD[name]));
+  if (chordHeld) {
     for (const name of startChord) buttonFlags &= ~flags[name];
     buttonFlags |= FLAG.play;
   }
+
   if (held(NPAD.left) && held(NPAD.right)) buttonFlags &= ~(FLAG.left | FLAG.right);
   if (held(NPAD.up) && held(NPAD.down)) buttonFlags &= ~(FLAG.up | FLAG.down);
+
   return {
     connected: pad.connected,
     buttonFlags,
@@ -155,9 +157,12 @@ function same(a, b) {
  */
 async function readController(rpc, mapped, {sources = false} = {}) {
   const selected = await rpc.read(mapped, NPAD_BYTES);
-  const extra = sources
-    ? await rpc.read(mapped + PAD_SOURCES.offset, PAD_SOURCES.count * PAD_SOURCES.stride)
-    : null;
+
+  let extra = null;
+  if (sources) {
+    extra = await rpc.read(mapped + PAD_SOURCES.offset, PAD_SOURCES.count * PAD_SOURCES.stride);
+  }
+
   return decode(selected, extra);
 }
 

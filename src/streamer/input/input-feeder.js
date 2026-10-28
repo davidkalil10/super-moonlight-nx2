@@ -1,35 +1,6 @@
 /**
- * Unified controller and touch feed for the stream helper. Attaches to the newest (or named)
- * runs/launcher-* session, reads the mapped state once per frame and writes tagged JSON lines to
- * stdout, meant to be piped into hbmoonlight's stdin:
- *
- *   {"type":"controller",...}                                  on change (controller.js fields)
- *   {"type":"touch","events":[{id,action,x,y,pressure}...]}    when touch changes
- *
- * Pad bytes (0..40) and the touch block (128..784) are contiguous in the mapped buffer, so one
- * rpc.read of 784 bytes covers both and halves the console exchanges competing with the video
- * sender. --sources is intentionally not supported here; the extra pad sources live far outside
- * that window.
- *
- * Each change of the console + or - goes to stderr with the wall time, so a console hang can be
- * matched against a + press (SB4 may act on + itself).
- *
- * With --counts-fd N, the reads' bridge exchanges and time go out on that descriptor once a
- * second as {exchanges, bridgeMs, pad} lines, for the stream's stats rows (stage "input"); pad
- * is how fresh the pad state was at each read (pad-age.js).
- *
- * With --push, a console worker sends each record (the 784 bytes, then the UI overlay words)
- * on a native TCP socket at --hz instead (input-push-worker.js), so no input crosses the
- * bridge once it runs; the lines out are the same. The counts lines add pushed, dropped and
- * gapMaxMs: records received, records dropped as backlog and the longest arrival gap. At the
- * end it writes {stopped, retained, error} there: whether the worker stopped cleanly, was
- * retained, and what failed.
- *
- * --start-chord names the NPAD buttons that press PC Start while all are held ('none' for no
- * chord, default stickL+stickR), since + alone stops SmileBASIC 4.
- *
- * Usage: node src/streamer/input/input-feeder.js [runs/launcher-XXXX] [--hz 60] [--labels]
- *        [--counts-fd N] [--push] [--start-chord stickL+stickR]
+ * Controller and touch feed for the stream helper: JSON lines for hbmoonlight's stdin, read
+ * over the bridge or pushed by a console worker. Flags and line formats are in CLAUDE.md.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -93,6 +64,7 @@ function keysWatch() {
   return bytes => {
     const keys = decode(bytes.subarray(0, NPAD_BYTES)).buttons & KEYS;
     if (keys === last) return null;
+
     last = keys;
     const state = bit => (keys & bit ? 'down' : 'up');
     return `Input keys: + ${state(NPAD.plus)}, - ${state(NPAD.minus)}`;
@@ -111,10 +83,13 @@ function keysWatch() {
  */
 function frame(previous, bytes, tracker, layout, startChord = START_CHORD) {
   const lines = [];
+
   const controller = toMoonlight(decode(bytes.subarray(0, NPAD_BYTES)), layout, startChord);
   if (!same(previous, controller)) lines.push(controllerLine(controller));
+
   const {events} = step(tracker, parseTouch(bytes.subarray(STATE.touch)));
   if (events.length) lines.push(touchLine(events));
+
   return {lines, controller};
 }
 
@@ -133,6 +108,7 @@ const OVERLAY_READ = {offset: UI.uiMagic, bytes: UI.uiOverlay + 4 - UI.uiMagic};
 function gate(paused, block) {
   const raised =
     block.readUInt32LE(0) === UI_MAGIC && block.readUInt32LE(UI.uiOverlay - UI.uiMagic) !== 0;
+
   return {paused: raised, release: raised && !paused};
 }
 
@@ -147,8 +123,11 @@ function gate(paused, block) {
  */
 function framed(record, sawMagic) {
   if (record.length === STATE_BYTES) return true;
+
   const magic = record.readUInt32LE(STATE_BYTES);
-  return magic === UI_MAGIC || (magic === 0 && !sawMagic);
+  if (magic === UI_MAGIC) return true;
+
+  return magic === 0 && !sawMagic;
 }
 
 /**
@@ -211,6 +190,7 @@ function createPushReader({
     const ups = flush(tracker);
     if (ups.length) write(touchLine(ups));
   };
+
   const release = () => {
     liftTouches();
     const neutral = toMoonlight(NEUTRAL, layout);
@@ -225,18 +205,22 @@ function createPushReader({
       paused = next.paused;
       if (next.release) release();
     }
+
     const frameIndex = record.readUInt32LE(STATE.frameIndex);
     if (frameIndex === lastFrame) return;
+
     if (lastFrame !== null && frameIndex < lastFrame) {
       log(`Input push frameIndex went back from ${lastFrame} to ${frameIndex}; new session`);
       release();
     }
     lastFrame = frameIndex;
     if (paused) return;
+
     const state = record.subarray(0, STATE_BYTES);
     const result = frame(previous, state, tracker, layout, startChord);
     previous = result.controller;
     for (const line of result.lines) write(line);
+
     const note = keys(state);
     if (note) log(`${note} at ${new Date().toISOString()}`);
   }
@@ -253,30 +237,39 @@ function createPushReader({
     /** @param {Buffer} chunk */
     data(chunk) {
       if (broken) return;
+
       pending = pending.length ? Buffer.concat([pending, chunk]) : chunk;
       const count = Math.floor(pending.length / recordBytes);
       if (!count) return;
+
       const record = index => pending.subarray(index * recordBytes, (index + 1) * recordBytes);
       for (let index = 0; index < count; index++) {
-        if (framed(record(index), sawMagic)) {
-          sawMagic ||= recordBytes > STATE_BYTES && record(index).readUInt32LE(STATE_BYTES) !== 0;
-          continue;
+        if (!framed(record(index), sawMagic)) {
+          broken = true;
+          pending = Buffer.alloc(0);
+          throw Error('Input push lost the record framing; a console send was short');
         }
-        broken = true;
-        pending = Buffer.alloc(0);
-        throw Error('Input push lost the record framing; a console send was short');
+
+        // Latched per record, since the next record in this chunk is framed against it.
+        if (!sawMagic && recordBytes > STATE_BYTES) {
+          sawMagic = record(index).readUInt32LE(STATE_BYTES) !== 0;
+        }
       }
+
       const at = now();
       if (lastAt !== null) counts.gapMaxMs = Math.max(counts.gapMaxMs, at - lastAt);
-      lastAt = heardAt = at;
+      lastAt = at;
+      heardAt = at;
       stalled = false;
       counts.pushed += count;
+
       let first = 0;
       if (count > MAX_BACKLOG) {
         liftTouches();
         counts.dropped += count - 1;
         first = count - 1;
       }
+
       for (let index = first; index < count; index++) apply(record(index));
       pending = pending.subarray(count * recordBytes);
     },
@@ -287,14 +280,17 @@ function createPushReader({
         release();
         log(`Input push stalled at frameIndex ${lastFrame}`);
       }
+
       if (heardAt === null || at - heardAt < SILENT_MS) return;
+
       heardAt = null;
       throw Error(`Input push heard nothing from the console for ${SILENT_MS} ms`);
     },
     /** Releases what is held and forgets the last arrival, so a stopped worker is no stall. */
     detach() {
       release();
-      lastAt = heardAt = null;
+      lastAt = null;
+      heardAt = null;
       stalled = false;
     },
     /** @returns {{pushed: number, dropped: number, gapMaxMs: number}} Since the last take. */
@@ -302,6 +298,7 @@ function createPushReader({
       const open = lastAt === null ? 0 : now() - lastAt;
       const result = {...counts, gapMaxMs: Math.round(Math.max(counts.gapMaxMs, open))};
       counts = {pushed: 0, dropped: 0, gapMaxMs: 0};
+
       return result;
     }
   };
@@ -353,6 +350,7 @@ function runPush({
   /** @param {Error} error */
   function fail(error) {
     if (failed) return;
+
     failed = true;
     log('Input push failed: ' + error.message);
     onFailure(error);
@@ -371,14 +369,20 @@ function runPush({
   async function startWorker(state, ui) {
     let created = null;
     const current = () => created !== null && worker === created;
+
     created = await createWorker({
       rpc,
       state,
       ui,
       hz,
-      onData: bytes => current() && feed(bytes),
-      onClose: () => current() && fail(Error('Input push socket closed by the console'))
+      onData: bytes => {
+        if (current()) feed(bytes);
+      },
+      onClose: () => {
+        if (current()) fail(Error('Input push socket closed by the console'));
+      }
     });
+
     worker = created;
     reader.attach(worker.recordBytes);
     await worker.start();
@@ -389,6 +393,7 @@ function runPush({
     const stopping = worker;
     worker = null;
     running = null;
+
     try {
       const {pushed} = await stopping.stop();
       log(`Input push stopped; the console counted ${pushed} records`);
@@ -406,6 +411,7 @@ function runPush({
     const moonlight = source?.package?.id === 'moonlight' && storage;
     const ui = moonlight ? storage.mapped + OVERLAY_READ.offset : null;
     const wanted = moonlight ? `${source.mapped}/${ui}` : null;
+
     if (worker && wanted !== running) await stopWorker();
     if (!worker && moonlight) await startWorker(source.mapped, ui);
   }
@@ -416,12 +422,16 @@ function runPush({
     } catch (error) {
       if (worker) fail(error);
     }
+
     const at = now();
     if (busy || failed || at - sourceChecked < SOURCE_CHECK_MS) return;
+
     sourceChecked = at;
     busy = check()
       .catch(fail)
-      .finally(() => (busy = null));
+      .finally(() => {
+        busy = null;
+      });
   }, PUSH_CHECK_MS);
 
   return {
@@ -447,7 +457,10 @@ function runPush({
  */
 async function mainPush(bridge, {directory, hz, layout, startChord, countsFd}) {
   let finish;
-  const finished = new Promise(resolve => (finish = resolve));
+  const finished = new Promise(resolve => {
+    finish = resolve;
+  });
+
   let closed = false;
   // A gone helper must not skip the worker stop, so its pipe error only ends the run.
   process.stdout.on('error', () => {
@@ -456,6 +469,7 @@ async function mainPush(bridge, {directory, hz, layout, startChord, countsFd}) {
   });
   process.on('SIGINT', () => finish());
   process.on('SIGTERM', () => finish());
+
   let failure = null;
   const push = runPush({
     rpc: bridge.rpc,
@@ -463,7 +477,9 @@ async function mainPush(bridge, {directory, hz, layout, startChord, countsFd}) {
     hz,
     layout,
     startChord,
-    write: line => closed || process.stdout.write(line + '\n'),
+    write: line => {
+      if (!closed) process.stdout.write(line + '\n');
+    },
     log: message => process.stderr.write(message + '\n'),
     onFailure: error => {
       failure = error;
@@ -471,27 +487,35 @@ async function mainPush(bridge, {directory, hz, layout, startChord, countsFd}) {
       finish();
     }
   });
-  if (countsFd !== null)
+
+  if (countsFd !== null) {
     setInterval(() => {
       const {exchanges, bridgeMs} = bridge.take();
       const line = JSON.stringify({exchanges, bridgeMs, ...push.take()});
       fs.write(countsFd, line + '\n', () => {});
     }, COUNTS_MS).unref();
+  }
+
   await finished;
+
   let stopError = null;
   try {
     await push.stop();
   } catch (error) {
     stopError = error;
   }
+
   const errors = [failure, stopError].filter(Boolean).map(error => error.message);
   const report = {stopped: !stopError, retained: push.retained, error: errors.join('; ') || null};
-  if (countsFd !== null)
+  if (countsFd !== null) {
     try {
       fs.writeSync(countsFd, JSON.stringify(report) + '\n');
     } catch {}
+  }
+
   if (!stopError) return;
   if (!push.retained) throw stopError;
+
   // The retained worker's console socket stays open, so the process is ended here.
   process.stderr.write(stopError.message + '\n');
   process.exit(1);
@@ -507,13 +531,16 @@ async function main() {
   const countsFd = cli.number(args, '--counts-fd', null);
   const bridge = instrument(session.rpc(directory), () => 'input');
   if (push) return mainPush(bridge, {directory, hz, layout, startChord, countsFd});
+
   const rpc = bridge.rpc;
   const pad = countsFd === null ? null : padAge.create();
-  if (countsFd !== null)
+  if (countsFd !== null) {
     setInterval(() => {
       const {exchanges, bridgeMs} = bridge.take();
-      fs.write(countsFd, JSON.stringify({exchanges, bridgeMs, pad: pad?.take()}) + '\n', () => {});
+      const line = JSON.stringify({exchanges, bridgeMs, pad: pad?.take()});
+      fs.write(countsFd, line + '\n', () => {});
     }, COUNTS_MS).unref();
+  }
 
   const tracker = createTracker();
   const keys = keysWatch();
@@ -524,6 +551,7 @@ async function main() {
   let sourceChecked = -Infinity;
   let overlayChecked = -Infinity;
   let paused = false;
+
   const write = line => process.stdout.write(line + '\n');
   const release = () => {
     const ups = flush(tracker);
@@ -532,9 +560,15 @@ async function main() {
     if (previous && !same(previous, neutral)) write(controllerLine(neutral));
     previous = null;
   };
+
   process.stdout.on('error', () => process.exit(0));
-  process.on('SIGINT', () => (stopping = true));
-  process.on('SIGTERM', () => (stopping = true));
+  process.on('SIGINT', () => {
+    stopping = true;
+  });
+  process.on('SIGTERM', () => {
+    stopping = true;
+  });
+
   const interval = 1000 / hz;
   while (!stopping) {
     const started = performance.now();
@@ -543,6 +577,7 @@ async function main() {
       storage = readStorage(directory);
       sourceChecked = started;
     }
+
     if (source?.package?.id === 'moonlight') {
       try {
         if (storage && started - overlayChecked > OVERLAY_CHECK_MS) {
@@ -552,6 +587,7 @@ async function main() {
           paused = next.paused;
           if (next.release) release();
         }
+
         if (!paused) {
           const readAt = performance.now();
           const bytes = await rpc.read(source.mapped, READ_BYTES);
@@ -559,6 +595,7 @@ async function main() {
           const result = frame(previous, bytes, tracker, layout, startChord);
           previous = result.controller;
           for (const line of result.lines) write(line);
+
           const note = keys(bytes);
           if (note) process.stderr.write(`${note} at ${new Date().toISOString()}\n`);
         }
@@ -568,16 +605,19 @@ async function main() {
     } else if (previous || tracker.active.size) {
       release();
     }
+
     const wait = interval - (performance.now() - started);
     await new Promise(resolve => setTimeout(resolve, Math.max(0, wait)));
   }
+
   release();
 }
 
 export {frame, keysWatch, gate, readStorage, OVERLAY_READ, READ_BYTES, createPushReader, runPush};
 
-if (cli.isMain(import.meta))
+if (cli.isMain(import.meta)) {
   main().catch(error => {
     process.stderr.write(error.message + '\n');
     process.exitCode = 1;
   });
+}
