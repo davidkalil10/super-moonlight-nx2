@@ -23,9 +23,9 @@ const SERVICES = Object.freeze({present: 1, input: 1, time: 2});
 const SECTION_KEYS = ['abi', 'shaders', 'initialState', 'data'];
 /** [entry stage, SPIR-V suffix, section stage] */
 const STAGES = [
-  ['logic', 'comp', 'compute'],
+  ['vertex', 'vert', 'vertex'],
   ['draw', 'frag', 'fragment'],
-  ['vertex', 'vert', 'vertex']
+  ['logic', 'comp', 'compute']
 ];
 const SECTION_DIR = 'backends/' + ID + '/';
 const SPIRV_MAGIC = 0x07230203;
