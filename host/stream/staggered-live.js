@@ -428,6 +428,12 @@ function create({
   let queue = null;
   /** The last unit primed, which a queued gate before it must not zero. */
   let primed = 0;
+  /**
+   * The prime and gate writes, one at a time: each rpc is its own POST and the bridge runs
+   * them in the order their bodies arrive, so two in flight could land swapped.
+   */
+  /** @type {Promise<unknown>} */
+  let writes = Promise.resolve();
   const units = new Map();
   const destinations = new Map();
   const counts = {
@@ -729,6 +735,18 @@ function create({
   }
 
   /**
+   * Runs `write` once the prime or gate write before it has its reply.
+   * @template T
+   * @param {() => Promise<T>} write
+   * @returns {Promise<T>}
+   */
+  function inOrder(write) {
+    const run = writes.then(write);
+    writes = run.catch(() => {});
+    return run;
+  }
+
+  /**
    * Opens the gate that submits `sequence`, receives `next` and fetches into `destination`,
    * then notes when it opened for the exchange bins, the decode wait and the pacer.
    */
@@ -807,17 +825,19 @@ function create({
       ));
     }
     enter('staggered-gate');
-    if (primed > sequence) next = units.get(sequence + 1);
-    const gateStarted = now();
-    onGate?.(gateStarted);
-    await openGate(gateStarted, {
-      sequence,
-      current,
-      next,
-      snapshot,
-      expected,
-      inputSlot,
-      destination
+    await inOrder(() => {
+      if (primed > sequence) next = units.get(sequence + 1);
+      const gateStarted = now();
+      onGate?.(gateStarted);
+      return openGate(gateStarted, {
+        sequence,
+        current,
+        next,
+        snapshot,
+        expected,
+        inputSlot,
+        destination
+      });
     });
   }
 
@@ -883,8 +903,10 @@ function create({
         await worker.start({sequence: 1, ...next});
       } else if (gateOnReceive) {
         enter('staggered-prime');
-        primed = sequence;
-        await worker.primeInput({sequence, ...next});
+        await inOrder(() => {
+          primed = sequence;
+          return worker.primeInput({sequence, ...next});
+        });
       }
       enter('staggered-send');
       await transport.send(unit.data);

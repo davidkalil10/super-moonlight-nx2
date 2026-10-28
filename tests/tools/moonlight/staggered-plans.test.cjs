@@ -548,6 +548,51 @@ test('the gate queue keeps every length-gate wake and descriptor over 200 units'
   assert.equal(live.retained, false);
 });
 
+// Each rpc is its own POST, so a gate write that reaches the bridge late would land after a prime
+// sent behind it and zero the primed descriptor. Here every gate write is held before it lands,
+// and each prime waits a little for one to be in flight, the order that loses it.
+test('a queued gate write that lands late never lets a prime overtake it', async () => {
+  const d = device();
+  let gating = 0;
+  let overtaken = 0;
+  let primes = 0;
+  const watch = worker =>
+    Object.create(worker, {
+      openGates: {
+        async value(options) {
+          gating++;
+          try {
+            await new Promise(resolve => setTimeout(resolve, 2));
+            return await worker.openGates(options);
+          } finally {
+            gating--;
+          }
+        }
+      },
+      primeInput: {
+        async value(unit) {
+          primes++;
+          const until = performance.now() + 5;
+          while (!gating && performance.now() < until)
+            await new Promise(resolve => setImmediate(resolve));
+          if (gating) overtaken++;
+          return worker.primeInput(unit);
+        }
+      }
+    });
+  const live = await d.live(watch, {gateOnReceive: true, gateQueue: true});
+  await stream(live, d.sink, 50);
+  assert.deepEqual(await live.finish({sink: d.sink}), {drained: 2});
+  assert.equal(primes, 49);
+  assert.equal(overtaken, 0, 'a prime went out while a gate write was still in flight');
+  const counts = withoutPacer(live.counts);
+  assert.equal(counts.decoded, 50);
+  assert.equal(counts.presented, 50);
+  await live.stop();
+  await d.worker.finalize();
+  assert.equal(live.retained, false);
+});
+
 // Counts the signals of the output worker's fetch gate, and those that found it still set and
 // so merged with one not yet waited for. The worker frames and the host both set it here.
 function watchFetchGate(d) {
