@@ -259,7 +259,10 @@ function createService({
     return queue;
   }
 
-  /** Model events run one at a time; intents start their work and come back through dispatch. */
+  /**
+   * Model events run one at a time; intents start their work and come back through dispatch.
+   * @param {import('./model.js').Event} event
+   */
   function dispatch(event) {
     return enqueue(async () => {
       if (stopped) return;

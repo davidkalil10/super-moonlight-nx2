@@ -42,6 +42,14 @@ const HOSTS_PER_PAGE = 6;
  * @typedef {{op: string, item: number, value: number}} Command
  * @typedef {{apps: App[], currentGame: number, message?: string | null}} Listed
  * @typedef {{model: Model, intents: Intent[]}} Step
+ * @typedef {({type: 'command'} & Command)
+ *   | {type: 'attached' | 'notPaired' | 'paired' | 'streamStarted' | 'streamEnded' | 'quitDone'
+ *       | 'appGone'}
+ *   | {type: 'hosts', hosts: Host[]}
+ *   | ({type: 'listed'} & Listed)
+ *   | {type: 'pin', pin: string | null, url: string | null}
+ *   | {type: 'stage', message: string | null}
+ *   | {type: 'failed', message: string, back?: string}} Event
  */
 
 /**
@@ -237,7 +245,8 @@ function onCommand(model, command) {
 
 /**
  * The host's apps arrived: show them and fetch their covers.
- * @param {Model} model @param {Listed} listed
+ * @param {Model} model
+ * @param {Listed} listed
  * @returns {Step}
  */
 function onListed(model, {apps, currentGame, message}) {
@@ -261,7 +270,7 @@ function onListed(model, {apps, currentGame, message}) {
 
 /**
  * @param {Model} model
- * @param {any} event A console command or a service result, told apart by type.
+ * @param {Event} event A console command or a service result, told apart by type.
  * @returns {Step}
  */
 function reduce(model, event) {
