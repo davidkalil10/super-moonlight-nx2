@@ -15,7 +15,9 @@ const {
   auTiming,
   hiddenQueue,
   hiddenTiming,
-  withInputStage
+  withInputStage,
+  linkQuality,
+  linkSeconds
 } = require('../../../host/stream/native-h264.js');
 const {AccessUnits, parameterSets} = require('../../../host/stream/h264-stream.js');
 
@@ -111,6 +113,33 @@ test('the input feeder counts land in bridgeByStage, not in the row totals', () 
       bridgeByStage: {}
     }
   );
+});
+
+test('the link verdict follows the input feeder ms per exchange', () => {
+  assert.deepEqual(linkQuality({exchanges: 70, bridgeMs: 210}), {
+    inputMsPerExchange: 3,
+    verdict: 'ok'
+  });
+  assert.deepEqual(linkQuality({exchanges: 70, bridgeMs: 211}), {
+    inputMsPerExchange: 3.01,
+    verdict: 'weak'
+  });
+  assert.deepEqual(linkQuality({exchanges: 70, bridgeMs: 420}), {
+    inputMsPerExchange: 6,
+    verdict: 'weak'
+  });
+  assert.deepEqual(linkQuality({exchanges: 64, bridgeMs: 2600}), {
+    inputMsPerExchange: 40.63,
+    verdict: 'bad'
+  });
+  assert.equal(linkQuality({exchanges: 0, bridgeMs: 0}), null);
+  const rows = [
+    {link: {verdict: 'ok'}},
+    {link: {verdict: 'bad'}},
+    {link: null},
+    {link: {verdict: 'ok'}}
+  ];
+  assert.deepEqual(linkSeconds(rows), {ok: 2, weak: 0, bad: 1});
 });
 
 test('backlog IDR requests recover within 100 ms and coalesce dropped frames', () => {
@@ -945,6 +974,9 @@ test(
       assert.deepEqual(fed.bridgeByStage.input, {exchanges: 4, bridgeMs: 7});
       assert.deepEqual(fed.inputPad, pad, 'the pad ages ride along in the same row');
       assert.equal(fed.exchanges, 0, 'the feeder reads stay out of the video exchange total');
+      assert.equal(fed.link.verdict, 'ok');
+      assert.ok(rows.every(row => row.bridgeByStage.input || row.link === null));
+      assert.deepEqual(Object.keys(summary.link), ['ok', 'weak', 'bad']);
       assert.equal(summary.trimmed, undefined);
       assert.ok(rows.every(row => !('trimmed' in row)));
     });

@@ -201,6 +201,33 @@ function withInputStage(counts, input) {
   return counts;
 }
 
+/** Input feeder ms per exchange at or under which the console link counts as ok, then weak. */
+const LINK_MS = {ok: 3, weak: 6};
+
+/**
+ * The console link read from the input feeder's bridge cost: its exchanges are the same every
+ * second, so their mean time tracks the link rather than the stream. Null without input.
+ * @param {{exchanges: number, bridgeMs: number}} input
+ * @returns {{inputMsPerExchange: number, verdict: 'ok' | 'weak' | 'bad'} | null}
+ */
+function linkQuality(input) {
+  if (!input.exchanges) return null;
+  const inputMsPerExchange = Math.round((input.bridgeMs / input.exchanges) * 100) / 100;
+  const verdict =
+    inputMsPerExchange <= LINK_MS.ok ? 'ok' : inputMsPerExchange <= LINK_MS.weak ? 'weak' : 'bad';
+  return {inputMsPerExchange, verdict};
+}
+
+/**
+ * How many rows had each link verdict; rows without input count in none.
+ * @param {{link?: {verdict: string} | null}[]} rows
+ */
+function linkSeconds(rows) {
+  const seconds = {ok: 0, weak: 0, bad: 0};
+  for (const row of rows) if (row.link) seconds[row.link.verdict]++;
+  return seconds;
+}
+
 /** The range checks of the stream flags, in the order they are reported. */
 function checkFlags(args, flags) {
   const {inputHz, presentHz, skipBacklog, skipRule, decodeWait, receiveWait, trimBacklogMs} = flags;
@@ -387,6 +414,7 @@ function buildSummary(options, {rows, staggeredLive, tail, socketAudioReport, st
     audio,
     ...(socketAudio ? {socketAudio: socketAudioReport} : {}),
     input,
+    link: linkSeconds(steadyRows),
     ...scoring.summarize(rows, {warmup}),
     expect,
     stopReason
@@ -743,6 +771,7 @@ async function run({
       ...(trimBacklogMs !== null ? {trimmed} : {}),
       ...withInputStage(bridge.take(), inputBridge),
       ...(inputPad.length ? {inputPad: padAge.merge(inputPad)} : {}),
+      link: linkQuality(inputBridge),
       at: stage + '/' + (decoder?.step ?? '-'),
       ms: Object.fromEntries(Object.entries(stageMs).map(([k, v]) => [k, Math.round(v)]))
     };
@@ -763,6 +792,19 @@ async function run({
     });
   }
 
+  /** The link line once the warmup is over, from the warmup rows' input exchanges. */
+  function logLink() {
+    const total = {exchanges: 0, bridgeMs: 0};
+    for (const row of rows) {
+      const input = row.bridgeByStage.input;
+      if (!input) continue;
+      total.exchanges += input.exchanges;
+      total.bridgeMs += input.bridgeMs;
+    }
+    const link = linkQuality(total);
+    if (link) log({event: 'link', ...link});
+  }
+
   /** Stops on a stalled console, then prints and records one stats row. */
   function printRow() {
     const silent = bridge.silentMs();
@@ -776,6 +818,7 @@ async function run({
     }
     const row = statsRow();
     rows.push(row);
+    if (rows.length === Math.max(1, options.warmup)) logLink();
     const line = JSON.stringify(row);
     console.log(line);
     fs.appendFile(statsFile, line + '\n', {mode: PRIVATE_FILE}).catch(() => {});
@@ -1108,5 +1151,7 @@ export {
   auTiming,
   hiddenQueue,
   hiddenTiming,
-  withInputStage
+  withInputStage,
+  linkQuality,
+  linkSeconds
 };
