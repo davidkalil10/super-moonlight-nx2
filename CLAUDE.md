@@ -1,14 +1,13 @@
 # hbl-moonlight
 
 The Moonlight streaming app and its host side, split out of HBLauncher (Phase 1 of the
-rewrite in the team notes). Runtime code at the top; tests and simulators in `tests/`.
+rewrite in the team notes). Code under `src/`; each component's unit tests in its `test/`.
 README.md has the layout, build, run, flags, tests and the console/host contract; this file
 has the decisions, constraints and measurements. The docs the old tests CLAUDE.md replaced are
 kept verbatim in the team notes (moonlight docs archive).
 
 ## Layout
 
-The host is moving from `tools/moonlight/` into `host/`; until it is done both hold code.
 
 ## Sibling checkouts
 
@@ -18,13 +17,13 @@ them). Package `exports` replace the relative paths later in Phase 2.
 ## Build
 
 - `build.js` compiles with glslc 2026.1 (Fedora 44) only and refuses another version: the
-  committed SPIR-V under `apps/moonlight/backends/hblauncher.gpu-app/` is the build of glslc
+  committed SPIR-V under `src/renderer/moonlight/backends/hblauncher.gpu-app/` is the build of glslc
   `shaderc v2026.1`, `spirv-tools v2026.1`, `glslang 301b4ede` (Fedora 44 `glslc-2026.1-1`),
   which reproduces all three files byte for byte; the package test pins them. glslangValidator
   16.2.0 builds different bytes. Moving to a new glslc means changing `GLSLC_VERSION` in
-  `build.js` and the pinned hashes in `tests/` together.
+  `build.js` and the pinned hashes in `src/renderer/test/` together.
 - It refuses any argument because it rewrites the package in place; the check that writes
-  nothing is `node ../hbl-platform/sdk/build.js --check apps/moonlight`.
+  nothing is `node ../hbl-platform/sdk/build.js --check src/renderer/moonlight`.
 
 ## Decisions
 
@@ -39,7 +38,7 @@ them). Package `exports` replace the relative paths later in Phase 2.
   stall), since Wi-Fi varies by an order of magnitude between sessions. The numbers are in
   [Bridge budget](#bridge-budget-measured).
 - One source of truth per layout: `ring.js` generates `ring.glsl`; `hbv.js`/`hbv2.js` generate
-  their GLSL tables; `host/ui/page.js` mirrors the shader's page validator. Change the JS and
+  their GLSL tables; `src/streamer/ui/page.js` mirrors the shader's page validator. Change the JS and
   regenerate, never the outputs.
 - HBV2 uses an integer IDCT shared by JS and GLSL; a float transform drifts across P frames.
 - The console UI commands go through plain words in the control page, not the SDK mailbox: a
@@ -82,24 +81,24 @@ that remains open.
   latches the decoder failed. Staggered workers that fail to stop, or a lost bridge, retain the
   native objects until SmileBASIC restarts.
 - The package fingerprint covers the manifest bytes, listed assets and entry sources only, so
-  docs and backend sources do not move it, but `tests/apps/moonlight/package.test.cjs` pins the
+  docs and backend sources do not move it, but `src/renderer/test/package.test.cjs` pins the
   shader, state, data, memory and icon hashes.
 
 ## Tests and simulators
 
 - The tests import the runtime one level up, inside this repo, so a worktree always tests its
   own code; only the other repos must sit beside the checkout.
-- `tests/tsconfig.json` lists the hbl-moonlight modules that went through the readability
+- `tsconfig.json` lists the hbl-moonlight modules that went through the readability
   rewrite; add each component as it lands. TypeScript is a dev dependency only, hbl-moonlight
   itself has no build step.
 - One test file per subsystem, each under about 1500 lines; split one only at a section (an old
   file) boundary. Helpers shared inside this tree live in
-  `tests/tools/moonlight/test-helpers.cjs`; the only cross-repo ones are the hbl-platform/tests
+  `src/streamer/test-support/test-helpers.cjs`; the only cross-repo ones are the hbl-platform/tests
   mocks.
 - The root `.gitignore` has no `node_modules` entry, so a symlinked `node_modules` shows as
   untracked; add files by path in a checkout that links one.
 - No test binds the launcher port 39380; native TCP tests listen on port 0.
-- `tests/tools/moonlight/request-budget.cjs` is the offline cost model; run it before any device
+- `src/streamer/stream/scheduler/test/request-budget.cjs` is the offline cost model; run it before any device
   run. Console probes live in sibling `hbl-dev/sdk/tools`: the user runs them, one at a time,
   per `DEVICE-RULES.md` in hbl-notes.
 - A test change that alters what the runtime sends needs its reason in the commit.
@@ -198,7 +197,7 @@ under 8.3 ms, and the bridge feeds 120 slots per second. The first is out inside
 - The decoder is nnCompat's `movie::Decoder` (implementation `movie::VideoDecoder`, no `nn::`
   prefix), created as type 1 with CPU-copy output format 4 (NV12). The first IDR's bare SPS/PPS
   build the configuration. The adapter checks the module's symbol names, offsets, sizes and
-  instruction signatures against `sdk/native/movie-functions.json` before any call. The
+  instruction signatures against `src/streamer/console-api/movie-functions.json` before any call. The
   captured catalog is in the team notes.
 - The access-unit reader drains the raw pipe before matching stderr metadata (an AU is
   announced only after its payload is written), validates lengths, sequences and EOF, and after
@@ -251,7 +250,7 @@ Mesa/NVDEC notes.
 - The frozen reference is the 1080p60 worker at HBLauncher 4bdeb1a and its records
   (`native-h264/2026-10-25T17-20-16-026Z-4bdeb1a4`): they stay untouched and every change is
   measured against them. Main may change exchange count and pacing for 120 fps. Prove each
-  change with the `tests/` suite, then a live pair before it lands: the 60 fps control
+  change with the test suite, then a live pair before it lands: the 60 fps control
   in the reference shape (fps=59, dropped=0, idr=0), then the 120 run.
 - Format, then rename/extract, never both in one commit.
 - No live console runs unless the user is at the console (`DEVICE-RULES.md` in hbl-notes).

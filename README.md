@@ -1,9 +1,9 @@
 # hbl-moonlight
 
 Moonlight for HBLauncher: stream PC games from Sunshine to the Switch 2. The console runs
-the Moonlight HB package (`apps/moonlight/`), the PC runs the host side (`host/`,
-`tools/moonlight/`): the `hbmoonlight` client, the stream senders and the console UI
-service. Tests and simulators live in `tests/` ([Tests](#tests)); CLAUDE.md has the decisions,
+the Moonlight HB package (`src/renderer/moonlight/`), the PC runs the streamer (`src/streamer/`): the
+`hbmoonlight` client, the stream senders and the console UI service. Each component keeps its
+unit tests in a `test/` beside it ([Tests](#tests)); CLAUDE.md has the decisions,
 measurements and research.
 
 ```
@@ -13,26 +13,26 @@ hbmoonlight (PC)                    pairing, app list, covers, quit, stream
    | --raw-h264-fd 4 | RGB24 stdout | PCM --audio-fd 3 | input on stdin
 live.js / native-h264.js (PC)       ring writes over the bridge, or native TCP
    | 32 KiB (protocol 1/2) or up to 252 KiB (protocol 3) exchanges
-apps/moonlight (console GPU)        compute picks/decodes, fragment draws
+src/renderer (console GPU)        compute picks/decodes, fragment draws
 ```
 
 ## Layout
 
-- `apps/moonlight/`: the HB package (`manifest.json`, `assets/`, `backends/hblauncher.gpu-app/`,
-  `build.js`); see [Package](#package).
-- `host/stream/`: `live.js` (sender), `native-h264.js` (console decoder route), the
-  staggered workers and `helper.js` (finds the `hbmoonlight` binary).
-- `host/audio/`: `audio-stream.js` and the socket audio worker.
-- `host/input/`: `input-feeder.js`, `controller.js`, `touch.js`.
-- `host/ui/`: the console UI service (see Console UI service).
-- `tools/moonlight/`: `ring.js`, the HBV formats, `feed.js` and
-  `helper/` (`hbmoonlight`, C, GPLv3).
-- `sdk/native/movie-functions.json`, `movie-event-functions.json`: the native symbols only
-  Moonlight uses.
-- `tests/`: the unit tests and the request-budget model; nothing there ships to users.
+- `src/renderer/moonlight/`: the HB package that draws on the Switch 2 (`manifest.json`,
+  `assets/`, `backends/hblauncher.gpu-app/`, `build.js`); see [Package](#package).
+- `src/renderer/`: the HBV codecs and the glslang shim that `build.js` builds from.
+- `src/streamer/protocol/`: `hbmoonlight`, the Moonlight protocol client (C, GPLv3).
+- `src/streamer/stream/`: `session/` (`live.js`, `native-h264.js`, `protocol-binary.js` finds
+  the `hbmoonlight` binary), `scheduler/`, `worker/` and `native/` (src/streamer/stream/CLAUDE.md).
+- `src/streamer/audio/`: `audio-stream.js` and the socket audio worker.
+- `src/streamer/input/`: `input-feeder.js`, `controller.js`, `touch.js`.
+- `src/streamer/ui/`: the console UI service (see Console UI service).
+- `src/streamer/shared/`: `ring.js` and `feed.js`; `test-support/`: helpers the tests share.
+- `src/streamer/console-api/movie-functions.json`, `movie-event-functions.json`: the native
+  symbols only Moonlight uses.
 
-It needs `hbl-platform` beside it (bridge, `sdk/host`, `sdk/native`, `sdk/build.js`; `tests/`
-also uses its `tests/` mocks) and, for `tests/`, `HBLauncher`; the layout is in
+It needs `hbl-platform` beside it (bridge, `sdk/host`, `sdk/native`, `sdk/build.js`; the tests
+also use its `tests/` mocks) and, for the tests, `HBLauncher`; the layout is in
 [hbl-platform's README](../hbl-platform/README.md), Sibling checkouts. Launcher sessions
 live in `hbl-platform/runs/launcher-*`; every tool takes a session directory as its first
 argument and uses the newest one when it is omitted.
@@ -40,15 +40,15 @@ argument and uses the newest one when it is omitted.
 ## Build
 
 ```sh
-tools/moonlight/helper/build.sh [BUILD]   # hbmoonlight into BUILD/build/ (default ~/claude-builds/HBLauncher/moonlight-helper)
-node apps/moonlight/build.js              # package shaders and memory image
-node ../hbl-platform/sdk/build.js --check apps/moonlight  # check the package, write nothing
+src/streamer/protocol/build.sh [BUILD]   # hbmoonlight into BUILD/build/ (default ~/claude-builds/HBLauncher/moonlight-helper)
+node src/renderer/moonlight/build.js           # package shaders and memory image
+node ../hbl-platform/sdk/build.js --check src/renderer/moonlight  # check the package, write nothing
 ```
 
 `build.js` needs glslc 2026.1 (Fedora 44) and `spirv-val`. It rewrites the package in place,
 so it refuses any argument, and it refuses a glslc other than the 2026.1 build behind the
 committed SPIR-V; both refusals write nothing. It always compiles through
-`tools/moonlight/glslang-shim.sh`, which maps the platform's `glslangValidator -V ... SRC -o OUT`
+`src/renderer/glslang-shim.sh`, which maps the platform's `glslangValidator -V ... SRC -o OUT`
 call onto `glslc -Os --target-env=vulkan1.0`. `GLSLC` picks the glslc for both the version check
 and the shim; a `GLSLANG` setting is ignored with a notice.
 
@@ -64,16 +64,16 @@ sudo dnf install gcc gcc-c++ cmake openssl-devel libcurl-devel expat-devel libuu
 `fetch.sh` pins the GPLv3 upstreams, never copied into this repo: moonlight-embedded
 (libgamestream: pairing, app list, launch; `discover.c` left out) at `f32e415`,
 moonlight-common-c at `b126e481` (has `LiSendTouchEvent`) and its enet at `dea6fb5`. A
-published `hbmoonlight` is GPLv3. The input test builds from `tests/` (`DEV_DIR` in
-`helper/CMakeLists.txt`).
-`host/stream/helper.js` finds the binary: `$HBMOONLIGHT`, else the default build path.
+published `hbmoonlight` is GPLv3. The input test builds from `test/` (`DEV_DIR` in
+`CMakeLists.txt`).
+`src/streamer/stream/session/protocol-binary.js` finds the binary: `$HBMOONLIGHT`, else the default build path.
 
 ## Package
 
-`apps/moonlight/` displays the frames the host writes into the app's private storage. The live
+`src/renderer/` displays the frames the host writes into the app's private storage. The live
 route is the helper's raw H.264, decoded through the console's native movie API into NV12
-surfaces. The ring also takes HBV1 (`tools/moonlight/hbv.js`, fixed-size intra slots drawn
-straight from the ring) and HBV2 (`tools/moonlight/hbv2.js`, inter-coded variable-rate slots
+surfaces. The ring also takes HBV1 (`src/renderer/hbv.js`, fixed-size intra slots drawn
+straight from the ring) and HBV2 (`src/renderer/hbv2.js`, inter-coded variable-rate slots
 that the compute shader decodes into a persistent 1080p frame). Without a sender the app shows
 the built-in HBV2 test card.
 
@@ -106,9 +106,9 @@ Refresh in the launcher and relaunch. Hold Plus and Minus together for one secon
 to the launcher; single B and Minus presses reach the PC.
 
 ```sh
-node host/stream/live.js [RUN_DIR] --moonlight 192.168.8.245 Desktop --codec h264 --fps 60
+node src/streamer/stream/session/live.js [RUN_DIR] --moonlight 192.168.8.245 Desktop --codec h264 --fps 60
 # console UI: the console picks the host and app
-node host/ui/service.js [RUN_DIR]
+node src/streamer/ui/service.js [RUN_DIR]
 ```
 
 ### live.js flags
@@ -188,7 +188,7 @@ Status and errors are one JSON object per line on stderr.
 
 ## Private memory (binding 1)
 
-`tools/moonlight/ring.js` is the source of truth; `build.js` generates `ring.glsl` from it.
+`src/streamer/shared/ring.js` is the source of truth; `build.js` generates `ring.glsl` from it.
 
 ```
 control 0x000000  64 KiB: shader words, native publication, written[8160] at 0x400 (ends 0x8380),
@@ -255,7 +255,7 @@ The shader is the only console writer of +16..+63 and never writes host words; t
 between; the host takes a command only when its epoch and page are current. One press makes
 one command; the host's state machine gives it meaning.
 
-### Page format (`UI_OFFSET + page * 4 MiB`, `host/ui/page.js`)
+### Page format (`UI_OFFSET + page * 4 MiB`, `src/streamer/ui/page.js`)
 
 | Offset | Content                                                                                                                                                                                              |
 | ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -281,7 +281,7 @@ one.
 
 ## Console UI service
 
-`node host/ui/service.js [RUN_DIR]` is the PC half of the console UI (`RUN_DIR`
+`node src/streamer/ui/service.js [RUN_DIR]` is the PC half of the console UI (`RUN_DIR`
 from the `SESSION READY` line, else the newest). The console draws the pages the service
 publishes and sends back commands; the host owns every screen.
 
@@ -361,8 +361,8 @@ with `--queue 2 --prime 2` and 960-frame (20 ms) buffers on protocol 3, 1920 (40
 
 ## Tests
 
-`tests/` holds the unit tests and the request-budget model. They import the runtime one level up, so
-a worktree tests its own code. From `tests/`:
+Each component's unit tests sit in its `test/` and import the code beside them, so a worktree
+tests its own code. From the repo root:
 
 ```sh
 npm install                        # once: TypeScript and @types/node
@@ -372,17 +372,17 @@ npm run typecheck                  # tsc --checkJs over the modules listed in ts
 
 ### Tools
 
-- `tests/tools/moonlight/request-budget.cjs`: offline request budget for the staggered native
+- `src/streamer/stream/scheduler/test/request-budget.cjs`: offline request budget for the staggered native
   H.264 host loop, a virtual-clock model of its gate cycle.
-- `tests/tools/moonlight/helper/tests/input.c`: the helper input-routing test, built by the
-  helper CMake project (`tools/moonlight/helper/`).
+- `src/streamer/protocol/test/input.c`: the helper input-routing test, built by the
+  helper CMake project (`src/streamer/protocol/`).
 
 ### Live test pass
 
 Only with the user at the console (`DEVICE-RULES.md` in hbl-notes). From `hbl-moonlight`,
 against a fresh `./start.sh --app moonlight` session showing the HBV2 test card, in order:
 
-1. Video: `node host/stream/live.js --moonlight 192.168.8.245 Desktop --codec h264 --staggered --no-input --no-audio`
+1. Video: `node src/streamer/stream/session/live.js --moonlight 192.168.8.245 Desktop --codec h264 --staggered --no-input --no-audio`
    (the h264 flags are above).
 2. Input: drop `--no-input`. Sticks and taps move the host cursor; touch is native multi-touch.
 3. Audio: drop `--no-audio`. If `OpenDefaultAudioOut` fails, the audio process prints a hint
