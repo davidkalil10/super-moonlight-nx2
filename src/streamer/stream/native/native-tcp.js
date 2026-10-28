@@ -1,16 +1,6 @@
 /**
  * A TCP connection from the console back to the host, for streaming data straight into
- * console memory with nn::socket calls instead of bridge writes.
- *
- * create() listens on the host, verifies the console's socket functions and writes a
- * sockaddr_in plus a random token into a console allocation. The console then opens a
- * socket, connects and sends the token with finite native jobs. The host accepts only the
- * connection that presents the token, so a stray client cannot take the data path.
- * receive() hands on what the console sends after the token, for workers that push data the
- * other way.
- *
- * While a connect or send job may still be running on the console, the socket is not
- * closed on failure: the job could otherwise touch a reused descriptor.
+ * console memory with nn::socket calls instead of bridge writes. Invariant 15.
  */
 import net from 'node:net';
 import crypto from 'node:crypto';
@@ -54,7 +44,8 @@ const signed = value => Number(BigInt.asIntN(32, value));
  * @returns {{host: string, port: number}}
  */
 function endpoint(host, port) {
-  if (!net.isIPv4(host) || !Number.isInteger(port) || port < 0 || port > MAX_PORT)
+  const validPort = Number.isInteger(port) && port >= 0 && port <= MAX_PORT;
+  if (!net.isIPv4(host) || !validPort)
     throw Error('Native TCP requires an IPv4 address and valid port');
   return {host, port};
 }
@@ -89,6 +80,7 @@ function checkSetup(host, port, timeoutMs, makeToken) {
   endpoint(host, port);
   if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > MAX_TIMEOUT_MS)
     throw Error('Invalid native TCP setup timeout');
+
   const token = makeToken();
   if (!Buffer.isBuffer(token) || token.length !== TOKEN_BYTES)
     throw Error('Invalid native TCP token');
@@ -170,13 +162,14 @@ async function writeAddressBlock(rpc, server, host, token) {
     failed: 'Native TCP address allocation failed',
     invalid: 'Invalid native TCP address allocation'
   });
+
   const listeningPort = /** @type {net.AddressInfo} */ (server.address()).port;
-  if (
-    !Number.isInteger(listeningPort) ||
-    listeningPort < MIN_LISTENING_PORT ||
-    listeningPort > MAX_PORT
-  )
-    throw Error('Native TCP listener has no usable port');
+  const usable =
+    Number.isInteger(listeningPort) &&
+    listeningPort >= MIN_LISTENING_PORT &&
+    listeningPort <= MAX_PORT;
+  if (!usable) throw Error('Native TCP listener has no usable port');
+
   await rpc.write(base, addressBlock(host, listeningPort, token));
   return {base, listeningPort};
 }
@@ -196,6 +189,7 @@ async function connectWithToken({run, errno, addresses, fd, base, tokenBytes}) {
   const connected = await run({function: addresses.connect, args: [fd, base, SOCKADDR_BYTES, 0]});
   if (signed(connected) !== 0)
     throw Error('Console TCP connect failed (errno ' + (await errno()) + ')');
+
   let sent = 0;
   while (sent < tokenBytes) {
     const result = await run({
@@ -253,6 +247,7 @@ async function create({
   let closed = false;
   let aborted = false;
   let listening = false;
+  const socketClosed = () => closed || !socket || socket.destroyed;
   const closeServer = () => {
     if (!listening) return;
     listening = false;
@@ -288,15 +283,18 @@ async function create({
   const call = async (name, args = []) =>
     (await rpc.callAddress(addresses[name], args, SHORT_RESPONSE_BYTES)).result;
   const errno = async () => Number(BigInt.asUintN(32, await call('errno')));
+
   try {
     await listen(server, port, host);
     listening = true;
     addresses = await verifySocketFunctions(rpc);
     if (signed(await call('socketInitialized')) !== 1)
       throw Error('Console sockets are not initialized');
+
     const {base, listeningPort} = await writeAddressBlock(rpc, server, host, token);
     fd = signed(await call('socket', [AF_INET, SOCK_STREAM, IPPROTO_TCP]));
     if (fd < 0) throw Error('Console TCP socket failed (errno ' + (await errno()) + ')');
+
     const worker = await createWorker(rpc);
     /** @param {{function: number, args: number[]}} job */
     const run = async job => {
@@ -305,8 +303,10 @@ async function create({
       safeToClose = true;
       return result;
     };
+
     await connectWithToken({run, errno, addresses, fd, base, tokenBytes: token.length});
     await accepted;
+
     return {
       fd,
       port: listeningPort,
@@ -314,21 +314,27 @@ async function create({
       recvFunction: addresses.recv,
       sendFunction: addresses.send,
       async send(bytes) {
-        if (closed || !socket || socket.destroyed) throw Error('Native TCP data socket is closed');
+        if (socketClosed()) throw Error('Native TCP data socket is closed');
         if (!Buffer.isBuffer(bytes) || bytes.length < 1 || bytes.length > MAX_ACCESS_UNIT)
           throw Error('Native TCP access unit exceeds the limit');
+
         await new Promise((resolve, reject) => {
-          socket.write(bytes, error => (error ? reject(error) : resolve()));
+          socket.write(bytes, error => {
+            if (error) reject(error);
+            else resolve();
+          });
         });
       },
       receive(listener, onClose = () => {}) {
-        if (closed || !socket || socket.destroyed) throw Error('Native TCP data socket is closed');
+        if (socketClosed()) throw Error('Native TCP data socket is closed');
+
         let reported = false;
         const ended = () => {
           if (closed || aborted || reported) return;
           reported = true;
           onClose();
         };
+
         socket.on('data', listener);
         socket.on('end', ended);
         socket.on('close', ended);
@@ -344,6 +350,7 @@ async function create({
         closed = true;
         socket?.destroy();
         closeServer();
+
         if (signed(await call('socketClose', [fd])) < 0)
           throw Error('Console TCP close failed (errno ' + (await errno()) + ')');
         // A job still running may read the address block, so it goes only with the worker.

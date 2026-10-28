@@ -1,9 +1,6 @@
 /**
- * Counts bridge exchanges and the time spent in them, per stage. `instrument` wraps an rpc so
- * every call is attributed to the stage the caller is in when it starts; `take` returns the
- * totals since the last take and resets them. Reads and writes count one exchange per chunk.
- * `silentMs` says how long the console has kept a call waiting without settling any.
- * `watchBridge` marks an rpc `bridgeLost` once a call fails because the connection is gone.
+ * Counts bridge exchanges and their time per stage (`instrument`), and marks an rpc
+ * `bridgeLost` once a call fails because the connection is gone (`watchBridge`).
  */
 
 /** The rpc methods that reach the console. */
@@ -29,10 +26,17 @@ const CHUNK_BYTES = 0x80000;
  * @returns {number}
  */
 function requestsFor(name, args) {
-  if (name === 'read')
-    return Number.isInteger(args[1]) && args[1] > 0 ? Math.ceil(args[1] / CHUNK_BYTES) : 0;
-  if (name === 'write')
-    return Buffer.isBuffer(args[1]) ? Math.ceil(args[1].length / CHUNK_BYTES) : 0;
+  if (name === 'read') {
+    const bytes = args[1];
+    if (!Number.isInteger(bytes) || bytes <= 0) return 0;
+    return Math.ceil(bytes / CHUNK_BYTES);
+  }
+
+  if (name === 'write') {
+    if (!Buffer.isBuffer(args[1])) return 0;
+    return Math.ceil(args[1].length / CHUNK_BYTES);
+  }
+
   return 1;
 }
 
@@ -55,17 +59,22 @@ function instrument(rpc, stage, now = () => performance.now()) {
   let byStage = {};
   let pending = 0;
   let answered = now();
+
   for (const name of METHODS) {
     if (typeof rpc[name] !== 'function') continue;
+
     measured[name] = async (...args) => {
       const label = stage();
       const started = now();
-      if (pending++ === 0) answered = started;
+      if (pending === 0) answered = started;
+      pending++;
+
       try {
         return await rpc[name](...args);
       } finally {
         pending--;
         answered = now();
+
         const count = requestsFor(name, args);
         const elapsed = answered - started;
         const row = (byStage[label] ||= {exchanges: 0, bridgeMs: 0});
@@ -76,6 +85,7 @@ function instrument(rpc, stage, now = () => performance.now()) {
       }
     };
   }
+
   return {
     rpc: measured,
     take() {
@@ -89,7 +99,8 @@ function instrument(rpc, stage, now = () => performance.now()) {
           ])
         )
       };
-      exchanges = bridgeMs = 0;
+      exchanges = 0;
+      bridgeMs = 0;
       byStage = {};
       return result;
     },

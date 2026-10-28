@@ -1,17 +1,6 @@
 /**
- * Publishes decoder-written NV12 surfaces to the Moonlight compute/draw worker.
- *
- * The decoder writes each frame straight into one of the ring's native surfaces, and the
- * sink tells the shader which surface to show by writing the publication metadata and then
- * its sequence into the control page. Two modes share that control page:
- *
- * - host publication: destination() alternates surfaces 0 and 1, publish() writes the
- *   metadata and wait() polls until the shader applied it;
- * - worker publication: a console worker publishes on its own. workerDestination() reserves
- *   a free surface for each sequence and keeps reserving until the shader has applied it,
- *   so the decoder never writes the surface on screen or one still queued for display.
- *
- * Destinations are checked to be writable mapped memory before the decoder may write them.
+ * Publishes decoder-written NV12 surfaces to the Moonlight shader, either from the host
+ * (publish/wait) or behind a console worker that publishes on its own (workerDestination).
  */
 import * as ring from '../../shared/ring.js';
 
@@ -26,7 +15,7 @@ const READ_WRITE = 3;
 /** nativeReady through nativeApplied, read once to check the shader ABI and seed the sequence. */
 const READY_BYTES = ring.CONTROL.nativeApplied + WORD_BYTES - ring.CONTROL.nativeReady;
 const READY_SEQUENCE_OFFSET = ring.CONTROL.nativeApplied - ring.CONTROL.nativeReady;
-/** current through nativeApplied, the presentation state of worker publication. */
+/** current through nativeApplied, the presentation state of worker publication (Invariant 14). */
 const STATE_BYTES = ring.CONTROL.nativeApplied + WORD_BYTES - ring.CONTROL.current;
 const STATE_APPLIED_OFFSET = ring.CONTROL.nativeApplied - ring.CONTROL.current;
 /** How much of the control page a timeout reports. */
@@ -85,15 +74,18 @@ const sleep = () => new Promise(resolve => setTimeout(resolve, POLL_MS));
  *   color space, 1 or 2.
  */
 async function create(rpc, storage, {cancelled = () => false, color = 1} = {}) {
-  if (storage.bytes < ring.MEMORY_BYTES || !(storage.memoryFlags & COHERENT_MEMORY))
+  const coherent = storage.memoryFlags & COHERENT_MEMORY;
+  if (storage.bytes < ring.MEMORY_BYTES || !coherent)
     throw Error('Native video requires the current coherent Moonlight allocation');
   if (!COLORS.includes(color)) throw Error('Unsupported native video color space');
+
   const ready = await rpc.read(storage.mapped + ring.CONTROL.nativeReady, READY_BYTES);
   if (ready.readUInt32LE() !== ring.NATIVE_ABI)
     throw Error('Relaunch Moonlight after rebuilding its native-video shaders');
   let sequence = ready.readUInt32LE(READY_SEQUENCE_OFFSET);
   let pending = 0;
   let index = (await rpc.read(storage.mapped + ring.CONTROL.current, WORD_BYTES)).readUInt32LE();
+
   /** @type {Map<number, number>} Surface to the time its writability check expires. */
   const verified = new Map();
   /** @type {Map<number, number>} Sequence to the surface reserved for it. */
@@ -107,24 +99,30 @@ async function create(rpc, storage, {cancelled = () => false, color = 1} = {}) {
   };
 
   /**
+   * @param {Presentation} state
+   * @returns {boolean}
+   */
+  function invalidPresentation(state) {
+    if (!state) return true;
+    if (!Number.isInteger(state.current) || !Number.isInteger(state.applied)) return true;
+    return state.current >= ring.NATIVE_FRAMES || state.current < 0;
+  }
+
+  /**
    * The next surface after `index` that is neither on screen nor reserved for a sequence the
    * shader has not applied yet; null while the shader is still switching surfaces.
    * @param {Presentation} state
    * @returns {number | null}
    */
   function availableSurface(state) {
-    if (
-      !state ||
-      !Number.isInteger(state.current) ||
-      !Number.isInteger(state.applied) ||
-      state.current >= ring.NATIVE_FRAMES ||
-      state.current < 0
-    )
-      throw Error('Invalid native presentation state');
+    if (invalidPresentation(state)) throw Error('Invalid native presentation state');
+
     const appliedIndex = reserved.get(state.applied);
     if (appliedIndex !== undefined && appliedIndex !== state.current) return null;
+
     for (const submitted of reserved.keys())
       if (reached(state.applied, submitted)) reserved.delete(submitted);
+
     const blocked = new Set([state.current, ...reserved.values()]);
     for (let offset = 1; offset <= ring.NATIVE_FRAMES; offset++) {
       const target = (index + offset) % ring.NATIVE_FRAMES;
@@ -141,14 +139,14 @@ async function create(rpc, storage, {cancelled = () => false, color = 1} = {}) {
    */
   async function writable(target, cacheMs) {
     const address = storage.mapped + ring.frameOffset(target);
-    if (!(verified.get(target) > Date.now())) {
+    const stillVerified = verified.get(target) > Date.now();
+    if (!stillVerified) {
       const region = await rpc.query(address);
-      if (
-        (region.permissions & READ_WRITE) !== READ_WRITE ||
-        region.ipcReferences ||
-        address + ring.FRAME_BYTES > region.address + region.size
-      )
+      const readWrite = (region.permissions & READ_WRITE) === READ_WRITE;
+      const pastRegion = address + ring.FRAME_BYTES > region.address + region.size;
+      if (!readWrite || region.ipcReferences || pastRegion)
         throw Error('The native frame destination is not writable mapped memory');
+
       verified.set(target, cacheMs === Infinity ? Infinity : Date.now() + cacheMs);
     }
     return {index: target, address, bytes: ring.FRAME_BYTES};
@@ -178,13 +176,12 @@ async function create(rpc, storage, {cancelled = () => false, color = 1} = {}) {
       }
       await sleep();
     }
+
     const control = await controlSnapshot();
-    throw Object.assign(
-      Error(
-        cancelled() ? 'Native presentation cancelled' : 'Moonlight native presentation timed out'
-      ),
-      {pending, control}
-    );
+    const message = cancelled()
+      ? 'Native presentation cancelled'
+      : 'Moonlight native presentation timed out';
+    throw Object.assign(Error(message), {pending, control});
   }
 
   return {
@@ -207,6 +204,7 @@ async function create(rpc, storage, {cancelled = () => false, color = 1} = {}) {
         workerStarted = true;
       }
       if (!presentation) presentation = await currentState();
+
       const until = Date.now() + TIMEOUT_MS;
       let target;
       while (!cancelled() && Date.now() < until) {
@@ -216,6 +214,7 @@ async function create(rpc, storage, {cancelled = () => false, color = 1} = {}) {
         presentation = await currentState();
       }
       if (target === null || cancelled()) throw Error('No free native presentation surface');
+
       const destination = await writable(target, Infinity);
       sequence = nextSequence(sequence);
       reserved.set(sequence, target);
@@ -244,8 +243,11 @@ async function create(rpc, storage, {cancelled = () => false, color = 1} = {}) {
     async publish(destination, frame) {
       if (pending || !HOST_SURFACES.includes(destination.index))
         throw Error('Native frame publication is out of order');
-      if (frame.format !== 'nv12' || (frame.stride * frame.sliceHeight * 3) / 2 > ring.FRAME_BYTES)
+
+      const frameBytes = (frame.stride * frame.sliceHeight * 3) / 2;
+      if (frame.format !== 'nv12' || frameBytes > ring.FRAME_BYTES)
         throw Error('The native frame exceeds the Moonlight surface');
+
       const fields = [
         destination.index,
         frame.width,
@@ -254,11 +256,13 @@ async function create(rpc, storage, {cancelled = () => false, color = 1} = {}) {
         frame.sliceHeight,
         color
       ];
+
       const metadata = Buffer.alloc(METADATA_BYTES);
       fields.forEach((value, word) => metadata.writeUInt32LE(value, word * WORD_BYTES));
       sequence = nextSequence(sequence);
       metadata.writeUInt32LE(ring.nativeChecksum(sequence, fields), METADATA_CHECKSUM_OFFSET);
       await rpc.write(storage.mapped + ring.CONTROL.nativeIndex, metadata);
+
       const commit = Buffer.alloc(WORD_BYTES);
       commit.writeUInt32LE(sequence);
       await rpc.write(storage.mapped + ring.CONTROL.nativeSequence, commit);
@@ -275,12 +279,10 @@ async function create(rpc, storage, {cancelled = () => false, color = 1} = {}) {
      * @param {number} bytes
      */
     sample(index, offset, bytes) {
-      if (
-        !(index >= 0 && index < ring.NATIVE_FRAMES) ||
-        offset < 0 ||
-        offset + bytes > ring.FRAME_BYTES
-      )
+      const inRing = index >= 0 && index < ring.NATIVE_FRAMES;
+      if (!inRing || offset < 0 || offset + bytes > ring.FRAME_BYTES)
         throw Error('Native surface sample out of range');
+
       return rpc.read(storage.mapped + ring.frameOffset(index) + offset, bytes);
     },
 

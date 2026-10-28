@@ -1,22 +1,6 @@
 /**
- * Host-controlled H.264 decoding through the inspected nnCompat movie::Decoder ABI.
- *
- * create() checks that the loaded movie module matches the inspected build, then constructs
- * a decoder, two media objects (configuration, output format) and two buffers (input,
- * output) in module memory. configure() turns SPS/PPS into a configuration and starts the
- * decoder. Everything is destroyed again, in reverse, by close().
- *
- * Two ways to drive it, picked by `workerMode`:
- *
- * - host: submit() and receive() run each frame from the host. One finite worker frame
- *   carries SendInput, AcquireOutput and the next AcquireInput, and receive() points the
- *   output buffer at the destination surface and fetches the frame in one paired exchange.
- * - split: configure() also creates and registers the console workers of
- *   `splitWorkerFactory` (the staggered workers), which take over after the host-driven
- *   first frame; close() stops and finalizes them.
- *
- * Input indices are pipelined: each frame acquires the input slot of the next one, and the
- * host only polls for a slot when that came back empty.
+ * Host-controlled H.264 decoding through the inspected nnCompat movie::Decoder ABI, driven
+ * per frame from the host (`workerMode` 'host') or by the staggered console workers ('split').
  */
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -91,7 +75,7 @@ const MAX_HEIGHT = 1088;
 /** The H.264 configuration helper returns 1 on success. */
 const CONFIGURATION_CREATED = 1;
 
-/** The values of DecoderOptions.workerMode; the file header describes both. */
+/** The values of DecoderOptions.workerMode. */
 const WORKER_MODES = ['host', 'split'];
 /** The only pixel format the decoder is built for. */
 const OUTPUT_FORMAT = 'nv12';
@@ -147,14 +131,18 @@ const nv12Bytes = (stride, sliceHeight) => (stride * sliceHeight * 3) / 2;
  */
 function matchesInspectedBuild(movieModule) {
   return Object.values(definitions).every(definition =>
-    movieModule.symbols.some(
-      symbol =>
-        symbol.name === definition.symbol &&
-        symbol.section &&
-        symbol.offset === definition.offset &&
-        symbol.size === definition.size
-    )
+    movieModule.symbols.some(symbol => sameSymbol(symbol, definition))
   );
+}
+
+/**
+ * @param {any} symbol A symbol of the loaded module.
+ * @param {any} definition Its inspected definition.
+ * @returns {boolean}
+ */
+function sameSymbol(symbol, definition) {
+  if (symbol.name !== definition.symbol || !symbol.section) return false;
+  return symbol.offset === definition.offset && symbol.size === definition.size;
 }
 
 /**
@@ -182,16 +170,10 @@ function defaultWorkerDirectory() {
  * @returns {boolean}
  */
 function invalidParameterSets(sps, pps) {
-  return (
-    !Buffer.isBuffer(sps) ||
-    !Buffer.isBuffer(pps) ||
-    sps.length < MIN_SPS_BYTES ||
-    !pps.length ||
-    sps.length > MAX_PARAMETER_SET_BYTES ||
-    pps.length > MAX_PARAMETER_SET_BYTES ||
-    (sps[0] & NAL_TYPE_MASK) !== NAL_SPS ||
-    (pps[0] & NAL_TYPE_MASK) !== NAL_PPS
-  );
+  if (!Buffer.isBuffer(sps) || !Buffer.isBuffer(pps)) return true;
+  if (sps.length < MIN_SPS_BYTES || !pps.length) return true;
+  if (sps.length > MAX_PARAMETER_SET_BYTES || pps.length > MAX_PARAMETER_SET_BYTES) return true;
+  return (sps[0] & NAL_TYPE_MASK) !== NAL_SPS || (pps[0] & NAL_TYPE_MASK) !== NAL_PPS;
 }
 
 /**
@@ -208,9 +190,8 @@ function invalidFrameRate(fps) {
  * @returns {boolean}
  */
 function outsideSurface(width, height) {
-  return (
-    width < MIN_DIMENSION || height < MIN_DIMENSION || width > MAX_WIDTH || height > MAX_HEIGHT
-  );
+  if (width < MIN_DIMENSION || height < MIN_DIMENSION) return true;
+  return width > MAX_WIDTH || height > MAX_HEIGHT;
 }
 
 /**
@@ -218,12 +199,8 @@ function outsideSurface(width, height) {
  * @returns {boolean}
  */
 function invalidUnit(unit) {
-  return (
-    !Buffer.isBuffer(unit.data) ||
-    !unit.data.length ||
-    !Number.isSafeInteger(unit.pts) ||
-    unit.pts < 0
-  );
+  if (!Buffer.isBuffer(unit.data) || !unit.data.length) return true;
+  return !Number.isSafeInteger(unit.pts) || unit.pts < 0;
 }
 
 /**
@@ -233,31 +210,25 @@ function invalidUnit(unit) {
  * @returns {boolean | number} Truthy when it does not fit.
  */
 function unfitDestination(destination, {bytes, alignment}) {
-  return (
-    !Number.isSafeInteger(destination.address) ||
-    !Number.isSafeInteger(destination.bytes) ||
-    destination.bytes < bytes ||
-    !alignment ||
-    destination.address % alignment
-  );
+  if (!Number.isSafeInteger(destination.address) || !Number.isSafeInteger(destination.bytes))
+    return true;
+  if (destination.bytes < bytes || !alignment) return true;
+  return destination.address % alignment;
 }
 
 /**
  * @param {Layout} layout
  * @param {number} bytes The decoder's output size.
  * @param {number} destinationBytes
- * @returns {boolean | number} Truthy when the layout is unsupported.
+ * @returns {boolean} True when the layout is unsupported.
  */
 function unsupportedLayout({width, height, stride, sliceHeight}, bytes, destinationBytes) {
-  return (
-    outsideSurface(width, height) ||
-    stride < width ||
-    sliceHeight < height ||
-    stride % 2 ||
-    sliceHeight % 2 ||
-    nv12Bytes(stride, sliceHeight) > destinationBytes ||
-    bytes < nv12Bytes(stride, sliceHeight)
-  );
+  if (outsideSurface(width, height)) return true;
+  if (stride < width || sliceHeight < height) return true;
+  if (stride % 2 || sliceHeight % 2) return true;
+
+  const frameBytes = nv12Bytes(stride, sliceHeight);
+  return frameBytes > destinationBytes || bytes < frameBytes;
 }
 
 /**
@@ -421,7 +392,9 @@ function movieCalls(api, fn, worker, rpc, cancelled) {
       args: [pointer('decoder'), pointer('inputIndex'), pointer('inputCount')]
     };
     const calls = withOutput ? [send, output, input] : [send, input];
-    const results = await worker.run(stamp ? [{function: stamp, args: []}, ...calls] : calls);
+    const frame = stamp ? [{function: stamp, args: []}, ...calls] : calls;
+
+    const results = await worker.run(frame);
     lastStamp = stamp ? results.shift() : null;
     const control = await api.read(MEMORY.inputIndex, PUMP_CONTROL_BYTES);
     return {statuses: results.map(result), control};
@@ -586,12 +559,13 @@ function decoderObject({
 
   /**
    * Stops the workers and the decoder and destroys what create() built, collecting every
-   * failure. Workers are finalized only after a clean shutdown.
+   * failure. Workers are finalized only after a clean shutdown (Invariant 8).
    */
   async function close() {
     if (closed) return;
     if (split) await split.stop();
     closed = true;
+
     const errors = [];
     try {
       await release();
@@ -669,6 +643,7 @@ function decoderObject({
       ]);
       if (made !== CONFIGURATION_CREATED)
         throw Error('The native H.264 configuration helper rejected SPS/PPS');
+
       const width = await integer(pointer('configuration'), 'width', true);
       const height = await integer(pointer('configuration'), 'height', true);
       if (outsideSurface(width, height) || width % 2 || height % 2)
@@ -680,7 +655,9 @@ function decoderObject({
       if (workerMode === 'split') await registerSplit();
       await beforeStart?.(pointer('decoder'));
       await success('start', [pointer('decoder')]);
-      configured = running = true;
+
+      configured = true;
+      running = true;
       dimensions = {width, height};
       log({event: 'native-decoder', ...dimensions, format: OUTPUT_FORMAT});
       return dimensions;
@@ -710,8 +687,10 @@ function decoderObject({
       step = 'cacheInput';
       await movie.cacheInput(index);
       const {address, capacity} = movie.input(index);
-      if (!Number.isSafeInteger(address) || address <= 0 || unit.data.length > capacity)
+      const validAddress = Number.isSafeInteger(address) && address > 0;
+      if (!validAddress || unit.data.length > capacity)
         throw Error('H.264 access unit exceeds the native input buffer');
+
       step = 'writeUnit';
       await rpc.write(address, unit.data);
 
@@ -719,11 +698,13 @@ function decoderObject({
       const {statuses, control} = await movie.pump(unit.data.length, unit.pts, withOutput, stamp);
       step = 'idle';
       if (statuses[0] !== 0) throw resultError('movie::sendInput', statuses[0]);
+
       const nextIndex = control.readInt32LE(0);
       const inputStatus = statuses.at(-1);
       lastInput = {status: inputStatus, index: nextIndex};
       if (queueFailed(inputStatus, nextIndex))
         throw resultError('Decoder input queue', inputStatus);
+
       pendingInput = nextIndex >= 0 ? nextIndex : null;
       if (withOutput) pendingOutput = outputAt(control, MEMORY.inputIndex, statuses[1]);
     },
@@ -753,6 +734,7 @@ function decoderObject({
         const {bytes} = sizing;
         if (unfitDestination(destination, sizing))
           throw Error('Native output does not fit the aligned destination surface');
+
         step = 'getOutput';
         const paired = await rpc.pair([
           {
@@ -766,10 +748,12 @@ function decoderObject({
         ]);
         const got = result(paired.results[1]);
         if (got !== 0) throw resultError('movie::getOutput', got);
+
         step = 'outputFormat';
         if (!layout) layout = await movie.readLayout(dimensions);
         if (unsupportedLayout(layout, bytes, destination.bytes))
           throw Error('Unsupported native NV12 output layout');
+
         const {width, height, stride, sliceHeight} = layout;
         return {
           width,
