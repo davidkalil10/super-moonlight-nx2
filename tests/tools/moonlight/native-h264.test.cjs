@@ -899,7 +899,16 @@ test(
     f.options.statsMs = 10;
     const spawnProcess = f.options.spawnProcess;
     const feeders = [];
-    const pad = {reads: 2, readMeanMs: 3, readMaxMs: 4, stepMax: 2, stalls: 0, gaps: 1, ageMeanMs: 1, ageMaxMs: 2};
+    const pad = {
+      reads: 2,
+      readMeanMs: 3,
+      readMaxMs: 4,
+      stepMax: 2,
+      stalls: 0,
+      gaps: 1,
+      ageMeanMs: 1,
+      ageMaxMs: 2
+    };
     f.options.spawnProcess = (command, args, spawnOptions) => {
       const child = spawnProcess(command, args, spawnOptions);
       if (path.basename(args[0] ?? '') === 'input-feeder.js') {
