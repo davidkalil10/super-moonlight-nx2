@@ -708,8 +708,7 @@ function tcpPushWorker() {
         return {result: 0n, output};
       },
       async callAddress(address) {
-        if (address === ADDRESS.sdk + socketFunctions.socketInitialized.offset)
-          return {result: 1n};
+        if (address === ADDRESS.sdk + socketFunctions.socketInitialized.offset) return {result: 1n};
         if (address === ADDRESS.sdk + socketFunctions.socket.offset) return {result: 7n};
         return {result: 0n};
       },

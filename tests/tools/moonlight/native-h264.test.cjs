@@ -1071,7 +1071,10 @@ test(
         .map(JSON.parse);
       const pushed = rows.find(row => row.inputPush.pushed);
       assert.deepEqual(pushed.inputPush, {pushed: 120, dropped: 1, gapMaxMs: 14});
-      assert.ok(rows.every(row => !row.bridgeByStage.input), 'a push run has no input stage');
+      assert.ok(
+        rows.every(row => !row.bridgeByStage.input),
+        'a push run has no input stage'
+      );
     });
     const g = await fixture();
     await exercise(g, async () => {
