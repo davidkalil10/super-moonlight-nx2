@@ -115,8 +115,8 @@ const tenths = value => Math.round(value * 10) / 10;
 function hiddenQueue(unit, arrivedMonotonic) {
   if (typeof unit.writtenAt !== 'number') return null;
   const pipeMs = arrivedMonotonic - unit.writtenAt;
-  const {receiveMs, queueMs, queued, unread, writeMs} = unit;
-  return {totalMs: receiveMs + pipeMs, pipeMs, receiveMs, queueMs, queued, unread, writeMs};
+  const {receiveMs, queueMs, queued, unread, writeMs, hostMs = 0} = unit;
+  return {totalMs: receiveMs + pipeMs, pipeMs, receiveMs, queueMs, queued, unread, writeMs, hostMs};
 }
 
 /**
@@ -127,12 +127,15 @@ function hiddenQueue(unit, arrivedMonotonic) {
 function hiddenTiming(samples) {
   const hidden = samples.map(sample => sample.hidden).filter(value => value);
   if (!hidden.length) return null;
+  /** @param {number[]} values */
+  const meanMax = values => ({
+    mean: tenths(values.reduce((sum, value) => sum + value, 0) / values.length),
+    max: tenths(Math.max(...values))
+  });
   /** @param {string} key */
-  const spread = key => {
-    const values = hidden.map(value => /** @type {any} */ (value)[key]);
-    const mean = values.reduce((sum, value) => sum + value, 0) / values.length;
-    return {mean: tenths(mean), max: tenths(Math.max(...values))};
-  };
+  const spread = key => meanMax(hidden.map(value => /** @type {any} */ (value)[key]));
+  // The host leaves its processing time at 0 when it sends none, or for a repeated frame.
+  const hosted = hidden.map(value => /** @type {any} */ (value).hostMs).filter(ms => ms > 0);
   return {
     units: hidden.length,
     totalMs: spread('totalMs'),
@@ -141,7 +144,8 @@ function hiddenTiming(samples) {
     queueMs: spread('queueMs'),
     queued: spread('queued'),
     unread: spread('unread'),
-    writeMs: spread('writeMs')
+    writeMs: spread('writeMs'),
+    ...(hosted.length ? {hostMs: meanMax(hosted)} : {})
   };
 }
 

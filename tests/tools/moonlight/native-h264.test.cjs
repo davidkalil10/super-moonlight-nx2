@@ -29,14 +29,16 @@ test('stats rows report staggered waits since the previous row', () => {
 });
 
 test('the helper stamps split the time before arrival into its parts', () => {
-  const stamps = {receiveMs: 4, queueMs: 0.5, queued: 0, unread: 0, writeMs: 0.1};
+  const stamps = {receiveMs: 4, queueMs: 0.5, queued: 0, unread: 0, writeMs: 0.1, hostMs: 0};
   assert.deepEqual(hiddenQueue({...stamps, writtenAt: 1000}, 1003), {
     totalMs: 7,
     pipeMs: 3,
     ...stamps
   });
   assert.equal(hiddenQueue({seq: 1, bytes: 9}, 1003), null, 'an unstamped unit has none');
-  const late = {receiveMs: 6, queueMs: 2.5, queued: 2, unread: 4096, writeMs: 0.3};
+  const {hostMs, ...older} = stamps;
+  assert.equal(hiddenQueue({...older, writtenAt: 1000}, 1003).hostMs, hostMs, 'no hostMs is 0');
+  const late = {receiveMs: 6, queueMs: 2.5, queued: 2, unread: 4096, writeMs: 0.3, hostMs: 0};
   assert.deepEqual(
     hiddenTiming([
       {hidden: hiddenQueue({...stamps, writtenAt: 1000}, 1003)},
@@ -55,6 +57,11 @@ test('the helper stamps split the time before arrival into its parts', () => {
     }
   );
   assert.equal(hiddenTiming([{hidden: null}]), null, 'a row with no stamps reports none');
+  const hosted = hiddenTiming(
+    [3, 0, 5.2].map(ms => ({hidden: hiddenQueue({...stamps, hostMs: ms, writtenAt: 1000}, 1003)}))
+  );
+  assert.deepEqual(hosted?.hostMs, {mean: 4.1, max: 5.2}, 'host times of 0 are skipped');
+  assert.equal(hosted?.units, 3);
   assert.equal(hiddenTiming([]), null);
 });
 

@@ -299,10 +299,11 @@ static int submit(PDECODE_UNIT unit) {
     double receive_ms = (LiGetMicroseconds() - unit->receiveTimeUs) / 1000.0;
     status("{\"type\":\"au\",\"seq\":%llu,\"frame\":%d,\"bytes\":%zu,\"keyframe\":%s,"
            "\"pts\":%llu,\"receiveMs\":%.2f,\"queueMs\":%.2f,\"queued\":%d,\"unread\":%d,"
-           "\"writeMs\":%.2f,\"writtenAt\":%.3f}",
+           "\"writeMs\":%.2f,\"hostMs\":%.1f,\"writtenAt\":%.3f}",
            (unsigned long long)access_units++, unit->frameNumber, offset,
            keyframe ? "true" : "false", (unsigned long long)unit->presentationTimeUs,
-           receive_ms, queue_ms, queued, unread, written - write_started, written);
+           receive_ms, queue_ms, queued, unread, written - write_started,
+           unit->frameHostProcessingLatency / 10.0, written);
   }
   if (!options.decode) {
     pthread_mutex_lock(&lock);
