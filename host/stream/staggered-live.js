@@ -309,8 +309,18 @@ function create({
   const waits = {timeoutMs, pause};
   const pacer = presentPacer.create({periodMs, now, sleep: ms => pause(ms)});
   const decode = decodeWait ? decodeWaits.create({now, sleep: ms => pause(ms)}) : null;
+  /** Receive-wait sleeps since the start, for the stats rows. */
+  const receiveSlept = {sleeps: 0, ms: 0};
   const receive = receiveWait
-    ? receiveWaits.create({maxSleepMs: periodMs, now, sleep: ms => pause(ms)})
+    ? receiveWaits.create({
+        maxSleepMs: periodMs,
+        now,
+        sleep: ms => {
+          receiveSlept.sleeps++;
+          receiveSlept.ms += ms;
+          return pause(ms);
+        }
+      })
     : null;
   /** How long the last status read took, for the decode wait. */
   let readMs = 0;
@@ -768,7 +778,13 @@ function create({
     },
 
     get counts() {
-      return {...counts, pacer: pacer.counters, waiting: {...waiting}, exchanges: timing.counts};
+      return {
+        ...counts,
+        pacer: pacer.counters,
+        waiting: {...waiting},
+        exchanges: timing.counts,
+        ...(receive && {receive: {...receiveSlept, fixedMs: receive.fixedMs}})
+      };
     },
 
     get retained() {

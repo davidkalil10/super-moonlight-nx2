@@ -154,6 +154,19 @@ function hiddenTiming(samples) {
 const withHidden = hidden => (hidden ? {hidden} : {});
 
 /**
+ * One stats row's receive-wait sleeps, and the fixed-latency estimate at its end.
+ * @param {{sleeps: number, ms: number, fixedMs: number}} now
+ * @param {{sleeps: number, ms: number} | null} before the counts at the row's start
+ */
+function receiveRow(now, before) {
+  return {
+    sleeps: now.sleeps - (before?.sleeps ?? 0),
+    sleptMs: tenths(now.ms - (before?.ms ?? 0)),
+    fixedMs: tenths(now.fixedMs)
+  };
+}
+
+/**
  * One stats row's access-unit timing: the mean and longest wait from host arrival to send, and
  * over the units that went through a gate, the mean age at gate and how many were in hand.
  * @param {{arrivedAt: number, gatedAt: number | null, sentAt: number,
@@ -491,6 +504,8 @@ async function run({
   let dropped = 0;
   let queued = 0;
   let waited = {};
+  /** @type {{sleeps: number, ms: number} | null} */
+  let slept = null;
   let stageAt;
   let stageMs = {};
   const statsFile = path.join(output, 'stats.jsonl');
@@ -716,6 +731,9 @@ async function run({
       dropped: reader.dropped - dropped,
       queued,
       ...(staggeredLive ? {waiting: countsSince(staggeredLive.counts.waiting, waited)} : {}),
+      ...(staggeredLive?.counts.receive
+        ? {receive: receiveRow(staggeredLive.counts.receive, slept)}
+        : {}),
       au: auTiming(auSamples),
       ...withHidden(hiddenTiming(auSamples)),
       ...(trimBacklogMs !== null ? {trimmed} : {}),
@@ -733,6 +751,7 @@ async function run({
     dropped = reader.dropped;
     queued = 0;
     waited = staggeredLive?.counts.waiting ?? {};
+    slept = staggeredLive?.counts.receive ?? null;
     Object.keys(stats).forEach(key => {
       stats[key] = 0;
     });
@@ -1070,4 +1089,13 @@ async function run({
   return writeSummary();
 }
 
-export {run, createIdrRequester, countsSince, auTiming, hiddenQueue, hiddenTiming, withInputStage};
+export {
+  run,
+  createIdrRequester,
+  countsSince,
+  receiveRow,
+  auTiming,
+  hiddenQueue,
+  hiddenTiming,
+  withInputStage
+};

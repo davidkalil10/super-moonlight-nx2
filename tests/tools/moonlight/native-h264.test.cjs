@@ -11,6 +11,7 @@ const {
   run,
   createIdrRequester,
   countsSince,
+  receiveRow,
   auTiming,
   hiddenQueue,
   hiddenTiming,
@@ -63,6 +64,12 @@ test('the helper stamps split the time before arrival into its parts', () => {
   assert.deepEqual(hosted?.hostMs, {units: 2, mean: 4.1, max: 5.2}, 'host times of 0 are skipped');
   assert.equal(hosted?.units, 3);
   assert.equal(hiddenTiming([]), null);
+});
+
+test('a stats row carries the receive sleeps since its start and the latest estimate', () => {
+  const now = {sleeps: 7, ms: 20.04, fixedMs: 3.26};
+  assert.deepEqual(receiveRow(now, {sleeps: 4, ms: 8}), {sleeps: 3, sleptMs: 12, fixedMs: 3.3});
+  assert.deepEqual(receiveRow(now, null), {sleeps: 7, sleptMs: 20, fixedMs: 3.3});
 });
 
 test('access-unit timing reports the wait to send, the age at gate and the units in hand', () => {
