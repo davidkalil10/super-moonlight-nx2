@@ -12,7 +12,7 @@
  * The first gate error stops the queue: later gates never run, admit() and drain() reject with
  * it and push() throws it. push() also throws when the queue is already full, since a gate
  * pushed without admit() could merge the console's wakes. clear(), for a stop, rejects any
- * admit() still waiting, so nothing is primed after it.
+ * admit() still waiting and makes push() throw, so nothing is primed or queued after it.
  */
 
 /**
@@ -77,7 +77,7 @@ function create({depth = 2, received = 0} = {}) {
      * @param {() => Promise<unknown>} run
      */
     push(sequence, run) {
-      if (failure) throw failure;
+      if (failure || stopped) throw failure || stopped;
       if (queue.length + (active ? 1 : 0) >= depth) throw Error('Gate queue is full');
       queue.push({sequence, run});
       running ??= loop();

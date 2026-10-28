@@ -1295,6 +1295,8 @@ test('clear drops the gates that have not started and refuses further primes', a
   assert.equal(queue.depth, 1);
   await assert.rejects(waiting, /Gate queue stopped/);
   await assert.rejects(queue.admit(3), /Gate queue stopped/);
+  assert.throws(() => queue.push(3, async () => {}), /Gate queue stopped/);
+  assert.equal(queue.depth, 1, 'a push after clear queues nothing');
   release();
   await queue.drain();
 });
