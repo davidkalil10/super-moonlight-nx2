@@ -1240,6 +1240,74 @@ test(
   }
 );
 
+test(
+  '--gate-queue reaches the staggered scheduler, needs --gate-on-receive and refuses 120 Hz',
+  {timeout: 5000},
+  async () => {
+    const f = await fixture({units: pairedUnits(4)});
+    const created = [];
+    const fake = staggeredFake(f.events);
+    f.options.createStaggered = options => {
+      created.push(options);
+      return fake();
+    };
+    f.options.args.push('--staggered', '--gate-on-receive', '--gate-queue');
+    await exercise(f, async () => {
+      const summary = await run(f.options);
+      assert.equal(created[0].gateQueue, true);
+      assert.equal(summary.gateQueue, true);
+      const events = (await fs.readFile(path.join(f.directory, 'logs', 'events.jsonl'), 'utf8'))
+        .trim()
+        .split('\n')
+        .map(JSON.parse);
+      assert.equal(events.find(entry => entry.event === 'staggered-worker').gateQueue, true);
+    });
+    for (const [args, message] of [
+      [['--staggered', '--gate-queue'], /--gate-queue needs --gate-on-receive/],
+      [
+        ['--staggered', '--gate-on-receive', '--gate-queue', '--present-hz', '120'],
+        /--gate-on-receive is untested at --present-hz 120/
+      ]
+    ]) {
+      const g = await fixture();
+      await exercise(g, async () => {
+        g.options.args.push(...args);
+        await assert.rejects(run(g.options), message);
+      });
+    }
+  }
+);
+
+test('a stop cancels nothing while a queued gate still runs', {timeout: 5000}, async () => {
+  const f = await fixture({units: pairedUnits(4)});
+  const seen = [];
+  let cancelled = null;
+  const createSink = f.options.createSink;
+  f.options.createSink = async (rpc, storage, options) => {
+    cancelled = options.cancelled;
+    return createSink(rpc, storage, options);
+  };
+  const fake = staggeredFake(f.events);
+  f.options.createStaggered = () => {
+    let queued = 1;
+    return Object.create(fake(), {
+      queued: {get: () => queued},
+      stop: {
+        async value() {
+          seen.push(cancelled());
+          queued = 0;
+          seen.push(cancelled());
+        }
+      }
+    });
+  };
+  f.options.args.push('--staggered', '--gate-on-receive', '--gate-queue');
+  await exercise(f, async () => {
+    await run(f.options);
+  });
+  assert.deepEqual(seen, [false, true]);
+});
+
 test('--output-lag reaches the staggered scheduler and takes 0 to 2', {timeout: 5000}, async () => {
   for (const lag of [1, 0]) {
     const f = await fixture({units: pairedUnits(4)});

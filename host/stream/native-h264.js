@@ -261,7 +261,7 @@ function linkSeconds(rows) {
 function checkFlags(args, flags) {
   const {inputHz, presentHz, skipBacklog, skipRule, decodeWait, receiveWait, trimBacklogMs} = flags;
   const {avoidWindow, gateOnReceive, outputLag, audioFrames, socketAudio, queue} = flags;
-  const {duration, warmup} = flags;
+  const {duration, warmup, gateQueue} = flags;
   if (!Number.isInteger(inputHz) || inputHz < 10 || inputHz > 120)
     throw Error('--input-hz takes 10 to 120');
   if (presentHz !== 60 && presentHz !== 120) throw Error('--present-hz takes 60 or 120');
@@ -281,6 +281,7 @@ function checkFlags(args, flags) {
     throw Error('--avoid-window needs --decode-wait or --receive-wait to predict the events');
   if (gateOnReceive && presentHz === 120)
     throw Error('--gate-on-receive is untested at --present-hz 120');
+  if (gateQueue && !gateOnReceive) throw Error('--gate-queue needs --gate-on-receive');
   if (outputLag !== null && outputLag !== 0 && outputLag !== 1 && outputLag !== 2)
     throw Error('--output-lag takes 0, 1 or 2');
   if (outputLag === 0 && gateOnReceive)
@@ -328,6 +329,7 @@ function parseOptions(args, rpc, width, height, fps) {
     skipRule,
     trimBacklogMs: cli.number(args, '--trim-backlog-ms', null),
     gateOnReceive: args.includes('--gate-on-receive'),
+    gateQueue: args.includes('--gate-queue'),
     outputLag: cli.number(args, '--output-lag', null),
     decodeWait: args.includes('--decode-wait'),
     receiveWait: args.includes('--receive-wait'),
@@ -433,7 +435,7 @@ function buildSummary(
 ) {
   const {presentHz, skipBacklog, skipRule, trimBacklogMs, gateOnReceive, outputLag} = options;
   const {decodeWait, receiveWait, avoidWindow, queue, inputHz, audioFrames, audio} = options;
-  const {socketAudio, input, inputPush, warmup, expect} = options;
+  const {socketAudio, input, inputPush, warmup, expect, gateQueue} = options;
   const steadyRows = rows.slice(warmup);
   return {
     workerMode: 'staggered',
@@ -443,6 +445,7 @@ function buildSummary(
     skipRule,
     ...(trimBacklogMs !== null && {trimBacklogMs}),
     ...(gateOnReceive && {gateOnReceive}),
+    ...(gateQueue && {gateQueue}),
     ...(outputLag !== null && {outputLag}),
     decodeWait,
     receiveWait,
@@ -532,6 +535,7 @@ async function run({
   const {host, app, audio, socketTone, socketAudio, duration, queue, inputHz, inputPush} = options;
   const {presentHz, skipRule, trimBacklogMs, gateOnReceive, outputLag} = options;
   const {decodeWait, receiveWait, avoidWindow, skipBacklog, audioFrames, bitrate} = options;
+  const {gateQueue} = options;
   if (!rpc.host) throw Error('Native TCP requires a fresh launcher session from this branch');
   /** Moves `now` onto CLOCK_MONOTONIC, the clock of the helper's writtenAt. */
   const monotonicOffset = Number(process.hrtime.bigint()) / 1e6 - now();
@@ -600,7 +604,8 @@ async function run({
     );
     console.error(line);
   };
-  const cancelled = () => stopping && !pairing;
+  /** A queued gate is still pairing after its push returned (--gate-queue). */
+  const cancelled = () => stopping && !pairing && !staggeredLive?.queued;
   const idrRequester = createIdrRequester(() => {
     if (stopping) return;
     stats.idr++;
@@ -647,6 +652,7 @@ async function run({
       skipRule: /** @type {'backlog' | 'vsync'} */ (skipRule),
       ...(trimBacklogMs !== null && {trimBacklogMs}),
       ...(gateOnReceive && {gateOnReceive}),
+      ...(gateQueue && {gateQueue}),
       ...(outputLag !== null && {lag: /** @type {0 | 1 | 2} */ (outputLag)}),
       decodeWait,
       receiveWait,
@@ -943,6 +949,7 @@ async function run({
       started: true,
       ...(trimBacklogMs !== null && {trimBacklogMs}),
       ...(gateOnReceive && {gateOnReceive}),
+      ...(gateQueue && {gateQueue}),
       ...(outputLag !== null && {outputLag})
     });
   }
