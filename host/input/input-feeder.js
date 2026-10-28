@@ -26,7 +26,7 @@ import path from 'node:path';
 import * as session from '../../../hbl-platform/sdk/host/session.js';
 import * as cli from '../../../hbl-platform/sdk/cli.js';
 import {STATE} from '../../../hbl-platform/sdk/host/layout.js';
-import {FLAG, NEUTRAL, decode, toMoonlight, same, NPAD_BYTES} from './controller.js';
+import {NPAD, NEUTRAL, decode, toMoonlight, same, NPAD_BYTES} from './controller.js';
 import {TOUCH_BYTES, parseTouch, createTracker, step, flush, touchLine} from './touch.js';
 import {UI, UI_MAGIC} from '../../tools/moonlight/ring.js';
 import {instrument} from '../stream/bridge-counter.js';
@@ -41,8 +41,8 @@ const SOURCE_CHECK_MS = 250;
 const OVERLAY_CHECK_MS = 100;
 /** How often the bridge counts go out on --counts-fd. */
 const COUNTS_MS = 1000;
-/** Console + and -, which reach the game as Start and Back. */
-const KEYS = FLAG.play | FLAG.back;
+/** Console + and -, read off the pad itself: a chord may press Start with + up. */
+const KEYS = NPAD.plus | NPAD.minus;
 
 /**
  * @param {object} controller toMoonlight fields
@@ -53,15 +53,19 @@ function controllerLine(controller) {
 }
 
 /**
- * @param {object | null} previous the controller state of the last frame
- * @param {ReturnType<typeof toMoonlight>} controller
- * @returns {string | null} the + and - state when either changed
+ * Watches the console + and -: each call takes a state buffer and returns their state when
+ * either changed since the last call.
+ * @returns {(bytes: Buffer) => string | null}
  */
-function keysNote(previous, controller) {
-  const keys = controller.buttonFlags & KEYS;
-  if (keys === ((previous?.buttonFlags ?? 0) & KEYS)) return null;
-  const state = flag => (keys & flag ? 'down' : 'up');
-  return `Input keys: + ${state(FLAG.play)}, - ${state(FLAG.back)}`;
+function keysWatch() {
+  let last = 0;
+  return bytes => {
+    const keys = decode(bytes.subarray(0, NPAD_BYTES)).buttons & KEYS;
+    if (keys === last) return null;
+    last = keys;
+    const state = bit => (keys & bit ? 'down' : 'up');
+    return `Input keys: + ${state(NPAD.plus)}, - ${state(NPAD.minus)}`;
+  };
 }
 
 /**
@@ -71,7 +75,7 @@ function keysNote(previous, controller) {
  * @param {Buffer} bytes READ_BYTES of state
  * @param {import('./touch.js').Tracker} tracker
  * @param {'position' | 'labels'} layout
- * @returns {{lines: string[], controller: ReturnType<typeof toMoonlight>, keys: string | null}}
+ * @returns {{lines: string[], controller: ReturnType<typeof toMoonlight>}}
  */
 function frame(previous, bytes, tracker, layout) {
   const lines = [];
@@ -79,7 +83,7 @@ function frame(previous, bytes, tracker, layout) {
   if (!same(previous, controller)) lines.push(controllerLine(controller));
   const {events} = step(tracker, parseTouch(bytes.subarray(STATE.touch)));
   if (events.length) lines.push(touchLine(events));
-  return {lines, controller, keys: keysNote(previous, controller)};
+  return {lines, controller};
 }
 
 /** The UI block words the gate reads in one go: uiMagic through uiOverlay. */
@@ -136,6 +140,7 @@ async function main() {
     }, COUNTS_MS).unref();
 
   const tracker = createTracker();
+  const keys = keysWatch();
   let stopping = false;
   let previous = null;
   let source = null;
@@ -178,7 +183,8 @@ async function main() {
           const result = frame(previous, bytes, tracker, layout);
           previous = result.controller;
           for (const line of result.lines) write(line);
-          if (result.keys) process.stderr.write(`${result.keys} at ${new Date().toISOString()}\n`);
+          const note = keys(bytes);
+          if (note) process.stderr.write(`${note} at ${new Date().toISOString()}\n`);
         }
       } catch (error) {
         process.stderr.write('Input read failed: ' + error.message + '\n');
@@ -192,7 +198,7 @@ async function main() {
   release();
 }
 
-export {frame, gate, readStorage, OVERLAY_READ, READ_BYTES};
+export {frame, keysWatch, gate, readStorage, OVERLAY_READ, READ_BYTES};
 
 if (cli.isMain(import.meta))
   main().catch(error => {

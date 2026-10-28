@@ -17,7 +17,7 @@ const {
   flush,
   touchLine
 } = require('../../../host/input/touch.js');
-const {frame} = require('../../../host/input/input-feeder.js');
+const {frame, keysWatch} = require('../../../host/input/input-feeder.js');
 const padAge = require('../../../host/input/pad-age.js');
 
 // controller.js
@@ -349,18 +349,14 @@ test('pad rows from one stats row merge with means weighted by reads', () => {
   assert.deepEqual(padAge.merge([{reads: 0}]), {reads: 0});
 });
 
-test('frame notes each change of + and -, and nothing else', () => {
-  const tracker = createTracker();
-  const plus = NPAD.plus;
-  const minus = NPAD.minus;
-  const run = (previous, buttons) => frame(previous, stateBytes({buttons}), tracker);
-  const idle = run(null, 0);
-  assert.equal(idle.keys, null);
-  const down = run(idle.controller, plus);
-  assert.equal(down.keys, 'Input keys: + down, - up');
-  assert.equal(run(down.controller, plus | NPAD.a).keys, null);
-  const both = run(down.controller, plus | minus);
-  assert.equal(both.keys, 'Input keys: + down, - down');
-  assert.equal(run(both.controller, 0).keys, 'Input keys: + up, - up');
-  assert.equal(run(null, minus).keys, 'Input keys: + up, - down');
+test('the keys watch notes each change of the pad + and -, and nothing else', () => {
+  const note = keysWatch();
+  const keys = buttons => note(stateBytes({buttons}));
+  assert.equal(keys(0), null);
+  assert.equal(keys(NPAD.plus), 'Input keys: + down, - up');
+  assert.equal(keys(NPAD.plus | NPAD.a), null);
+  assert.equal(keys(NPAD.plus | NPAD.minus), 'Input keys: + down, - down');
+  assert.equal(keys(0), 'Input keys: + up, - up');
+  assert.equal(keys(NPAD.stickL | NPAD.stickR), null, 'a Start chord is not a + press');
+  assert.equal(keys(NPAD.minus), 'Input keys: + up, - down');
 });
