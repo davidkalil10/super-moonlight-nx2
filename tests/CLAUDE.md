@@ -34,7 +34,7 @@ node apps/moonlight/check.cjs [CLIP]         # desktop Vulkan check, needs a GPU
   command and checks its wording.
 - One test file per subsystem, each under about 1500 lines; split one only at a section (an old
   file) boundary. Helpers shared inside this tree live in `tools/moonlight/test-helpers.cjs`;
-  the only cross-repo ones are the hbl-platform-dev mocks.
+  the only cross-repo ones are the hbl-platform/tests mocks.
 - `.gitignore` has `node_modules/`, which does not match a symlinked `node_modules`; add files
   by path in a worktree that links one.
 - No test binds the launcher port 39380; native TCP tests listen on port 0.
