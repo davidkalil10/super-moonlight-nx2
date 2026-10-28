@@ -1,18 +1,6 @@
 /**
- * Runs the staggered gates of gate-on-receive off the producer's path. The producer primes and
- * sends a unit, then queues its gate; one task runs the queued gates in order, so a gate that
- * rereads a late receive no longer holds up the next unit (z37-queued-gate.md).
- *
- * The console bounds how far the producer may run ahead. It has two descriptor slots and an
- * auto-clear length gate, so a prime for N+1 that lands before the console took N's wake
- * would merge both wakes into one and park the console on N+1 for good. admit(N) therefore
- * waits until the gates' status reads saw unit N-1 received, and until fewer than `depth`
- * gates are queued or running. There is one producer: it awaits admit() before each push().
- *
- * The first gate error stops the queue: later gates never run, admit() and drain() reject with
- * it and push() throws it. push() also throws when the queue is already full, since a gate
- * pushed without admit() could merge the console's wakes. clear(), for a stop, rejects any
- * admit() still waiting and makes push() throw, so nothing is primed or queued after it.
+ * Runs the gates of gate-on-receive off the producer's path, one at a time in order, and admits
+ * each prime per invariant 2. The first gate error stops the queue (z37-queued-gate.md).
  */
 
 /**
@@ -33,14 +21,22 @@ function create({depth = 2, received = 0} = {}) {
   let failure = null;
   let stopped = null;
 
+  /** Gates queued or running. */
+  const inFlight = () => queue.length + (active ? 1 : 0);
+
   /** @param {number} sequence */
-  const ready = sequence => seen >= sequence - 1 && queue.length + (active ? 1 : 0) < depth;
+  const ready = sequence => seen >= sequence - 1 && inFlight() < depth;
 
   const wake = () => {
     waiters = waiters.filter(waiter => {
-      if (failure || stopped) waiter.reject(failure || stopped);
-      else if (ready(waiter.sequence)) waiter.resolve();
-      else return true;
+      const error = failure || stopped;
+      if (error) {
+        waiter.reject(error);
+        return false;
+      }
+
+      if (!ready(waiter.sequence)) return true;
+      waiter.resolve();
       return false;
     });
   };
@@ -62,7 +58,7 @@ function create({depth = 2, received = 0} = {}) {
 
   return {
     /**
-     * Resolves once unit `sequence` may be primed.
+     * Resolves once unit `sequence` may be primed; rejects with the first gate error or a stop.
      * @param {number} sequence
      * @returns {Promise<void>}
      */
@@ -72,13 +68,14 @@ function create({depth = 2, received = 0} = {}) {
       return new Promise((resolve, reject) => waiters.push({sequence, resolve, reject}));
     },
     /**
-     * Queues the gate of an admitted unit; `run` resolves once the gate is checked.
+     * Queues the gate of an admitted unit; `run` resolves once the gate is checked. Throws when
+     * full, since a gate pushed without admit() could merge the console's wakes.
      * @param {number} sequence
      * @param {() => Promise<unknown>} run
      */
     push(sequence, run) {
       if (failure || stopped) throw failure || stopped;
-      if (queue.length + (active ? 1 : 0) >= depth) throw Error('Gate queue is full');
+      if (inFlight() >= depth) throw Error('Gate queue is full');
       queue.push({sequence, run});
       running ??= loop();
     },
@@ -109,7 +106,7 @@ function create({depth = 2, received = 0} = {}) {
     },
     /** Gates queued or running. */
     get depth() {
-      return queue.length + (active ? 1 : 0);
+      return inFlight();
     }
   };
 }

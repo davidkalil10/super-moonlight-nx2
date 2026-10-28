@@ -47,7 +47,9 @@ function create({every, read}) {
      * @param {{index: number, skip?: boolean} | undefined} destination
      */
     async first(sequence, destination) {
-      if (!span || sequence % every || !destination || destination.skip) return;
+      if (!span || sequence % every) return;
+      if (!destination || destination.skip) return;
+
       const value = hash(await read(destination.index, span.offset, span.bytes));
       stash.set(destination.index, {seq: sequence, surface: destination.index, hash: value});
       counts.sampled++;
@@ -58,8 +60,10 @@ function create({every, read}) {
      * @param {{index: number} | null} destination
      */
     async reuse(destination) {
-      const entry = destination && span && stash.get(destination.index);
-      if (!entry || !span) return;
+      if (!destination || !span) return;
+      const entry = stash.get(destination.index);
+      if (!entry) return;
+
       stash.delete(entry.surface);
       const reread = hash(await read(entry.surface, span.offset, span.bytes));
       const torn = reread !== entry.hash;

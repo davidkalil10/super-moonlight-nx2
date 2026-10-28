@@ -1,54 +1,7 @@
 /**
- * Host scheduler for the staggered live path. The input worker receives each access unit over
- * native TCP and the output worker fetches the unit two behind it (one with lag 1, the unit itself
- * with lag 0, right after its decode), so a steady frame costs one checked status read and one
- * combined gate write. Every gate goes through the worker's checked writes (staggered-gate /
- * staggered-status); call order, the odd tail drain and stop are the ones the removed
- * probe-staggered-ladder.cjs proved on the console.
- *
- * Skip and catch-up: with more than skipBacklog units (SKIP_BACKLOG by default) queued on the
- * host, an output is still decoded, fetched and released but copied to a free surface behind a
- * replay of the last applied publication, so the shader keeps it off screen and the next gate
- * does not wait for a present. At most MAX_SKIPS outputs in a row are skipped this way.
- * trimBacklogMs (backlog rule only) skips one output the same way once the unit in hand has
- * been older than that, with another unit queued behind it, at TRIM_FRAMES gates in a row.
- * That drops a standing delay at or below skipBacklog that the backlog skip leaves alone, so
- * it needs a skipBacklog of at least 1. With nothing queued the age is arrival phase and a trim
- * cannot lower it. After a trim the next TRIM_FRAMES gates do not count, so trims stay at most
- * one per 2 * TRIM_FRAMES gates.
- *
- * skipRule 'vsync' instead keeps at most one publication pending: the newest output is
- * published once the previous publication is applied and the outputs in between go off
- * screen. A gate waits for the pending publication only with at most skipBacklog units
- * queued, or once it has been pending for two vsync periods (request-budget.cjs). With
- * no free surface to discard into, the gate waits for the pending publication first.
- * decodeWait (vsync rule only) sleeps through a pending acquire to the time decode-wait.js
- * predicts instead of rereading back to back; receiveWait does the same for a pending
- * receive with receive-wait.js.
- *
- * Gate on receive: by default the gate write for unit N carries N+1's length, so it waits for
- * N+1 to arrive. gateOnReceive instead primes each unit's descriptor in its own exchange as it
- * arrives (staggered-input-plan.js), sends it and gates it at once, so decode N opens a frame
- * earlier for one more exchange per unit.
- *
- * Gate queue (gate on receive only): push() primes and sends a unit, queues its gate on
- * gate-queue.js and returns, so a gate rereading a late receive no longer holds up the next
- * unit. Every gate status read reports the console's receive sequence to the queue, which
- * admits the next prime only once the unit before it is received. The queue lives with the
- * held unit: it starts with unit 1 and goes at finish, as sequences restart per generation.
- * A gate write covers both input descriptors, so a queued gate carries the unit primed behind
- * it instead of zeroing that slot.
- *
- * Rereads: a gate late on receive, input, acquire or fetch reads the status again right away,
- * since a pause costs the frame its vsync slot (request-budget.cjs staggeredRetryWait). A gate
- * waiting for the renderer to apply a publication sleeps to the vsync present-pacer predicts
- * instead, since polling there only fills the bridge. The deadline bounds both.
- *
- * Exchange timing: every status read and gate write is binned by exchange-timing.js against
- * the last gate, the last send and the predicted decode-done and receive-done, and reported
- * in counts.exchanges. `avoid` ({beforeMs, afterMs}) keeps a status read from starting
- * inside that span around a predicted event, delaying it to afterMs past the event, so a
- * live run can move reads off the console's busy window once the bins show where it is.
+ * Host scheduler for the staggered live path: a steady frame costs one checked status read and
+ * one combined gate write. Skip, trim, vsync rule, gate on receive, gate queue, rereads and
+ * exchange timing follow the flags and invariants in src/streamer/stream/CLAUDE.md.
  */
 import * as checked from '../worker/staggered-status.js';
 import * as presentPacer from './present-pacer.js';
@@ -82,14 +35,10 @@ const LARGE_UNIT_BYTES = 64 * 1024;
 const PENDING_READ_BINS = 4;
 
 /**
- * How long gates waited for the output worker's acquire, split by the size of the unit. Reads
- * are about 5 ms apart, so a wait is only known between two bounds:
- * - upper (`bins`, `maxMs`): from the start of the first read that found the acquire pending to
- *   the end of the read that found it done;
- * - lower (`lowerBins`): from the end of the first pending read to the start of the last one,
- *   so 0 with a single pending read.
- * `immediate` counts the acquires a gate's first read already found done, and `reads` how many
- * pending reads each wait took. The fetch waits are booked the same way.
+ * How long gates waited for the output worker's acquire (or fetch), by unit size. Reads are about
+ * 5 ms apart, so a wait is booked between bounds: `bins`/`maxMs` from the first pending read's
+ * start to the done read's end, `lowerBins` from the first pending read's end to the last's start.
+ * `immediate` counts acquires the first read found done; `reads` bins pending reads per wait.
  */
 function createAcquireWaits() {
   const bins = () => ACQUIRE_BINS_MS.map(() => 0).concat(0);
@@ -123,6 +72,7 @@ function createAcquireWaits() {
       if (wait.unit !== unit)
         wait = {unit, since: null, firstEnd: 0, lastStart: 0, reads: 0, done: false};
       if (wait.done) return;
+
       if (pending) {
         if (wait.since === null) {
           wait.since = startedAt;
@@ -132,12 +82,14 @@ function createAcquireWaits() {
         wait.reads++;
         return;
       }
+
       wait.done = true;
       const size = sizes[bytes >= LARGE_UNIT_BYTES ? 'large' : 'small'];
       if (wait.since === null) {
         size.immediate++;
         return;
       }
+
       const upperMs = endedAt - wait.since;
       size.count++;
       size.reads[Math.min(wait.reads, PENDING_READ_BINS) - 1]++;
@@ -180,14 +132,17 @@ const immediate = () => new Promise(resolve => setImmediate(resolve));
  *   after a complete receive and submit.
  */
 function isPendingInputSlot(snapshot, expected) {
-  return (
-    Boolean(expected.input) &&
+  if (!expected.input) return false;
+
+  const received =
     snapshot.receive.sequence === expected.receive.sequence &&
-    snapshot.receive.count === BigInt(expected.receive.bytes) &&
-    snapshot.input.sequence === expected.input.sequence &&
-    snapshot.input.nextIndex < 0 &&
-    PENDING_INPUT.includes(snapshot.input.nextSlotStatus)
-  );
+    snapshot.receive.count === BigInt(expected.receive.bytes);
+  if (!received) return false;
+
+  const submitted = snapshot.input.sequence === expected.input.sequence;
+  if (!submitted) return false;
+
+  return snapshot.input.nextIndex < 0 && PENDING_INPUT.includes(snapshot.input.nextSlotStatus);
 }
 
 /**
@@ -211,9 +166,8 @@ function isApplied(nativeApplied, sequence) {
  */
 
 /**
- * The mismatch a torn read leaves, or null for any other failure. A torn read cannot repeat,
- * since the shader stores current before nativeApplied, so the same one twice is a wrong
- * surface.
+ * The mismatch a torn read leaves, or null for any other failure. The same one twice is a wrong
+ * surface (invariant 14).
  * @param {any} error
  * @param {Snapshot} snapshot
  */
@@ -252,18 +206,21 @@ async function waitChecked(
     const snapshot = await worker.readStatus();
     last = snapshot;
     onRead(snapshot, startedAt);
+
     try {
       checked.check(snapshot, expected);
       return snapshot;
     } catch (error) {
       const tear = tearOf(error, snapshot);
-      if (!error.retryable || (tear !== null && tear === torn))
-        throw failedCheck(error, expected, snapshot);
+      const repeatedTear = tear !== null && tear === torn;
+      if (!error.retryable || repeatedTear) throw failedCheck(error, expected, snapshot);
       torn = tear;
+
       if (Date.now() >= nextInputRetry && isPendingInputSlot(snapshot, expected)) {
         await worker.retryInputSlot(expected.input.sequence);
         nextInputRetry = Date.now() + INPUT_RETRY_MS;
       }
+
       onReread(error.pending);
       pending = error.pending;
     }
@@ -300,8 +257,8 @@ async function waitOutput(
       return snapshot;
     } catch (error) {
       const tear = tearOf(error, snapshot);
-      if (!error.retryable || (tear !== null && tear === torn))
-        throw failedCheck(error, expected, snapshot);
+      const repeatedTear = tear !== null && tear === torn;
+      if (!error.retryable || repeatedTear) throw failedCheck(error, expected, snapshot);
       torn = tear;
       onReread(error.pending);
     }
@@ -314,9 +271,8 @@ async function waitOutput(
  * What the gate after access unit `sequence` expects: its receive, the submit of the unit
  * before it, the output `lag` behind it (two by default) and, once there is one, the fetch of
  * the output before that and the publication that fetch presented unless it was skipped.
- * With lag 0 the gate names output `sequence` itself, so it expects output `sequence - 1`
- * both acquired and fetched: the fetch gate is one auto-clear event, and this keeps at most
- * one fetch signal outstanding and the descriptor slot of `sequence - 1` read before reuse.
+ * With lag 0 the gate names output `sequence` itself and expects `sequence - 1` acquired and
+ * fetched (invariants 3 and 4).
  * @param {number} sequence
  * @param {Map<number, {length: number, pts: bigint}>} units
  * @param {Map<number, any>} destinations Output sequence to the surface it was fetched into.
@@ -326,6 +282,7 @@ async function waitOutput(
 function expectedFor(sequence, units, destinations, lag = gates.OUTPUT_LAG) {
   const value = {receive: {sequence, bytes: units.get(sequence).length}};
   if (sequence >= 2) value.input = {sequence: sequence - 1};
+
   const acquired = sequence - Math.max(lag, 1);
   const fetched = lag === 0 ? acquired : acquired - 1;
   if (acquired >= 1) value.acquire = {sequence: acquired, pts: units.get(acquired).pts};
@@ -425,6 +382,7 @@ function create({
   if (lag !== 0 && lag !== 1 && lag !== gates.OUTPUT_LAG)
     throw Error('The staggered output lag is 0, 1 or 2');
   if (gateQueue && !gateOnReceive) throw Error('The gate queue needs gate on receive');
+
   const periodMs = 1000 / presentHz;
   let worker = null;
   let transport = null;
@@ -436,12 +394,9 @@ function create({
   let held = null;
   /** The held unit's gate queue, under gateQueue. */
   let queue = null;
-  /** The last unit primed, which a queued gate before it must not zero. */
+  /** The last unit primed, which a queued gate before it carries (invariant 11). */
   let primed = 0;
-  /**
-   * The prime and gate writes, one at a time: each rpc is its own POST and the bridge runs
-   * them in the order their bodies arrive, so two in flight could land swapped.
-   */
+  // The prime and gate writes, one at a time (invariant 10).
   /** @type {Promise<unknown>} */
   let writes = Promise.resolve();
   /** The error of a queued gate that stop() dropped, for the caller to log. */
@@ -511,24 +466,26 @@ function create({
    * One per gate: the acquire it expects and what its reads have seen of it.
    * @param {Expected} expected
    */
-  const acquireWatch = expected =>
-    decode && expected.acquire
-      ? {unit: expected.acquire.sequence, pendingSeen: false, acquired: false, waited: false}
-      : null;
+  const acquireWatch = expected => {
+    if (!decode || !expected.acquire) return null;
+    return {unit: expected.acquire.sequence, pendingSeen: false, acquired: false, waited: false};
+  };
+
   /**
    * One per gate: the receive it expects and what its reads have seen of it.
    * @param {Expected} expected
    */
-  const receiveWatch = expected =>
-    receive
-      ? {
-          unit: expected.receive.sequence,
-          bytes: expected.receive.bytes,
-          pendingSeen: false,
-          received: false,
-          waited: false
-        }
-      : null;
+  const receiveWatch = expected => {
+    if (!receive) return null;
+    return {
+      unit: expected.receive.sequence,
+      bytes: expected.receive.bytes,
+      pendingSeen: false,
+      received: false,
+      waited: false
+    };
+  };
+
   /**
    * @param {Expected} expected
    * @param {ReturnType<typeof acquireWatch>} [watch]
@@ -542,8 +499,10 @@ function create({
     beforeRead: async () => {
       if (link && !link.received)
         link.waited = await receive.beforeRead(link.unit, link.pendingSeen, readMs);
+
       if (watch && !watch.acquired)
         watch.waited = await decode.beforeRead(watch.unit, watch.pendingSeen, readMs);
+
       const delay = exchangeTiming.delayFor(now(), predictions(expected), avoid);
       if (delay > 0) await pause(delay);
     },
@@ -551,27 +510,32 @@ function create({
       queue?.observeReceive(snapshot.receive.sequence);
       readMs = now() - startedAt;
       timing.record('status', startedAt, now(), references(expected));
+
       if (link && !link.received) {
         link.received =
           snapshot.receive.sequence === link.unit && snapshot.receive.count === BigInt(link.bytes);
         receive.observe(link.unit, now(), link.received, link);
         link.pendingSeen ||= !link.received;
       }
+
       if (watch && !watch.acquired) {
         watch.acquired = snapshot.acquire.sequence >= watch.unit;
         decode.observe(watch.unit, now(), watch.acquired, watch);
         watch.pendingSeen ||= !watch.acquired;
       }
+
       if (expected.acquire) {
         const unit = expected.acquire.sequence;
         const pending = snapshot.acquire.sequence < unit;
         acquireWaits.observe(unit, pending, startedAt, now(), units.get(unit)?.length ?? 0);
       }
+
       if (expected.fetch) {
         const unit = expected.fetch.sequence;
         const pending = snapshot.fetch.sequence < unit;
         fetchWaits.observe(unit, pending, startedAt, now(), units.get(unit)?.length ?? 0);
       }
+
       if (expected.ack) {
         const applied = isApplied(snapshot.nativeApplied, expected.ack.sequence);
         pacer.observe(startedAt, applied, expected.ack.openedAt ?? null);
@@ -592,6 +556,7 @@ function create({
     expected.acquire ? decode?.predictedAt(expected.acquire.sequence) : null,
     receive?.predictedAt(expected.receive.sequence)
   ];
+
   /**
    * The event times an exchange of a gate is binned against.
    * @param {Expected} expected
@@ -626,6 +591,7 @@ function create({
   function pendingAck(expected, backlog) {
     delete expected.ack;
     if (!pending) return;
+
     const optional = backlog > skipBacklog && now() - pending.openedAt <= 2 * pacer.periodMs;
     expected.ack = {
       sequence: pending.sequence,
@@ -667,23 +633,23 @@ function create({
   }
 
   /**
-   * Ends a lag 0 run on a decoder timeout instead of switching lag: a lag 1 gate after a lag 0
-   * one would merge two fetch signals in the one auto-clear event.
+   * Ends a lag 0 run on a decoder timeout instead of switching lag (invariants 3 and 4).
    * @param {any} error
    * @param {number} sequence
    * @param {Expected} expected
    */
   function lagEnd(error, sequence, expected) {
     const waitedFor = expected[error.pending]?.sequence;
-    if (lag === 0 && error.timedOut && ['acquire', 'fetch'].includes(error.pending)) {
-      fallback = {
-        at: sequence,
-        waitedFor,
-        reason: `${error.pending} ${waitedFor} timed out at lag 0`,
-        recommendedLag: 1
-      };
-      error.lagEnd = {...fallback};
-    }
+    const decoderTimeout = error.timedOut && ['acquire', 'fetch'].includes(error.pending);
+    if (lag !== 0 || !decoderTimeout) return error;
+
+    fallback = {
+      at: sequence,
+      waitedFor,
+      reason: `${error.pending} ${waitedFor} timed out at lag 0`,
+      recommendedLag: 1
+    };
+    error.lagEnd = {...fallback};
     return error;
   }
 
@@ -712,12 +678,15 @@ function create({
       pending = {sequence: published.sequence, index: published.index, openedAt: null};
       return published;
     }
+
     const trim = trimDue(arrivedAt, backlog);
-    if (published && (backlog > skipBacklog || trim) && skips < MAX_SKIPS) {
+    const wantsSkip = backlog > skipBacklog || trim;
+    if (published && wantsSkip && skips < MAX_SKIPS) {
       const discard = await sink.discardDestination(presentation);
       if (discard) {
         skips++;
         stale = 0;
+        // Not over the backlog, so the trim asked for this skip.
         if (backlog <= skipBacklog) {
           cooling = TRIM_FRAMES;
           counts.trimmed++;
@@ -726,6 +695,7 @@ function create({
         return discard;
       }
     }
+
     skips = 0;
     await nextPublication(sink, presentation);
     return published;
@@ -740,10 +710,12 @@ function create({
       counts.decoded++;
       onDecoded?.(1);
     }
+
     if (!vsyncRule) {
       shown(expected, onPresented, onSkipped);
       return;
     }
+
     if (expected.fetch && destinations.get(expected.fetch.sequence).skip) {
       counts.skipped++;
       onSkipped?.(1);
@@ -759,6 +731,7 @@ function create({
   async function pickDestination(sequence, snapshot, expected, watch, link, hooks) {
     const {sink, onPresented, onTrimmed, arrivedAt, backlog} = hooks;
     let destination = await target(sink, snapshot, backlog, arrivedAt, onTrimmed);
+
     if (!destination && vsyncRule) {
       expected.ack = {
         sequence: pending.sequence,
@@ -772,6 +745,7 @@ function create({
       confirm(snapshot, onPresented);
       destination = await target(sink, snapshot, backlog);
     }
+
     destinations.set(sequence - lag, destination);
     return {destination, snapshot};
   }
@@ -807,6 +781,7 @@ function create({
       frame: layout,
       ...(lag !== gates.OUTPUT_LAG && {lag})
     });
+
     timing.record('gate', gateStarted, now(), references(expected));
     lastGate = now();
     decode?.opened(sequence, lastGate);
@@ -843,16 +818,19 @@ function create({
     if (vsyncRule) pendingAck(expected, backlog);
     if (expected.ack && !expected.ack.optional)
       await pacer.beforeRead(vsyncRule ? pending.openedAt : fetchOpened);
+
     const watch = acquireWatch(expected);
     const link = receiveWatch(expected);
     let snapshot = await waitChecked(worker, expected, rereadsFor(expected, watch, link)).catch(
       error => withPrevious(lagEnd(error, sequence, expected))
     );
     countRead(expected, snapshot, onDecoded, onPresented, onSkipped);
+
     enter('staggered-input');
     const inputSlot = await worker.inputSlot(
       sequence === 1 ? firstInput.index : snapshot.input.nextIndex
     );
+
     let destination = null;
     if (sequence > lag) {
       enter('destination');
@@ -866,9 +844,11 @@ function create({
         hooks
       ));
     }
+
     // On the gate path, but only for a sampled surface: the re-read must beat the refill.
     sampleSink = sink;
     if (surfaces) await surfaces.reuse(destination);
+
     enter('staggered-gate');
     await inOrder(() => {
       if (primed > sequence) next = units.get(sequence + 1);
@@ -884,6 +864,7 @@ function create({
         destination
       });
     });
+
     if (surfaces && expected.fetch)
       await surfaces.first(expected.fetch.sequence, destinations.get(expected.fetch.sequence));
   }
@@ -937,14 +918,17 @@ function create({
       const next = {length: unit.data.length, pts: BigInt(unit.pts)};
       if (next.length < 1 || next.length > transport.maxAccessUnit)
         throw Error('Access unit does not fit the staggered receive buffer');
+
       const enter = hooks.enter || (() => {});
       const sequence = held ? held.sequence + 1 : 1;
       if (held && !(next.pts > held.pts))
         throw Error('Staggered loop needs increasing access-unit PTS');
+
       if (held && !gateOnReceive)
         await gate(held.sequence, held, next, {...hooks, arrivedAt: unit.arrivedAt});
       if (!held && gateQueue) queue = createGateQueue();
       if (queue) await queue.admit(sequence);
+
       remember(sequence, next);
       if (!held) {
         enter('staggered-start');
@@ -956,16 +940,19 @@ function create({
           return worker.primeInput({sequence, ...next});
         });
       }
+
       enter('staggered-send');
       await transport.send(unit.data);
       lastSend = now();
       hooks.onSent?.(lastSend);
       receive?.sent(sequence, next.length, lastSend);
+
       const gateHooks = {...hooks, arrivedAt: unit.arrivedAt};
       if (queue) {
         const backlog = (hooks.backlog ?? 0) + queue.depth;
         queue.push(sequence, () => gate(sequence, next, null, {...gateHooks, backlog}));
       } else if (gateOnReceive) await gate(sequence, next, null, gateHooks);
+
       held = {sequence, ...next};
       counts.submitted++;
     },
@@ -982,21 +969,26 @@ function create({
       finished = true;
       const {sink, enter = () => {}, onDecoded, onPresented, onSkipped} = hooks;
       const last = held.sequence;
+
       if (queue) await queue.drain();
       if (!gateOnReceive)
         await gate(last, held, {length: 1, pts: held.pts + 1n}, {...hooks, backlog: 0});
       held = null;
       queue = null;
+
       enter('staggered-tail');
       await waitFinalInput(last);
       await worker.stopInput();
+
       for (let sequence = Math.max(1, last - lag + 1); sequence <= last; sequence++) {
         const expected = tailExpected(sequence, units, destinations);
         const snapshot = await waitOutput(worker, expected, waits).catch(withPrevious);
+
         counts.decoded++;
         onDecoded?.(1);
         shown(expected, onPresented, onSkipped);
         if (expected.ack) pending = null;
+
         enter('destination');
         const destination = await target(sink, snapshot, 0);
         enter('staggered-tail');
@@ -1004,6 +996,7 @@ function create({
         destinations.set(sequence, destination);
         counts.tailDrained++;
       }
+
       const final = destinations.get(last);
       await waitOutput(
         worker,
@@ -1014,12 +1007,14 @@ function create({
         },
         waits
       ).catch(withPrevious);
+
       if (lag === 0) {
         counts.decoded++;
         onDecoded?.(1);
       }
       counts.presented++;
       onPresented?.(1);
+
       await worker.stopOutput();
       return {drained: counts.tailDrained};
     },
@@ -1032,19 +1027,21 @@ function create({
       if (retained) throw Error(RESTART);
       if (!worker) return;
       if (queue) {
-        // Queued gates are of units already primed and sent. Dropping them is safe because
-        // worker.stop() rewrites the exit dispatch before it signals; the running one finishes.
+        // Units already primed and sent; dropping their gates is safe (invariant 7).
+        // The running one finishes.
         queue.clear();
         await queue.drain().catch(error => {
           gateError = error;
         });
       }
+
       try {
         await worker.stop();
       } catch (error) {
         retained = true;
         throw Error(`${RESTART} (${error.message})`, {cause: error});
       }
+
       if (worker.diagnostics.retained) {
         retained = true;
         throw Error(RESTART);

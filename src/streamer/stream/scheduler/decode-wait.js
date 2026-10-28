@@ -1,13 +1,6 @@
 /**
- * Predicts when the decoder acquires a unit, so a staggered gate whose acquire is pending
- * sleeps off the bridge instead of rereading the status back to back. The host has no
- * console timestamps: a unit is predicted done at max(its gate, the previous unit done) plus
- * a decode estimate, and a unit is taken as done at the earlier of its prediction and the
- * read that saw it. A read past the prediction that still finds the acquire pending grows
- * the estimate by growMs; a read that slept and then saw the acquire shrinks it by shrinkMs,
- * so a faster decoder still shows. A gate's first read waits only while decode is bound,
- * that is, the previous gate found its acquire pending, so a gate whose decode keeps up
- * reads at once (request-budget.cjs staggeredDecodeWait).
+ * Predicts when the decoder acquires a unit, so a gate whose acquire is pending sleeps off the
+ * bridge instead of rereading back to back (request-budget.cjs staggeredDecodeWait).
  */
 
 /**
@@ -56,7 +49,9 @@ function create({startMs = 6, growMs = 0.5, shrinkMs = 0.1, now = Date.now, slee
      * @returns {Promise<boolean>} whether it slept
      */
     async beforeRead(unit, pending, readMs) {
-      if (!(pending || bound) || !gates.has(unit)) return false;
+      if (!pending && !bound) return false;
+      if (!gates.has(unit)) return false;
+
       const start = predicted(unit) - readMs;
       if (start <= now()) return false;
       await sleep(start - now());
@@ -72,10 +67,12 @@ function create({startMs = 6, growMs = 0.5, shrinkMs = 0.1, now = Date.now, slee
      */
     observe(unit, at, acquired, {waited = false, pendingSeen = false} = {}) {
       if (!gates.has(unit)) return;
+
       if (!acquired) {
         if (at >= predicted(unit)) estimate += growMs;
         return;
       }
+
       done.set(unit, Math.min(predicted(unit), at));
       if (waited) estimate = Math.max(0, estimate - shrinkMs);
       bound = waited || pendingSeen;

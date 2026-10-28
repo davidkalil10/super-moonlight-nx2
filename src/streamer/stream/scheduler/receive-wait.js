@@ -1,15 +1,6 @@
 /**
- * Predicts when the console has received a unit, so a staggered gate whose receive is pending
- * sleeps off the bridge instead of rereading the status back to back. The console starts
- * receiving unit N+1 when gate N opens and the host sends it right after, so a unit is
- * predicted received at its send plus a fixed estimate plus its size times perKbMs. Only the
- * fixed estimate learns: most of a pending receive is the input thread still submitting the
- * unit before, which does not scale with size. A read past the prediction that still finds
- * the receive pending grows it by growMs; a read that slept and then saw the receive shrinks
- * it by shrinkMs, so a faster link still shows. A sleep never exceeds maxSleepMs, since a
- * longer one loses the frame its vsync slot anyway. A gate's first read waits only while the
- * link is bound, that is, the previous gate found its receive pending, so a gate whose
- * receive keeps up reads at once (request-budget.cjs receiveWait).
+ * Predicts when the console has received a unit, so a gate whose receive is pending sleeps off
+ * the bridge instead of rereading back to back (request-budget.cjs receiveWait).
  */
 
 /**
@@ -69,7 +60,9 @@ function create({
      * @returns {Promise<boolean>} whether it slept
      */
     async beforeRead(unit, pending, readMs) {
-      if (!(pending || bound) || !sends.has(unit)) return false;
+      if (!pending && !bound) return false;
+      if (!sends.has(unit)) return false;
+
       const start = predicted(unit) - readMs;
       if (start <= now()) return false;
       await sleep(Math.min(start - now(), maxSleepMs));
@@ -86,6 +79,7 @@ function create({
     observe(unit, at, received, {waited = false, pendingSeen = false} = {}) {
       const send = sends.get(unit);
       if (!send) return;
+
       if (!received) {
         if (at >= predicted(unit) && !send.grown) {
           fixedMs = Math.min(maxSleepMs, fixedMs + growMs);
@@ -93,6 +87,7 @@ function create({
         }
         return;
       }
+
       if (waited) fixedMs = Math.max(0, fixedMs - shrinkMs);
       bound = waited || pendingSeen;
     },

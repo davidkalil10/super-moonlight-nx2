@@ -1,10 +1,6 @@
 /**
  * Bins the cost of each staggered exchange by when it started relative to the frame events
- * the host knows: the last gate it opened, the last unit it sent, and the decode-done and
- * receive-done times the wait predictors expect. The host has no console timestamps, so
- * the offsets say where a read landed against the host's own model of the console's work,
- * which is what the schedule can move. Counts and milliseconds per 1 ms bin over
- * -windowMs..windowMs, with '<' and '>' for the rest, per exchange kind and reference.
+ * the host knows, per exchange kind and reference, over -windowMs..windowMs.
  */
 
 const KINDS = ['status', 'gate'];
@@ -12,6 +8,33 @@ const REFERENCES = ['gate', 'send', 'decodeDone', 'receiveDone'];
 
 /** @typedef {{n: number, ms: number}} Bin */
 /** @typedef {{exchanges: number, ms: number, offsets: Record<string, Record<string, Bin>>}} KindCounts */
+
+/** @param {number} ms */
+const round2 = ms => +ms.toFixed(2);
+
+/**
+ * @param {Record<string, Bin>} bins
+ * @returns {Record<string, Bin>}
+ */
+function roundedBins(bins) {
+  return Object.fromEntries(
+    Object.entries(bins).map(([offset, bin]) => [offset, {n: bin.n, ms: round2(bin.ms)}])
+  );
+}
+
+/**
+ * @param {KindCounts} counts
+ * @returns {KindCounts}
+ */
+function roundedCounts(counts) {
+  return {
+    exchanges: counts.exchanges,
+    ms: round2(counts.ms),
+    offsets: Object.fromEntries(
+      Object.entries(counts.offsets).map(([name, bins]) => [name, roundedBins(bins)])
+    )
+  };
+}
 
 /**
  * @param {{binMs?: number, windowMs?: number}} [options]
@@ -42,12 +65,15 @@ function create({binMs = 1, windowMs = 10} = {}) {
     record(kind, startedAt, endedAt, references) {
       const counts = kinds[kind];
       if (!counts) throw Error('Unknown exchange kind ' + kind);
+
       const ms = endedAt - startedAt;
       counts.exchanges++;
       counts.ms += ms;
+
       for (const name of REFERENCES) {
         const at = references[name];
         if (typeof at !== 'number') continue;
+
         const bins = (counts.offsets[name] ||= {});
         const bin = (bins[label(startedAt - at)] ||= {n: 0, ms: 0});
         bin.n++;
@@ -58,24 +84,7 @@ function create({binMs = 1, windowMs = 10} = {}) {
     /** The counts so far, milliseconds rounded to two decimals. */
     get counts() {
       return Object.fromEntries(
-        Object.entries(kinds).map(([kind, counts]) => [
-          kind,
-          {
-            exchanges: counts.exchanges,
-            ms: +counts.ms.toFixed(2),
-            offsets: Object.fromEntries(
-              Object.entries(counts.offsets).map(([name, bins]) => [
-                name,
-                Object.fromEntries(
-                  Object.entries(bins).map(([offset, bin]) => [
-                    offset,
-                    {n: bin.n, ms: +bin.ms.toFixed(2)}
-                  ])
-                )
-              ])
-            )
-          }
-        ])
+        Object.entries(kinds).map(([kind, counts]) => [kind, roundedCounts(counts)])
       );
     },
 
@@ -93,16 +102,21 @@ function create({binMs = 1, windowMs = 10} = {}) {
  */
 function delayFor(at, events, avoid) {
   if (!avoid) return 0;
+
   const known = events.filter(event => typeof event === 'number').sort((a, b) => a - b);
   let until = at;
-  for (let moved = true; moved; ) {
+  let moved = true;
+  while (moved) {
     moved = false;
-    for (const event of known)
-      if (until >= event - avoid.beforeMs && until < event + avoid.afterMs) {
-        until = event + avoid.afterMs;
-        moved = true;
-      }
+    for (const event of known) {
+      const inWindow = until >= event - avoid.beforeMs && until < event + avoid.afterMs;
+      if (!inWindow) continue;
+
+      until = event + avoid.afterMs;
+      moved = true;
+    }
   }
+
   return until - at;
 }
 
