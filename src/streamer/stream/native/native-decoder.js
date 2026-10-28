@@ -513,6 +513,7 @@ async function construct(api, pointer, owned) {
  * @param {object} context
  * @param {any} context.api
  * @param {Record<string, number>} context.fn
+ * @param {Awaited<ReturnType<typeof createFinite>>} context.worker The pump frames' worker.
  * @param {ReturnType<typeof movieCalls>} context.movie
  * @param {[string, number][]} context.owned What construct() built, in construction order.
  * @param {any} context.movieModule
@@ -527,6 +528,7 @@ async function construct(api, pointer, owned) {
 function decoderObject({
   api,
   fn,
+  worker,
   movie,
   owned,
   movieModule,
@@ -621,6 +623,14 @@ function decoderObject({
     if (!errors.length && split) {
       try {
         await split.finalize();
+      } catch (error) {
+        errors.push(error);
+      }
+    }
+    // Freed last, and only after a clean shutdown: the movie objects live in module memory.
+    if (!errors.length) {
+      try {
+        if (await worker.close()) await api.close();
       } catch (error) {
         errors.push(error);
       }
@@ -821,6 +831,7 @@ async function create({
   const decoder = decoderObject({
     api,
     fn,
+    worker,
     movie,
     owned,
     movieModule,

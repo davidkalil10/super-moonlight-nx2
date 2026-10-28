@@ -50,6 +50,8 @@ function createConsole() {
   };
   add(SCRATCH, 0x80000);
   let heap = HEAP;
+  const allocations = [];
+  const frees = [];
   const regionOf = address => regions.find(r => address >= r.start && address < r.end);
   const peek = (address, length) => {
     const region = regionOf(address);
@@ -247,6 +249,12 @@ function createConsole() {
       const region = add(heap, bytes);
       heap = region.end;
       poke64(out, region.start);
+      allocations.push(region.start);
+      return 0n;
+    }
+    if (target === SDK + FREE) {
+      frees.push(Number(args[0]));
+      log.push('free');
       return 0n;
     }
     if (target === SDK + QUERY) {
@@ -361,6 +369,8 @@ function createConsole() {
   return {
     rpc,
     log,
+    allocations,
+    frees,
     reset() {
       counter = 0;
       log.length = 0;
@@ -554,6 +564,53 @@ test('split mode registers its workers before Start and stops them before decode
     assert.ok(consoleMock.log.includes('stop'));
   } finally {
     await decoder.close().catch(() => {});
+    await fs.rm(directory, {recursive: true, force: true});
+  }
+});
+
+test('decoder close frees every allocation once, after the movie objects', async () => {
+  const {consoleMock, decoder, destination, directory} = await build();
+  try {
+    await decoder.configure(sps, pps, 30);
+    assert.ok(await decodeFrame(decoder, destination, 1000));
+    assert.deepEqual(consoleMock.frees, []);
+    await decoder.close();
+    await decoder.close();
+    const {allocations, frees, log} = consoleMock;
+    assert.deepEqual([...frees].sort(), [...allocations].sort());
+    assert.equal(frees.at(-1), allocations[0], 'the module memory goes last');
+    const destroyed = log.map(name => name.endsWith('Destroy')).lastIndexOf(true);
+    assert.ok(destroyed >= 0 && destroyed < log.indexOf('free'));
+  } finally {
+    await fs.rm(directory, {recursive: true, force: true});
+  }
+});
+
+test('decoder close frees nothing when the split workers stay retained', async () => {
+  const directory = await fixture();
+  const consoleMock = createConsole();
+  const decoder = await createDecoder({
+    rpc: consoleMock.rpc,
+    directory,
+    workerDirectory: path.join(directory, 'worker'),
+    workerMode: 'split',
+    transport: {async close() {}},
+    publication: {mapped: 0x71000000, color: 1},
+    async splitWorkerFactory() {
+      return {
+        async register() {},
+        async stop() {},
+        async finalize() {
+          throw Error('Staggered worker retained');
+        }
+      };
+    }
+  });
+  try {
+    await decoder.configure(sps, pps, 30);
+    await assert.rejects(decoder.close(), /cleanup failed/);
+    assert.deepEqual(consoleMock.frees, []);
+  } finally {
     await fs.rm(directory, {recursive: true, force: true});
   }
 });
