@@ -754,7 +754,7 @@ async function main() {
     log: run.log
   });
 
-  const stop = () => service.stop();
+  const stop = () => service.stop().catch(error => console.error('ui-service: ' + error.message));
   process.on('SIGINT', stop);
   process.on('SIGTERM', stop);
   console.error('ui-service: run ' + run.output);
