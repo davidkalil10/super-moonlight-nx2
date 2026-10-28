@@ -1,19 +1,26 @@
-// Live sender: streams a Moonlight host into the running Moonlight app through the console's
-// native H.264 decoder (native-h264.js).
-// Usage: node host/stream/live.js [runs/launcher-XXXX] --moonlight HOST APP
-//        [--bitrate KBPS|auto] [--codec h264] [--size 1920x1080] [--fps 60]
-//        [--duration S] [--warmup S] [--expect fps=30,dropped=0,idr=0] [--queue 8] [--input-hz 60] [--audio-frames 960]
-//        [--staggered] (no-op: the staggered workers are the only route)
-//        [--present-hz 60|120] [--skip-backlog 2|off] [--skip-rule backlog|vsync]
-//        [--trim-backlog-ms N] (backlog rule: skip one output once the unit in hand is N ms old at 3 gates in a row)
-//        [--gate-on-receive] (prime and gate each unit as it arrives instead of on the next one)
-//        [--output-lag 1|2] (fetch each output 1 or 2 gates after its decode opened; 2 by default)
-//        [--decode-wait] (with --skip-rule vsync) [--receive-wait] [--avoid-window BEFORE-AFTER]
-//        [--socket-audio | --socket-audio-tone] (PCM or a 500 Hz test tone over native TCP to a console worker)
-// --moonlight runs tools/moonlight/helper's hbmoonlight (path from $HBMOONLIGHT)
-//   and, unless --no-input / --no-audio, also feeds controller+touch into its
-//   stdin (input-feeder.js) and plays its audio on the console (audio-stream.js,
-//   or socket-audio-source.js with --socket-audio).
+/**
+ * Live sender: streams a Moonlight host into the running Moonlight app through the console's
+ * native H.264 decoder (native-h264.js).
+ *
+ * Usage: node host/stream/live.js [runs/launcher-XXXX] --moonlight HOST APP
+ *   [--bitrate KBPS|auto] [--codec h264] [--size 1920x1080] [--fps 60]
+ *   [--duration S] [--warmup S] [--expect fps=30,dropped=0,idr=0] [--queue 8]
+ *   [--input-hz 60] [--audio-frames 960]
+ *   [--staggered] (no-op: the staggered workers are the only route)
+ *   [--present-hz 60|120] [--skip-backlog 2|off] [--skip-rule backlog|vsync]
+ *   [--trim-backlog-ms N] (backlog rule: skip one output once the unit in hand is N ms old
+ *     at 3 gates in a row)
+ *   [--gate-on-receive] (prime and gate each unit as it arrives instead of on the next one)
+ *   [--output-lag 1|2] (fetch each output 1 or 2 gates after its decode opened; 2 by default)
+ *   [--decode-wait] (with --skip-rule vsync) [--receive-wait] [--avoid-window BEFORE-AFTER]
+ *   [--socket-audio | --socket-audio-tone] (PCM or a 500 Hz test tone over native TCP to a
+ *     console worker)
+ *
+ * --moonlight runs tools/moonlight/helper's hbmoonlight (path from $HBMOONLIGHT) and, unless
+ * --no-input / --no-audio, also feeds controller+touch into its stdin (input-feeder.js) and
+ * plays its audio on the console (audio-stream.js, or socket-audio-source.js with
+ * --socket-audio).
+ */
 import path from 'node:path';
 import * as ring from '../../tools/moonlight/ring.js';
 import {findPrivateStorage} from '../../tools/moonlight/feed.js';
@@ -22,12 +29,14 @@ import * as session from '../../../hbl-platform/sdk/host/session.js';
 import * as cli from '../../../hbl-platform/sdk/cli.js';
 import * as nativeH264 from './native-h264.js';
 
+/** The newest launcher run directory, for when none is given. */
 function newestRun() {
   const newest = session.newest();
   console.log('Using ' + path.relative(process.cwd(), newest));
   return newest;
 }
 
+/** Checks the codec and the installed app, then streams through native-h264.js. */
 async function main() {
   const args = process.argv.slice(2);
   const option = (name, fallback) => cli.number(args, name, fallback);
