@@ -1,13 +1,6 @@
+// The staggered scheduler, and the gate and status checks it runs every frame.
 const test = require('node:test');
 const assert = require('node:assert/strict');
-
-/** The staggered counts without the pacer's read counters, which the fake device does not pin. */
-// The pacer and the exchange bins carry run timing, so count comparisons leave them out.
-const withoutPacer = ({pacer, exchanges, ...counts}) => (
-  assert.equal(typeof pacer.reads, 'number'),
-  assert.equal(typeof exchanges.status.ms, 'number'),
-  counts
-);
 const definitions = require('../../../sdk/native/movie-functions.json');
 const registration = require('../../../sdk/native/movie-event-functions.json').registerClientEvents;
 const {CODE} = require('../../../../hbl-platform/sdk/native/thread.js');
@@ -24,7 +17,20 @@ const {
   TRIM_FRAMES,
   expectedFor
 } = require('../../../host/stream/staggered-live.js');
+const gate = require('../../../host/stream/staggered-gate.js');
+const input = require('../../../host/stream/staggered-input-plan.js');
+const output = require('../../../host/stream/staggered-output-plan.js');
+const {
+  STATUS,
+  READ_START,
+  READ_END,
+  parse,
+  check,
+  checkOutput
+} = require('../../../host/stream/staggered-status.js');
+const withoutPacer = require('./test-helpers.cjs').withoutPacer('status');
 
+// staggered-live.js
 const layout = {width: 1920, height: 1080, stride: 1920, sliceHeight: 1088};
 const noPause = async () => {};
 /** sha256 of every write, gate payload, request and send of defaultStreamDigest() on 14e29df. */
@@ -1031,4 +1037,195 @@ test('at lag 1 a gate expects the output one behind and the fetch before it', ()
     'acquire',
     'fetch'
   ]);
+});
+
+// staggered-gate.js
+function snapshot() {
+  return {
+    current: 2,
+    nativeApplied: 11,
+    receive: {count: 40000n, sequence: 5},
+    input: {sendStatus: 0n, nextSlotStatus: 0n, nextIndex: 1, sequence: 4},
+    acquire: {status: 0n, index: 0, pts: 3n, sequence: 3},
+    fetch: {setStatus: 0n, getStatus: 0n, releaseStatus: 0n, sequence: 2}
+  };
+}
+
+const publication = {mapped: 0x7400000000, color: 1};
+const destination = {
+  index: 0,
+  address: publication.mapped + ring.frameOffset(0),
+  bytes: ring.FRAME_BYTES,
+  sequence: 12,
+  color: 1
+};
+const frame = {width: 1920, height: 1080, stride: 1920, sliceHeight: 1088};
+const request = {
+  expected: {
+    receive: {sequence: 5, bytes: 40000},
+    input: {sequence: 4},
+    acquire: {sequence: 3, pts: 3n},
+    fetch: {sequence: 2},
+    ack: {sequence: 11, index: 2}
+  },
+  inputSlot: {index: 1, address: 0x7900000000, capacity: 0x100000},
+  current: {sequence: 5, length: 40000, pts: 5n},
+  next: {sequence: 6, length: 41000, pts: 6n},
+  fetchGate: 0x7300000020,
+  ignoredFetchGate: 0x7300000010,
+  publication,
+  destination,
+  frame
+};
+
+test('one checked write carries current decode, next receive and lag-two fetch', () => {
+  const {offset, bytes} = gate.gateWrite({snapshot: snapshot(), ...request});
+  assert.equal(offset, input.CONTROL.descriptors[0]);
+  assert.equal(bytes.length, gate.WRITE_BYTES);
+  assert.equal(bytes.readUInt32LE(0), 5);
+  assert.equal(bytes.readUInt32LE(input.DESCRIPTOR.bytes), 6);
+  const outputSlot0 = output.CONTROL.descriptors[0] - offset;
+  const outputSlot1 = output.CONTROL.descriptors[1] - offset;
+  assert.equal(bytes.readUInt32LE(outputSlot0), 3);
+  assert.equal(bytes.readBigUInt64LE(outputSlot0 + 8), BigInt(destination.address));
+  assert.equal(bytes.readUInt32LE(outputSlot0 + 24 + 28), destination.sequence);
+  assert.equal(bytes.readUInt32LE(outputSlot1), 4);
+  assert.equal(bytes.readBigUInt64LE(outputSlot1 + 8), 0n);
+});
+
+test('fetch remains closed when the acquired output or publication target differs', () => {
+  const wrong = snapshot();
+  wrong.acquire.pts = 4n;
+  assert.throws(() => gate.gateWrite({snapshot: wrong, ...request}), /output status/);
+  assert.throws(
+    () =>
+      gate.gateWrite({snapshot: snapshot(), ...request, destination: {...destination, index: 1}}),
+    /target/
+  );
+  const shifted = snapshot();
+  shifted.acquire.sequence = 4;
+  assert.throws(
+    () =>
+      gate.gateWrite({
+        snapshot: shifted,
+        ...request,
+        expected: {...request.expected, acquire: {sequence: 4, pts: 3n}}
+      }),
+    /two AUs/
+  );
+});
+
+test('bootstrap writes sequence tags without opening an unchecked fetch', () => {
+  const initial = snapshot();
+  initial.receive = {count: 40000n, sequence: 1};
+  const {offset, bytes} = gate.gateWrite({
+    snapshot: initial,
+    ...request,
+    expected: {receive: {sequence: 1, bytes: 40000}},
+    current: {sequence: 1, length: 40000, pts: 1n},
+    next: {sequence: 2, length: 41000, pts: 2n},
+    destination: null
+  });
+  assert.equal(bytes.readBigUInt64LE(input.DESCRIPTOR.fetchGate), BigInt(request.ignoredFetchGate));
+  assert.equal(bytes.readUInt32LE(output.CONTROL.descriptors[0] - offset), 1);
+  assert.equal(bytes.readUInt32LE(output.CONTROL.descriptors[1] - offset), 2);
+  assert.equal(bytes.readBigUInt64LE(output.CONTROL.descriptors[0] - offset + 8), 0n);
+});
+
+test('at lag 1 the write fetches the output one behind decode', () => {
+  const lagOne = snapshot();
+  lagOne.acquire = {...lagOne.acquire, sequence: 4, pts: 4n};
+  lagOne.fetch = {...lagOne.fetch, sequence: 3};
+  const expected = {...request.expected, acquire: {sequence: 4, pts: 4n}, fetch: {sequence: 3}};
+  const {offset, bytes} = gate.gateWrite({snapshot: lagOne, ...request, expected, lag: 1});
+  const outputSlot0 = output.CONTROL.descriptors[0] - offset;
+  const outputSlot1 = output.CONTROL.descriptors[1] - offset;
+  assert.equal(bytes.readUInt32LE(outputSlot1), 4);
+  assert.equal(bytes.readBigUInt64LE(outputSlot1 + 8), BigInt(destination.address));
+  assert.equal(bytes.readUInt32LE(outputSlot0), 5);
+  assert.equal(bytes.readBigUInt64LE(outputSlot0 + 8), 0n);
+  assert.throws(() => gate.gateWrite({snapshot: snapshot(), ...request, lag: 1}), /one AU behind/);
+  assert.throws(() => gate.gateWrite({snapshot: snapshot(), ...request, lag: 3}), /lag is 1 or 2/);
+});
+
+// staggered-status.js
+function statusSnapshot() {
+  const bytes = Buffer.alloc(READ_END - READ_START);
+  const u32 = (offset, value) => bytes.writeUInt32LE(value, offset - READ_START);
+  const i32 = (offset, value) => bytes.writeInt32LE(value, offset - READ_START);
+  const u64 = (offset, value) => bytes.writeBigUInt64LE(BigInt(value), offset - READ_START);
+  u32(ring.CONTROL.current, 1);
+  u32(ring.CONTROL.nativeApplied, 14);
+  u64(STATUS.receive, 40000);
+  u32(STATUS.receive + 8, 9);
+  u64(STATUS.input, 0);
+  u64(STATUS.input + 8, 0);
+  i32(STATUS.input + 16, 2);
+  u32(STATUS.input + 20, 8);
+  u64(STATUS.acquire, 0);
+  i32(STATUS.acquire + 8, 3);
+  u64(STATUS.acquire + 16, 7000);
+  u32(STATUS.acquire + 24, 7);
+  u64(STATUS.fetch, 0);
+  u64(STATUS.fetch + 8, 0);
+  u64(STATUS.fetch + 16, 0);
+  u32(STATUS.fetch + 24, 6);
+  return bytes;
+}
+
+const expected = {
+  receive: {sequence: 9, bytes: 40000},
+  input: {sequence: 8},
+  acquire: {sequence: 7, pts: 7000},
+  fetch: {sequence: 6},
+  ack: {sequence: 14, index: 1}
+};
+
+test('staggered host gate accepts one complete checked status snapshot', () => {
+  assert.deepEqual(check(parse(statusSnapshot()), expected), {
+    inputIndex: 2,
+    outputIndex: 3,
+    current: 1,
+    nativeApplied: 14
+  });
+});
+
+test('staggered host gate keeps decode and fetch closed on incomplete or wrong results', () => {
+  const bytes = statusSnapshot();
+  bytes.writeUInt32LE(8, STATUS.receive + 8 - READ_START);
+  assert.throws(() => check(parse(bytes), expected), {retryable: true, pending: 'receive'});
+  bytes.writeUInt32LE(9, STATUS.receive + 8 - READ_START);
+  bytes.writeBigInt64LE(39999n, STATUS.receive - READ_START);
+  assert.throws(() => check(parse(bytes), expected), /Short receive/);
+  bytes.writeBigInt64LE(40000n, STATUS.receive - READ_START);
+  bytes.writeBigUInt64LE(1n, STATUS.acquire - READ_START);
+  assert.throws(() => check(parse(bytes), expected), /output status/);
+  bytes.writeBigUInt64LE(0n, STATUS.acquire - READ_START);
+  bytes.writeUInt32LE(13, ring.CONTROL.nativeApplied - READ_START);
+  assert.throws(() => check(parse(bytes), expected), {retryable: true, pending: 'applied'});
+});
+
+test('staggered gate treats temporary lack of an input slot as retryable', () => {
+  const bytes = statusSnapshot();
+  bytes.writeBigUInt64LE(0x100en, STATUS.input + 8 - READ_START);
+  bytes.writeInt32LE(-1, STATUS.input + 16 - READ_START);
+  assert.throws(() => check(parse(bytes), expected), {retryable: true, pending: 'slot'});
+});
+
+test('tail output check requires acquisition and prior publication without a new receive', () => {
+  const state = parse(statusSnapshot());
+  state.receive.count = 0n;
+  assert.deepEqual(
+    checkOutput(state, {
+      acquire: {sequence: 7, pts: 7000n},
+      fetch: {sequence: 6},
+      ack: {sequence: 14, index: 1}
+    }),
+    {outputIndex: 3, current: 1, nativeApplied: 14}
+  );
+  state.acquire.pts = 7001n;
+  assert.throws(
+    () => checkOutput(state, {acquire: {sequence: 7, pts: 7000n}}),
+    /output status/
+  );
 });

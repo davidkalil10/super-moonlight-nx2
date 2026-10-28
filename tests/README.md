@@ -36,7 +36,7 @@ ffmpeg -f lavfi -i testsrc2=size=1280x720:rate=60 -t 3 -pix_fmt yuv420p -c:v lib
 ```
 
 GPU and PIL tests skip with the reason when their tools are missing. `sdk/desktop-vulkan/` is
-HB package backend two (offscreen Vulkan); its README is read by `readme.test.cjs`.
+HB package backend two (offscreen Vulkan); its README is read by `desktop-vulkan.test.cjs`.
 
 ## Tools
 
@@ -83,7 +83,7 @@ node ../host/input/input-feeder.js /tmp/fake
 
 `shared/console.cjs` is a separate byte-level model of the `bootstrap.bas` `RPC()` loop for
 protocols 1, 2 and 3 (header and data recv, response framing, memmove/read/QueryMemory) over a
-flat memory buffer; `protocol3.test.cjs` round-trips the real `native.js` through it.
+flat memory buffer; `formats.test.cjs` round-trips the real `native.js` through it.
 
 ## Live test pass
 
