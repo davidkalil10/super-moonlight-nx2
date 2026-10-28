@@ -138,15 +138,17 @@ function gate(paused, block) {
 
 /**
  * Whether a record starts where the reader thinks: its UI words, when it has them, open with
- * uiMagic, which is the magic once a service attached and 0 before. A short send shifts every
- * later record, and the word there is then pad or touch bytes.
+ * uiMagic, which is the magic once a service attached and 0 before. Once the magic was seen, 0
+ * no longer counts. A short send shifts every later record, and the word there is then pad or
+ * touch bytes.
  * @param {Buffer} record
+ * @param {boolean} sawMagic
  * @returns {boolean}
  */
-function framed(record) {
+function framed(record, sawMagic) {
   if (record.length === STATE_BYTES) return true;
   const magic = record.readUInt32LE(STATE_BYTES);
-  return magic === UI_MAGIC || magic === 0;
+  return magic === UI_MAGIC || (magic === 0 && !sawMagic);
 }
 
 /**
@@ -200,6 +202,8 @@ function createPushReader({
   let heardAt = null;
   let stalled = false;
   let broken = false;
+  let sawMagic = false;
+  let checkedFrame = null;
   let recordBytes = 0;
   let pending = Buffer.alloc(0);
   let counts = {pushed: 0, dropped: 0, gapMaxMs: 0};
@@ -243,6 +247,8 @@ function createPushReader({
     attach(bytes) {
       recordBytes = bytes;
       pending = Buffer.alloc(0);
+      sawMagic = false;
+      checkedFrame = null;
       lastFrame = null;
       heardAt = now();
     },
@@ -254,7 +260,13 @@ function createPushReader({
       if (!count) return;
       const record = index => pending.subarray(index * recordBytes, (index + 1) * recordBytes);
       for (let index = 0; index < count; index++) {
-        if (framed(record(index))) continue;
+        const frameIndex = record(index).readUInt32LE(STATE.frameIndex);
+        if (checkedFrame !== null && frameIndex < checkedFrame) sawMagic = false;
+        checkedFrame = frameIndex;
+        if (framed(record(index), sawMagic)) {
+          sawMagic ||= recordBytes > STATE_BYTES && record(index).readUInt32LE(STATE_BYTES) !== 0;
+          continue;
+        }
         broken = true;
         pending = Buffer.alloc(0);
         throw Error('Input push lost the record framing; a console send was short');

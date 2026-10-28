@@ -730,6 +730,23 @@ test('the push reader presses Start from its chord and logs only the pad + and -
   assert.match(logs.at(-1), /^Input keys: \+ down, - up at /);
 });
 
+test('once the UI magic was seen, a shifted idle record no longer passes as detached', () => {
+  const lines = [];
+  const reader = createPushReader({layout: 'position', write: line => lines.push(line), log() {}});
+  reader.attach(812);
+  reader.data(pushRecord(1, {buttons: BUTTON_A}));
+  // A new launcher session starts over before the service writes the magic again.
+  const restarted = pushRecord(1);
+  restarted.writeUInt32LE(0, 784);
+  reader.data(Buffer.concat([pushRecord(2), restarted]));
+  assert.equal(reader.take().pushed, 3, 'the restarted record with 0 is framed');
+  reader.data(pushRecord(2, {buttons: BUTTON_A}));
+  // 784 bytes of an idle record shift a zero buttons word onto the next record's uiMagic.
+  const cut = pushRecord(3).subarray(0, 784);
+  assert.throws(() => reader.data(Buffer.concat([cut, pushRecord(4)])), /lost the record framing/);
+  assert.equal(reader.take().pushed, 1);
+});
+
 test('a short send that shifts the push framing fails the reader before any shifted line', () => {
   const lines = [];
   const reader = createPushReader({layout: 'position', write: line => lines.push(line), log() {}});
