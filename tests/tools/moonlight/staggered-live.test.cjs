@@ -388,6 +388,12 @@ test('a short stream drains its lag-2 tail and stops both workers before finaliz
     ['gate', 'drain', 'drain']
   );
   assert.equal(device.transport.aborted, true);
+  // Gates 3-5 read acquires 1-3 and gates 4-5 fetches 1-2, all done on the first read.
+  assert.equal(live.counts.acquireWaits.small.immediate, 3);
+  assert.deepEqual(live.counts.fetchWaits.small, {
+    ...live.counts.acquireWaits.small,
+    immediate: 2
+  });
   assert.deepEqual(withoutPacer(live.counts), {
     submitted: 5,
     decoded: 5,

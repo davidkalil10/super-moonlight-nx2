@@ -78,7 +78,7 @@ const PENDING_READ_BINS = 4;
  * - lower (`lowerBins`): from the end of the first pending read to the start of the last one,
  *   so 0 with a single pending read.
  * `immediate` counts the acquires a gate's first read already found done, and `reads` how many
- * pending reads each wait took.
+ * pending reads each wait took. The fetch waits are booked the same way.
  */
 function createAcquireWaits() {
   const bins = () => ACQUIRE_BINS_MS.map(() => 0).concat(0);
@@ -427,6 +427,7 @@ function create({
   let cooling = 0;
   const waiting = {};
   const acquireWaits = createAcquireWaits();
+  const fetchWaits = createAcquireWaits();
   const waits = {
     timeoutMs,
     pause,
@@ -515,6 +516,11 @@ function create({
         const unit = expected.acquire.sequence;
         const pending = snapshot.acquire.sequence < unit;
         acquireWaits.observe(unit, pending, startedAt, now(), units.get(unit)?.length ?? 0);
+      }
+      if (expected.fetch) {
+        const unit = expected.fetch.sequence;
+        const pending = snapshot.fetch.sequence < unit;
+        fetchWaits.observe(unit, pending, startedAt, now(), units.get(unit)?.length ?? 0);
       }
       if (expected.ack) {
         const applied = isApplied(snapshot.nativeApplied, expected.ack.sequence);
@@ -940,7 +946,8 @@ function create({
         waiting: {...waiting},
         exchanges: timing.counts,
         ...(receive && {receive: {...receiveSlept, fixedMs: receive.fixedMs}}),
-        acquireWaits: acquireWaits.counts
+        acquireWaits: acquireWaits.counts,
+        fetchWaits: fetchWaits.counts
       };
     },
 

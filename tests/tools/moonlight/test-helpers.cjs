@@ -19,15 +19,16 @@ function tempFile(prefix, name) {
 }
 
 /**
- * The staggered counts without the pacer's read counters and the acquire-wait timings, which the
- * fake device does not pin. EXCHANGE is the exchange bin that must carry a timing.
+ * The staggered counts without the pacer's read counters and the acquire and fetch waits, which
+ * the fake device does not pin. EXCHANGE is the exchange bin that must carry a timing.
  */
 const withoutPacer =
   exchange =>
-  ({pacer, exchanges, acquireWaits, ...counts}) => (
+  ({pacer, exchanges, acquireWaits, fetchWaits, ...counts}) => (
     assert.equal(typeof pacer.reads, 'number'),
     assert.equal(typeof exchanges[exchange].ms, 'number'),
     assert.deepEqual(Object.keys(acquireWaits), ['small', 'large']),
+    assert.deepEqual(Object.keys(fetchWaits), ['small', 'large']),
     counts
   );
 
