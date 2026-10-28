@@ -105,6 +105,9 @@ the child processes in stream-children.js.
 - The run stops on SIGINT/SIGTERM, `--duration`, Moonlight leaving the console, or a console that
   stops answering (invariant 16).
 - Run record: manifest.json, events.jsonl, stats.jsonl (one row per statsMs) and summary.json.
+- A row's `au.gateAgeMs` is the age of the unit whose push ran the gate. Under the default gate
+  that gate opens the unit before it, whose age is `au.ownGateMs` and includes the wait for N+1.
+  Under `--gate-on-receive` the two are equal.
 - run-summary.js: `summarize` averages the steady rows after the warmup, `parseExpect` reads the
   `--expect` limits, `verdict` checks them. Dropped frames and IDR requests fail a run unless
   `--expect` allows some. Backlog trims are intended skips: counted apart from drops, they fail a

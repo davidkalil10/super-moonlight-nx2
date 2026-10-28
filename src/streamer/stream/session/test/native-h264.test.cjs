@@ -86,17 +86,30 @@ test('access-unit timing reports the wait to send, the age at gate and the units
   assert.deepEqual(
     auTiming([
       {arrivedAt: 100, gatedAt: null, sentAt: 103, inHand: null},
-      {arrivedAt: 110, gatedAt: 130, sentAt: 132.5, inHand: 1},
-      {arrivedAt: 120, gatedAt: 150, sentAt: 151, inHand: 3}
+      {arrivedAt: 110, gatedAt: 130, sentAt: 132.5, ownGateMs: 30, inHand: 1},
+      {arrivedAt: 120, gatedAt: 150, sentAt: 151, ownGateMs: 40, inHand: 3}
     ]),
-    {units: 3, gated: 2, waitMs: 18.8, maxWaitMs: 31, gateAgeMs: 25, inHand: 2, maxInHand: 3}
+    {
+      units: 3,
+      gated: 2,
+      waitMs: 18.8,
+      maxWaitMs: 31,
+      gateAgeMs: 25,
+      ownGateMs: 35,
+      inHand: 2,
+      maxInHand: 3
+    }
   );
+  const first = {arrivedAt: 110, gatedAt: 130, sentAt: 131, ownGateMs: null, inHand: 1};
+  const second = {arrivedAt: 120, gatedAt: 150, sentAt: 151, ownGateMs: 40, inHand: 1};
+  assert.equal(auTiming([first, second]).ownGateMs, 40, 'a gate with no opened unit is left out');
   assert.deepEqual(auTiming([]), {
     units: 0,
     gated: 0,
     waitMs: null,
     maxWaitMs: null,
     gateAgeMs: null,
+    ownGateMs: null,
     inHand: null,
     maxInHand: null
   });
@@ -1425,6 +1438,7 @@ test('a queued gate that runs after its push still times its unit', {timeout: 50
     for (const row of rows) assert.equal(row.au.gated, row.au.units, 'no row books a unit ungated');
     assert.ok(rows.reduce((sum, row) => sum + row.au.gated, 0) >= 2);
     assert.equal(summary.au.gateAgeMs, 20);
+    assert.equal(summary.au.ownGateMs, 20, 'a queued gate opens its own unit');
   });
 });
 
@@ -1851,4 +1865,23 @@ test('units carry their arrival time only when the reader has a clock', async ()
   plain.end(Buffer.from([1]));
   untimed.endMetadata();
   for await (const unit of untimed) assert.equal('arrivedAt' in unit, false);
+});
+
+test('the default gate books the age of the unit it opens, the one pushed before', async () => {
+  const f = await fixture({units: pairedUnits(6)});
+  const arrivals = [];
+  let clock = 1000;
+  f.options.now = () => (clock += 7);
+  f.options.statsMs = 10;
+  f.options.createStaggered = timedStaggeredFake(f.events, arrivals);
+  f.options.args.push('--staggered', '--queue', '16', '--warmup', '0');
+  await exercise(f, async () => {
+    const summary = await run(f.options);
+    // The fake gates at its unit's arrival + 10, so the opened unit is that much plus the gap.
+    const gaps = arrivals.slice(1).map((at, index) => at + 10 - arrivals[index]);
+    const expected = gaps.reduce((sum, gap) => sum + gap, 0) / gaps.length;
+    assert.ok(new Set(gaps).size > 1 || gaps[0] !== 10, 'arrivals must differ for this test');
+    assert.equal(summary.au.gateAgeMs, 10);
+    assert.ok(Math.abs(summary.au.ownGateMs - expected) < 0.2, `${summary.au.ownGateMs}`);
+  });
 });

@@ -73,12 +73,14 @@ function auTotals(steady) {
   const timed = steady.filter(row => row.au?.units);
   if (!timed.length) return null;
   const total = weight => timed.reduce((sum, row) => sum + (row.au[weight] ?? 0), 0);
+  // Only the rows that carry `key`, so a missing value is not averaged in as 0.
   const mean = (key, weight) => {
-    const weighted = timed.reduce(
-      (sum, row) => sum + (row.au[key] ?? 0) * (row.au[weight] ?? 0),
-      0
-    );
-    return +(weighted / (total(weight) || 1)).toFixed(1);
+    const carried = timed.filter(row => row.au[key] != null);
+    if (!carried.length) return null;
+    const weightOf = row => row.au[weight] ?? 0;
+    const weighted = carried.reduce((sum, row) => sum + row.au[key] * weightOf(row), 0);
+    const weights = carried.reduce((sum, row) => sum + weightOf(row), 0);
+    return +(weighted / (weights || 1)).toFixed(1);
   };
   return {
     units: total('units'),
@@ -86,6 +88,7 @@ function auTotals(steady) {
     waitMs: mean('waitMs', 'units'),
     maxWaitMs: Math.max(...timed.map(row => row.au.maxWaitMs ?? 0)),
     gateAgeMs: mean('gateAgeMs', 'gated'),
+    ownGateMs: mean('ownGateMs', 'gated'),
     inHand: mean('inHand', 'gated'),
     maxInHand: Math.max(...timed.map(row => row.au.maxInHand ?? 0))
   };

@@ -181,6 +181,8 @@ async function run({
   let pushCounts = {pushed: 0, dropped: 0, gapMaxMs: 0, applied: 0, changes: 0};
   let trimmed = 0;
   let auSamples = [];
+  // The last unit pushed, which the default gate opens on the next push.
+  let heldSample = null;
   const stats = freshStats();
   // The decoder generations and what the current one has been fed.
   let resets = [];
@@ -323,6 +325,7 @@ async function run({
   /** Opens a decoder generation on its own transport and staggered scheduler. */
   async function makeDecoder() {
     transport = await createTransport({rpc, host: rpc.host});
+    heldSample = null;
     staggeredLive = createStaggered({
       presentHz,
       skipBacklog,
@@ -478,7 +481,9 @@ async function run({
       enter,
       backlog: procs.reader.ready.length,
       onGate: at => {
+        const gated = gateOnReceive ? sample : heldSample;
         sample.gatedAt = at;
+        sample.ownGateMs = gated ? at - gated.arrivedAt : null;
         sample.inHand = 1 + procs.reader.ready.length;
         if (sample.queued) auSamples.push(sample);
         sample.queued = false;
@@ -642,6 +647,7 @@ async function run({
     };
     try {
       await staggeredLive.push(unit, pushOptions(sample));
+      heldSample = sample;
     } finally {
       pairing = false;
     }

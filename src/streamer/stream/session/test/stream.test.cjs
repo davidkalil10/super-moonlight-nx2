@@ -1525,6 +1525,7 @@ test('rows with access-unit timing are weighted by units, and rows without it st
         waitMs: 20,
         maxWaitMs: 31,
         gateAgeMs: 18,
+        ownGateMs: 34,
         inHand: 1,
         maxInHand: 2
       }),
@@ -1534,6 +1535,7 @@ test('rows with access-unit timing are weighted by units, and rows without it st
         waitMs: 40,
         maxWaitMs: 52.5,
         gateAgeMs: 38,
+        ownGateMs: 54,
         inHand: 2,
         maxInHand: 3
       }),
@@ -1547,9 +1549,20 @@ test('rows with access-unit timing are weighted by units, and rows without it st
     waitMs: 25,
     maxWaitMs: 52.5,
     gateAgeMs: 23,
+    ownGateMs: 39,
     inHand: 1.3,
     maxInHand: 3
   });
+  const mixed = summarize(
+    [
+      row(30),
+      timed(60, {units: 60, gated: 60, waitMs: 20, gateAgeMs: 18, inHand: 1}),
+      timed(60, {units: 20, gated: 20, waitMs: 40, gateAgeMs: 38, ownGateMs: 54, inHand: 2})
+    ],
+    {warmup: 1}
+  );
+  assert.equal(mixed.au.ownGateMs, 54, 'rows without the value are not averaged in as 0');
+  assert.equal(mixed.au.gateAgeMs, 23);
   const old = summarize([row(30), row(30), row(30), row(30)]);
   assert.equal(old.au, undefined);
   assert.equal(old.fps, 30);

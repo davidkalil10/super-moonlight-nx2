@@ -87,8 +87,10 @@ function receiveRow(now, before) {
 /**
  * One stats row's access-unit timing: the mean and longest wait from host arrival to send, and
  * over the units that went through a gate, the mean age at gate and how many were in hand.
+ * gateAgeMs is the age of the unit whose push ran the gate; ownGateMs is the age of the unit the
+ * gate opened, which under the default gate is the one before it.
  * @param {{arrivedAt: number, gatedAt: number | null, sentAt: number,
- *   inHand: number | null}[]} samples
+ *   ownGateMs?: number | null, inHand: number | null}[]} samples
  */
 function auTiming(samples) {
   const gated = samples.filter(sample => sample.gatedAt !== null);
@@ -101,6 +103,7 @@ function auTiming(samples) {
     waitMs: mean(waits),
     maxWaitMs: waits.length ? tenths(Math.max(...waits)) : null,
     gateAgeMs: mean(gated.map(sample => sample.gatedAt - sample.arrivedAt)),
+    ownGateMs: mean(gated.map(sample => sample.ownGateMs).filter(ms => ms != null)),
     inHand: mean(gated.map(sample => sample.inHand)),
     maxInHand: gated.length ? Math.max(...gated.map(sample => sample.inHand)) : null
   };
