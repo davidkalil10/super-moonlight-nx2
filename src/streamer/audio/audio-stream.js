@@ -359,7 +359,12 @@ function stream(options) {
     await drain();
     check(Number(await call('GetAudioOutBufferCount', base)) === 0, 'AudioOut queue did not drain');
     // Only a closed AudioOut no longer touches its region.
-    if (await call('CloseAudioOut', base).then(() => true, () => false))
+    if (
+      await call('CloseAudioOut', base).then(
+        () => true,
+        () => false
+      )
+    )
       await release(rpc, base);
 
     if (inputError) throw inputError;

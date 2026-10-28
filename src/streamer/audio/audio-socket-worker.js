@@ -472,7 +472,12 @@ async function create({
     if (opened) {
       await call('FlushAudioOutBuffers', [audio]).catch(() => {});
       // Only a closed AudioOut no longer touches its region.
-      if (await call('CloseAudioOut', [audio]).then(() => true, () => false))
+      if (
+        await call('CloseAudioOut', [audio]).then(
+          () => true,
+          () => false
+        )
+      )
         await release(rpc, audio).catch(() => {});
     }
     throw error;
