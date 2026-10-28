@@ -15,7 +15,8 @@ import path from 'node:path';
 import readline from 'node:readline';
 import {spawn, execFileSync} from 'node:child_process';
 import os from 'node:os';
-import {AccessUnits, parameterSets} from './h264-stream.js';
+import {AccessUnits, scanUnit} from './h264-stream.js';
+import {parseSps, reorderOf} from './h264-sps.js';
 import {instrument, watchBridge} from './bridge-counter.js';
 import * as cli from '../../../hbl-platform/sdk/cli.js';
 import {builds} from '../../../hbl-platform/sdk/build.js';
@@ -432,7 +433,7 @@ function helperArgs(host, app, {width, height, fps, bitrate, audio}) {
  */
 function buildSummary(
   options,
-  {rows, staggeredLive, tail, socketAudioReport, inputPushStop, stopReason, lagFallback}
+  {rows, staggeredLive, tail, socketAudioReport, inputPushStop, stopReason, lagFallback, stream}
 ) {
   const {presentHz, skipBacklog, skipRule, trimBacklogMs, gateOnReceive, outputLag} = options;
   const {decodeWait, receiveWait, avoidWindow, queue, inputHz, audioFrames, audio} = options;
@@ -463,7 +464,9 @@ function buildSummary(
     ...scoring.summarize(rows, {warmup}),
     expect,
     stopReason,
-    ...(lagFallback && {lagFallback})
+    ...(lagFallback && {lagFallback}),
+    ...(stream.sps && {sps: stream.sps}),
+    ...(stream.bSlices && {bSlices: stream.bSlices})
   };
 }
 
@@ -478,6 +481,8 @@ function score(summary, {expect, duration, socketAudioReport, inputPushStop, sto
   if (stopReason === 'console-stalled') result.failures.push('console stopped answering');
   if (stopReason === 'lag0-timeout')
     result.failures.push('lag 0 decoder wait timed out; rerun with --output-lag 1');
+  if (stopReason === 'lag0-reorder')
+    result.failures.push('lag 0 refused, the stream can reorder; rerun with --output-lag 1');
   if (duration !== null && stopReason !== 'duration')
     result.failures.push('ended before duration: ' + stopReason);
   result.pass = result.failures.length === 0;
@@ -589,6 +594,8 @@ async function run({
   let generation = 0;
   let sps;
   let pps;
+  /** The last SPS as h264-sps.js reads it and the B slices seen, for the log and summary. */
+  const stream = {sps: null, bSlices: 0};
   let configured = false;
   let workerStarted = false;
   let firstFrame = null;
@@ -643,13 +650,56 @@ async function run({
   }
 
   /**
-   * Ends a lag 0 run whose decoder wait timed out; lag 1 is the advice.
-   * @param {{at: number, waitedFor: number, reason: string, recommendedLag: number}} fallback
+   * Ends a lag 0 run on a decoder timeout or a stream that can reorder; lag 1 is the advice.
+   * @param {{at: number, reason: string, recommendedLag: number}} fallback
+   * @param {string} [reason]
    */
-  function endLagZero(fallback) {
+  function endLagZero(fallback, reason = 'lag0-timeout') {
     lagFallback = fallback;
     log({event: 'lag-fallback', lagFallback: fallback});
-    stop('lag0-timeout');
+    stop(reason);
+  }
+
+  /**
+   * The error that refuses lag 0 for a stream that can reorder: the decoder would hold an
+   * output the next gate waits for (h264-sps.js).
+   * @param {any} unit
+   * @param {string} reorder
+   */
+  function reorderRefusal(unit, reorder) {
+    const fallback = {at: unit.seq, reason: reorder, recommendedLag: 1};
+    return Object.assign(Error('--output-lag 0 refused: ' + reorder), {
+      lagFallback: fallback,
+      stopReason: 'lag0-reorder'
+    });
+  }
+
+  /**
+   * Reads and logs what the SPS says about reordering before it is configured; lag 0 refuses
+   * one that allows it or cannot be read.
+   * @param {any} unit
+   */
+  function checkSps(unit) {
+    let reorder;
+    try {
+      const parsed = parseSps(sps);
+      reorder = reorderOf(parsed);
+      stream.sps = {...parsed, reorder};
+    } catch (error) {
+      reorder = 'unreadable SPS: ' + error.message;
+      stream.sps = {error: error.message, reorder};
+    }
+    log({event: 'h264-sps', ...stream.sps});
+    if (outputLag === 0 && reorder) throw reorderRefusal(unit, reorder);
+  }
+
+  /**
+   * Counts B slices and logs the first; lag 0 ends on one.
+   * @param {any} unit
+   */
+  function checkSlices(unit) {
+    if (!stream.bSlices++) log({event: 'h264-b-slice', seq: unit.seq});
+    if (outputLag === 0) throw reorderRefusal(unit, 'B slice in unit ' + unit.seq);
   }
 
   const onInterrupt = () => stop('SIGINT');
@@ -970,7 +1020,8 @@ async function run({
       ...(trimBacklogMs !== null && {trimBacklogMs}),
       ...(gateOnReceive && {gateOnReceive}),
       ...(gateQueue && {gateQueue}),
-      ...(outputLag !== null && {outputLag})
+      ...(outputLag !== null && {outputLag}),
+      ...(stream.sps && {sps: stream.sps})
     });
   }
 
@@ -1099,13 +1150,15 @@ async function run({
    * carries both; false while the unit has to be skipped.
    */
   async function readyToDecode(unit) {
-    const sets = parameterSets(unit.data);
+    const sets = scanUnit(unit.data);
+    if (sets.bSlice) checkSlices(unit);
     if (configured && ((sets.sps && !sets.sps.equals(sps)) || (sets.pps && !sets.pps.equals(pps))))
       await resync(Error('H.264 parameter sets changed'));
     sps = sets.sps || sps;
     pps = sets.pps || pps;
     if (configured) return true;
     if (!unit.keyframe || !sps || !pps) return false;
+    checkSps(unit);
     await decoder.configure(sps, pps, fps);
     configured = true;
     return true;
@@ -1228,7 +1281,8 @@ async function run({
       socketAudioReport,
       inputPushStop,
       stopReason,
-      lagFallback
+      lagFallback,
+      stream
     });
     const result = score(summary, {
       expect: options.expect,
@@ -1264,7 +1318,7 @@ async function run({
   } catch (error) {
     failed = error;
     await logFailure(error);
-    if (error.lagFallback && !stopping) endLagZero(error.lagFallback);
+    if (error.lagFallback && !stopping) endLagZero(error.lagFallback, error.stopReason);
     if (!stopping) throw error;
   } finally {
     await shutdown();

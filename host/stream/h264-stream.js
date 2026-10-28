@@ -8,6 +8,8 @@
  * keyframe.
  */
 
+import {isBSlice, sliceType} from './h264-sps.js';
+
 const NAL_SPS = 7;
 const NAL_PPS = 8;
 const NAL_TYPE_MASK = 31;
@@ -53,17 +55,29 @@ function nals(bytes) {
 }
 
 /**
+ * The last SPS and PPS in a byte stream, copied out, and whether it carries a B slice, from
+ * one pass over its NAL units.
+ * @param {Uint8Array} bytes
+ * @returns {{sps?: Buffer, pps?: Buffer, bSlice: boolean}}
+ */
+function scanUnit(bytes) {
+  const result = {bSlice: false};
+  for (const nal of nals(bytes)) {
+    if (nal.type === NAL_SPS) result.sps = Buffer.from(nal.data);
+    if (nal.type === NAL_PPS) result.pps = Buffer.from(nal.data);
+    result.bSlice ||= isBSlice(sliceType(nal.data));
+  }
+  return result;
+}
+
+/**
  * The last SPS and PPS in a byte stream, copied out.
  * @param {Uint8Array} bytes
  * @returns {{sps?: Buffer, pps?: Buffer}}
  */
 function parameterSets(bytes) {
-  const result = {};
-  for (const nal of nals(bytes)) {
-    if (nal.type === NAL_SPS) result.sps = Buffer.from(nal.data);
-    if (nal.type === NAL_PPS) result.pps = Buffer.from(nal.data);
-  }
-  return result;
+  const {bSlice, ...sets} = scanUnit(bytes);
+  return sets;
 }
 
 function isNonNegativeSafeInteger(value) {
@@ -300,4 +314,4 @@ class AccessUnits {
   }
 }
 
-export {AccessUnits, nals, parameterSets};
+export {AccessUnits, nals, parameterSets, scanUnit};

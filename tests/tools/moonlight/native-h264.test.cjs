@@ -21,9 +21,16 @@ const {
   steadyLink
 } = require('../../../host/stream/native-h264.js');
 const {AccessUnits, parameterSets} = require('../../../host/stream/h264-stream.js');
+const {spsNal, sliceNal} = require('./test-helpers.cjs');
 
 // native-h264.js
 const accessUnit = Buffer.from('0000016742001eab00000168ce0100000165abcd', 'hex');
+const annexB = (...nals) => Buffer.concat(nals.flatMap(nal => [Buffer.from([0, 0, 0, 1]), nal]));
+const pps = Buffer.from('68ce01', 'hex');
+/** A keyframe whose SPS rules out reordering, for lag 0, and one whose SPS allows it. */
+const noReorderUnit = annexB(spsNal(), pps, sliceNal(7));
+const reorderUnit = annexB(spsNal({reorder: 2}), pps, sliceNal(7));
+const truncatedSpsUnit = annexB(Buffer.from('6742001eab', 'hex'), pps, sliceNal(7));
 const pcm = Buffer.from('0001020304050607', 'hex');
 
 test('stats rows report staggered waits since the previous row', () => {
@@ -691,9 +698,9 @@ test(
   }
 );
 
-const pairedUnits = count =>
+const pairedUnits = (count, unit = accessUnit) =>
   Array.from({length: count}, (_, index) => ({
-    hex: accessUnit.toString('hex'),
+    hex: unit.toString('hex'),
     keyframe: index === 0,
     pts: (index + 1) * 1000
   }));
@@ -1400,7 +1407,7 @@ test('a gate error that already failed a push is logged once', {timeout: 5000}, 
 
 test('--output-lag reaches the staggered scheduler and takes 0 to 2', {timeout: 5000}, async () => {
   for (const lag of [1, 0]) {
-    const f = await fixture({units: pairedUnits(4)});
+    const f = await fixture({units: pairedUnits(4, lag ? accessUnit : noReorderUnit)});
     const created = [];
     const fake = staggeredFake(f.events);
     f.options.createStaggered = options => {
@@ -1412,6 +1419,7 @@ test('--output-lag reaches the staggered scheduler and takes 0 to 2', {timeout: 
       const summary = await run(f.options);
       assert.equal(created[0].lag, lag);
       assert.equal(summary.outputLag, lag);
+      assert.notEqual(summary.stopReason, 'lag0-reorder');
     });
   }
   for (const [args, message] of [
@@ -1441,7 +1449,7 @@ test(
   'a lag 0 decoder timeout stops the run and records the fallback',
   {timeout: 5000},
   async () => {
-    const f = await fixture({units: pairedUnits(4)});
+    const f = await fixture({units: pairedUnits(4, noReorderUnit)});
     const lagFallback = {
       at: 3,
       waitedFor: 2,
@@ -1471,12 +1479,78 @@ test(
   }
 );
 
+/** The events.jsonl records of a fixture's run. */
+async function loggedEvents(f) {
+  const text = await fs.readFile(path.join(f.directory, 'logs', 'events.jsonl'), 'utf8');
+  return text.trim().split('\n').map(JSON.parse);
+}
+
+test(
+  'lag 0 refuses an SPS that allows reordering before it configures',
+  {timeout: 5000},
+  async () => {
+    for (const unit of [reorderUnit, truncatedSpsUnit]) {
+      const f = await fixture({units: pairedUnits(4, unit)});
+      f.options.createStaggered = staggeredFake(f.events);
+      f.options.args.push('--staggered', '--output-lag', '0');
+      await exercise(f, async () => {
+        const summary = await run(f.options);
+        const reason =
+          unit === reorderUnit ? 'max_num_reorder_frames 2' : 'unreadable SPS: Truncated H.264 SPS';
+        assert.equal(summary.stopReason, 'lag0-reorder');
+        assert.equal(summary.lagFallback.reason, reason);
+        assert.equal(summary.lagFallback.recommendedLag, 1);
+        assert.equal(summary.sps.reorder, reason);
+        assert.equal(summary.pass, false);
+        assert.ok(
+          summary.failures.includes(
+            'lag 0 refused, the stream can reorder; rerun with --output-lag 1'
+          )
+        );
+        assert.equal(f.events.filter(event => event.type === 'configure').length, 0);
+        const events = await loggedEvents(f);
+        assert.equal(events.find(entry => entry.event === 'h264-sps').reorder, reason);
+        assert.equal(events.find(entry => entry.event === 'native-stop').reason, 'lag0-reorder');
+      });
+    }
+  }
+);
+
+test('a B slice ends a lag 0 run and is only counted at lag 1', {timeout: 5000}, async () => {
+  const units = [annexB(sliceNal(0)), annexB(sliceNal(6)), annexB(sliceNal(0))];
+  for (const lag of [0, 1]) {
+    const f = await fixture({
+      units: [noReorderUnit, ...units].map((unit, index) => ({
+        hex: unit.toString('hex'),
+        keyframe: index === 0,
+        pts: (index + 1) * 1000
+      }))
+    });
+    f.options.createStaggered = staggeredFake(f.events);
+    f.options.args.push('--staggered', '--output-lag', String(lag));
+    await exercise(f, async () => {
+      const summary = await run(f.options);
+      const events = await loggedEvents(f);
+      assert.equal(summary.sps.reorder, null);
+      assert.equal(summary.bSlices, 1);
+      assert.ok(events.some(entry => entry.event === 'h264-b-slice'));
+      if (lag === 0) {
+        assert.equal(summary.stopReason, 'lag0-reorder');
+        assert.match(summary.lagFallback.reason, /^B slice in unit \d+$/);
+      } else {
+        assert.notEqual(summary.stopReason, 'lag0-reorder');
+        assert.equal(summary.lagFallback, undefined);
+      }
+    });
+  }
+});
+
 test(
   'the staggered-worker started event names the latency flags that were on',
   {timeout: 5000},
   async () => {
-    const started = async args => {
-      const f = await fixture({units: pairedUnits(4)});
+    const started = async (args, unit = accessUnit) => {
+      const f = await fixture({units: pairedUnits(4, unit)});
       f.options.createStaggered = staggeredFake(f.events);
       f.options.args.push('--staggered', ...args);
       let event;
@@ -1501,7 +1575,12 @@ test(
     assert.equal(flagged.trimBacklogMs, 40);
     assert.equal(flagged.gateOnReceive, true);
     assert.equal(flagged.outputLag, 1);
-    assert.equal((await started(['--output-lag', '0'])).outputLag, 0);
+    assert.equal(flagged.sps.reorder, 'unreadable SPS: Truncated H.264 SPS');
+    const lagZero = await started(['--output-lag', '0'], noReorderUnit);
+    assert.equal(lagZero.outputLag, 0);
+    assert.equal(lagZero.sps.reorder, null);
+    assert.equal(lagZero.sps.maxNumReorderFrames, 0);
+    assert.equal(lagZero.sps.pocType, 0);
     const plain = await started([]);
     assert.equal(plain.started, true);
     for (const key of ['trimBacklogMs', 'gateOnReceive', 'outputLag']) assert.ok(!(key in plain));

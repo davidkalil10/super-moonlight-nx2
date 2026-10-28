@@ -23,6 +23,7 @@
     "../tools/moonlight/frames.js",
     "../tools/moonlight/ring.js",
     "../host/stream/h264-stream.js",
+    "../host/stream/h264-sps.js",
     "../tools/moonlight/reference.js",
     "../apps/moonlight/build.js",
     "../host/stream/bitrate.js",
