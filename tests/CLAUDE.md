@@ -11,8 +11,8 @@ Everything runs against the runtime code by relative path:
 
 ```
 <dir>/hbl-moonlight      the code under test, these tests in tests/
-<dir>/hbl-platform       bridge, sdk/host, sdk/native, sdk/package
-<dir>/hbl-platform-dev   sdk/tests/recording-rpc.cjs, audio-out-mock, gate-worker-mock
+<dir>/hbl-platform       bridge, sdk/host, sdk/native, sdk/package; tests/ mocks (recording-rpc,
+                         audio-out-mock, gate-worker-mock)
 <dir>/HBLauncher         package-backend.js and the hb-package hello-world template
 ```
 
@@ -39,8 +39,8 @@ node apps/moonlight/check.cjs [CLIP]         # desktop Vulkan check, needs a GPU
   by path in a worktree that links one.
 - No test binds the launcher port 39380; native TCP tests listen on port 0.
 - `tools/moonlight/request-budget.cjs` is the offline cost model; run it before any device run.
-  Console probes live in sibling `hbl-dev/sdk/tools` and `hbl-platform-dev/sdk/tools`: the user
-  runs them, one at a time, per DEVICE-RULES.md.
+  Console probes live in sibling `hbl-dev/sdk/tools`: the user runs them, one at a time, per
+  DEVICE-RULES.md.
 
 ## Bridge budget (measured)
 

@@ -9,8 +9,8 @@ Everything runs against the runtime code by relative path:
 
 ```
 <dir>/hbl-moonlight      the code under test, these tests in tests/
-<dir>/hbl-platform       bridge, sdk/host, sdk/native, sdk/package
-<dir>/hbl-platform-dev   sdk/tests mocks (recording-rpc, audio-out-mock, gate-worker-mock)
+<dir>/hbl-platform       bridge, sdk/host, sdk/native, sdk/package; tests/ mocks (recording-rpc,
+                         audio-out-mock, gate-worker-mock)
 <dir>/HBLauncher         sdk/host/package-backend.js, the hb-package hello-world template
 ```
 
