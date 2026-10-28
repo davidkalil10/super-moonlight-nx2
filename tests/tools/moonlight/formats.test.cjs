@@ -136,7 +136,7 @@ test('keyframe decodes close to the source', () => {
   assert.strictEqual(decoder.applied, 1);
 });
 
-test('torn slot is rejected', () => {
+test('hbv2 torn slot is rejected', () => {
   const words = keyframe(hbv2.toFrame(scene(64, 48), 64, 48), 9);
   words[words.length - 1] = 8;
   assert.strictEqual(hbv2.readHeader(words), null);

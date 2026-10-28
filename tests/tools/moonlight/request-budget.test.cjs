@@ -313,7 +313,7 @@ test('the pacer learns the apply grid from a host whose backlog keeps the ack op
   );
 });
 
-test('the decode wait sleeps through a pending acquire instead of rereading', async () => {
+test('budget: the decode wait sleeps through a pending acquire instead of rereading', async () => {
   const run = (presentHz, decodeMs, decodeWait, retryRate = 0) =>
     simulate({
       frames: 600,
@@ -346,7 +346,7 @@ test('the decode wait sleeps through a pending acquire instead of rereading', as
   }
 });
 
-test('the receive wait sleeps through a slow receive instead of rereading', async () => {
+test('budget: the receive wait sleeps through a slow receive instead of rereading', async () => {
   const run = (receiveWait, receiveMs) =>
     simulate({
       frames: 600,
@@ -373,7 +373,7 @@ test('the receive wait sleeps through a slow receive instead of rereading', asyn
     assert.equal(quickWaited[key], quick[key], key);
 });
 
-test('the decode wait needs the vsync skip rule', async () => {
+test('budget: the decode wait needs the vsync skip rule', async () => {
   const options = {frames: 10, presentHz: 60, lag: 2, barrier: true};
   await assert.rejects(
     simulate({...options, hostWait: 'pacer', skipBacklog: 2, decodeWait: true}),
