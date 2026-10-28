@@ -352,7 +352,7 @@ function runPush({
   }
 
   /** @param {Buffer} bytes */
-  function onData(bytes) {
+  function feed(bytes) {
     try {
       reader.data(bytes);
     } catch (error) {
@@ -360,15 +360,19 @@ function runPush({
     }
   }
 
+  /** Only the current worker reaches the reader; a stopping or retained one is cut off. */
   async function startWorker(state, ui) {
-    worker = await createWorker({
+    let created = null;
+    const current = () => created !== null && worker === created;
+    created = await createWorker({
       rpc,
       state,
       ui,
       hz,
-      onData,
-      onClose: () => worker && fail(Error('Input push socket closed by the console'))
+      onData: bytes => current() && feed(bytes),
+      onClose: () => current() && fail(Error('Input push socket closed by the console'))
     });
+    worker = created;
     reader.attach(worker.recordBytes);
     await worker.start();
     running = `${state}/${ui}`;
@@ -479,7 +483,11 @@ async function mainPush(bridge, {directory, hz, layout, startChord, countsFd}) {
     try {
       fs.writeSync(countsFd, JSON.stringify(report) + '\n');
     } catch {}
-  if (stopError) throw stopError;
+  if (!stopError) return;
+  if (!push.retained) throw stopError;
+  // The retained worker's console socket stays open, so the process is ended here.
+  process.stderr.write(stopError.message + '\n');
+  process.exit(1);
 }
 
 async function main() {

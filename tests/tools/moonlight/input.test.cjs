@@ -542,6 +542,9 @@ async function pushWorker({before = () => {}, ...options} = {}) {
     receive(onData) {
       listener = onData;
     },
+    abort() {
+      log.push(['abort']);
+    },
     async close() {
       log.push(['close', fake.rpc.lines.length]);
     }
@@ -599,7 +602,7 @@ test('a push worker that does not stop is retained with its socket open', async 
   assert.equal(worker.retained, true);
   const calls = fake.rpc.lines.filter(line => !line.startsWith('verify '));
   assert.ok(!calls.some(line => /thread\.join/.test(line)), 'no join of a running worker');
-  assert.deepEqual(log, [['connect', '192.0.2.10']]);
+  assert.deepEqual(log, [['connect', '192.0.2.10'], ['abort']], 'only the host end is dropped');
   await assert.rejects(worker.stop(), /retained for safety/);
 });
 
@@ -608,12 +611,12 @@ test('a failed push join or spawn retains the socket', async () => {
   await joined.worker.start();
   await assert.rejects(joined.worker.stop(), /push worker join failed/);
   assert.equal(joined.worker.retained, true);
-  assert.equal(joined.log.length, 1);
+  assert.deepEqual(joined.log.at(-1), ['abort']);
   const spawned = await pushWorker({before: fake => (fake.handlers['thread.create'] = () => 1n)});
   await assert.rejects(spawned.worker.start(), /push worker creation failed/);
   assert.equal(spawned.worker.retained, true);
   await assert.rejects(spawned.worker.stop(), /retained for safety/);
-  assert.equal(spawned.log.length, 1);
+  assert.deepEqual(spawned.log.slice(1), [['abort']]);
 });
 
 test('a short push send closes the socket and rejects with the console count', async () => {
@@ -750,7 +753,7 @@ test('a short send that shifts the push framing fails the reader before any shif
  * A push worker double that opens the real native TCP listener: its connect and token jobs
  * start a TCP client playing the console, which the test then writes records on.
  */
-function tcpPushWorker() {
+function tcpPushWorker({beforeStop = async () => {}} = {}) {
   const consoles = [];
   const created = [];
   async function createWorker({state, ui, hz, onData, onClose}) {
@@ -798,6 +801,7 @@ function tcpPushWorker() {
         consoles.push(client);
       },
       async stop() {
+        await beforeStop(client);
         await transport.close();
         client.destroy();
         return {pushed: 9};
@@ -863,6 +867,30 @@ test('push mode feeds records, drops a backlog burst and releases after a silenc
     await push.stop();
   }
   assert.match(logs.at(-1), /console counted 9 records/);
+});
+
+test('a stopping push worker no longer feeds the PC', async () => {
+  const lines = [];
+  const fake = tcpPushWorker({
+    async beforeStop(client) {
+      client.write(pushRecord(1, {buttons: BUTTON_A}));
+      await pause(50);
+    }
+  });
+  const push = runPush({
+    rpc: {},
+    directory: 'unused',
+    hz: 120,
+    layout: 'position',
+    write: line => lines.push(line),
+    log() {},
+    createWorker: fake.createWorker,
+    readSource: () => ({package: {id: 'moonlight'}, mapped: STATE_AT}),
+    readAppStorage: () => ({mapped: 0x71000000})
+  });
+  await until(() => fake.consoles.length === 1);
+  await push.stop();
+  assert.deepEqual(lines, []);
 });
 
 test('push mode fails when the console never sends or closes the socket', async () => {

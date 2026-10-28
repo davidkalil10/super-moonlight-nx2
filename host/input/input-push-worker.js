@@ -11,7 +11,8 @@
  * The worker only sleeps, so stop() just points it at its exit and it leaves within one
  * period. The host end keeps reading until the join, so a send never blocks on a full
  * window; then the counter is read back and the socket closed. Whenever the worker may still
- * hold the socket, it is retained: nothing is closed and SmileBASIC has to be restarted.
+ * hold the socket, it is retained: the host end is dropped, the console descriptor stays open
+ * and SmileBASIC has to be restarted.
  */
 import {allocate} from '../../../hbl-platform/sdk/native/allocate.js';
 import {verify} from '../../../hbl-platform/sdk/native/symbols.js';
@@ -172,6 +173,12 @@ async function create({
   /** @type {{pushed: number} | null} */
   let report = null;
 
+  /** Keeps the console socket and worker; only the host end goes, so nothing more is read. */
+  function retain() {
+    retained = true;
+    transport.abort();
+  }
+
   async function start() {
     if (started || stopped || retained) throw Error('Input push start is not available');
     started = true;
@@ -187,7 +194,7 @@ async function create({
         outputBytes: SHORT
       });
     } catch (error) {
-      retained = true;
+      retain();
       throw error;
     }
     running = true;
@@ -214,7 +221,7 @@ async function create({
         outputBytes: SHORT
       });
     } catch (error) {
-      retained = true;
+      retain();
       throw error;
     }
     running = false;
