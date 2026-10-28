@@ -109,7 +109,9 @@ test('a fake rung writes the records the ladder reads', {timeout: 20000}, async 
   fs.writeFileSync(path.join(runDir, 'app-runtime.json'), '{"active":{"id":"moonlight"}}');
   const flags = ladder.rungFlags('R1', {trimMs: 9});
   const directory = path.join(root, 'R1');
-  await fake.create(MOON, runDir)([...ladder.base('h'), ...flags], directory, 5, /^$/);
+  const rung = fake.create(MOON, runDir);
+  t.after(() => rung.stop?.());
+  await rung([...ladder.base('h'), ...flags], directory, 5, /^$/);
   const row = ladder.row('R1', flags, ladder.readRecords(directory));
   assert.equal(row.flagOn, 'on');
   assert.match(row.score, /^fps \d+(\.\d+)? dropped 0 idr 0 trimmed \d+ PASS$/);
