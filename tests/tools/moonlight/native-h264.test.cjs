@@ -17,7 +17,8 @@ const {
   hiddenTiming,
   withInputStage,
   linkQuality,
-  linkSeconds
+  linkSeconds,
+  steadyLink
 } = require('../../../host/stream/native-h264.js');
 const {AccessUnits, parameterSets} = require('../../../host/stream/h264-stream.js');
 
@@ -116,12 +117,12 @@ test('the input feeder counts land in bridgeByStage, not in the row totals', () 
 });
 
 test('the link verdict follows the input feeder ms per exchange', () => {
-  assert.deepEqual(linkQuality({exchanges: 70, bridgeMs: 210}), {
-    inputMsPerExchange: 3,
+  assert.deepEqual(linkQuality({exchanges: 70, bridgeMs: 245}), {
+    inputMsPerExchange: 3.5,
     verdict: 'ok'
   });
-  assert.deepEqual(linkQuality({exchanges: 70, bridgeMs: 211}), {
-    inputMsPerExchange: 3.01,
+  assert.deepEqual(linkQuality({exchanges: 70, bridgeMs: 246}), {
+    inputMsPerExchange: 3.51,
     verdict: 'weak'
   });
   assert.deepEqual(linkQuality({exchanges: 70, bridgeMs: 420}), {
@@ -139,7 +140,33 @@ test('the link verdict follows the input feeder ms per exchange', () => {
     {link: null},
     {link: {verdict: 'ok'}}
   ];
-  assert.deepEqual(linkSeconds(rows), {ok: 2, weak: 0, bad: 1});
+  assert.deepEqual(linkSeconds(rows), {ok: 2, weak: 0, bad: 1, verdict: 'bad'});
+  const counted = (ok, weak, bad) =>
+    linkSeconds(
+      [
+        ...Array(ok).fill('ok'),
+        ...Array(weak).fill('weak'),
+        ...Array(bad).fill('bad')
+      ].map(verdict => ({link: {verdict}}))
+    ).verdict;
+  assert.equal(counted(9, 0, 1), 'ok', 'a tenth bad is not over the share');
+  assert.equal(counted(8, 0, 2), 'bad');
+  assert.equal(counted(5, 5, 0), 'ok', 'half weak is not over the share');
+  assert.equal(counted(4, 5, 1), 'bad');
+  assert.equal(linkSeconds([{link: null}]).verdict, null);
+});
+
+test('the link event reads the first steady rows, not the warmup', () => {
+  const row = (exchanges, bridgeMs) => ({
+    bridgeByStage: exchanges ? {input: {exchanges, bridgeMs}} : {}
+  });
+  // The start-up row alone would make the link weak.
+  const rows = [row(70, 450), row(70, 180), row(70, 182), row(0), row(70, 190), row(70, 900)];
+  assert.equal(steadyLink(rows.slice(0, 3), 1), null, 'three steady rows are needed');
+  assert.deepEqual(steadyLink(rows.slice(0, 4), 1), {inputMsPerExchange: 2.59, verdict: 'ok'});
+  assert.deepEqual(steadyLink(rows, 1), {inputMsPerExchange: 2.59, verdict: 'ok'});
+  assert.deepEqual(steadyLink(rows, 0), {inputMsPerExchange: 3.87, verdict: 'weak'});
+  assert.equal(steadyLink([row(0), row(0), row(0)], 0), null);
 });
 
 test('backlog IDR requests recover within 100 ms and coalesce dropped frames', () => {
@@ -976,7 +1003,14 @@ test(
       assert.equal(fed.exchanges, 0, 'the feeder reads stay out of the video exchange total');
       assert.equal(fed.link.verdict, 'ok');
       assert.ok(rows.every(row => row.bridgeByStage.input || row.link === null));
-      assert.deepEqual(Object.keys(summary.link), ['ok', 'weak', 'bad']);
+      assert.deepEqual(Object.keys(summary.link), ['ok', 'weak', 'bad', 'verdict']);
+      const events = (await fs.readFile(path.join(f.directory, 'logs', 'events.jsonl'), 'utf8'))
+        .trim()
+        .split('\n')
+        .map(JSON.parse);
+      const links = events.filter(event => event.event === 'link').map(({at, ...link}) => link);
+      const expected = steadyLink(rows, 0);
+      assert.deepEqual(links, expected ? [{event: 'link', ...expected}] : []);
       assert.equal(summary.trimmed, undefined);
       assert.ok(rows.every(row => !('trimmed' in row)));
     });

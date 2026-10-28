@@ -202,7 +202,11 @@ function withInputStage(counts, input) {
 }
 
 /** Input feeder ms per exchange at or under which the console link counts as ok, then weak. */
-const LINK_MS = {ok: 3, weak: 6};
+const LINK_MS = {ok: 3.5, weak: 6};
+/** The steady rows the link event is read from. */
+const LINK_ROWS = 3;
+/** Shares of the steady seconds over which the summary calls the link bad. */
+const LINK_VOID = {bad: 0.1, weakOrBad: 0.5};
 
 /**
  * The console link read from the input feeder's bridge cost: its exchanges are the same every
@@ -219,13 +223,36 @@ function linkQuality(input) {
 }
 
 /**
- * How many rows had each link verdict; rows without input count in none.
+ * The link of the first LINK_ROWS steady rows, from their summed input exchanges; null until
+ * they exist or without input. The warmup rows carry the feeder's start-up cost.
+ * @param {{bridgeByStage: Record<string, {exchanges: number, bridgeMs: number}>}[]} rows
+ * @param {number} warmup
+ */
+function steadyLink(rows, warmup) {
+  if (rows.length < warmup + LINK_ROWS) return null;
+  const total = {exchanges: 0, bridgeMs: 0};
+  for (const row of rows.slice(warmup, warmup + LINK_ROWS)) {
+    const input = row.bridgeByStage.input;
+    if (!input) continue;
+    total.exchanges += input.exchanges;
+    total.bridgeMs += input.bridgeMs;
+  }
+  return linkQuality(total);
+}
+
+/**
+ * How many rows had each link verdict, and the run's: bad when over LINK_VOID of the rows
+ * with input were bad, or weak or bad together, else ok; null without input. Rows without
+ * input count in none.
  * @param {{link?: {verdict: string} | null}[]} rows
  */
 function linkSeconds(rows) {
   const seconds = {ok: 0, weak: 0, bad: 0};
   for (const row of rows) if (row.link) seconds[row.link.verdict]++;
-  return seconds;
+  const total = seconds.ok + seconds.weak + seconds.bad;
+  const voided =
+    seconds.bad > LINK_VOID.bad * total || seconds.weak + seconds.bad > LINK_VOID.weakOrBad * total;
+  return {...seconds, verdict: total ? (voided ? 'bad' : 'ok') : null};
 }
 
 /** The range checks of the stream flags, in the order they are reported. */
@@ -792,19 +819,6 @@ async function run({
     });
   }
 
-  /** The link line once the warmup is over, from the warmup rows' input exchanges. */
-  function logLink() {
-    const total = {exchanges: 0, bridgeMs: 0};
-    for (const row of rows) {
-      const input = row.bridgeByStage.input;
-      if (!input) continue;
-      total.exchanges += input.exchanges;
-      total.bridgeMs += input.bridgeMs;
-    }
-    const link = linkQuality(total);
-    if (link) log({event: 'link', ...link});
-  }
-
   /** Stops on a stalled console, then prints and records one stats row. */
   function printRow() {
     const silent = bridge.silentMs();
@@ -818,7 +832,10 @@ async function run({
     }
     const row = statsRow();
     rows.push(row);
-    if (rows.length === Math.max(1, options.warmup)) logLink();
+    if (rows.length === options.warmup + LINK_ROWS) {
+      const link = steadyLink(rows, options.warmup);
+      if (link) log({event: 'link', ...link});
+    }
     const line = JSON.stringify(row);
     console.log(line);
     fs.appendFile(statsFile, line + '\n', {mode: PRIVATE_FILE}).catch(() => {});
@@ -1153,5 +1170,6 @@ export {
   hiddenTiming,
   withInputStage,
   linkQuality,
-  linkSeconds
+  linkSeconds,
+  steadyLink
 };
