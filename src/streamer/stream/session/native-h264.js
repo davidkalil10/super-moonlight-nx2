@@ -305,7 +305,7 @@ function checkGateFlags(flags) {
 /** --surface-check, --audio-frames, --queue, --duration, --warmup and --expect. */
 function checkRunFlags(args, {surfaceCheck, audioFrames, socketAudio, queue, duration, warmup}) {
   if (!Number.isInteger(surfaceCheck) || surfaceCheck < 0)
-    throw Error('--surface-check takes a unit interval');
+    throw Error('--surface-check takes a unit count, 0 for off');
 
   const audioStep = Number.isInteger(audioFrames) && audioFrames >= FRAME_STEP;
   if (!audioStep || audioFrames % FRAME_STEP) throw Error('--audio-frames takes a multiple of 240');

@@ -766,13 +766,13 @@ function staggeredFake(
   };
 }
 
-test('--surface-check needs a unit interval', {timeout: 5000}, async () => {
+test('--surface-check needs a unit count, 0 for off', {timeout: 5000}, async () => {
   for (const value of ['--duration', '-1', '1.5']) {
     const f = await fixture({units: pairedUnits(2)});
     f.options.createStaggered = staggeredFake(f.events);
     f.options.args.push('--staggered', '--surface-check', value);
     await exercise(f, async () => {
-      await assert.rejects(() => run(f.options), /--surface-check takes a unit interval/);
+      await assert.rejects(() => run(f.options), /--surface-check takes a unit count, 0 for off/);
     });
   }
 });
