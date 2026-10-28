@@ -12,7 +12,7 @@ kept verbatim in the team notes (moonlight docs archive).
 src/renderer/   console side: moonlight/ is the HB package, built from the HBV codecs beside it
 src/streamer/   PC side: protocol/ (hbmoonlight, C), stream/{session,scheduler,worker,native}/,
                 input/, audio/, ui/, shared/ (ring.js, feed.js), console-api/ (native ABI
-                tables), test-support/
+                tables), loopback/ (latency probe), test-support/
 ```
 
 The component CLAUDE.md files hold their rules, and code comments cite them:
