@@ -722,6 +722,25 @@ test('the push reader presses Start from its chord and logs only the pad + and -
   assert.match(logs.at(-1), /^Input keys: \+ down, - up at /);
 });
 
+test('a short send that shifts the push framing fails the reader before any shifted line', () => {
+  const lines = [];
+  const reader = createPushReader({layout: 'position', write: line => lines.push(line), log() {}});
+  reader.attach(812);
+  const detached = pushRecord(1, {buttons: BUTTON_A});
+  detached.writeUInt32LE(0, 784);
+  reader.data(detached);
+  assert.equal(lines.length, 1, 'a record before any service attached is framed');
+  // 776 bytes of a record, then whole ones: the word at 784 is the next record's buttons.
+  const cut = pushRecord(2, {buttons: 0b0010}).subarray(0, 776);
+  assert.throws(
+    () => reader.data(Buffer.concat([cut, pushRecord(3, {buttons: BUTTON_A})])),
+    /lost the record framing/
+  );
+  reader.data(Buffer.concat([pushRecord(4, {buttons: 0b0100}), pushRecord(5)]));
+  assert.equal(lines.length, 1, 'no controller line from shifted or later bytes');
+  assert.equal(reader.take().pushed, 1);
+});
+
 /**
  * A push worker double that opens the real native TCP listener: its connect and token jobs
  * start a TCP client playing the console, which the test then writes records on.

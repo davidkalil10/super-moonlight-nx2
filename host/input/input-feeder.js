@@ -133,6 +133,19 @@ function gate(paused, block) {
 }
 
 /**
+ * Whether a record starts where the reader thinks: its UI words, when it has them, open with
+ * uiMagic, which is the magic once a service attached and 0 before. A short send shifts every
+ * later record, and the word there is then pad or touch bytes.
+ * @param {Buffer} record
+ * @returns {boolean}
+ */
+function framed(record) {
+  if (record.length === STATE_BYTES) return true;
+  const magic = record.readUInt32LE(STATE_BYTES);
+  return magic === UI_MAGIC || magic === 0;
+}
+
+/**
  * The private storage of the newest Moonlight app report, where the UI block lives (the
  * source file maps the launcher's controls buffer, not the app's storage).
  * @param {string} directory
@@ -157,7 +170,8 @@ function readStorage(directory) {
  * frameIndex is a launcher frame already seen (the push outruns the pad copy) and only feeds
  * the overlay gate; a frameIndex going back means a new launcher session. More than
  * MAX_BACKLOG records waiting at once keeps only the newest, after lifting open touches. With
- * no record for STALL_MS, check() lifts every touch and sends the pad back to neutral.
+ * no record for STALL_MS, check() lifts every touch and sends the pad back to neutral. A
+ * record that is not framed throws, and the reader takes nothing more.
  * @param {object} options
  * @param {'position' | 'labels'} options.layout
  * @param {(line: string) => void} options.write
@@ -179,6 +193,7 @@ function createPushReader({
   let lastFrame = null;
   let lastAt = null;
   let stalled = false;
+  let broken = false;
   let recordBytes = 0;
   let pending = Buffer.alloc(0);
   let counts = {pushed: 0, dropped: 0, gapMaxMs: 0};
@@ -226,9 +241,17 @@ function createPushReader({
     },
     /** @param {Buffer} chunk */
     data(chunk) {
+      if (broken) return;
       pending = pending.length ? Buffer.concat([pending, chunk]) : chunk;
       const count = Math.floor(pending.length / recordBytes);
       if (!count) return;
+      const record = index => pending.subarray(index * recordBytes, (index + 1) * recordBytes);
+      for (let index = 0; index < count; index++) {
+        if (framed(record(index))) continue;
+        broken = true;
+        pending = Buffer.alloc(0);
+        throw Error('Input push lost the record framing; a console send was short');
+      }
       const at = now();
       if (lastAt !== null) counts.gapMaxMs = Math.max(counts.gapMaxMs, at - lastAt);
       lastAt = at;
@@ -240,8 +263,7 @@ function createPushReader({
         counts.dropped += count - 1;
         first = count - 1;
       }
-      for (let index = first; index < count; index++)
-        apply(pending.subarray(index * recordBytes, (index + 1) * recordBytes));
+      for (let index = first; index < count; index++) apply(record(index));
       pending = pending.subarray(count * recordBytes);
     },
     check() {
@@ -308,8 +330,25 @@ function runPush({
   let failed = false;
   let sourceChecked = -Infinity;
 
+  /** @param {Error} error */
+  function fail(error) {
+    if (failed) return;
+    failed = true;
+    log('Input push failed: ' + error.message);
+    onFailure(error);
+  }
+
+  /** @param {Buffer} bytes */
+  function onData(bytes) {
+    try {
+      reader.data(bytes);
+    } catch (error) {
+      fail(error);
+    }
+  }
+
   async function startWorker(state, ui) {
-    worker = await createWorker({rpc, state, ui, hz, onData: bytes => reader.data(bytes)});
+    worker = await createWorker({rpc, state, ui, hz, onData});
     reader.attach(worker.recordBytes);
     await worker.start();
     running = `${state}/${ui}`;
@@ -343,11 +382,7 @@ function runPush({
     if (busy || failed || at - sourceChecked < SOURCE_CHECK_MS) return;
     sourceChecked = at;
     busy = check()
-      .catch(error => {
-        failed = true;
-        log('Input push failed: ' + error.message);
-        onFailure(error);
-      })
+      .catch(fail)
       .finally(() => (busy = null));
   }, PUSH_CHECK_MS);
 
