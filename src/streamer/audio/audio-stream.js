@@ -239,13 +239,22 @@ function stream(options) {
     await rpc.write(base, Buffer.alloc(SLOT_BASE));
 
     const param = base + PARAM_OFFSET;
-    await audioOut.open(rpc, call, base, param, {
-      rate: SAMPLE_RATE,
-      channels: CHANNELS,
-      failed: opened =>
-        'OpenDefaultAudioOut failed (' + opened + '); game-audio.js may hold the device',
-      format: 'Unexpected AudioOut format'
-    });
+    let refused = false;
+    try {
+      await audioOut.open(rpc, call, base, param, {
+        rate: SAMPLE_RATE,
+        channels: CHANNELS,
+        failed: opened => {
+          refused = opened !== 0n;
+          return 'OpenDefaultAudioOut failed (' + opened + '); game-audio.js may hold the device';
+        },
+        format: 'Unexpected AudioOut format'
+      });
+    } catch (error) {
+      // A refused open left no AudioOut on the region; a format mismatch leaves one open.
+      if (refused) await release(rpc, base).catch(() => {});
+      throw error;
+    }
 
     descriptors = audioOut.descriptors(base + DESCRIPTOR_BASE, DESCRIPTOR_COUNT, DESCRIPTOR_STRIDE);
     const index = new Map(descriptors.map((address, i) => [address, i]));

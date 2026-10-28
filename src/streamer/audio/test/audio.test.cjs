@@ -301,8 +301,9 @@ test('a stream whose AudioOut did not close keeps its region', async () => {
   assert.deepEqual(frees, []);
 });
 
-test('reports a hint when OpenDefaultAudioOut fails', async () => {
+test('reports a hint when OpenDefaultAudioOut fails, and frees its region', async () => {
   const mock = mockRpc({openFail: true});
+  const frees = recordFrees(mock);
   const input = new PassThrough();
   const session = stream({
     rpc: mock.rpc,
@@ -312,6 +313,7 @@ test('reports a hint when OpenDefaultAudioOut fails', async () => {
   });
   input.end(sine(1));
   await assert.rejects(session.done, /game-audio\.js/);
+  assert.equal(frees.length, 1);
 });
 
 test('ByteQueue pulls and drops in FIFO order', () => {
