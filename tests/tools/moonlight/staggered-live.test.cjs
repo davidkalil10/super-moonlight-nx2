@@ -359,6 +359,27 @@ async function stream(device, live, count, onFrame = () => {}) {
   }
 }
 
+test('lag 2 books a large unit as large in both the acquire and the fetch waits', async () => {
+  const device = simulatedDevice();
+  const live = await liveOn(device);
+  for (let sequence = 1; sequence <= 6; sequence++) {
+    const unit = sequence === 2 ? {data: Buffer.alloc(70000), pts: 2000} : unitAt(sequence);
+    device.pts.set(sequence, BigInt(unit.pts));
+    await live.push(unit, {sink: device.sink});
+  }
+  // Six pushes read acquires 1-3 and fetches 1-2; the fetch of 2 comes three units later.
+  assert.deepEqual(
+    [live.counts.acquireWaits, live.counts.fetchWaits].map(waits => [
+      waits.small.immediate,
+      waits.large.immediate
+    ]),
+    [
+      [2, 1],
+      [1, 1]
+    ]
+  );
+});
+
 async function modelRequestsPerFrame(retryRate) {
   const result = await simulate({
     frames: 240,

@@ -554,7 +554,7 @@ function create({
   /** Keeps the units and destinations later gates still check, and drops older ones. */
   function remember(sequence, unit) {
     units.set(sequence, unit);
-    units.delete(sequence - 3);
+    units.delete(sequence - 4);
     destinations.delete(sequence - 4);
   }
 
