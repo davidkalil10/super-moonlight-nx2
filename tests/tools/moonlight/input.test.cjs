@@ -6,6 +6,7 @@ const {
   toMoonlight,
   same,
   readController,
+  parseStartChord,
   NEUTRAL,
   NPAD
 } = require('../../../host/input/controller.js');
@@ -63,6 +64,23 @@ test('shoulders, sticks clicks, plus, minus and dpad use Limelight flags', () =>
     [1 << 15, 0x0002]
   ];
   for (const [bit, flag] of cases) assert.equal(map({buttons: bit}).buttonFlags, flag);
+});
+
+test('L3+R3 held together is PC Start in place of both clicks; the chord is configurable', () => {
+  const l3 = 1 << 4;
+  const r3 = 1 << 5;
+  const a = 1 << 0;
+  assert.equal(map({buttons: l3 | r3}).buttonFlags, 0x0010);
+  assert.equal(map({buttons: l3 | r3 | a}).buttonFlags, 0x0010 | 0x2000);
+  assert.equal(map({buttons: l3}).buttonFlags, 0x0040);
+  assert.equal(map({buttons: r3}).buttonFlags, 0x0080);
+  const none = parseStartChord('none');
+  assert.equal(toMoonlight(decode(npad({buttons: l3 | r3})), 'position', none).buttonFlags, 0x00c0);
+  const minusA = parseStartChord('minus+a');
+  const chord = toMoonlight(decode(npad({buttons: (1 << 11) | a | r3})), 'labels', minusA);
+  assert.equal(chord.buttonFlags, 0x0010 | 0x0080);
+  for (const bad of ['stickL', 'stickL+zl', 'stickL+stickL', ''])
+    assert.throws(() => parseStartChord(bad), /Invalid start chord/);
 });
 
 test('ZL and ZR become full triggers', () => {

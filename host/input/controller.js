@@ -9,6 +9,9 @@
  * Face buttons map by position by default (Nintendo B to A_FLAG, A to B_FLAG, Y to X_FLAG,
  * X to Y_FLAG); layout 'labels' maps by printed letter. HOME and Capture are not in NpadState,
  * so SPECIAL_FLAG is never set.
+ *
+ * Pressing + alone stops SmileBASIC 4, so PC Start also comes from a chord: while every button
+ * of the start chord (L3+R3 by default) is held, the PC sees Start instead of those buttons.
  */
 import {NPAD, NPAD_BYTES, readPad} from '../../../hbl-platform/sdk/host/npad.js';
 import {OFFSET, FIELD} from '../../../hbl-platform/sdk/host/layout.js';
@@ -52,6 +55,8 @@ const SHARED = {
   l: FLAG.lb,
   r: FLAG.rb
 };
+/** NPAD buttons that, held together, press PC Start in place of themselves. */
+const START_CHORD = ['stickL', 'stickR'];
 /** ZL and ZR are digital, so a trigger is either released or fully pressed. */
 const TRIGGER_PRESSED = 255;
 const INT16_MIN = -32768;
@@ -88,16 +93,36 @@ function decode(selected, sources) {
 const int16 = value => Math.max(INT16_MIN, Math.min(INT16_MAX, value | 0));
 
 /**
+ * Parses a --start-chord value: NPAD button names joined by '+', or 'none' for no chord.
+ * @param {string} text
+ * @returns {string[]}
+ */
+function parseStartChord(text) {
+  if (text === 'none') return [];
+  const names = text.split('+');
+  const known = {...FACE.position, ...SHARED};
+  const unknown = names.some(name => !(name in known));
+  if (names.length < 2 || unknown || new Set(names).size < names.length)
+    throw Error(`Invalid start chord ${text}: two or more of ${Object.keys(known).join(', ')}`);
+  return names;
+}
+
+/**
  * Maps a decoded pad to LiSendMultiControllerEvent fields. Opposite d-pad directions held
- * together cancel out.
+ * together cancel out, and the start chord held in full becomes PC Start.
  * @param {typeof NEUTRAL} pad
  * @param {'position' | 'labels'} [layout]
+ * @param {string[]} [startChord] NPAD button names, empty for no chord
  */
-function toMoonlight(pad, layout = 'position') {
+function toMoonlight(pad, layout = 'position', startChord = START_CHORD) {
   const held = bit => (pad.buttons & bit) !== 0;
+  const flags = {...FACE[layout], ...SHARED};
   let buttonFlags = 0;
-  for (const [name, flag] of Object.entries({...FACE[layout], ...SHARED}))
-    if (held(NPAD[name])) buttonFlags |= flag;
+  for (const [name, flag] of Object.entries(flags)) if (held(NPAD[name])) buttonFlags |= flag;
+  if (startChord.length && startChord.every(name => held(NPAD[name]))) {
+    for (const name of startChord) buttonFlags &= ~flags[name];
+    buttonFlags |= FLAG.play;
+  }
   if (held(NPAD.left) && held(NPAD.right)) buttonFlags &= ~(FLAG.left | FLAG.right);
   if (held(NPAD.up) && held(NPAD.down)) buttonFlags &= ~(FLAG.up | FLAG.down);
   return {
@@ -136,4 +161,16 @@ async function readController(rpc, mapped, {sources = false} = {}) {
   return decode(selected, extra);
 }
 
-export {FLAG, NPAD, NPAD_BYTES, PAD_SOURCES, NEUTRAL, decode, toMoonlight, same, readController};
+export {
+  FLAG,
+  NPAD,
+  NPAD_BYTES,
+  PAD_SOURCES,
+  NEUTRAL,
+  START_CHORD,
+  decode,
+  toMoonlight,
+  parseStartChord,
+  same,
+  readController
+};

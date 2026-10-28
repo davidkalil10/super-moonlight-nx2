@@ -23,15 +23,27 @@
  * bridge once it runs; the lines out are the same. The counts lines add pushed, dropped and
  * gapMaxMs: records received, records dropped as backlog and the longest arrival gap.
  *
+ * --start-chord names the NPAD buttons that press PC Start while all are held ('none' for no
+ * chord, default stickL+stickR), since + alone stops SmileBASIC 4.
+ *
  * Usage: node host/input/input-feeder.js [runs/launcher-XXXX] [--hz 60] [--labels]
- *        [--counts-fd N] [--push]
+ *        [--counts-fd N] [--push] [--start-chord stickL+stickR]
  */
 import fs from 'node:fs';
 import path from 'node:path';
 import * as session from '../../../hbl-platform/sdk/host/session.js';
 import * as cli from '../../../hbl-platform/sdk/cli.js';
 import {STATE} from '../../../hbl-platform/sdk/host/layout.js';
-import {NPAD, NEUTRAL, decode, toMoonlight, same, NPAD_BYTES} from './controller.js';
+import {
+  NPAD,
+  NEUTRAL,
+  START_CHORD,
+  decode,
+  toMoonlight,
+  parseStartChord,
+  same,
+  NPAD_BYTES
+} from './controller.js';
 import {TOUCH_BYTES, parseTouch, createTracker, step, flush, touchLine} from './touch.js';
 import {UI, UI_MAGIC} from '../../tools/moonlight/ring.js';
 import {instrument} from '../stream/bridge-counter.js';
@@ -90,11 +102,12 @@ function keysWatch() {
  * @param {Buffer} bytes READ_BYTES of state
  * @param {import('./touch.js').Tracker} tracker
  * @param {'position' | 'labels'} layout
+ * @param {string[]} [startChord]
  * @returns {{lines: string[], controller: ReturnType<typeof toMoonlight>}}
  */
-function frame(previous, bytes, tracker, layout) {
+function frame(previous, bytes, tracker, layout, startChord = START_CHORD) {
   const lines = [];
-  const controller = toMoonlight(decode(bytes.subarray(0, NPAD_BYTES)), layout);
+  const controller = toMoonlight(decode(bytes.subarray(0, NPAD_BYTES)), layout, startChord);
   if (!same(previous, controller)) lines.push(controllerLine(controller));
   const {events} = step(tracker, parseTouch(bytes.subarray(STATE.touch)));
   if (events.length) lines.push(touchLine(events));
@@ -380,6 +393,7 @@ async function main() {
   const push = args.includes('--push');
   const hz = cli.number(args, '--hz', push ? PUSH_HZ : DEFAULT_HZ);
   const layout = args.includes('--labels') ? 'labels' : 'position';
+  const startChord = parseStartChord(cli.option(args, '--start-chord', START_CHORD.join('+')));
   const directory = session.resolve(args[0]);
   const countsFd = cli.number(args, '--counts-fd', null);
   const bridge = instrument(session.rpc(directory), () => 'input');
@@ -433,7 +447,7 @@ async function main() {
           const readAt = performance.now();
           const bytes = await rpc.read(source.mapped, READ_BYTES);
           pad?.sample(bytes, readAt, performance.now());
-          const result = frame(previous, bytes, tracker, layout);
+          const result = frame(previous, bytes, tracker, layout, startChord);
           previous = result.controller;
           for (const line of result.lines) write(line);
           const note = keys(bytes);

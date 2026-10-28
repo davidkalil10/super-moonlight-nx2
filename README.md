@@ -323,11 +323,11 @@ helper's error line and `stage`), `stream-event`, `stream-exit`, `quit`, `app-go
 
 ## Input and audio
 
-`input-feeder.js [RUN_DIR] [--hz 60]` reads the pad (bytes 0..40) and touch (128..784) of the
-mapped state in one 784-byte read per frame and writes compact JSON lines for the helper's stdin.
-With `--push` (default 120 Hz) a console worker sends the same 784 bytes and the overlay words
-over native TCP instead: backlogs over 4 records keep the newest, and 250 ms without a record
-releases everything and logs `Input push stalled`:
+`input-feeder.js [RUN_DIR] [--hz 60] [--start-chord stickL+stickR]` reads the pad (bytes 0..40)
+and touch (128..784) of the mapped state in one 784-byte read per frame and writes compact JSON
+lines for the helper's stdin. With `--push` (default 120 Hz) a console worker sends the same 784
+bytes and the overlay words over native TCP instead: backlogs over 4 records keep the newest, and
+250 ms without a record releases everything and logs `Input push stalled`:
 
 ```
 {"type":"controller","connected":true,"buttonFlags":4096,"leftTrigger":0,...}
@@ -336,7 +336,9 @@ releases everything and logs `Input push stalled`:
 
 An untyped line is a controller line. The helper parses keys by substring, so lines carry no
 whitespace. Controller fields go to `LiSendMultiControllerEvent` as gamepad 0 (an Xbox pad with
-analog triggers; missing fields keep their value). Touch is a verbatim
+analog triggers; missing fields keep their value). + alone stops SmileBASIC 4, so PC Start also
+comes from `--start-chord`: while all its buttons are held (L3+R3 by default, `none` to turn it
+off), the PC sees Start in place of them. Touch is a verbatim
 `nn::hid::TouchScreenState<16>` (count at word 2, entry i at word 4 + i*10: attributes, fingerId,
 x, y); the panel reports 1280x720, normalized to 0..1 and rounded to 4 decimals. `fingerId` is
 the pointer id: new id down, moved id move, End bit or absent id up; pressure 0 (unknown), no
