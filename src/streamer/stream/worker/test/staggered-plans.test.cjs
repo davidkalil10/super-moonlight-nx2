@@ -23,6 +23,8 @@ const withoutPacer = require('../../../test-support/test-helpers.cjs').withoutPa
 // The host side is the real staggered-live scheduler and the held-fetch checks below.
 const layout = {width: 1920, height: 1080, stride: 1920, sliceHeight: 1088};
 const noWait = async () => {};
+/** sdk-functions.json `free`; the fake rpc treats every other call as an allocation. */
+const FREE = 5616480;
 const RECV = ADDRESS.module + 0x800;
 const NO_OUTPUT = 0x2a0n;
 /** Where the surface check samples the fake's 1920x1080 frame. */
@@ -1173,6 +1175,7 @@ function fixture() {
   const mapped = 0x80000000;
   const regions = [{base: mapped, bytes: Buffer.alloc(ring.CONTROL_BYTES)}];
   const calls = [];
+  const allocated = [];
   let allocations = 0;
   const regionAt = address =>
     regions.find(region => address >= region.base && address < region.base + region.bytes.length);
@@ -1194,8 +1197,13 @@ function fixture() {
     async request() {
       return {verified: true};
     },
-    async call(_offset, args) {
+    async call(offset, args) {
+      if (offset === FREE) {
+        calls.push({free: args[0]});
+        return {result: 0n, output: Buffer.alloc(8)};
+      }
       const base = 0x60000000 + allocations++ * 0x1000000;
+      allocated.push(base);
       regions.push({base, bytes: Buffer.alloc(args[2])});
       const output = Buffer.alloc(8);
       output.writeBigUInt64LE(BigInt(base));
@@ -1251,8 +1259,10 @@ function fixture() {
     Object.entries(definitions).map(([name, definition]) => [name, moduleBase + definition.offset])
   );
   const publication = {mapped, color: 1};
-  return {rpc, transport, module, functions, publication, read, write, calls, sdk};
+  return {rpc, transport, module, functions, publication, read, write, calls, sdk, allocated};
 }
+
+const freed = calls => calls.filter(call => call.free !== undefined).map(call => call.free);
 
 async function started(fixture) {
   const worker = await create({
@@ -1289,6 +1299,27 @@ test('staggered workers install two alternating frames and can stop both waits',
     assert.equal(f.read(control + offset, 8).readBigUInt64LE(), BigInt(inputExit));
   for (const offset of [...outputPlan.CONTROL.fetchDispatch, ...outputPlan.CONTROL.acquireDispatch])
     assert.equal(f.read(control + offset, 8).readBigUInt64LE(), BigInt(outputExit));
+});
+
+test('staggered finalize frees every region once, after the events', async () => {
+  const f = fixture();
+  const worker = await started(f);
+  await worker.stop();
+  assert.deepEqual(freed(f.calls), []);
+  await worker.finalize();
+  await worker.finalize();
+  assert.deepEqual(freed(f.calls), [...f.allocated].reverse());
+  const event = SYNC.finalizeEvent.offset + f.sdk;
+  const last = f.calls.map(call => call.address === event).lastIndexOf(true);
+  assert.ok(last >= 0 && last < f.calls.findIndex(call => call.free !== undefined));
+});
+
+test('staggered finalize frees nothing while a worker may still run', async () => {
+  const f = fixture();
+  const worker = await started(f);
+  await assert.rejects(worker.finalize(), /retained while a worker may be running/);
+  assert.deepEqual(freed(f.calls), []);
+  await worker.stop();
 });
 
 test('short receive keeps staggered decode and fetch gates closed', async () => {

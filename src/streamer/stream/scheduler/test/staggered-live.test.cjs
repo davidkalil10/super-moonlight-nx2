@@ -86,6 +86,8 @@ test('acquire waits book both bounds, the pending reads and the immediate acquir
 
 const layout = {width: 1920, height: 1080, stride: 1920, sliceHeight: 1088};
 const noPause = async () => {};
+/** sdk-functions.json `free`; the fake rpc treats every other call as an allocation. */
+const FREE = 5616480;
 /** sha256 of every write, gate payload, request and send of defaultStreamDigest() on 14e29df. */
 const DEFAULT_STREAM_DIGEST = 'a1a04bafef4771fcdd4cedcea9e2466fe0b49598972df79293e9c9540419af34';
 const unitAt = sequence => ({data: Buffer.alloc(100 + sequence), pts: sequence * 1000});
@@ -204,7 +206,8 @@ function simulatedDevice({
     async request() {
       return {verified: true};
     },
-    async call(_offset, args) {
+    async call(offset, args) {
+      if (offset === FREE) return {result: 0n, output: Buffer.alloc(8)};
       const base = 0x60000000 + allocations++ * 0x1000000;
       regions.push({base, bytes: Buffer.alloc(args[2])});
       const output = Buffer.alloc(8);

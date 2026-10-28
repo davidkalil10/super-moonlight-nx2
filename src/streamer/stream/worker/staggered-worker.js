@@ -16,7 +16,7 @@
  * SendInput. Whenever a worker may still be running or a gate write may have half landed, the
  * native objects are retained: nothing is finalized and SmileBASIC has to be restarted.
  */
-import {allocate} from '../../../../../hbl-platform/sdk/native/allocate.js';
+import {allocate, release} from '../../../../../hbl-platform/sdk/native/allocate.js';
 import {verify} from '../../../../../hbl-platform/sdk/native/symbols.js';
 import {
   CONTEXT_X30,
@@ -861,7 +861,7 @@ async function create({
       stopped = true;
     },
 
-    /** Finalizes the events once no worker can be running. */
+    /** Finalizes the events, then frees the regions, once no worker can be running. */
     async finalize() {
       if (retained || workers.some(worker => worker.uncertain || (worker.thread && !worker.joined)))
         throw Error('Staggered events retained while a worker may be running');
@@ -870,6 +870,8 @@ async function create({
       for (const item of initialized.reverse())
         await rpc.callAddress(item.finalize, [at(item.offset)], SHORT);
       closed = true;
+      const {inputBase, outputBase, control, scratch} = regions;
+      for (const base of [scratch, control, outputBase, inputBase]) await release(rpc, base);
     }
   };
 }
