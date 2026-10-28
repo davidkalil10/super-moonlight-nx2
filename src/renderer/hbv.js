@@ -1,13 +1,6 @@
 /**
- * HBV1: a fixed-rate, shader-decodable frame format for the Moonlight app.
- *
- * The frame is split into 16x16 macroblocks of exactly nine 32-bit words: four 8x8 luma DCT
- * blocks followed by one 8x8 Cb and one 8x8 Cr DCT block (4:2:0). Every macroblock has the same
- * size, so the fragment shader finds any pixel's data by index arithmetic and evaluates the
- * inverse DCT at its own position. Fields are packed LSB first and may straddle word boundaries.
- *
- * This file is the single source of the format: the GLSL include in src/renderer is generated
- * from it by glsl().
+ * HBV1: fixed-rate intra frames the fragment shader decodes per pixel. This file is the single
+ * source of the format; glsl() generates the shader include (see src/renderer/CLAUDE.md).
  */
 
 const MAGIC = 0x31564248;
@@ -128,11 +121,13 @@ class BitWriter {
     this.base = base;
     this.offset = 0;
   }
+
   put(value, bits) {
     const field = (value & (2 ** bits - 1)) >>> 0;
-    for (let bit = 0; bit < bits; bit++, this.offset++)
+    for (let bit = 0; bit < bits; bit++, this.offset++) {
       if ((field >>> bit) & 1)
         this.words[this.base + (this.offset >>> 5)] |= 1 << (this.offset & 31);
+    }
   }
 }
 
@@ -167,6 +162,7 @@ function project(pixels, basisList) {
  */
 function gatherBlock(plane, width, height, left, top, step) {
   const block = new Float64Array(BLOCK_PIXELS);
+
   for (let y = 0; y < BLOCK_SIZE; y++)
     for (let x = 0; x < BLOCK_SIZE; x++) {
       let sum = 0;
@@ -178,6 +174,7 @@ function gatherBlock(plane, width, height, left, top, step) {
         }
       block[y * BLOCK_SIZE + x] = sum / (step * step);
     }
+
   return block;
 }
 
@@ -193,6 +190,7 @@ function toYCbCr(rgb, width, height) {
     y = new Float32Array(count),
     cb = new Float32Array(count),
     cr = new Float32Array(count);
+
   for (let i = 0; i < count; i++) {
     const r = rgb[i * 3],
       g = rgb[i * 3 + 1],
@@ -201,20 +199,23 @@ function toYCbCr(rgb, width, height) {
     cb[i] = 128 - 0.168736 * r - 0.331264 * g + 0.5 * b;
     cr[i] = 128 + 0.5 * r - 0.418688 * g - 0.081312 * b;
   }
+
   return {y, cb, cr};
 }
 
+/**
+ * A whole number of macroblocks that fits the size word's half.
+ * @param {number} value
+ * @returns {boolean}
+ */
+function isMacroblockDimension(value) {
+  if (!Number.isInteger(value)) return false;
+  if (value < MACROBLOCK_SIZE || value % MACROBLOCK_SIZE) return false;
+  return value <= SIZE_MASK;
+}
+
 function isValidSize(width, height) {
-  return (
-    Number.isInteger(width) &&
-    Number.isInteger(height) &&
-    width >= MACROBLOCK_SIZE &&
-    height >= MACROBLOCK_SIZE &&
-    !(width % MACROBLOCK_SIZE) &&
-    !(height % MACROBLOCK_SIZE) &&
-    width <= SIZE_MASK &&
-    height <= SIZE_MASK
-  );
+  return isMacroblockDimension(width) && isMacroblockDimension(height);
 }
 
 /**
@@ -254,6 +255,7 @@ function createFormat(spec = SPEC) {
     throw Error(
       `Macroblock allocation is ${macroblockBits} bits, expected ${MACROBLOCK_WORDS * 32}`
     );
+
   const lumaBases = bases(spec.luma),
     chromaBases = bases(spec.chroma);
   const lumaQuantiser = quantiser(spec.luma),
@@ -268,11 +270,13 @@ function createFormat(spec = SPEC) {
    */
   function layout(width, height) {
     if (!isValidSize(width, height)) throw Error('HBV1 frame sizes must be multiples of 16');
+
     const blocksX = width / MACROBLOCK_SIZE,
       blocksY = height / MACROBLOCK_SIZE;
     const usedWords = HEADER_WORDS + blocksX * blocksY * MACROBLOCK_WORDS + 1;
     const exchanges = Math.ceil((usedWords * 4) / EXCHANGE_BYTES);
     const slotWords = (exchanges * EXCHANGE_BYTES) / 4;
+
     return {
       width,
       height,
@@ -290,6 +294,7 @@ function createFormat(spec = SPEC) {
   function bestScale(coefficients, {scales, limits, steps}) {
     let best = 0,
       bestError = Infinity;
+
     for (let scale = 0; scale < scales; scale++) {
       const step = steps[scale];
       let error = 0;
@@ -302,14 +307,14 @@ function createFormat(spec = SPEC) {
         best = scale;
       }
     }
+
     return best;
   }
 
   function encodeBlock(writer, coefficients, block, blockQuantiser) {
-    writer.put(
-      clampInt(coefficients[0] / (8 * block.dcStep), 0, 2 ** block.dcBits - 1),
-      block.dcBits
-    );
+    const dc = clampInt(coefficients[0] / (8 * block.dcStep), 0, 2 ** block.dcBits - 1);
+    writer.put(dc, block.dcBits);
+
     const scale = bestScale(coefficients, blockQuantiser);
     const {limits, steps} = blockQuantiser;
     writer.put(scale, block.scaleBits);
@@ -332,23 +337,14 @@ function createFormat(spec = SPEC) {
       left = mx * MACROBLOCK_SIZE,
       top = my * MACROBLOCK_SIZE;
     const writer = new BitWriter(words, HEADER_WORDS + (my * map.blocksX + mx) * MACROBLOCK_WORDS);
-    for (let i = 0; i < LUMA_BLOCKS; i++)
-      encodeBlock(
-        writer,
-        project(
-          gatherBlock(
-            planes.y,
-            width,
-            height,
-            left + (i & 1) * BLOCK_SIZE,
-            top + (i >> 1) * BLOCK_SIZE,
-            1
-          ),
-          lumaBases
-        ),
-        spec.luma,
-        lumaQuantiser
-      );
+
+    for (let i = 0; i < LUMA_BLOCKS; i++) {
+      const quadrantLeft = left + (i & 1) * BLOCK_SIZE,
+        quadrantTop = top + (i >> 1) * BLOCK_SIZE;
+      const pixels = gatherBlock(planes.y, width, height, quadrantLeft, quadrantTop, 1);
+      encodeBlock(writer, project(pixels, lumaBases), spec.luma, lumaQuantiser);
+    }
+
     encodeChroma(writer, planes.cb, width, height, left, top);
     encodeChroma(writer, planes.cr, width, height, left, top);
   }
@@ -365,10 +361,12 @@ function createFormat(spec = SPEC) {
     const map = layout(width, height),
       words = new Uint32Array(map.slotWords);
     const planes = toYCbCr(rgb, width, height);
+
     words.set([MAGIC, sequence >>> 0, (width | (height << HEIGHT_SHIFT)) >>> 0, map.payloadBytes]);
     for (let my = 0; my < map.blocksY; my++)
       for (let mx = 0; mx < map.blocksX; mx++) encodeMacroblock(words, map, planes, mx, my);
     words[map.trailerWord] = sequence >>> 0;
+
     return Buffer.from(words.buffer);
   }
 
@@ -379,6 +377,7 @@ function createFormat(spec = SPEC) {
   function readHeader(slot) {
     const words = new Uint32Array(slot.buffer, slot.byteOffset, slot.byteLength >> 2);
     if (words[HEADER.magic] !== MAGIC) return null;
+
     let map;
     try {
       map = layout(words[HEADER.size] & SIZE_MASK, words[HEADER.size] >>> HEIGHT_SHIFT);
@@ -386,8 +385,10 @@ function createFormat(spec = SPEC) {
       return null;
     }
     if (map.slotBytes > slot.byteLength) return null;
+
     const sequence = words[HEADER.sequence];
     if (sequence === 0 || sequence !== words[map.trailerWord]) return null;
+
     return {words, map, sequence};
   }
 
@@ -397,6 +398,7 @@ function createFormat(spec = SPEC) {
     offset += block.dcBits;
     const scale = readBits(words, base, offset, block.scaleBits);
     offset += block.scaleBits;
+
     for (const [u, v, bits, exponent] of block.ac) {
       const q = signExtend(readBits(words, base, offset, bits), bits);
       offset += bits;
@@ -408,6 +410,7 @@ function createFormat(spec = SPEC) {
         Math.cos((u * Math.PI * tx) / 8) *
         Math.cos((v * Math.PI * ty) / 8);
     }
+
     return value;
   }
 
@@ -422,19 +425,17 @@ function createFormat(spec = SPEC) {
     const base = HEADER_WORDS + (my * map.blocksX + mx) * MACROBLOCK_WORDS;
     const lx = sx - mx * MACROBLOCK_SIZE,
       ly = sy - my * MACROBLOCK_SIZE;
+
     const quadrant = (lx >= BLOCK_SIZE ? 1 : 0) + (ly >= BLOCK_SIZE ? 2 : 0);
-    const luma = decodeBlock(
-      words,
-      base,
-      quadrant * lumaBits,
-      spec.luma,
-      lx - (quadrant & 1) * BLOCK_SIZE,
-      ly - (quadrant >> 1) * BLOCK_SIZE
-    );
+    const tx = lx - (quadrant & 1) * BLOCK_SIZE,
+      ty = ly - (quadrant >> 1) * BLOCK_SIZE;
+    const luma = decodeBlock(words, base, quadrant * lumaBits, spec.luma, tx, ty);
+
     const cx = lx / CHROMA_STEP,
       cy = ly / CHROMA_STEP;
     const cb = decodeBlock(words, base, cbOffset, spec.chroma, cx, cy) - 128;
     const cr = decodeBlock(words, base, crOffset, spec.chroma, cx, cy) - 128;
+
     return [luma + 1.402 * cr, luma - 0.344136 * cb - 0.714136 * cr, luma + 1.772 * cb];
   }
 
@@ -448,9 +449,11 @@ function createFormat(spec = SPEC) {
   function decode(slot, outWidth, outHeight) {
     const header = readHeader(slot);
     if (!header) throw Error('Not a complete HBV1 slot');
+
     const {words, map} = header;
     outWidth ??= map.width;
     outHeight ??= map.height;
+
     const rgb = Buffer.alloc(outWidth * outHeight * 3),
       fx = map.width / outWidth,
       fy = map.height / outHeight;
@@ -460,6 +463,7 @@ function createFormat(spec = SPEC) {
           at = (y * outWidth + x) * 3;
         for (let c = 0; c < 3; c++) rgb[at + c] = clampInt(pixel[c], 0, 255);
       }
+
     return rgb;
   }
 
@@ -475,11 +479,13 @@ const glslFloat = value => {
 /** One `value += ...` line per coded AC term of a block. */
 function glslTerms(block) {
   return block.ac
-    .map(
-      ([u, v, bits, exponent]) =>
-        `    value += hbvCoefficient(base, offset, ${bits}u, scale + ${exponent}, ${glslFloat(alpha(u) * alpha(v))}) * ` +
+    .map(([u, v, bits, exponent]) => {
+      const weight = glslFloat(alpha(u) * alpha(v));
+      return (
+        `    value += hbvCoefficient(base, offset, ${bits}u, scale + ${exponent}, ${weight}) * ` +
         `cos(${u}.0 * HBV_PI * t.x / 8.0) * cos(${v}.0 * HBV_PI * t.y / 8.0);`
-    )
+      );
+    })
     .join('\n');
 }
 

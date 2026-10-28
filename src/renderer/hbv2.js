@@ -1,17 +1,6 @@
 /**
- * HBV2: inter-coded, variable-rate frames for the Moonlight app.
- *
- * A slot is a header, a list of coded chunks and one bit stream. A chunk is eight consecutive
- * 16x16 macroblocks in raster order; chunks whose blocks are all unchanged are left out of the
- * list. Each list entry holds the chunk index and the bit offset of its data, so every chunk
- * decodes on its own GPU invocation. Inside a chunk, each macroblock is skipped (copied from the
- * previous frame), inter coded (motion vector plus optional DCT residual) or intra coded. The
- * transform is an integer IDCT, so this file and the compute shader reconstruct bit-identical
- * frames and P frames never drift. Bits are packed LSB first; ue() is Exp-Golomb
- * with its zero prefix read from the low bits.
- *
- * This file is the reference decoder and a plan-driven reference encoder; the console decoder is
- * src/renderer/moonlight/backends/hblauncher.gpu-app/hbv2.glsl. Shared tables are generated from here.
+ * HBV2: inter-coded, variable-rate frames. The reference decoder and a plan-driven reference
+ * encoder; the shader's shared tables are generated here (see src/renderer/CLAUDE.md).
  */
 
 const MAGIC = 0x32564248;
@@ -111,7 +100,9 @@ function step(qp, weight) {
 }
 
 function clamp(value, low, high) {
-  return value < low ? low : value > high ? high : value;
+  if (value < low) return low;
+  if (value > high) return high;
+  return value;
 }
 
 /** Count of trailing zero bits. */
@@ -280,13 +271,10 @@ function createFrame(width, height) {
 
 /** Component 0 is luma, 1 Cb, 2 Cr. */
 function plane(frame, component) {
-  return component === 0
-    ? {data: frame.y, width: frame.width, height: frame.height}
-    : {
-        data: component === 1 ? frame.cb : frame.cr,
-        width: frame.width / 2,
-        height: frame.height / 2
-      };
+  if (component === 0) return {data: frame.y, width: frame.width, height: frame.height};
+
+  const data = component === 1 ? frame.cb : frame.cr;
+  return {data, width: frame.width / 2, height: frame.height / 2};
 }
 
 /**
@@ -294,9 +282,8 @@ function plane(frame, component) {
  * @returns {number[]} [left, top, component] in that component's plane
  */
 function blockOrigin(b, mbx, mby) {
-  return b < LUMA_BLOCKS
-    ? [mbx * 16 + (b & 1) * 8, mby * 16 + (b >> 1) * 8, 0]
-    : [mbx * 8, mby * 8, b - 3];
+  if (b < LUMA_BLOCKS) return [mbx * 16 + (b & 1) * 8, mby * 16 + (b >> 1) * 8, 0];
+  return [mbx * 8, mby * 8, b - 3];
 }
 
 /** Bilinear half-pel chroma tap at doubled coordinates (x2, y2). */
@@ -330,6 +317,7 @@ function chromaTap(at, x2, y2) {
 function predict(reference, component, left, top, mvx, mvy, out) {
   const {data, width, height} = plane(reference, component);
   const at = (x, y) => data[clamp(y, 0, height - 1) * width + clamp(x, 0, width - 1)];
+
   for (let j = 0; j < 8; j++)
     for (let i = 0; i < 8; i++) {
       if (component === 0) {
@@ -338,6 +326,7 @@ function predict(reference, component, left, top, mvx, mvy, out) {
       }
       out[j * 8 + i] = chromaTap(at, 2 * (left + i) + mvx, 2 * (top + j) + mvy);
     }
+
   return out;
 }
 
@@ -359,17 +348,20 @@ function copyMacroblock(from, to, mbx, mby) {
   }
 }
 
+/**
+ * A whole number of macroblocks, at most max.
+ * @param {number} value
+ * @param {number} max
+ * @returns {boolean}
+ */
+function isMacroblockDimension(value, max) {
+  if (!Number.isInteger(value)) return false;
+  if (value < MACROBLOCK_SIZE || value % MACROBLOCK_SIZE) return false;
+  return value <= max;
+}
+
 function isValidSize(width, height) {
-  return (
-    Number.isInteger(width) &&
-    Number.isInteger(height) &&
-    width >= MACROBLOCK_SIZE &&
-    height >= MACROBLOCK_SIZE &&
-    !(width % MACROBLOCK_SIZE) &&
-    !(height % MACROBLOCK_SIZE) &&
-    width <= MAX_WIDTH &&
-    height <= MAX_HEIGHT
-  );
+  return isMacroblockDimension(width, MAX_WIDTH) && isMacroblockDimension(height, MAX_HEIGHT);
 }
 
 /**
@@ -380,6 +372,7 @@ function isValidSize(width, height) {
 function layout(width, height) {
   if (!isValidSize(width, height))
     throw Error(`HBV2 frames are multiples of 16 up to ${MAX_WIDTH}x${MAX_HEIGHT}`);
+
   const blocksX = width / MACROBLOCK_SIZE,
     blocksY = height / MACROBLOCK_SIZE,
     macroblocks = blocksX * blocksY;
@@ -395,6 +388,16 @@ function exchangesFor(payloadBytes) {
 }
 
 /**
+ * The shader's size check for either format: nonzero whole macroblocks up to MAX_SLOT_DIMENSION.
+ * @param {number} value
+ * @returns {boolean}
+ */
+function isSlotDimension(value) {
+  if (!value || value % MACROBLOCK_SIZE) return false;
+  return value <= MAX_SLOT_DIMENSION;
+}
+
+/**
  * Validates a slot the way the compute shader does.
  * @param {Uint32Array} words the slot's words
  * @param {number} [slotWords]
@@ -404,24 +407,21 @@ function readHeader(words, slotWords = words.length) {
     sequence = words[HEADER.sequence],
     size = words[HEADER.size],
     payloadBytes = words[HEADER.payloadBytes];
-  if ((magic !== MAGIC && magic !== HBV1_MAGIC) || sequence === 0) return null;
+  const knownMagic = magic === MAGIC || magic === HBV1_MAGIC;
+  if (!knownMagic || sequence === 0) return null;
+
   const width = size & SIZE_MASK,
     height = size >>> HEIGHT_SHIFT;
-  if (
-    !width ||
-    !height ||
-    width % MACROBLOCK_SIZE ||
-    height % MACROBLOCK_SIZE ||
-    width > MAX_SLOT_DIMENSION ||
-    height > MAX_SLOT_DIMENSION
-  )
-    return null;
+  if (!isSlotDimension(width) || !isSlotDimension(height)) return null;
+
   const exchanges = exchangesFor(payloadBytes),
     exchangeWords = EXCHANGE_BYTES / 4;
   if (exchanges === 0 || exchanges * exchangeWords > slotWords) return null;
+
   const trailer = exchanges * exchangeWords - 1;
   if (words[trailer] !== sequence) return null;
   if (magic === HBV1_MAGIC) return {kind: FORMAT.hbv1, sequence, width, height, trailer};
+
   if (width > MAX_WIDTH || height > MAX_HEIGHT) return null;
   const count = words[HEADER.count],
     qp = words[HEADER.qp] & QP_MASK,
@@ -429,6 +429,7 @@ function readHeader(words, slotWords = words.length) {
     map = layout(width, height);
   if (count > map.chunks || HEADER_WORDS + count > trailer) return null;
   if (qp > MAX_QP || chromaQp > MAX_QP) return null;
+
   return {
     kind: FORMAT.hbv2,
     sequence,
@@ -445,6 +446,10 @@ function readHeader(words, slotWords = words.length) {
 
 function isIndependent(header) {
   return header.kind === FORMAT.hbv1 || header.reference === 0;
+}
+
+function matchesSize(frame, header) {
+  return frame.width === header.width && frame.height === header.height;
 }
 
 /**
@@ -471,13 +476,10 @@ class Decoder {
   eligible(header) {
     if (!header || header.sequence <= this.applied) return false;
     if (isIndependent(header)) return true;
+
     const frame = this.frame;
-    return (
-      header.reference === this.applied &&
-      frame !== null &&
-      frame.width === header.width &&
-      frame.height === header.height
-    );
+    if (header.reference !== this.applied || frame === null) return false;
+    return matchesSize(frame, header);
   }
 
   /**
@@ -491,21 +493,27 @@ class Decoder {
       independentSequence = 0,
       dependent = -1,
       dependentSequence = 0;
+
     slots.forEach((words, index) => {
       const header = readHeader(words);
       if (!this.eligible(header)) return;
+
       if (isIndependent(header)) {
         if (header.sequence > independentSequence) {
           independent = index;
           independentSequence = header.sequence;
         }
-      } else if (dependent < 0 || header.sequence < dependentSequence) {
+        return;
+      }
+
+      if (dependent < 0 || header.sequence < dependentSequence) {
         dependent = index;
         dependentSequence = header.sequence;
       }
     });
-    if (independent >= 0 && (dependent < 0 || independentSequence > dependentSequence))
-      return independent;
+
+    if (independent < 0) return dependent;
+    if (dependent < 0 || independentSequence > dependentSequence) return independent;
     return dependent;
   }
 
@@ -517,18 +525,22 @@ class Decoder {
   apply(words, index = 0) {
     const header = readHeader(words);
     if (!this.eligible(header)) throw Error('Slot is not eligible');
+
     if (header.kind === FORMAT.hbv1) {
       this.mode = MODE.hbv1;
       this.hbv1Slot = index;
       this.applied = header.sequence;
       return header;
     }
+
     const target = this.mode === MODE.hbv2 ? this.current ^ 1 : 0,
       count = this.applyCount + 1;
     const frame = targetFrame(this.frames, target, header);
     const reference = header.reference ? this.frames[this.current] : null;
+
     if (reference) carryForward(reference, frame, header.map, this.written, count - 1);
     decodeChunks(words, header, reference, frame, this.written, count);
+
     this.applyCount = count;
     this.current = target;
     this.mode = MODE.hbv2;
@@ -549,6 +561,7 @@ class Decoder {
       if (index < 0) break;
       this.apply(slots[index], index);
     }
+
     return applied;
   }
 }
@@ -556,8 +569,11 @@ class Decoder {
 /** The frame buffer at index target, reallocated when the size changed. */
 function targetFrame(frames, target, header) {
   let frame = frames[target];
-  if (!frame || frame.width !== header.width || frame.height !== header.height)
-    frame = frames[target] = createFrame(header.width, header.height);
+  if (!frame || !matchesSize(frame, header)) {
+    frame = createFrame(header.width, header.height);
+    frames[target] = frame;
+  }
+
   return frame;
 }
 
@@ -574,19 +590,14 @@ function carryForward(reference, frame, map, written, previousCount) {
 function decodeChunks(words, header, reference, frame, written, count) {
   const {map} = header,
     streamBase = HEADER_WORDS + header.count;
+
   for (let entry = 0; entry < header.count; entry++) {
     const value = words[HEADER_WORDS + entry],
       chunk = value & (MAX_CHUNKS - 1);
     if (chunk >= map.chunks) continue;
-    decodeChunk(
-      new BitReader(words, streamBase, header.trailer, value >>> CHUNK_INDEX_BITS),
-      chunk,
-      header,
-      reference,
-      frame,
-      written,
-      count
-    );
+
+    const reader = new BitReader(words, streamBase, header.trailer, value >>> CHUNK_INDEX_BITS);
+    decodeChunk(reader, chunk, header, reference, frame, written, count);
   }
 }
 
@@ -596,16 +607,21 @@ function readCoefficients(reader, intra, qp, predictor, out) {
   const weights = intra ? WEIGHT_INTRA : WEIGHT_INTER;
   let position = 0,
     count;
+
   if (intra) {
     predictor.dc += reader.se();
     out[0] = clamp(predictor.dc * DC_SCALE, -COEFFICIENT_LIMIT, COEFFICIENT_LIMIT - 1);
     count = reader.ue();
     position = 1;
-  } else count = reader.ue() + 1;
+  } else {
+    count = reader.ue() + 1;
+  }
   count = Math.min(count, 64);
+
   for (let i = 0; i < count; i++) {
     position += reader.ue();
     if (position > 63) break;
+
     const magnitude = reader.ue() + 1,
       level = reader.bits(1) ? -magnitude : magnitude,
       natural = ZIGZAG[position];
@@ -616,6 +632,7 @@ function readCoefficients(reader, intra, qp, predictor, out) {
     );
     position++;
   }
+
   return out;
 }
 
@@ -632,10 +649,13 @@ function decodeChunk(reader, chunk, header, reference, frame, written, count) {
     predictors = newPredictors();
   let mvx = 0,
     mvy = 0;
+
   for (let m = 0; m < CHUNK_MBS; m++) {
     const mb = chunk * CHUNK_MBS + m;
     if (mb >= map.macroblocks) break;
     if (reader.bits(1)) continue;
+
+    // The inter bit is read even without a reference; it then decodes as intra.
     const inter = reader.bits(1) === 1 && reference !== null,
       mbx = mb % map.blocksX,
       mby = Math.floor(mb / map.blocksX);
@@ -645,18 +665,24 @@ function decodeChunk(reader, chunk, header, reference, frame, written, count) {
       mvy += reader.se();
       cbp = reader.bits(CBP_BITS);
     }
+
     for (let b = 0; b < MACROBLOCK_BLOCKS; b++) {
       const [left, top, component] = blockOrigin(b, mbx, mby),
         qp = component ? header.chromaQp : header.qp;
+
       if (inter) {
         predict(reference, component, left, top, mvx, mvy, prediction);
-        if ((cbp >> b) & 1) idct(readCoefficients(reader, false, qp, null, coefficients), residual);
-        else residual.fill(0);
+        if ((cbp >> b) & 1) {
+          idct(readCoefficients(reader, false, qp, null, coefficients), residual);
+        } else {
+          residual.fill(0);
+        }
         for (let i = 0; i < 64; i++) pixels[i] = clamp(prediction[i] + residual[i], 0, 255);
       } else {
         idct(readCoefficients(reader, true, qp, predictors[component], coefficients), residual);
         for (let i = 0; i < 64; i++) pixels[i] = clamp(residual[i], 0, 255);
       }
+
       store(frame, component, left, top, pixels);
     }
     written[mb] = count;
@@ -679,8 +705,10 @@ function lumaAt(rgb, at) {
 function toFrame(rgb, width, height, codedHeight = Math.ceil(height / 16) * 16) {
   const frame = createFrame(width, codedHeight),
     row = y => Math.min(y, height - 1) * width;
+
   for (let y = 0; y < codedHeight; y++)
     for (let x = 0; x < width; x++) frame.y[y * width + x] = lumaAt(rgb, (row(y) + x) * 3);
+
   const chromaWidth = width / 2;
   for (let y = 0; y < codedHeight / 2; y++)
     for (let x = 0; x < chromaWidth; x++) {
@@ -697,6 +725,7 @@ function toFrame(rgb, width, height, codedHeight = Math.ceil(height / 16) * 16) 
       r /= 4;
       g /= 4;
       b /= 4;
+
       frame.cb[y * chromaWidth + x] = clamp(
         Math.round(128 - 0.168736 * r - 0.331264 * g + 0.5 * b),
         0,
@@ -708,6 +737,7 @@ function toFrame(rgb, width, height, codedHeight = Math.ceil(height / 16) * 16) 
         255
       );
     }
+
   return frame;
 }
 
@@ -721,6 +751,7 @@ function sampleBilinear(frame, component, sx, sy) {
     fx = qx - ix,
     fy = qy - iy;
   const at = (x, y) => data[clamp(y, 0, height - 1) * width + clamp(x, 0, width - 1)];
+
   const top = at(ix, iy) * (1 - fx) + at(ix + 1, iy) * fx,
     bottom = at(ix, iy + 1) * (1 - fx) + at(ix + 1, iy + 1) * fx;
   return top * (1 - fy) + bottom * fy;
@@ -737,6 +768,7 @@ function sampleBilinear(frame, component, sx, sy) {
 function toRgb(frame, outWidth = frame.width, outHeight = frame.height) {
   const rgb = Buffer.alloc(outWidth * outHeight * 3),
     scale = frame.width / outWidth;
+
   for (let y = 0; y < outHeight; y++)
     for (let x = 0; x < outWidth; x++) {
       const sx = (x + 0.5) * scale,
@@ -745,10 +777,12 @@ function toRgb(frame, outWidth = frame.width, outHeight = frame.height) {
         cb = sampleBilinear(frame, 1, sx / 2, sy / 2) - 128,
         cr = sampleBilinear(frame, 2, sx / 2, sy / 2) - 128,
         at = (y * outWidth + x) * 3;
+
       rgb[at] = clamp(Math.round(luma + 1.402 * cr), 0, 255);
       rgb[at + 1] = clamp(Math.round(luma - 0.344136 * cb - 0.714136 * cr), 0, 255);
       rgb[at + 2] = clamp(Math.round(luma + 1.772 * cb), 0, 255);
     }
+
   return rgb;
 }
 
@@ -769,15 +803,18 @@ function runLevelPairs(dct, intra, qp) {
   const weights = intra ? WEIGHT_INTRA : WEIGHT_INTER,
     pairs = [];
   let run = 0;
+
   for (let position = intra ? 1 : 0; position < 64; position++) {
     const natural = ZIGZAG[position],
       level = clamp(quantise(dct[natural], step(qp, weights[natural])), -MAX_LEVEL, MAX_LEVEL);
-    if (level === 0) run++;
-    else {
+    if (level === 0) {
+      run++;
+    } else {
       pairs.push([run, level]);
       run = 0;
     }
   }
+
   return pairs;
 }
 
@@ -787,6 +824,7 @@ function runLevelPairs(dct, intra, qp) {
  */
 function writeCoefficients(writer, dct, intra, qp, predictor) {
   const pairs = runLevelPairs(dct, intra, qp);
+
   if (intra) {
     const dc = clamp(Math.round(dct[0] / DC_SCALE), 0, 255);
     writer.se(dc - predictor.dc);
@@ -796,11 +834,13 @@ function writeCoefficients(writer, dct, intra, qp, predictor) {
     if (pairs.length === 0) return false;
     writer.ue(pairs.length - 1);
   }
+
   for (const [skip, level] of pairs) {
     writer.ue(skip);
     writer.ue(Math.abs(level) - 1);
     writer.put(level < 0 ? 1 : 0, 1);
   }
+
   return true;
 }
 
@@ -812,14 +852,18 @@ function writeInterBlocks(writer, source, reference, mbx, mby, mvx, mvy, qps, sc
   const {pixels, prediction, difference} = scratch,
     blocks = new BitWriter();
   let cbp = 0;
+
   for (let b = 0; b < MACROBLOCK_BLOCKS; b++) {
     const [left, top, component] = blockOrigin(b, mbx, mby);
     predict(reference, component, left, top, mvx, mvy, prediction);
     gather(source, component, left, top, pixels);
     for (let i = 0; i < 64; i++) difference[i] = pixels[i] - prediction[i];
-    if (writeCoefficients(blocks, forwardDct(difference), false, qps[component ? 1 : 0], null))
-      cbp |= 1 << b;
+
+    const qp = qps[component ? 1 : 0];
+    const coded = writeCoefficients(blocks, forwardDct(difference), false, qp, null);
+    if (coded) cbp |= 1 << b;
   }
+
   writer.put(cbp, CBP_BITS);
   writer.append(blocks);
 }
@@ -827,13 +871,8 @@ function writeInterBlocks(writer, source, reference, mbx, mby, mvx, mvy, qps, sc
 function writeIntraBlocks(writer, source, mbx, mby, qps, predictors, pixels) {
   for (let b = 0; b < MACROBLOCK_BLOCKS; b++) {
     const [left, top, component] = blockOrigin(b, mbx, mby);
-    writeCoefficients(
-      writer,
-      forwardDct(gather(source, component, left, top, pixels)),
-      true,
-      qps[component ? 1 : 0],
-      predictors[component]
-    );
+    const dct = forwardDct(gather(source, component, left, top, pixels));
+    writeCoefficients(writer, dct, true, qps[component ? 1 : 0], predictors[component]);
   }
 }
 
@@ -847,9 +886,11 @@ function encodeChunk(chunk, map, source, reference, plan, qps, scratch) {
   let coded = false,
     mvx = 0,
     mvy = 0;
+
   for (let m = 0; m < CHUNK_MBS; m++) {
     const mb = chunk * CHUNK_MBS + m;
     if (mb >= map.macroblocks) break;
+
     const mbx = mb % map.blocksX,
       mby = Math.floor(mb / map.blocksX),
       choice = reference ? plan(mb, mbx, mby) : {mode: 'intra'};
@@ -857,6 +898,7 @@ function encodeChunk(chunk, map, source, reference, plan, qps, scratch) {
       writer.put(MB_SKIP, 1);
       continue;
     }
+
     coded = true;
     if (choice.mode === 'inter') {
       writer.put(MB_INTER, 2);
@@ -870,6 +912,7 @@ function encodeChunk(chunk, map, source, reference, plan, qps, scratch) {
       writeIntraBlocks(writer, source, mbx, mby, qps, predictors, scratch.pixels);
     }
   }
+
   return coded ? writer : null;
 }
 
@@ -885,6 +928,7 @@ function encode(source, {sequence, reference = null, referenceSequence = 0, qp, 
   const map = layout(source.width, source.height);
   chromaQp ??= Math.min(MAX_QP, qp + 2);
   plan ??= () => ({mode: 'intra'});
+
   const qps = [qp, chromaQp],
     entries = [],
     stream = new BitWriter(),
@@ -893,6 +937,7 @@ function encode(source, {sequence, reference = null, referenceSequence = 0, qp, 
       prediction: new Int32Array(64),
       difference: new Float64Array(64)
     };
+
   for (let chunk = 0; chunk < map.chunks; chunk++) {
     const writer = encodeChunk(chunk, map, source, reference, plan, qps, scratch);
     if (!writer) continue;
@@ -900,11 +945,13 @@ function encode(source, {sequence, reference = null, referenceSequence = 0, qp, 
     stream.append(writer);
   }
   if (stream.length >= MAX_STREAM_BITS) throw Error('HBV2 stream exceeds the entry offset range');
+
   const streamWords = Math.ceil(stream.length / 32),
     payloadWords = HEADER_WORDS + entries.length + streamWords;
   const payloadBytes = payloadWords * 4 + 4,
     exchanges = exchangesFor(payloadBytes);
   if (exchanges * EXCHANGE_BYTES > MAX_FRAME_BYTES) throw Error('HBV2 frame exceeds 256 KiB');
+
   const words = new Uint32Array((exchanges * EXCHANGE_BYTES) / 4);
   words.set([
     MAGIC,
@@ -919,6 +966,7 @@ function encode(source, {sequence, reference = null, referenceSequence = 0, qp, 
   words.set(entries, HEADER_WORDS);
   words.set(stream.words.subarray(0, streamWords), HEADER_WORDS + entries.length);
   words[words.length - 1] = sequence >>> 0;
+
   return Buffer.from(words.buffer);
 }
 
@@ -931,8 +979,11 @@ function words(slot) {
   return new Uint32Array(slot.buffer, slot.byteOffset, slot.byteLength >> 2);
 }
 
-const glslArray = (name, values, type = 'int') =>
-  `const ${type} ${name}[${values.length}] = ${type}[](${values.map(v => (type === 'uint' ? v + 'u' : v)).join(', ')});`;
+function glslArray(name, values, type = 'int') {
+  const literal = value => (type === 'uint' ? value + 'u' : value);
+  const list = values.map(literal).join(', ');
+  return `const ${type} ${name}[${values.length}] = ${type}[](${list});`;
+}
 
 /** Constants shared with the shader and the C encoder, by their generated names. */
 function constants() {

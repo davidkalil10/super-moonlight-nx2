@@ -1,10 +1,6 @@
 /**
- * Generates the HBV1 decoder include, the HBV2 tables, ring constants, an HBV2 test-card
- * keyframe for the initial private memory and the text atlas, then compiles the shaders into
- * backend one's section of the package.
- *
- * The platform build is imported only when main runs, so testCard loads without the shader
- * toolchain.
+ * Generates the shader includes, memory images and text atlas, then compiles backend one's
+ * shaders. The platform build is imported only in main, so testCard loads without a toolchain.
  */
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -36,35 +32,53 @@ const GLSLC_VERSION =
 const SHIM = path.join(import.meta.dirname, '../glslang-shim.sh');
 
 /**
- * Why this run must not build, or null: build.js takes no arguments, and only the glslc behind
- * the pins (GLSLC, or glslc on the PATH) reproduces the committed SPIR-V.
- * @returns {string | null}
+ * A path next to build.js as the user should type it: relative to the cwd when that is
+ * shorter, absolute when run from the filesystem root.
+ * @param {string} target
+ * @returns {string}
  */
-function refusal() {
-  if (process.argv.length > 2) {
-    const from = target => {
-      const absolute = path.join(import.meta.dirname, target);
-      const relative = path.relative(process.cwd(), absolute) || '.';
-      const atRoot = process.cwd() === path.parse(absolute).root;
-      return relative.length < absolute.length && !atRoot ? relative : absolute;
-    };
-    return (
-      'build.js takes no arguments and rewrites the package in place; to check it, run node ' +
-      from('../../../../hbl-platform/sdk/build.js') +
-      ' --check ' +
-      from('.')
-    );
-  }
-  let found;
+function hintPath(target) {
+  const absolute = path.join(import.meta.dirname, target);
+  const relative = path.relative(process.cwd(), absolute) || '.';
+  const atRoot = process.cwd() === path.parse(absolute).root;
+
+  if (relative.length < absolute.length && !atRoot) return relative;
+  return absolute;
+}
+
+/**
+ * The first line of `glslc --version` (GLSLC, or glslc on the PATH), or why it did not run.
+ * @returns {string}
+ */
+function glslcVersion() {
   try {
-    found = execFileSync(process.env.GLSLC || 'glslc', ['--version'], {
+    return execFileSync(process.env.GLSLC || 'glslc', ['--version'], {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore']
     }).split('\n')[0];
   } catch (error) {
-    found = 'none (' + error.message.split('\n')[0] + ')';
+    return 'none (' + error.message.split('\n')[0] + ')';
   }
+}
+
+/**
+ * Why this run must not build, or null: build.js takes no arguments, and only the glslc behind
+ * the pins reproduces the committed SPIR-V.
+ * @returns {string | null}
+ */
+function refusal() {
+  if (process.argv.length > 2) {
+    return (
+      'build.js takes no arguments and rewrites the package in place; to check it, run node ' +
+      hintPath('../../../../hbl-platform/sdk/build.js') +
+      ' --check ' +
+      hintPath('.')
+    );
+  }
+
+  const found = glslcVersion();
   if (found === GLSLC_VERSION) return null;
+
   return (
     'build.js compiles with glslc ' +
     GLSLC_VERSION +
@@ -82,17 +96,28 @@ function refusal() {
  */
 function testCard(width, height) {
   const rgb = Buffer.alloc(width * height * 3);
+
   for (let y = 0; y < height; y++)
     for (let x = 0; x < width; x++) {
-      const color =
-        y < (height * 2) / 3
-          ? BARS[Math.floor((x * BARS.length) / width)]
-          : Array(3).fill(Math.round((x * 255) / (width - 1)));
+      const color = testCardColor(x, y, width, height);
       color.forEach((value, c) => {
         rgb[(y * width + x) * 3 + c] = value;
       });
     }
+
   return rgb;
+}
+
+/**
+ * @param {number} x
+ * @param {number} y
+ * @param {number} width
+ * @param {number} height
+ * @returns {number[]} RGB
+ */
+function testCardColor(x, y, width, height) {
+  if (y < (height * 2) / 3) return BARS[Math.floor((x * BARS.length) / width)];
+  return Array(3).fill(Math.round((x * 255) / (width - 1)));
 }
 
 /**
@@ -105,6 +130,7 @@ function initialMemory(codec) {
   const [width, height] = ring.TEST_CARD;
   const source = codec.toFrame(testCard(width, height), width, height);
   const slot = codec.encode(source, {sequence: ring.TEST_CARD_SEQUENCE, qp: TEST_CARD_QP});
+
   const offset = ring.slotOffset(ring.TEST_CARD_SEQUENCE);
   const memory = Buffer.alloc(offset + slot.length);
   slot.copy(memory, offset);
@@ -125,14 +151,17 @@ async function main() {
   if (process.env.GLSLANG && path.resolve(process.env.GLSLANG) !== SHIM)
     console.error('build.js ignores GLSLANG and compiles through ' + SHIM + '; GLSLC picks glslc');
   process.env.GLSLANG = SHIM;
+
   const output = name => path.join(import.meta.dirname, name);
   const backend = name => output(path.join(BACKEND, name));
+
   await fs.writeFile(backend('state.bin'), initialState());
   await fs.writeFile(backend('hbv.glsl'), hbv.glsl());
   await fs.writeFile(backend('hbv2-tables.glsl'), hbv2.glslTables());
   await fs.writeFile(backend('ring.glsl'), ring.glsl());
   await fs.writeFile(backend('memory.bin'), initialMemory(hbv2));
   execFileSync('python3', [output('assets.py')], {stdio: 'inherit'});
+
   const {headers, compile} = await import('../../../../hbl-platform/sdk/build.js');
   await headers(output(BACKEND));
   for (const stage of ['vert', 'frag', 'comp'])
@@ -144,11 +173,12 @@ if (isMain(import.meta)) {
   if (refused) {
     console.error(refused);
     process.exitCode = 1;
-  } else
+  } else {
     main().catch(error => {
       console.error(error);
       process.exitCode = 1;
     });
+  }
 }
 
 export {testCard, GLSLC_VERSION};
