@@ -3,7 +3,8 @@
 Moonlight for HBLauncher: stream PC games from Sunshine to the Switch 2. The console runs
 the Moonlight HB package (`apps/moonlight/`), the PC runs the host side (`host/`,
 `tools/moonlight/`): the `hbmoonlight` client, the stream senders and the console UI
-service. Tests, simulators and research live in `tests/`.
+service. Tests and simulators live in `tests/` ([Tests](#tests)); CLAUDE.md has the decisions,
+measurements and research.
 
 ```
 Sunshine (rig, 192.168.8.245)
@@ -18,7 +19,7 @@ apps/moonlight (console GPU)        compute picks/decodes, fragment draws
 ## Layout
 
 - `apps/moonlight/`: the HB package (`manifest.json`, `assets/`, `backends/hblauncher.gpu-app/`,
-  `build.js`); its own README covers the package build.
+  `build.js`); see [Package](#package).
 - `host/stream/`: `live.js` (sender), `native-h264.js` (console decoder route), the
   staggered workers and `helper.js` (finds the `hbmoonlight` binary).
 - `host/audio/`: `audio-stream.js` and the socket audio worker.
@@ -28,9 +29,11 @@ apps/moonlight (console GPU)        compute picks/decodes, fragment draws
   `helper/` (`hbmoonlight`, C, GPLv3).
 - `sdk/native/movie-functions.json`, `movie-event-functions.json`: the native symbols only
   Moonlight uses.
+- `tests/`: tests, simulators and offline tools; nothing there ships to users.
 
-It needs `hbl-platform` beside it (`<dir>/hbl-moonlight`, `<dir>/hbl-platform`): bridge,
-`sdk/host`, `sdk/native` and `sdk/build.js` are imported by relative path. Launcher sessions
+It needs `hbl-platform` beside it (bridge, `sdk/host`, `sdk/native`, `sdk/build.js`; `tests/`
+also uses its `tests/` mocks) and, for `tests/`, `HBLauncher`; the layout is in
+[hbl-platform's README](../hbl-platform/README.md), Sibling checkouts. Launcher sessions
 live in `hbl-platform/runs/launcher-*`; every tool takes a session directory as its first
 argument and uses the newest one when it is omitted.
 
@@ -42,8 +45,12 @@ node apps/moonlight/build.js              # package shaders and memory image
 node ../hbl-platform/sdk/build.js --check apps/moonlight  # check the package, write nothing
 ```
 
-`build.js` rewrites the package in place, so it refuses any argument, and it refuses a glslc
-other than the 2026.1 build behind the committed SPIR-V; both refusals write nothing.
+`build.js` needs glslc 2026.1 (Fedora 44) and `spirv-val`. It rewrites the package in place,
+so it refuses any argument, and it refuses a glslc other than the 2026.1 build behind the
+committed SPIR-V; both refusals write nothing. It always compiles through
+`tools/moonlight/glslang-shim.sh`, which maps the platform's `glslangValidator -V ... SRC -o OUT`
+call onto `glslc -Os --target-env=vulkan1.0`. `GLSLC` picks the glslc for both the version check
+and the shim; a `GLSLANG` setting is ignored with a notice.
 
 `build.sh` compiles natively when the -devel packages are present, otherwise inside a rootless
 podman `quay.io/fedora/fedora:44` image (`helper/Containerfile`); rig and m5 run the same
@@ -60,6 +67,35 @@ moonlight-common-c at `b126e481` (has `LiSendTouchEvent`) and its enet at `dea6f
 published `hbmoonlight` is GPLv3. The input test builds from `tests/` (`DEV_DIR` in
 `helper/CMakeLists.txt`).
 `host/stream/helper.js` finds the binary: `$HBMOONLIGHT`, else the default build path.
+
+## Package
+
+`apps/moonlight/` displays the frames the host writes into the app's private storage. The live
+route is the helper's raw H.264, decoded through the console's native movie API into NV12
+surfaces. The ring also takes HBV1 (`tools/moonlight/hbv.js`, fixed-size intra slots drawn
+straight from the ring) and HBV2 (`tools/moonlight/hbv2.js`, inter-coded variable-rate slots
+that the compute shader decodes into a persistent 1080p frame). Without a sender the app shows
+the built-in HBV2 test card.
+
+The app is an HB package (`manifest.json`, see the package spec in hbl-platform's README):
+`assets/` holds the icon and text atlas and `backends/hblauncher.gpu-app/` the shaders
+with their includes, the SPIR-V and the state and memory images. The compute and fragment
+shaders read the frame ring, so the package has no portable entry and no `src/` yet.
+`build.js` regenerates `hbv.glsl`, `hbv2-tables.glsl`, `ring.glsl`, `state.bin` and
+`memory.bin` under `backends/hblauncher.gpu-app/`, and `assets.py` the text atlas and
+`text.glsl`; do not edit those by hand. Private memory (`manifest.json` `memory.bytes`) is
+laid out in [Private memory](#private-memory-binding-1); the two UI page buffers came with 1.1.0.
+
+The console UI (`ui.glsl`, included by `app.comp` and `app.frag`) draws the pages the host
+service publishes: text strips and images at the positions the host laid out, a cursor the
+console moves by geometry on the frame of the press, and one forwarded command per press
+(A/B/X/Y, left/right on an adjustable item, L+R held one second). A page replaces the video
+unless it is an overlay, which shows over the dimmed stream while raised. Plus and Minus held
+together still exit to HBLauncher from any screen.
+
+`assets/icon.png` is the Moonlight logo: the 256x256 frame of `app/moonlight.ico` from
+[moonlight-qt](https://github.com/moonlight-stream/moonlight-qt) at commit ac29686,
+GPL-3.0 like the helper's upstreams, exported as RGBA PNG with Pillow and otherwise unchanged.
 
 ## Run
 
@@ -307,14 +343,107 @@ fallback, when unsupported.
 `audio-stream.js [RUN_DIR] [--fd N | --file PATH] [--buffer-frames 3840] [--queue 3] [--prime 2]
 [--stats]` plays helper PCM (stdin by default) on the console AudioOut: 8 descriptors at
 `base+0x400+i*0x40`, 8 PCM slots of 0x4000 at `base+0x10000`; a buffer is one write, with its
-append in the same exchange when the rpc supports it. It primes `prime` buffers, starts, and keeps at most `queue` in flight; added latency is
-about queue x buffer + one exchange (3 x 80 ms by default). Releases are predicted on a host
-playhead, so the release poll stays near one call per buffer. Pending input beyond
-(queue + 2) buffers drops the oldest whole buffers (`overruns`, `droppedBytes`); a starved queue
-counts `underruns` and resumes; an EOF tail is padded with silence. On exit it writes
-`moonlight-audio-<ts>.json` into the session. The h264 route runs it with `--queue 2 --prime 2`
-and 960-frame (20 ms) buffers on protocol 3, 1920 (40 ms) otherwise.
+append in the same exchange when the rpc supports it. It primes `prime` buffers, starts, and
+keeps at most `queue` in flight; added latency is about queue x buffer + one exchange (3 x 80 ms
+by default). Releases are predicted on a host playhead, so the release poll stays near one call
+per buffer. Pending input beyond (queue + 2) buffers drops the oldest whole buffers (`overruns`,
+`droppedBytes`); a starved queue counts `underruns` and resumes; an EOF tail is padded with
+silence. On exit it writes `moonlight-audio-<ts>.json` into the session. The h264 route runs it
+with `--queue 2 --prime 2` and 960-frame (20 ms) buffers on protocol 3, 1920 (40 ms) otherwise.
 
 ## Tests
 
-In `tests/`: `npm test`, `npm run typecheck`, `node apps/moonlight/check.cjs [CLIP]`.
+`tests/` holds the tests, simulators and offline tools. They import the runtime one level up, so
+a worktree tests its own code. From `tests/`:
+
+```sh
+npm install                        # once: TypeScript and @types/node
+npm test                           # node --test over every tracked *.test.cjs
+npm run typecheck                  # tsc --checkJs over the modules listed in tsconfig.json
+node apps/moonlight/check.cjs [CLIP]
+```
+
+`check.cjs` renders the real Moonlight shaders on desktop Vulkan through
+`tools/moonlight/gpu-check.c` (compute and draw per frame, like the launcher): exit handling,
+the waiting screen, the HBV2 test card, an HBV1 slot, and an HBV2 P chain with a torn slot, a
+stray reference and a catch-up dispatch, all bit-exact against the JS decoder. With CLIP it
+also streams the clip through the native encoder. It builds under
+`$HB_MOONLIGHT_CHECK_BUILDS` (default `~/claude-builds/HBLauncher/gpu-check`) and needs a GPU,
+`cc`, the Vulkan headers, `glslangValidator` and `spirv-val`. A test clip:
+
+```sh
+ffmpeg -f lavfi -i testsrc2=size=1280x720:rate=60 -t 3 -pix_fmt yuv420p -c:v libx264 -crf 12 testsrc2.mp4
+```
+
+GPU and PIL tests skip with the reason when their tools are missing. `tests/sdk/desktop-vulkan/`
+is HB package backend two (offscreen Vulkan); [its README](tests/sdk/desktop-vulkan/README.md)
+is read by `desktop-vulkan.test.cjs`.
+
+### Tools
+
+- `tests/tools/moonlight/request-budget.cjs`: offline request budget for the staggered native
+  H.264 host loop, a virtual-clock model of its gate cycle.
+- `tests/tools/moonlight/encode.cjs CLIP OUT.hbv [--size 640x352] [--frames N]`: the HBV1 slot
+  stream the host would write; `tools/moonlight/feed.js` replays it into a live ring.
+- `tests/tools/moonlight/desktop-scenes.py SCENE FRAMES OUT`: synthetic 1920x1080 desktop
+  sequences (typing, scroll, drag, pan) as raw RGB24.
+- `tests/tools/moonlight/controller-watch.cjs [RUN_DIR] [--hz 60] [--labels] [--sources]`:
+  prints the console controller as Moonlight gamepad state.
+- `tests/tools/moonlight/helper/tests/input.c`: the helper input-routing test, built by the
+  helper CMake project (`tools/moonlight/helper/`).
+
+### Fake console
+
+`tests/tools/moonlight/fake-console` stands in for a running Moonlight app, so `feed.js` can be
+developed without a console. `shared/rpc.cjs` simulates the bridge: one serial link of 32 KiB
+exchanges whose concurrent writes interleave at random, and a 60 Hz dispatch that runs the JS
+HBV2 decoder over the ring and writes back `applied`. From the repo root:
+
+```sh
+# HBV1 slots of a clip, fed on the measured 5.7 MB/s link
+node tests/tools/moonlight/encode.cjs clip.mp4 clip.hbv --size 1920x1088
+node tools/moonlight/feed.js tests/tools/moonlight/fake-console clip.hbv
+# a 1.5 s stall at t=4 s
+STALL=1500@4000 node tools/moonlight/feed.js tests/tools/moonlight/fake-console clip.hbv
+```
+
+Env: `RATE` (link bytes/s, default 5.7e6), `STALL=ms@at` (pause the dispatch once), `DECODE=1`
+(full pixel decode instead of the light apply).
+
+`bridge.cjs DIR [--pad]` serves the same fake console through the real
+`hbl-platform/smilebasic/engine/lib/bridge.js` and writes a run directory, so `live.js` or
+`input-feeder.js` pay the same HTTP, JSON and base64 costs as on a
+console. It also simulates the sound-memory allocation and an AudioOut that plays appended
+buffers in real time (underruns counted); `--pad` cycles a scripted controller and touch state
+every 500 ms. `HB_PIPELINE` works as on the launcher.
+
+```sh
+HB_PIPELINE=2 RATE=12e6 node tests/tools/moonlight/fake-console/bridge.cjs /tmp/fake --pad &
+node host/input/input-feeder.js /tmp/fake
+```
+
+`shared/console.cjs` is a separate byte-level model of the `bootstrap.bas` `RPC()` loop for
+protocols 1, 2 and 3 (header and data recv, response framing, memmove/read/QueryMemory) over a
+flat memory buffer; `formats.test.cjs` round-trips the real `native.js` through it.
+
+### Live test pass
+
+Only with the user at the console (DEVICE-RULES.md). From `hbl-moonlight`, against a fresh
+`./start.sh --app moonlight` session showing the HBV2 test card, in order:
+
+1. Video: `node host/stream/live.js --moonlight 192.168.8.245 Desktop --codec h264 --staggered --no-input --no-audio`
+   (the h264 flags are above).
+2. Input: drop `--no-input`. Sticks and taps move the host cursor; touch is native multi-touch.
+3. Audio: drop `--no-audio`. If `OpenDefaultAudioOut` fails, the audio process prints a hint
+   and exits while video and input keep running.
+4. A real game from `hbmoonlight list 192.168.8.245` in place of `Desktop`.
+
+### Protocol 3 write test
+
+The A/B for the open Protocol 3 question in CLAUDE.md. Start two sessions with
+`HB_WRITE_CHUNK=32768 ./start.sh` and `HB_WRITE_CHUNK=258048 ./start.sh` in HBLauncher
+(the latter is the protocol 3 default). In each, the gap in
+`hbl-platform/runs/<session>/launcher-auto-operations.jsonl` between `vkMapMemory2` and the next
+`vkCreateBuffer` is the launcher's startup write (8 MiB of zeros, the state, the text atlas and
+the catalog raster: 14,681,088 bytes in the 2026-10-24 sessions); divide to get MB/s. Capture a
+protocol 2 session too if small exchanges dominate the workload.
