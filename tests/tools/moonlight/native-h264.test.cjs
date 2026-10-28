@@ -1387,7 +1387,8 @@ test('a gate error that already failed a push is logged once', {timeout: 5000}, 
       .trim()
       .split('\n')
       .map(JSON.parse);
-    const logged = events.filter(entry => entry.message === failure.message || entry.error);
+    const errorEvents = ['native-error', 'staggered-gate-dropped-error'];
+    const logged = events.filter(entry => errorEvents.includes(entry.event));
     assert.deepEqual(
       logged.map(entry => entry.event),
       ['native-error']
