@@ -566,8 +566,8 @@ const primeJobs = log => named(log, 'thread.create').filter(entry => entry.args[
  * A console that runs the socket audio worker's native calls against plain memory: the
  * allocations, in order, are AudioOut, the finite job worker and the recycle worker.
  * `on.call(name, args)` may return a result to replace the default, `on.send(bytes, count)`
- * and `on.read(address)` may throw; `hang` keeps the recycle thread running. `finite(job)` is
- * every result of finite job 1 (the prime receive) or 2 (the prime append); `frames` keeps
+ * and `on.read(address)` may throw; `hang` keeps the recycle thread running. `finite(job, index)`
+ * is result `index` of finite job 1 (the prime receive) or 2 (the prime append); `frames` keeps
  * what is written to the finite job worker.
  */
 function fakeConsole({
@@ -645,7 +645,7 @@ function fakeConsole({
       // Finite job results: receive counts for the first job, append results for the second.
       if (owner === regions[1] && address !== owner.base)
         for (let at = 0; at + 8 <= bytes.length; at += 8)
-          bytes.writeBigUInt64LE(finite(finiteJobs), at);
+          bytes.writeBigUInt64LE(finite(finiteJobs, at / 8), at);
       return bytes;
     },
     async write(address, bytes) {
@@ -855,21 +855,26 @@ test('the prime receives each slot whole with MSG_WAITALL', async () => {
 });
 
 test('a failed prime job retains the objects and leaves AudioOut open', async () => {
-  let joins = 0;
-  const fake = fakeConsole({
-    on: {call: (name, args) => (primeJoin(name, args) && ++joins === 2 ? 1n : undefined)}
-  });
-  const socket = await createWorker({rpc: fake.rpc, transport: fake.transport});
-  await assert.rejects(socket.start(chunk(1), chunk(2)), /Native job join failed/);
-  assert.equal(socket.retained, true);
-  assert.equal(primeJobs(fake.log).length, 2);
-  const from = fake.log.length;
-  await assert.rejects(socket.stop(), /retained for safety/);
-  assert.deepEqual(afterStop(fake.log, from), []);
+  for (const failing of [1, 2]) {
+    let joins = 0;
+    const fake = fakeConsole({
+      on: {call: (name, args) => (primeJoin(name, args) && ++joins === failing ? 1n : undefined)}
+    });
+    const socket = await createWorker({rpc: fake.rpc, transport: fake.transport});
+    await assert.rejects(socket.start(chunk(1), chunk(2)), /Native job join failed/);
+    assert.equal(socket.retained, true);
+    assert.equal(primeJobs(fake.log).length, failing);
+    const from = fake.log.length;
+    await assert.rejects(socket.start(chunk(1), chunk(2)), /start is not available/);
+    await assert.rejects(socket.stop(), /retained for safety/);
+    assert.deepEqual(afterStop(fake.log, from), [], 'job ' + failing);
+  }
 });
 
 test('a short prime receive appends nothing and closes AudioOut', async () => {
-  const fake = fakeConsole({finite: job => (job === 1 ? BigInt(CHUNK - 4) : 1n)});
+  const fake = fakeConsole({
+    finite: (job, index) => (job === 1 ? BigInt(index === 1 ? CHUNK - 4 : CHUNK) : 1n)
+  });
   const socket = await createWorker({rpc: fake.rpc, transport: fake.transport});
   await assert.rejects(socket.start(chunk(1), chunk(2)), /prime receive was short/);
   assert.equal(primeJobs(fake.log).length, 1);
@@ -880,7 +885,9 @@ test('a short prime receive appends nothing and closes AudioOut', async () => {
 });
 
 test('a rejected prime append closes AudioOut without starting it', async () => {
-  const fake = fakeConsole({finite: job => (job === 1 ? BigInt(CHUNK) : 0n)});
+  const fake = fakeConsole({
+    finite: (job, index) => (job === 1 ? BigInt(CHUNK) : index === 1 ? 0n : 1n)
+  });
   const socket = await createWorker({rpc: fake.rpc, transport: fake.transport});
   await assert.rejects(socket.start(chunk(1), chunk(2)), /rejected prime buffer/);
   assert.equal(named(fake.log, 'StartAudioOut').length, 0);
@@ -898,4 +905,20 @@ test('start is refused once started and after stop', async () => {
   await assert.rejects(socket.start(chunk(1), chunk(2)), /start is not available/);
   assert.equal(named(log, 'send').length, sends + 2);
   assert.equal(primeJobs(log).length, 2);
+});
+
+test('start is refused after a stop that came first', async () => {
+  const fake = fakeConsole();
+  const socket = await createWorker({rpc: fake.rpc, transport: fake.transport});
+  await socket.stop();
+  const from = fake.log.length;
+  await assert.rejects(socket.start(chunk(1), chunk(2)), /start is not available/);
+  assert.deepEqual(afterStop(fake.log, from), []);
+});
+
+test('a bad second chunk is refused before the first is sent', async () => {
+  const fake = fakeConsole();
+  const socket = await createWorker({rpc: fake.rpc, transport: fake.transport});
+  await assert.rejects(socket.start(chunk(1), Buffer.alloc(CHUNK - 4)), /one complete PCM chunk/);
+  assert.equal(named(fake.log, 'send').length, 0);
 });
