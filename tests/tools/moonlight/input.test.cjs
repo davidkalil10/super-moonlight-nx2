@@ -705,6 +705,23 @@ test('the push reader skips repeated frames, follows the overlay and resets on a
   assert.deepEqual(reader.take(), {pushed: 5, dropped: 0, gapMaxMs: 40});
 });
 
+test('the push reader presses Start from its chord and logs only the pad + and -', () => {
+  const lines = [];
+  const logs = [];
+  const reader = createPushReader({
+    layout: 'position',
+    write: line => lines.push(line),
+    log: message => logs.push(message),
+    startChord: ['l', 'r']
+  });
+  reader.attach(812);
+  reader.data(pushRecord(1, {buttons: NPAD.l | NPAD.r}));
+  assert.ok(parsed(lines).at(-1).buttonFlags & 0x0010, 'the chord presses Start');
+  assert.deepEqual(logs, [], 'a chord is not a + press');
+  reader.data(pushRecord(2, {buttons: NPAD.plus}));
+  assert.match(logs.at(-1), /^Input keys: \+ down, - up at /);
+});
+
 /**
  * A push worker double that opens the real native TCP listener: its connect and token jobs
  * start a TCP client playing the console, which the test then writes records on.

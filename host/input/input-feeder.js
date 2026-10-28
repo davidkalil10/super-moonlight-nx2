@@ -162,10 +162,18 @@ function readStorage(directory) {
  * @param {'position' | 'labels'} options.layout
  * @param {(line: string) => void} options.write
  * @param {(message: string) => void} options.log
+ * @param {string[]} [options.startChord]
  * @param {() => number} [options.now]
  */
-function createPushReader({layout, write, log, now = () => performance.now()}) {
+function createPushReader({
+  layout,
+  write,
+  log,
+  startChord = START_CHORD,
+  now = () => performance.now()
+}) {
   const tracker = createTracker();
+  const keys = keysWatch();
   let previous = null;
   let paused = false;
   let lastFrame = null;
@@ -201,9 +209,12 @@ function createPushReader({layout, write, log, now = () => performance.now()}) {
     }
     lastFrame = frameIndex;
     if (paused) return;
-    const result = frame(previous, record.subarray(0, STATE_BYTES), tracker, layout);
+    const state = record.subarray(0, STATE_BYTES);
+    const result = frame(previous, state, tracker, layout, startChord);
     previous = result.controller;
     for (const line of result.lines) write(line);
+    const note = keys(state);
+    if (note) log(`${note} at ${new Date().toISOString()}`);
   }
 
   return {
@@ -264,6 +275,7 @@ function createPushReader({layout, write, log, now = () => performance.now()}) {
  * @param {string} options.directory The session directory.
  * @param {number} options.hz
  * @param {'position' | 'labels'} options.layout
+ * @param {string[]} [options.startChord]
  * @param {(line: string) => void} options.write
  * @param {(message: string) => void} options.log
  * @param {(error: Error) => void} [options.onFailure] Called once when the worker fails.
@@ -279,6 +291,7 @@ function runPush({
   directory,
   hz,
   layout,
+  startChord,
   write,
   log,
   onFailure = () => {},
@@ -287,7 +300,7 @@ function runPush({
   readAppStorage = readStorage,
   now = () => performance.now()
 }) {
-  const reader = createPushReader({layout, write, log, now});
+  const reader = createPushReader({layout, write, log, startChord, now});
   /** @type {Awaited<ReturnType<typeof createPushWorker>> | null} */
   let worker = null;
   let running = null;
@@ -352,10 +365,10 @@ function runPush({
 /**
  * Runs push mode until SIGINT or SIGTERM, or until the worker fails.
  * @param {ReturnType<typeof instrument>} bridge
- * @param {{directory: string, hz: number, layout: 'position' | 'labels',
+ * @param {{directory: string, hz: number, layout: 'position' | 'labels', startChord: string[],
  *   countsFd: number | null}} options
  */
-async function mainPush(bridge, {directory, hz, layout, countsFd}) {
+async function mainPush(bridge, {directory, hz, layout, startChord, countsFd}) {
   let finish;
   const finished = new Promise(resolve => (finish = resolve));
   let closed = false;
@@ -371,6 +384,7 @@ async function mainPush(bridge, {directory, hz, layout, countsFd}) {
     directory,
     hz,
     layout,
+    startChord,
     write: line => closed || process.stdout.write(line + '\n'),
     log: message => process.stderr.write(message + '\n'),
     onFailure: () => {
@@ -397,7 +411,7 @@ async function main() {
   const directory = session.resolve(args[0]);
   const countsFd = cli.number(args, '--counts-fd', null);
   const bridge = instrument(session.rpc(directory), () => 'input');
-  if (push) return mainPush(bridge, {directory, hz, layout, countsFd});
+  if (push) return mainPush(bridge, {directory, hz, layout, startChord, countsFd});
   const rpc = bridge.rpc;
   const pad = countsFd === null ? null : padAge.create();
   if (countsFd !== null)
