@@ -1248,7 +1248,7 @@ test('one checked write carries current decode, next receive and lag-two fetch',
 test('fetch remains closed when the acquired output or publication target differs', () => {
   const wrong = snapshot();
   wrong.acquire.pts = 4n;
-  assert.throws(() => gate.gateWrite({snapshot: wrong, ...request}), /output status/);
+  assert.throws(() => gate.gateWrite({snapshot: wrong, ...request}), /output PTS 4 is not/);
   assert.throws(
     () =>
       gate.gateWrite({snapshot: snapshot(), ...request, destination: {...destination, index: 1}}),
@@ -1682,7 +1682,7 @@ test('staggered host gate keeps decode and fetch closed on incomplete or wrong r
   assert.throws(() => check(parse(bytes), expected), /Short receive/);
   bytes.writeBigInt64LE(40000n, STATUS.receive - READ_START);
   bytes.writeBigUInt64LE(1n, STATUS.acquire - READ_START);
-  assert.throws(() => check(parse(bytes), expected), /output status/);
+  assert.throws(() => check(parse(bytes), expected), /output acquire failed \(0x1\)/);
   bytes.writeBigUInt64LE(0n, STATUS.acquire - READ_START);
   bytes.writeUInt32LE(13, ring.CONTROL.nativeApplied - READ_START);
   assert.throws(() => check(parse(bytes), expected), {retryable: true, pending: 'applied'});
@@ -1709,7 +1709,7 @@ test('tail output check requires acquisition and prior publication without a new
   state.acquire.pts = 7001n;
   assert.throws(
     () => checkOutput(state, {acquire: {sequence: 7, pts: 7000n}}),
-    /output status/
+    /output PTS 7001 is not the expected 7000/
   );
 });
 

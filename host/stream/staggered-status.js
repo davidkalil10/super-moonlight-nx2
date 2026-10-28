@@ -149,6 +149,25 @@ function isApplied(nativeApplied, sequence) {
 }
 
 /**
+ * Why an acquire stamp is not the output the gate expects. The acquire frame can't drain the
+ * queue, so a wake with no output or two outputs under one wake shows here (lag0-re.md risk 2).
+ * @param {Snapshot['acquire']} acquire
+ * @param {number | bigint} pts
+ * @returns {string | null}
+ */
+function acquireFault({status, index, pts: actual}, pts) {
+  if (status !== 0n || index < 0) {
+    const code = '0x' + status.toString(16);
+    return index < 0
+      ? `Decoder output event woke with no output ready (${code})`
+      : `Decoder output acquire failed (${code})`;
+  }
+  if (actual !== BigInt(pts))
+    return `Decoder output PTS ${actual} is not the expected ${pts}: an extra or held output`;
+  return null;
+}
+
+/**
  * Checks the output half of a snapshot: the acquired output, the previous fetch and the
  * publication it presented.
  * @param {Snapshot} snapshot
@@ -158,12 +177,8 @@ function isApplied(nativeApplied, sequence) {
 function checkOutput(snapshot, expected) {
   if (!expected.acquire) throw Error('Missing expected staggered output acquire');
   checkSequence(snapshot.acquire.sequence, expected.acquire.sequence, 'Acquire');
-  if (
-    snapshot.acquire.status !== 0n ||
-    snapshot.acquire.index < 0 ||
-    snapshot.acquire.pts !== BigInt(expected.acquire.pts)
-  )
-    throw gateError('Decoder output status, index or PTS differs');
+  const fault = acquireFault(snapshot.acquire, expected.acquire.pts);
+  if (fault) throw gateError(fault);
 
   if (expected.fetch) {
     checkSequence(snapshot.fetch.sequence, expected.fetch.sequence, 'Fetch');

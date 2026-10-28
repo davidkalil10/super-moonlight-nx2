@@ -74,6 +74,8 @@ function device() {
   // GetOutputBuffer of one unit for some worker steps, and `fetched` and `published` log what
   // each fetch copied and each publication the shader applied.
   Object.assign(decoder, {holding: false, held: [], slowFetch: null, fetched: [], published: []});
+  // `double` names a unit that decodes into two outputs under one event set.
+  decoder.double = null;
   const outputs = new Map();
   let setData = null;
   let aborted = false;
@@ -101,6 +103,7 @@ function device() {
       const event = fake.events.get(decoder.event);
       if (event.set) decoder.coalesced++;
       decoder.ready.push({index: nextOutput++ % 4, pts});
+      if (decoder.double === sequenceOf(pts)) decoder.ready.push({index: nextOutput++ % 4, pts});
       decoder.maxReady = Math.max(decoder.maxReady, decoder.ready.length);
       event.set = true;
       return 0;
@@ -111,7 +114,11 @@ function device() {
     },
     'movie.acquireOutput'([, index, pts], memory) {
       const output = decoder.ready.shift();
-      if (!output) return NO_OUTPUT;
+      // The SDK sets the index to -1 before it finds the list empty (lag0-re.md).
+      if (!output) {
+        memory.write32(index, 0xffffffff);
+        return NO_OUTPUT;
+      }
       log.push(`acquire ${sequenceOf(output.pts)}`);
       outputs.set(output.index, sequenceOf(output.pts));
       memory.write32(index, output.index);
@@ -124,6 +131,7 @@ function device() {
     },
     'movie.getOutput'([, index]) {
       const unit = outputs.get(Number(index));
+      if (unit === undefined) return NO_OUTPUT;
       const slow = decoder.slowFetch;
       if (slow?.unit === unit && slow.steps-- > 0) return BLOCK;
       decoder.fetched.push({unit, address: setData});
@@ -697,6 +705,77 @@ test('a slow lag 0 fetch of N-1 makes gate N reread rather than signal again', a
   ownUnits(d, 9);
   await live.stop();
   await d.worker.finalize();
+});
+
+test('two outputs under one event stop the run on the extra one', async () => {
+  // At lag 1 the gate that checks the extra acquire also holds its fetch; at lag 0 the gate
+  // before it already opened that fetch, so the extra is published once before the stop.
+  const fetchedUnits = {1: [1, 2, 3, 4], 0: [1, 2, 3, 4, 4]};
+  for (const lag of [1, 0]) {
+    const d = device();
+    d.decoder.double = 4;
+    const live = await d.live(undefined, {lag});
+    const failure = await stream(live, d.sink, 9).then(
+      () => null,
+      error => error
+    );
+    assert.match(failure?.message ?? '', /Decoder output PTS 4000 is not the expected 5000/);
+    assert.equal(d.decoder.maxReady, 2, `lag ${lag}`);
+    assert.deepEqual(
+      d.log.filter(entry => entry.startsWith('acquire')),
+      ['acquire 1', 'acquire 2', 'acquire 3', 'acquire 4', 'acquire 4'],
+      `lag ${lag}`
+    );
+    assert.deepEqual(
+      d.decoder.fetched.map(fetch => fetch.unit),
+      fetchedUnits[lag],
+      `lag ${lag}`
+    );
+    await live.stop();
+    assert.equal(live.retained, false, `lag ${lag}`);
+    assert.deepEqual(d.worker.diagnostics.joined, [true, true], `lag ${lag}`);
+    assert.ok(
+      d.decoder.ready.every(output => output.pts === 5000),
+      'only output 5 is left'
+    );
+    await d.worker.finalize();
+  }
+});
+
+test('an output event wake with nothing ready stops the run on the empty result', async () => {
+  for (const lag of [1, 0]) {
+    const d = device();
+    const live = await d.live(undefined, {lag});
+    // Output 3 is held back from the event, so the stray wake finds the list empty.
+    await stream(live, d.sink, 3);
+    while ((await d.worker.readStatus()).acquire.sequence < 2);
+    d.decoder.holding = true;
+    await live.push(unitAt(4), {sink: d.sink});
+    for (let poll = 0; poll < 5; poll++) await d.worker.readStatus();
+    d.fake.signal(d.decoder.event);
+    const failure = await live.push(unitAt(5), {sink: d.sink}).then(
+      () => null,
+      error => error
+    );
+    assert.deepEqual(
+      d.decoder.held.map(output => output.pts),
+      [3000]
+    );
+    assert.match(failure?.message ?? '', /output event woke with no output ready \(0x2a0\)/);
+    // Nothing is fetched for the empty acquire, but at lag 0 its gate already opened the fetch
+    // frame, which publishes the surface GetOutputBuffer failed to fill.
+    assert.deepEqual(
+      d.decoder.fetched.map(fetch => fetch.unit),
+      [1, 2]
+    );
+    assert.deepEqual(
+      d.decoder.published.map(publication => publication.unit),
+      lag ? [1, 2] : [1, 2, 3]
+    );
+    await live.stop();
+    assert.equal(live.retained, false, `lag ${lag}`);
+    await d.worker.finalize();
+  }
 });
 
 test('a lag 0 stop in each phase ends both workers at their exit', async () => {
@@ -1299,7 +1378,7 @@ test('tail output drain opens only a checked fetch gate', async () => {
       destination,
       frame
     }),
-    /output status/
+    /Decoder output PTS 2 is not the expected 1/
   );
   assert.equal(f.calls.filter(call => call.combined).length, 0);
   await worker.drainOutput({
