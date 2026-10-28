@@ -3,8 +3,8 @@
  * keyframe for the initial private memory and the text atlas, then compiles the shaders into
  * backend one's section of the package.
  *
- * The platform build is imported only when main runs, so check.cjs can load testCard without
- * the shader toolchain.
+ * The platform build is imported only when main runs, so testCard loads without the shader
+ * toolchain.
  */
 import fs from 'node:fs/promises';
 import path from 'node:path';

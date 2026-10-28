@@ -92,8 +92,6 @@ that remains open.
 - `tests/tsconfig.json` lists the hbl-moonlight modules that went through the readability
   rewrite; add each component as it lands. TypeScript is a dev dependency only, hbl-moonlight
   itself has no build step.
-- `tests/sdk/desktop-vulkan/README.md` stays in place: `desktop-vulkan.test.cjs` runs its smoke
-  command and checks its wording.
 - One test file per subsystem, each under about 1500 lines; split one only at a section (an old
   file) boundary. Helpers shared inside this tree live in
   `tests/tools/moonlight/test-helpers.cjs`; the only cross-repo ones are the hbl-platform/tests

@@ -20,12 +20,10 @@
   "include": [
     "../tools/moonlight/hbv.js",
     "../tools/moonlight/hbv2.js",
-    "../tools/moonlight/frames.js",
     "../tools/moonlight/ring.js",
     "../host/stream/h264-stream.js",
     "../host/stream/h264-sps.js",
     "../host/stream/surface-check.js",
-    "../tools/moonlight/reference.js",
     "../apps/moonlight/build.js",
     "../host/stream/bitrate.js",
     "../host/stream/bridge-counter.js",
