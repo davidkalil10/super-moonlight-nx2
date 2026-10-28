@@ -1430,6 +1430,24 @@ test('staggered workers install two alternating frames and can stop both waits',
     assert.equal(f.read(control + offset, 8).readBigUInt64LE(), BigInt(outputExit));
 });
 
+test('the live counts book the stage ticks of real frames only when they are on', async () => {
+  const countsOf = async schedule => {
+    const d = device();
+    const live = await d.live(undefined, schedule);
+    await stream(live, d.sink, 12);
+    await live.finish({sink: d.sink});
+    await live.stop();
+    await d.worker.finalize();
+    return live.counts;
+  };
+
+  assert.ok(!('ticks' in (await countsOf({}))));
+  const {ticks} = await countsOf({stageTicks: true});
+  assert.ok(ticks.paired > 0);
+  for (const stage of ['receiveSubmit', 'decode', 'readyPublish', 'publishApplied', 'sendPresent'])
+    assert.ok(ticks[stage].n > 0 && ticks[stage].p50 >= 0, stage);
+});
+
 test('the worker verifies the console tick only with the stage ticks on', async () => {
   const verifiedBy = async settings => {
     const f = fixture();

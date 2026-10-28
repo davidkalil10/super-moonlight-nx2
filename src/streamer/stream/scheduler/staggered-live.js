@@ -10,6 +10,7 @@ import * as surfaceChecks from './surface-check.js';
 import * as exchangeTiming from './exchange-timing.js';
 import * as gates from '../worker/staggered-gate.js';
 import {create as createGateQueue} from './gate-queue.js';
+import {create as createStageTicks} from './stage-ticks.js';
 import {create as createStaggeredWorker} from '../worker/staggered-worker.js';
 import {
   createAcquireWaits,
@@ -167,6 +168,7 @@ function create({
   /** When the last gate opened a fetch, for the pacer's vsync prediction. */
   let fetchOpened = null;
   const timing = exchangeTiming.create();
+  const ticks = stageTicks ? createStageTicks() : null;
   /** When the last gate opened and the last unit went out, for the exchange bins. */
   let lastGate = null;
   let lastSend = null;
@@ -218,6 +220,7 @@ function create({
       queue?.observeReceive(snapshot.receive.sequence);
       readMs = now() - startedAt;
       timing.record('status', startedAt, now(), references(expected));
+      ticks?.observe(snapshot, startedAt);
 
       if (link && !link.received) {
         link.received =
@@ -455,6 +458,8 @@ function create({
     }
 
     destinations.set(sequence - lag, destination);
+    if (ticks && destination && !destination.skip)
+      ticks.publishes(sequence - lag, destination.sequence);
     return {destination, snapshot};
   }
 
@@ -789,7 +794,8 @@ function create({
         acquireWaits: acquireWaits.counts,
         fetchWaits: fetchWaits.counts,
         ...(fallback && {lagEnd: {...fallback}}),
-        ...(surfaces && {surfaceCheck: surfaces.counts})
+        ...(surfaces && {surfaceCheck: surfaces.counts}),
+        ...(ticks && {ticks: ticks.summary})
       };
     },
 
