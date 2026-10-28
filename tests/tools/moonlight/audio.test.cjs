@@ -1,4 +1,4 @@
-// Host audio: the socket plan, the AudioOut stream and the socket audio source.
+// Host audio: the socket plan, the AudioOut stream, the socket audio source and its worker.
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const {PassThrough} = require('node:stream');
@@ -519,4 +519,316 @@ test('a mid-stream send failure reports once and stops pacing', async () => {
   const report = await source.close();
   assert.equal(report.error, 'Native TCP data socket is closed');
   assert.deepEqual(f.events.slice(-2), ['audio-stop', 'transport-close']);
+});
+
+// audio-socket-worker.js
+const {create: createWorker} = require('../../../host/audio/audio-socket-worker.js');
+const {CODE} = require('../../../../hbl-platform/sdk/native/thread.js');
+const {repeatingFrame} = require('../../../../hbl-platform/sdk/native/jobs.js');
+const symbols = require('../../../../hbl-platform/sdk/native/audio-symbols.json');
+
+const SDK = 0x40000000;
+const OUTPUT = 0x20000000;
+const FD = 12;
+const RECV = 0x30001234;
+const DESCRIPTOR_OFFSET = 0x400;
+const DESCRIPTOR_STRIDE = 0x40;
+const AUDIO_FUNCTIONS = {
+  InitializeAudioOutParameter: 'InitializeAudioOutParameter',
+  OpenDefaultAudioOut:
+    'OpenDefaultAudioOutEPNS0_8AudioOutEPNS_2os11SystemEventERKNS0_17AudioOutParameterE',
+  GetAudioOutSampleRate: 'GetAudioOutSampleRate',
+  GetAudioOutChannelCount: 'GetAudioOutChannelCount',
+  GetAudioOutSampleFormat: 'GetAudioOutSampleFormat',
+  SetAudioOutBufferInfo: 'SetAudioOutBufferInfo',
+  StartAudioOut: 'StartAudioOut',
+  StopAudioOut: 'StopAudioOut',
+  FlushAudioOutBuffers: 'FlushAudioOutBuffers',
+  CloseAudioOut: 'CloseAudioOut'
+};
+/** Address to a short name, for the AudioOut functions the host calls and the thread gadgets. */
+const NAMES = new Map();
+for (const [name, match] of Object.entries(AUDIO_FUNCTIONS))
+  NAMES.set(SDK + symbols.find(symbol => symbol.name.includes(match)).offset, name);
+for (const [name, code] of Object.entries(CODE)) NAMES.set(SDK + code.offset, 'thread.' + name);
+
+/** Allocations land one 16 MiB apart: AudioOut, the finite job worker, the recycle worker. */
+const region = index => 0x60000000 + index * 0x1000000;
+/** The recycle worker's join, which stores its exit value at base + 8; the prime jobs join too. */
+const workerJoin = (name, args) => name === 'thread.join' && args[1] === region(2) + 8;
+const chunk = value => Buffer.alloc(CHUNK, value);
+const named = (log, name) => log.filter(entry => entry.name === name);
+
+/**
+ * A console that runs the socket audio worker's native calls against plain memory: the
+ * allocations, in order, are AudioOut, the finite job worker and the recycle worker.
+ * `on.call(name, args)` may return a result to replace the default, `on.send(bytes, count)`
+ * and `on.read(address)` may throw; `hang` keeps the recycle thread running.
+ */
+function fakeConsole({on = {}, hang = false, cycle = 'whole'} = {}) {
+  const log = [];
+  const regions = [];
+  let finiteJobs = 0;
+  let sends = 0;
+  let recycleThread = null;
+  const regionAt = address =>
+    regions.find(region => address >= region.base && address < region.base + region.bytes.length);
+  const audio = () => regions[0].base;
+  const frame = () => repeatingFrame({base: regions[2].base, sdk: SDK, calls: [], code: CODE});
+
+  /** Recycle results, per slot: wait, released descriptor, received count, appended. */
+  function cycleResults() {
+    const results = Buffer.alloc(8 * 8);
+    for (let slot = 0; slot < 2; slot++) {
+      const descriptor = audio() + DESCRIPTOR_OFFSET + slot * DESCRIPTOR_STRIDE;
+      results.writeBigUInt64LE(
+        BigInt(cycle === 'whole' ? descriptor : descriptor + 1),
+        slot * 32 + 8
+      );
+      results.writeBigUInt64LE(BigInt(CHUNK), slot * 32 + 16);
+      results.writeBigUInt64LE(1n, slot * 32 + 24);
+    }
+    return results;
+  }
+
+  const rpc = {
+    a: {sdk: SDK},
+    output: OUTPUT,
+    async request() {
+      return {verified: true};
+    },
+    async call(offset, [, , bytes]) {
+      const base = region(regions.length);
+      regions.push({base, bytes: Buffer.alloc(bytes)});
+      const output = Buffer.alloc(8);
+      output.writeBigUInt64LE(BigInt(base));
+      return {result: 0n, output};
+    },
+    async callAddress(address, args) {
+      const name = NAMES.get(address) ?? 'native';
+      log.push({name, args});
+      const result = on.call?.(name, args);
+      if (result !== undefined) return {result};
+      if (name === 'thread.create') {
+        const thread = BigInt(0x1000 + log.length);
+        regionAt(args[0]).bytes.writeBigUInt64LE(thread, args[0] - regionAt(args[0]).base);
+        if (args[0] === regions[2]?.base) recycleThread = thread;
+        else finiteJobs++;
+      }
+      if (name === 'thread.tryWait') return {result: hang && args[0] === recycleThread ? 0n : 1n};
+      if (name === 'GetAudioOutSampleRate') return {result: 48000n};
+      if (name === 'GetAudioOutChannelCount') return {result: 2n};
+      if (name === 'GetAudioOutSampleFormat') return {result: 2n};
+      return {result: 0n};
+    },
+    async read(address, length) {
+      on.read?.(address);
+      const owner = regionAt(address);
+      if (regions[2] && address === frame().results) {
+        log.push({name: 'read results', length});
+        return cycleResults().subarray(0, length);
+      }
+      const bytes = Buffer.from(
+        owner.bytes.subarray(address - owner.base, address - owner.base + length)
+      );
+      // Finite job results: receive counts for the first job, append results for the second.
+      if (owner === regions[1] && address !== owner.base)
+        for (let at = 0; at + 8 <= bytes.length; at += 8)
+          bytes.writeBigUInt64LE(finiteJobs === 1 ? BigInt(CHUNK) : 1n, at);
+      return bytes;
+    },
+    async write(address, bytes) {
+      const owner = regionAt(address);
+      if (regions[2] && address === frame().selector)
+        log.push({
+          name: bytes.readBigUInt64LE() === BigInt(frame().exit) ? 'select exit' : 'select live'
+        });
+      bytes.copy(owner.bytes, address - owner.base);
+    }
+  };
+  const transport = {
+    fd: FD,
+    recvFunction: RECV,
+    async send(bytes) {
+      sends++;
+      log.push({name: 'send', silent: !bytes.some(byte => byte), length: bytes.length});
+      on.send?.(bytes, sends);
+    }
+  };
+  return {rpc, transport, log, audio};
+}
+
+/** Creates and starts socket audio on a fake console; `on`, `hang` and `cycle` go to it. */
+async function started(options = {}) {
+  const fake = fakeConsole(options);
+  const socket = await createWorker({rpc: fake.rpc, transport: fake.transport, timeoutMs: 1000});
+  await socket.start(chunk(1), chunk(2));
+  return {...fake, socket};
+}
+
+/** The log from the stop() call on, as names. */
+const afterStop = (log, from) => log.slice(from).map(entry => entry.name);
+
+test('socket audio opens with its event, primes both slots and recycles until stop', async () => {
+  const {socket, log, audio} = await started();
+  const base = audio();
+  assert.deepEqual(named(log, 'InitializeAudioOutParameter')[0].args, [base + 0x300]);
+  assert.deepEqual(named(log, 'OpenDefaultAudioOut')[0].args, [base, base + 0x100, base + 0x300]);
+  assert.deepEqual(
+    named(log, 'SetAudioOutBufferInfo').map(entry => entry.args.slice(0, 2)),
+    [
+      [base + 0x400, base + 0x10000],
+      [base + 0x440, base + 0x14000]
+    ]
+  );
+  await socket.send(chunk(3));
+  const health = await socket.health();
+  assert.equal(health.sent, 3);
+  assert.equal(health.running, true);
+  assert.equal(health.results.length, 8);
+  const from = log.length;
+  await socket.stop();
+  assert.deepEqual(afterStop(log, from), [
+    'select exit',
+    'send',
+    'send',
+    'thread.tryWait',
+    'thread.join',
+    'read results',
+    'StopAudioOut',
+    'FlushAudioOutBuffers',
+    'CloseAudioOut'
+  ]);
+  assert.equal(socket.retained, false);
+  await socket.stop();
+});
+
+test('stop points the worker at its exit before two silent chunks unblock it', async () => {
+  const {socket, log} = await started();
+  const from = log.length;
+  await socket.stop();
+  const tail = log.slice(from);
+  assert.equal(tail[0].name, 'select exit');
+  assert.deepEqual(
+    tail.filter(entry => entry.name === 'send'),
+    [
+      {name: 'send', silent: true, length: CHUNK},
+      {name: 'send', silent: true, length: CHUNK}
+    ]
+  );
+});
+
+test('a failed silent chunk retains the objects and leaves AudioOut open', async () => {
+  const failure = Error('socket closed');
+  const {socket, log} = await started({
+    on: {
+      send(bytes, count) {
+        if (count === 3) throw failure;
+      }
+    }
+  });
+  const from = log.length;
+  await assert.rejects(socket.stop(), failure);
+  assert.equal(socket.retained, true);
+  assert.deepEqual(afterStop(log, from), ['select exit', 'send']);
+  await assert.rejects(socket.stop(), /retained for safety/);
+});
+
+test('a worker that does not stop is retained and never joined', async () => {
+  const {socket, log} = await started({hang: true});
+  const from = log.length;
+  await assert.rejects(socket.stop(), /did not stop; restart SmileBASIC/);
+  assert.equal(socket.retained, true);
+  const tail = afterStop(log, from);
+  assert.ok(tail.includes('thread.tryWait'));
+  for (const name of ['thread.join', 'StopAudioOut', 'FlushAudioOutBuffers', 'CloseAudioOut'])
+    assert.ok(!tail.includes(name), name);
+  await assert.rejects(socket.stop(), /retained for safety/);
+});
+
+test('a failed join retains the objects', async () => {
+  const {socket, log} = await started({
+    on: {call: (name, args) => (workerJoin(name, args) ? 1n : undefined)}
+  });
+  const from = log.length;
+  await assert.rejects(socket.stop(), /recycle worker join failed/);
+  assert.equal(socket.retained, true);
+  assert.ok(!afterStop(log, from).includes('CloseAudioOut'));
+});
+
+test('a worker that could not be spawned is retained without stopping AudioOut', async () => {
+  const fake = fakeConsole({
+    on: {call: (name, args) => (name === 'thread.create' && args[0] === region(2) ? 1n : undefined)}
+  });
+  const socket = await createWorker({rpc: fake.rpc, transport: fake.transport});
+  await assert.rejects(socket.start(chunk(1), chunk(2)), /recycle worker creation failed/);
+  assert.equal(socket.retained, true);
+  const from = fake.log.length;
+  await assert.rejects(socket.stop(), /retained for safety/);
+  assert.deepEqual(afterStop(fake.log, from), []);
+  await assert.rejects(socket.stop(), /retained for safety/);
+});
+
+test('an AudioOut that did not start is closed without stopping a worker', async () => {
+  const fake = fakeConsole({
+    on: {call: name => (name === 'StartAudioOut' ? 1n : undefined)}
+  });
+  const socket = await createWorker({rpc: fake.rpc, transport: fake.transport});
+  await assert.rejects(socket.start(chunk(1), chunk(2)), /Socket AudioOut start failed/);
+  const from = fake.log.length;
+  await socket.stop();
+  assert.deepEqual(afterStop(fake.log, from), ['FlushAudioOutBuffers', 'CloseAudioOut']);
+  assert.equal(socket.retained, false);
+});
+
+test('send is refused as soon as stop is called', async () => {
+  const {socket} = await started();
+  const stopping = socket.stop();
+  await assert.rejects(socket.send(chunk(4)), /no longer writable/);
+  await stopping;
+});
+
+test('a bad recycle result is thrown only after AudioOut is closed', async () => {
+  const {socket, log} = await started({cycle: 'wrong descriptor'});
+  const from = log.length;
+  await assert.rejects(socket.stop(), /recycle 0 returned an invalid descriptor or count/);
+  assert.equal(socket.retained, false);
+  assert.deepEqual(afterStop(log, from).slice(-3), [
+    'StopAudioOut',
+    'FlushAudioOutBuffers',
+    'CloseAudioOut'
+  ]);
+});
+
+test('health reports the worker stopped once it has been joined', async () => {
+  let socket;
+  let joined = false;
+  let health;
+  ({socket} = await started({
+    on: {
+      call(name, args) {
+        if (workerJoin(name, args)) joined = true;
+      },
+      read() {
+        if (joined && !health) {
+          health = Promise.resolve();
+          health = socket.health();
+        }
+      }
+    }
+  }));
+  await socket.stop();
+  assert.deepEqual(await health, {sent: 2, running: false, retained: false});
+});
+
+test('an AudioOut that is not 48 kHz stereo s16 is closed again', async () => {
+  const fake = fakeConsole({
+    on: {call: name => (name === 'GetAudioOutSampleFormat' ? 3n : undefined)}
+  });
+  await assert.rejects(
+    createWorker({rpc: fake.rpc, transport: fake.transport}),
+    /Unexpected socket AudioOut format/
+  );
+  assert.equal(named(fake.log, 'FlushAudioOutBuffers').length, 1);
+  assert.equal(named(fake.log, 'CloseAudioOut').length, 1);
 });
