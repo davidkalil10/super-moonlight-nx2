@@ -51,6 +51,7 @@
     "../host/stream/decode-wait.js",
     "../host/stream/exchange-timing.js",
     "../host/stream/receive-wait.js",
+    "../host/stream/gate-queue.js",
     "../host/stream/native-h264.js",
     "../host/stream/live.js",
     "../host/ui/discover.js",

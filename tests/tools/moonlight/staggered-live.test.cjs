@@ -31,6 +31,7 @@ const {
   check,
   checkOutput
 } = require('../../../host/stream/staggered-status.js');
+const {create: createGateQueue} = require('../../../host/stream/gate-queue.js');
 const withoutPacer = require('./test-helpers.cjs').withoutPacer('status');
 
 // staggered-live.js
@@ -1212,6 +1213,130 @@ test('at lag 1 the write fetches the output one behind decode', () => {
   assert.equal(bytes.readBigUInt64LE(outputSlot0 + 8), 0n);
   assert.throws(() => gate.gateWrite({snapshot: snapshot(), ...request, lag: 1}), /one AU behind/);
   assert.throws(() => gate.gateWrite({snapshot: snapshot(), ...request, lag: 3}), /lag is 1 or 2/);
+});
+
+// gate-queue.js
+const tick = () => new Promise(resolve => setImmediate(resolve));
+
+test('queued gates run one at a time in order and drain waits for them', async () => {
+  const queue = createGateQueue();
+  const log = [];
+  const ends = [];
+  const gate = sequence => () =>
+    new Promise(resolve => {
+      log.push(`start ${sequence}`);
+      ends.push(() => (log.push(`end ${sequence}`), resolve()));
+    });
+  await queue.admit(1);
+  queue.push(1, gate(1));
+  queue.observeReceive(1);
+  await queue.admit(2);
+  queue.push(2, gate(2));
+  assert.equal(queue.depth, 2);
+  let drained = false;
+  const drain = queue.drain().then(() => (drained = true));
+  await tick();
+  assert.deepEqual(log, ['start 1']);
+  ends.shift()();
+  await tick();
+  assert.deepEqual(log, ['start 1', 'end 1', 'start 2']);
+  assert.equal(drained, false);
+  ends.shift()();
+  await drain;
+  assert.equal(queue.depth, 0);
+});
+
+test('a prime waits for the previous receive and for room in the queue', async () => {
+  const queue = createGateQueue({received: 1});
+  const ends = [];
+  const gate = () => new Promise(resolve => ends.push(resolve));
+  await queue.admit(2);
+  queue.push(2, gate);
+  let admitted = false;
+  const third = queue.admit(3).then(() => (admitted = true));
+  await tick();
+  assert.equal(admitted, false, 'unit 2 is not seen received yet');
+  queue.observeReceive(2);
+  await third;
+  queue.push(3, gate);
+  queue.observeReceive(3);
+  admitted = false;
+  const fourth = queue.admit(4).then(() => (admitted = true));
+  await tick();
+  assert.equal(admitted, false, 'two gates are already queued or running');
+  ends.shift()();
+  await fourth;
+  ends.shift()();
+  await queue.drain();
+});
+
+test('the first gate error stops the queue and reaches the producer', async () => {
+  const queue = createGateQueue();
+  const ran = [];
+  queue.push(1, async () => {
+    ran.push(1);
+    throw Error('gate 1');
+  });
+  queue.push(2, async () => ran.push(2));
+  await assert.rejects(queue.admit(3), /gate 1/);
+  await assert.rejects(queue.drain(), /gate 1/);
+  assert.throws(() => queue.push(3, async () => {}), /gate 1/);
+  await assert.rejects(queue.admit(3), /gate 1/);
+  assert.deepEqual(ran, [1]);
+});
+
+test('clear drops the gates that have not started', async () => {
+  const queue = createGateQueue({depth: 3});
+  let release;
+  queue.push(1, () => new Promise(resolve => (release = resolve)));
+  queue.push(2, async () => assert.fail('a dropped gate ran'));
+  queue.push(3, async () => assert.fail('a dropped gate ran'));
+  assert.deepEqual(queue.clear(), [2, 3]);
+  assert.equal(queue.depth, 1);
+  release();
+  await queue.drain();
+});
+
+// The console's two descriptor slots and auto-clear length gate: a prime that finds the gate
+// still signalled merges its wake into the earlier one, and a prime into a slot the console has
+// not taken yet overwrites a unit.
+test('admitted primes never merge length-gate wakes over 200 units', async () => {
+  const last = 201;
+  const queue = createGateQueue({received: 1});
+  const slots = [0, 0];
+  let lengthGate = false;
+  let merged = 0;
+  let received = 1;
+  const prime = sequence => {
+    slots[(sequence - 1) % 2] = sequence;
+    if (lengthGate) merged++;
+    lengthGate = true;
+  };
+  const consoleSide = (async () => {
+    for (let next = 2; next <= last; next++) {
+      while (!lengthGate) await tick();
+      lengthGate = false;
+      assert.equal(slots[(next - 1) % 2], next, `descriptor ${next} was overwritten`);
+      for (let read = 0; read < next % 3; read++) await tick();
+      received = next;
+    }
+  })();
+  const gate = sequence => async () => {
+    for (;;) {
+      await tick();
+      queue.observeReceive(received);
+      if (received >= sequence) return;
+    }
+  };
+  for (let sequence = 2; sequence <= last; sequence++) {
+    await queue.admit(sequence);
+    prime(sequence);
+    queue.push(sequence, gate(sequence));
+  }
+  await queue.drain();
+  await consoleSide;
+  assert.equal(merged, 0);
+  assert.equal(received, last);
 });
 
 // staggered-status.js
