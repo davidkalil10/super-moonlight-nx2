@@ -67,7 +67,7 @@ staggered-output-plan.js). Their status words are read by staggered-status.js.
 17. Lag 0 needs a stream that cannot reorder: the SPS (h264-sps.js, E.2.1) or a B slice
     refuses it (`lag0-reorder`). An unreadable SPS refuses too.
 
-## Flags (native-h264.js checkFlags; live.js passes them through)
+## Flags (stream-options.js checkFlags; live.js passes them through)
 
 | flag                         | does                                                         | default           |
 | ---------------------------- | ------------------------------------------------------------ | ----------------- |
@@ -89,7 +89,7 @@ Refusals: lag 0 with `--gate-on-receive`, `--gate-queue` or 120 Hz; `--gate-queu
 ## session/
 
 Starts a run, feeds the AU stream in and scores it. Entry points are live.js (CLI) and
-native-h264.js (`run()`, `checkFlags`).
+native-h264.js (`run()`); options in stream-options.js, the run record in stream-report.js.
 
 - Invocation: `node src/streamer/stream/session/live.js [runs/launcher-XXXX] --moonlight HOST APP [flags]`.
   Session flags: `--bitrate KBPS|auto`, `--codec h264`, `--size 1920x1080`, `--fps 60`,

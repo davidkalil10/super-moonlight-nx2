@@ -50,6 +50,8 @@
     "src/streamer/stream/scheduler/exchange-timing.js",
     "src/streamer/stream/scheduler/receive-wait.js",
     "src/streamer/stream/scheduler/gate-queue.js",
+    "src/streamer/stream/session/stream-options.js",
+    "src/streamer/stream/session/stream-report.js",
     "src/streamer/stream/session/native-h264.js",
     "src/streamer/stream/session/live.js",
     "src/streamer/ui/discover.js",
