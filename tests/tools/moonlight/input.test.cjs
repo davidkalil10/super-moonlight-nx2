@@ -1,4 +1,4 @@
-// Console input: the controller and touch decoders.
+// Console input: the controller and touch decoders and the console push worker.
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const {
@@ -359,4 +359,143 @@ test('the keys watch notes each change of the pad + and -, and nothing else', ()
   assert.equal(keys(0), 'Input keys: + up, - up');
   assert.equal(keys(NPAD.stickL | NPAD.stickR), null, 'a Start chord is not a + press');
   assert.equal(keys(NPAD.minus), 'Input keys: + up, - down');
+});
+
+// input-push-plan.js: the real repeating frame on the gadget-level fake console. Every advance
+// is one period: the sleep parks once, returns on the next advance, and the pass after it
+// parks in the sleep again.
+const {ADDRESS} = require('../../../../hbl-platform/tests/recording-rpc.cjs');
+const {gateConsole, BLOCK} = require('../../../../hbl-platform/tests/gate-worker-mock.cjs');
+const {prepareRepeating} = require('../../../../hbl-platform/sdk/native/jobs.js');
+const {CODE, spawn} = require('../../../../hbl-platform/sdk/native/thread.js');
+const socketFunctions = require('../../../../hbl-platform/sdk/native/socket-functions.json');
+const pushPlan = require('../../../host/input/input-push-plan.js');
+
+const PUSH_FD = 9;
+const SEND = ADDRESS.sdk + socketFunctions.send.offset;
+const STATE_AT = ADDRESS.mapped;
+const UI_AT = ADDRESS.mapped + 0x10c000;
+const PUSH_BASE = ADDRESS.heap + 0x1000000;
+const PUSH_COUNTER = ADDRESS.heap + 0x2000000;
+
+/** A gate console whose send logs each block; short(count) may replace a send's result. */
+function pushConsole({short = () => null} = {}) {
+  const sends = [];
+  let asleep = false;
+  const fake = gateConsole({
+    natives: {
+      'socket.send'([fd, address, length], memory) {
+        sends.push({fd, address, length, bytes: memory.read(address, length)});
+        return short(sends.length) ?? length;
+      },
+      'os.sleepThread'() {
+        asleep = !asleep;
+        return asleep ? BLOCK : 0;
+      }
+    }
+  });
+  fake.rpc.names.set(SEND, 'socket.send');
+  return {...fake, sends};
+}
+
+/** Writes and spawns the push frame the way the worker does. */
+async function startPush(fake, ui = UI_AT) {
+  const plan = pushPlan.cycle({
+    sdk: ADDRESS.sdk,
+    base: PUSH_BASE,
+    fd: PUSH_FD,
+    send: SEND,
+    state: STATE_AT,
+    ui,
+    counter: PUSH_COUNTER,
+    hz: 120
+  });
+  const program = await prepareRepeating(fake.rpc, {
+    base: PUSH_BASE,
+    code: CODE,
+    calls: plan.calls,
+    verified: plan.verified
+  });
+  const thread = await spawn(fake.rpc, PUSH_BASE, program.live, {failed: 'Push spawn failed'});
+  const results = async () => {
+    const bytes = await fake.rpc.read(program.results, plan.calls.length * 8);
+    return plan.calls.map((_, index) => bytes.readBigUInt64LE(index * 8));
+  };
+  return {plan, program, thread, results};
+}
+
+const PASS = ['socket.send', 'socket.send', 'add'];
+
+test('each push period sends the state and UI blocks at their addresses', async () => {
+  const fake = pushConsole();
+  fake.memory.write(STATE_AT, Buffer.alloc(pushPlan.STATE_BYTES, 0x11));
+  fake.memory.write(UI_AT, Buffer.alloc(pushPlan.UI_BYTES, 0x22));
+  const {plan, results} = await startPush(fake);
+  assert.equal(plan.recordBytes, 784 + 28);
+  for (let period = 1; period < 5; period++) fake.advanceAll();
+  assert.equal(fake.sends.length, 2 * 5);
+  fake.sends.forEach((send, index) => {
+    const ui = index % 2 === 1;
+    assert.deepEqual(
+      [send.fd, send.address, send.length],
+      [PUSH_FD, ui ? UI_AT : STATE_AT, ui ? 28 : 784]
+    );
+    assert.ok(send.bytes.every(byte => byte === (ui ? 0x22 : 0x11)));
+  });
+  const next = ['os.sleepThread', 'restart', ...PASS];
+  assert.deepEqual(fake.trace, [...PASS, ...next, ...next, ...next, ...next]);
+  assert.equal(fake.memory.read(PUSH_COUNTER, 4).readUInt32LE(), 5);
+  const last = await results();
+  assert.doesNotThrow(() => pushPlan.checkedPush(last, plan.row));
+  assert.equal(plan.calls[plan.row.sleep].args[0], 8333333);
+});
+
+test('a stop during the push sleep ends the worker at the loop tail without a send', async () => {
+  const fake = pushConsole();
+  const {program, thread} = await startPush(fake);
+  fake.advanceAll();
+  assert.equal(fake.sends.length, 4);
+  await program.stop();
+  fake.advanceAll();
+  assert.equal(fake.sends.length, 4);
+  assert.deepEqual(fake.trace.slice(-2), ['os.sleepThread', 'exit']);
+  assert.equal(fake.workers.get(thread).exited, true);
+  assert.equal(fake.memory.read(PUSH_COUNTER, 4).readUInt32LE(), 2);
+});
+
+test('a short or failed push send fails the check, and the exit then ends the worker', async () => {
+  const fake = pushConsole({short: count => (count === 3 ? 100 : null)});
+  const {plan, program, thread, results} = await startPush(fake);
+  fake.advanceAll();
+  const last = await results();
+  assert.equal(last[plan.row.state], 100n);
+  assert.throws(() => pushPlan.checkedPush(last, plan.row), /short or failed/);
+  last[plan.row.state] = 784n;
+  last[plan.row.ui] = 0xffffffffffffffffn;
+  assert.throws(() => pushPlan.checkedPush(last, plan.row), /short or failed/);
+  await program.stop();
+  fake.advanceAll();
+  assert.equal(fake.sends.length, 4);
+  assert.equal(fake.workers.get(thread).exited, true);
+});
+
+test('the input push plan refuses a bad rate or block and drops the UI send without one', () => {
+  const options = {
+    sdk: ADDRESS.sdk,
+    base: PUSH_BASE,
+    fd: PUSH_FD,
+    send: SEND,
+    state: STATE_AT,
+    ui: null,
+    counter: PUSH_COUNTER,
+    hz: 120
+  };
+  for (const bad of [{hz: 1000}, {hz: 60.5}, {state: 0}, {counter: PUSH_COUNTER + 2}, {fd: -1}])
+    assert.throws(() => pushPlan.cycle({...options, ...bad}), /Input push needs/);
+  const plan = pushPlan.cycle(options);
+  assert.equal(plan.row.ui, null);
+  assert.equal(plan.calls.length, 3);
+  assert.equal(plan.recordBytes, 784);
+  assert.doesNotThrow(() => pushPlan.checkedPush([784n, 0n, 0n], plan.row));
+  assert.throws(() => pushPlan.checkedPush([784n, 0n], plan.row), /Invalid input push results/);
 });
