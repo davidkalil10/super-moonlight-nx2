@@ -8,6 +8,7 @@ import * as session from '../../../../hbl-platform/sdk/host/session.js';
 import * as cli from '../../../../hbl-platform/sdk/cli.js';
 import {STATE} from '../../../../hbl-platform/sdk/host/layout.js';
 import {
+  FLAG,
   NPAD,
   NEUTRAL,
   START_CHORD,
@@ -45,6 +46,10 @@ const STALL_MS = 250;
 const SILENT_MS = 2000;
 /** How often push mode checks for a stall and, every SOURCE_CHECK_MS, the source. */
 const PUSH_CHECK_MS = 50;
+/** How long a loopback probe press is held. */
+const PROBE_HOLD_MS = 100;
+/** Spread of the probe period, so presses land at every phase of the PC's refresh. */
+const PROBE_JITTER_MS = 16;
 
 /**
  * @param {object} controller toMoonlight fields
@@ -91,6 +96,55 @@ function frame(previous, bytes, tracker, layout, startChord = START_CHORD) {
   if (events.length) lines.push(touchLine(events));
 
   return {lines, controller};
+}
+
+/**
+ * Timed D-pad Up presses for the loopback probe: one every periodMs plus up to
+ * PROBE_JITTER_MS, held PROBE_HOLD_MS.
+ * @param {number} periodMs
+ * @param {() => number} [random]
+ */
+function createProbe(periodMs, random = Math.random) {
+  if (!(periodMs >= 2 * PROBE_HOLD_MS))
+    throw Error('HBL_PROBE_PRESS_MS must be a number of ms, at least ' + 2 * PROBE_HOLD_MS);
+
+  let edge = 0;
+  let pressed = false;
+  let next = null;
+  return {
+    periodMs,
+    /**
+     * The controller change due at `now`, if any.
+     * @param {number} now
+     */
+    due(now) {
+      if (next === null) next = now + periodMs;
+      if (now < next) return null;
+
+      pressed = !pressed;
+      if (pressed) edge++;
+      next = pressed
+        ? now + PROBE_HOLD_MS
+        : now + periodMs - PROBE_HOLD_MS + random() * PROBE_JITTER_MS;
+
+      const controller = {
+        ...toMoonlight(NEUTRAL),
+        connected: true,
+        buttonFlags: pressed ? FLAG.up : 0
+      };
+      return {controller, line: controllerLine(controller), edge, pressed};
+    }
+  };
+}
+
+/**
+ * The probe HBL_PROBE_PRESS_MS asks for, or null when it is unset or empty, and the feeder
+ * reads the pad as it does without the probe.
+ * @param {Record<string, string | undefined>} env
+ */
+function probeFromEnv(env) {
+  const value = env.HBL_PROBE_PRESS_MS;
+  return value ? createProbe(Number(value)) : null;
 }
 
 /** The UI block words the gate reads in one go: uiMagic through uiOverlay. */
@@ -530,6 +584,13 @@ async function main() {
   const startChord = parseStartChord(cli.option(args, '--start-chord', START_CHORD.join('+')));
   const directory = session.resolve(args[0]);
   const countsFd = cli.number(args, '--counts-fd', null);
+  const probe = probeFromEnv(process.env);
+  if (probe && push) throw Error('HBL_PROBE_PRESS_MS needs pull mode, not --push');
+  if (probe) {
+    const announce = {event: 'probe-press', periodMs: probe.periodMs, pad: 'ignored'};
+    process.stderr.write(JSON.stringify(announce) + '\n');
+  }
+
   const bridge = instrument(session.rpc(directory), () => 'input');
   if (push) return mainPush(bridge, {directory, hz, layout, startChord, countsFd});
 
@@ -579,7 +640,16 @@ async function main() {
       sourceChecked = started;
     }
 
-    if (source?.package?.id === 'moonlight') {
+    if (source?.package?.id === 'moonlight' && probe) {
+      const press = probe.due(started);
+      if (press) {
+        write(press.line);
+        previous = press.controller;
+        const {edge, pressed} = press;
+        const wallUs = Math.round((performance.timeOrigin + performance.now()) * 1000);
+        process.stderr.write(JSON.stringify({event: 'probe-press', edge, pressed, wallUs}) + '\n');
+      }
+    } else if (source?.package?.id === 'moonlight') {
       try {
         if (storage && started - overlayChecked > OVERLAY_CHECK_MS) {
           overlayChecked = started;
@@ -614,7 +684,18 @@ async function main() {
   release();
 }
 
-export {frame, keysWatch, gate, readStorage, OVERLAY_READ, READ_BYTES, createPushReader, runPush};
+export {
+  frame,
+  keysWatch,
+  gate,
+  readStorage,
+  createProbe,
+  probeFromEnv,
+  OVERLAY_READ,
+  READ_BYTES,
+  createPushReader,
+  runPush
+};
 
 if (cli.isMain(import.meta)) {
   main().catch(error => {

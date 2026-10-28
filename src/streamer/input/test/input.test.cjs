@@ -11,7 +11,7 @@ const {
   NPAD
 } = require('../controller.js');
 const {TOUCH_BYTES, parseTouch, createTracker, step, flush, touchLine} = require('../touch.js');
-const {frame, keysWatch} = require('../input-feeder.js');
+const {frame, keysWatch, createProbe, probeFromEnv} = require('../input-feeder.js');
 const padAge = require('../pad-age.js');
 
 // controller.js
@@ -288,6 +288,33 @@ test('frame tags controller and touch lines and remembers the pad', () => {
     tracker
   );
   assert.deepEqual(second.lines, []);
+});
+
+test('the loopback probe presses D-pad Up once a period and holds it briefly', () => {
+  const probe = createProbe(1000, () => 0);
+  const flags = change => change && JSON.parse(change.line).buttonFlags;
+  assert.equal(probe.due(0), null);
+  assert.equal(probe.due(999), null);
+
+  const press = probe.due(1000);
+  assert.deepEqual([press.edge, press.pressed, flags(press)], [1, true, 0x0001]);
+  assert.equal(press.controller.connected, true);
+  assert.equal(probe.due(1099), null);
+
+  const release = probe.due(1100);
+  assert.deepEqual([release.edge, release.pressed, flags(release)], [1, false, 0]);
+  assert.equal(probe.due(1999), null);
+  assert.deepEqual([probe.due(2000).edge, probe.due(2100).pressed], [2, false]);
+
+  assert.throws(() => createProbe(150), /at least 200/);
+  assert.throws(() => createProbe(Number('1s')), /a number of ms/);
+});
+
+test('without HBL_PROBE_PRESS_MS the feeder takes no probe and reads the pad', () => {
+  assert.equal(probeFromEnv({}), null);
+  assert.equal(probeFromEnv({HBL_PROBE_PRESS_MS: ''}), null);
+  assert.equal(probeFromEnv({HBL_PROBE_PRESS_MS: '1000'}).periodMs, 1000);
+  assert.throws(() => probeFromEnv({HBL_PROBE_PRESS_MS: 'x'}), /a number of ms/);
 });
 
 /** A state block whose app frame counter reads `frames`. */

@@ -36,6 +36,9 @@ the panel and read-size facts.
   halves the exchanges competing with video. `--sources` is unsupported: those pads sit outside
   that window.
 - Each change of console + or - goes to stderr with the wall time, to match a hang to a press.
+- `HBL_PROBE_PRESS_MS=N` (src/streamer/loopback/): the pad is not read. D-pad Up is pressed
+  every N ms (plus up to 16 ms of jitter) and held 100 ms, and each change logs a `probe-press`
+  line with its wall time on stderr. Pull mode only; unset or empty leaves the feeder as is.
 - `--counts-fd N`: once a second `{exchanges, bridgeMs, pad}` (stats stage "input"); under push
   `{exchanges, bridgeMs, pushed, dropped, gapMaxMs}`, then the final report of rule 4.
 
