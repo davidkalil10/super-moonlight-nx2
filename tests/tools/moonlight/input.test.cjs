@@ -378,18 +378,23 @@ const UI_AT = ADDRESS.mapped + 0x10c000;
 const PUSH_BASE = ADDRESS.heap + 0x1000000;
 const PUSH_COUNTER = ADDRESS.heap + 0x2000000;
 
-/** A gate console whose send logs each block; short(count) may replace a send's result. */
-function pushConsole({short = () => null} = {}) {
+/**
+ * A gate console whose send logs each block and hands it to deliver; short(count) may replace
+ * a send's result, and hang keeps the worker asleep for good.
+ */
+function pushConsole({short = () => null, deliver = () => {}, hang = false} = {}) {
   const sends = [];
   let asleep = false;
   const fake = gateConsole({
     natives: {
       'socket.send'([fd, address, length], memory) {
-        sends.push({fd, address, length, bytes: memory.read(address, length)});
+        const bytes = memory.read(address, length);
+        sends.push({fd, address, length, bytes});
+        deliver(bytes);
         return short(sends.length) ?? length;
       },
       'os.sleepThread'() {
-        asleep = !asleep;
+        asleep = hang || !asleep;
         return asleep ? BLOCK : 0;
       }
     }
@@ -498,4 +503,125 @@ test('the input push plan refuses a bad rate or block and drops the UI send with
   assert.equal(plan.recordBytes, 784);
   assert.doesNotThrow(() => pushPlan.checkedPush([784n, 0n, 0n], plan.row));
   assert.throws(() => pushPlan.checkedPush([784n, 0n], plan.row), /Invalid input push results/);
+});
+
+// input-push-worker.js: the real worker on the same fake console, behind a host transport
+// that hands each console send to onData.
+const {create: createPushWorker} = require('../../../host/input/input-push-worker.js');
+
+/** Creates and, unless `before` throws, starts a push worker; `before(fake)` runs first. */
+async function pushWorker({before = () => {}, ...options} = {}) {
+  let listener = null;
+  const fake = pushConsole({...options, deliver: bytes => listener?.(bytes)});
+  const received = [];
+  const log = [];
+  const transport = {
+    fd: PUSH_FD,
+    sendFunction: SEND,
+    receive(onData) {
+      listener = onData;
+    },
+    async close() {
+      log.push(['close', fake.rpc.lines.length]);
+    }
+  };
+  const worker = await createPushWorker({
+    rpc: fake.rpc,
+    host: '192.0.2.10',
+    state: STATE_AT,
+    ui: UI_AT,
+    onData: bytes => received.push(bytes),
+    timeoutMs: 1000,
+    createTransport: async ({host}) => {
+      log.push(['connect', host]);
+      return transport;
+    }
+  });
+  before(fake);
+  return {fake, worker, received, log};
+}
+
+test('the push worker verifies its calls and streams records to onData until stop', async () => {
+  const {fake, worker, received, log} = await pushWorker();
+  const verified = fake.rpc.lines.filter(line => line.startsWith('verify '));
+  for (const name of ['os.sleepThread', 'os.atomicAddU32'])
+    assert.ok(verified.some(line => line.startsWith(`verify ${name} `)), name);
+  assert.equal(worker.recordBytes, 812);
+  await worker.start();
+  await assert.rejects(worker.start(), /start is not available/);
+  fake.advanceAll();
+  fake.advanceAll();
+  assert.equal(Buffer.concat(received).length, 3 * 812);
+  const from = fake.rpc.lines.length;
+  assert.deepEqual(await worker.stop(), {pushed: 3});
+  assert.equal(fake.sends.length, 6, 'no send after the stop');
+  const tail = fake.rpc.lines.slice(from);
+  const at = pattern => tail.findIndex(line => pattern.test(line));
+  assert.equal(at(/^write /), 0, 'the exit is selected first');
+  assert.ok(at(/thread\.tryWait/) < at(/thread\.join/));
+  assert.ok(at(/thread\.join/) < at(/^read /));
+  assert.deepEqual(log, [
+    ['connect', '192.0.2.10'],
+    ['close', fake.rpc.lines.length]
+  ]);
+  assert.equal(worker.running, false);
+  assert.deepEqual(await worker.stop(), {pushed: 3});
+});
+
+test('a push worker that does not stop is retained with its socket open', async () => {
+  const {fake, worker, log} = await pushWorker({hang: true});
+  await worker.start();
+  await assert.rejects(worker.stop(), /did not stop; restart SmileBASIC/);
+  assert.equal(worker.retained, true);
+  assert.ok(!fake.rpc.lines.some(line => /thread\.join/.test(line)));
+  assert.deepEqual(log, [['connect', '192.0.2.10']]);
+  await assert.rejects(worker.stop(), /retained for safety/);
+});
+
+test('a failed push join or spawn retains the socket', async () => {
+  const joined = await pushWorker({before: fake => (fake.handlers['thread.join'] = () => 1n)});
+  await joined.worker.start();
+  await assert.rejects(joined.worker.stop(), /push worker join failed/);
+  assert.equal(joined.worker.retained, true);
+  assert.equal(joined.log.length, 1);
+  const spawned = await pushWorker({before: fake => (fake.handlers['thread.create'] = () => 1n)});
+  await assert.rejects(spawned.worker.start(), /push worker creation failed/);
+  assert.equal(spawned.worker.retained, true);
+  await assert.rejects(spawned.worker.stop(), /retained for safety/);
+  assert.equal(spawned.log.length, 1);
+});
+
+test('a short push send closes the socket and rejects with the console count', async () => {
+  const {fake, worker, log} = await pushWorker({short: count => (count === 3 ? 100 : null)});
+  await worker.start();
+  fake.advanceAll();
+  await assert.rejects(worker.stop(), error => {
+    assert.match(error.message, /short or failed/);
+    assert.equal(error.pushed, 2);
+    return true;
+  });
+  assert.equal(worker.retained, false);
+  assert.equal(log.at(-1)[0], 'close');
+});
+
+test('a push setup that fails after the connection closes it', async () => {
+  const fake = pushConsole();
+  const closed = [];
+  const transport = {
+    fd: PUSH_FD,
+    sendFunction: SEND,
+    receive() {},
+    close: async () => closed.push(1)
+  };
+  await assert.rejects(
+    createPushWorker({
+      rpc: fake.rpc,
+      state: 0,
+      onData: () => {},
+      createTransport: async () => transport
+    }),
+    /Input push needs a socket/
+  );
+  assert.deepEqual(closed, [1]);
+  await assert.rejects(createPushWorker({rpc: fake.rpc, state: STATE_AT}), /data callback/);
 });

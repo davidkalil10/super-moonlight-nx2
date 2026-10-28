@@ -32,6 +32,7 @@
     "../host/stream/helper.js",
     "../host/input/input-feeder.js",
     "../host/input/input-push-plan.js",
+    "../host/input/input-push-worker.js",
     "../host/stream/present-pacer.js",
     "../host/stream/run-summary.js",
     "../host/stream/staggered-gate.js",
