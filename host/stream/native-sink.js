@@ -268,6 +268,22 @@ async function create(rpc, storage, {cancelled = () => false, color = 1} = {}) {
 
     wait,
 
+    /**
+     * Reads `bytes` of native surface `index` from `offset`, for --surface-check.
+     * @param {number} index
+     * @param {number} offset
+     * @param {number} bytes
+     */
+    sample(index, offset, bytes) {
+      if (
+        !(index >= 0 && index < ring.NATIVE_FRAMES) ||
+        offset < 0 ||
+        offset + bytes > ring.FRAME_BYTES
+      )
+        throw Error('Native surface sample out of range');
+      return rpc.read(storage.mapped + ring.frameOffset(index) + offset, bytes);
+    },
+
     /** Clears the published sequence so the shader stops showing native frames. */
     async close() {
       await rpc.write(storage.mapped + ring.CONTROL.nativeSequence, Buffer.alloc(WORD_BYTES));

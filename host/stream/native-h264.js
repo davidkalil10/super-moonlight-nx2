@@ -262,7 +262,7 @@ function linkSeconds(rows) {
 function checkFlags(args, flags) {
   const {inputHz, presentHz, skipBacklog, skipRule, decodeWait, receiveWait, trimBacklogMs} = flags;
   const {avoidWindow, gateOnReceive, outputLag, audioFrames, socketAudio, queue} = flags;
-  const {duration, warmup, gateQueue} = flags;
+  const {duration, warmup, gateQueue, surfaceCheck} = flags;
   if (!Number.isInteger(inputHz) || inputHz < 10 || inputHz > 120)
     throw Error('--input-hz takes 10 to 120');
   if (presentHz !== 60 && presentHz !== 120) throw Error('--present-hz takes 60 or 120');
@@ -290,6 +290,8 @@ function checkFlags(args, flags) {
     throw Error('--output-lag 0 is untested with --gate-on-receive');
   if (outputLag === 0 && presentHz !== 60)
     throw Error('--output-lag 0 is untested at --present-hz 120');
+  if (!Number.isInteger(surfaceCheck) || surfaceCheck < 0)
+    throw Error('--surface-check takes a unit interval');
   if (!Number.isInteger(audioFrames) || audioFrames < FRAME_STEP || audioFrames % FRAME_STEP)
     throw Error('--audio-frames takes a multiple of 240');
   if (socketAudio && audioFrames > SOCKET_AUDIO_FRAMES)
@@ -333,6 +335,7 @@ function parseOptions(args, rpc, width, height, fps) {
     gateOnReceive: args.includes('--gate-on-receive'),
     gateQueue: args.includes('--gate-queue'),
     outputLag: cli.number(args, '--output-lag', null),
+    surfaceCheck: cli.number(args, '--surface-check', 0),
     decodeWait: args.includes('--decode-wait'),
     receiveWait: args.includes('--receive-wait'),
     avoidWindow: exchangeTiming.parseAvoid(cli.option(args, '--avoid-window') ?? undefined),
@@ -483,6 +486,8 @@ function score(summary, {expect, duration, socketAudioReport, inputPushStop, sto
     result.failures.push('lag 0 decoder wait timed out; rerun with --output-lag 1');
   if (stopReason === 'lag0-reorder')
     result.failures.push('lag 0 refused, the stream can reorder; rerun with --output-lag 1');
+  const torn = summary.staggered?.surfaceCheck?.torn;
+  if (torn) result.failures.push(`surface check: ${torn} surfaces changed before reuse`);
   if (duration !== null && stopReason !== 'duration')
     result.failures.push('ended before duration: ' + stopReason);
   result.pass = result.failures.length === 0;
@@ -542,7 +547,7 @@ async function run({
 }) {
   const options = parseOptions(args, rpc, width, height, fps);
   const {host, app, audio, socketTone, socketAudio, duration, queue, inputHz, inputPush} = options;
-  const {presentHz, skipRule, trimBacklogMs, gateOnReceive, outputLag} = options;
+  const {presentHz, skipRule, trimBacklogMs, gateOnReceive, outputLag, surfaceCheck} = options;
   const {decodeWait, receiveWait, avoidWindow, skipBacklog, audioFrames, bitrate} = options;
   const {gateQueue} = options;
   if (!rpc.host) throw Error('Native TCP requires a fresh launcher session from this branch');
@@ -722,6 +727,7 @@ async function run({
       ...(gateOnReceive && {gateOnReceive}),
       ...(gateQueue && {gateQueue}),
       ...(outputLag !== null && {lag: /** @type {0 | 1 | 2} */ (outputLag)}),
+      ...(surfaceCheck && {surfaceCheck}),
       decodeWait,
       receiveWait,
       avoid: avoidWindow,
@@ -942,6 +948,7 @@ async function run({
       ...(inputPad.length ? {inputPad: padAge.merge(inputPad)} : {}),
       link: linkQuality(inputBridge),
       ...(inputPush ? {inputPush: pushCounts} : {}),
+      ...(surfaceCheck ? {surfaces: staggeredLive?.takeSurfaces() ?? []} : {}),
       at: stage + '/' + (decoder?.step ?? '-'),
       ms: Object.fromEntries(Object.entries(stageMs).map(([k, v]) => [k, Math.round(v)]))
     };

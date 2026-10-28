@@ -54,6 +54,7 @@ import * as checked from './staggered-status.js';
 import * as presentPacer from './present-pacer.js';
 import * as decodeWaits from './decode-wait.js';
 import * as receiveWaits from './receive-wait.js';
+import * as surfaceChecks from './surface-check.js';
 import * as exchangeTiming from './exchange-timing.js';
 import * as gates from './staggered-gate.js';
 import {create as createGateQueue} from './gate-queue.js';
@@ -393,6 +394,7 @@ function jsonSafe(value) {
  * @param {0 | 1 | 2} [options.lag] fetch each output this many gates after its decode opened
  * @param {boolean} [options.decodeWait] sleep through a pending acquire (vsync rule only)
  * @param {boolean} [options.receiveWait] sleep through a pending receive
+ * @param {number} [options.surfaceCheck] sample every this many published surfaces, 0 for off
  * @param {{beforeMs: number, afterMs: number} | null} [options.avoid] span around a predicted
  *   decode-done or receive-done no status read starts in
  * @param {() => number} [options.now]
@@ -410,6 +412,7 @@ function create({
   lag = gates.OUTPUT_LAG,
   decodeWait = false,
   receiveWait = false,
+  surfaceCheck = 0,
   avoid = null,
   now = Date.now
 } = {}) {
@@ -461,6 +464,13 @@ function create({
   let pending = null;
   /** The lag 0 gate that timed out on the decoder, see lagFallback(). */
   let fallback = null;
+  let sampleSink = null;
+  const surfaces = surfaceCheck
+    ? surfaceChecks.create({
+        every: surfaceCheck,
+        read: (index, offset, bytes) => sampleSink.sample(index, offset, bytes)
+      })
+    : null;
   let skips = 0;
   let stale = 0;
   let cooling = 0;
@@ -856,6 +866,9 @@ function create({
         hooks
       ));
     }
+    // On the gate path, but only for a sampled surface: the re-read must beat the refill.
+    sampleSink = sink;
+    if (surfaces) await surfaces.reuse(destination);
     enter('staggered-gate');
     await inOrder(() => {
       if (primed > sequence) next = units.get(sequence + 1);
@@ -871,6 +884,8 @@ function create({
         destination
       });
     });
+    if (surfaces && expected.fetch)
+      await surfaces.first(expected.fetch.sequence, destinations.get(expected.fetch.sequence));
   }
 
   /**
@@ -905,6 +920,7 @@ function create({
       if (!frame) throw Error('Staggered worker needs the host IDR frame layout');
       firstInput = input;
       layout = frame;
+      surfaces?.start(frame);
       ready = true;
     },
 
@@ -1063,8 +1079,14 @@ function create({
         ...(receive && {receive: {...receiveSlept, fixedMs: receive.fixedMs}}),
         acquireWaits: acquireWaits.counts,
         fetchWaits: fetchWaits.counts,
-        ...(fallback && {lagFallback: {...fallback}})
+        ...(fallback && {lagFallback: {...fallback}}),
+        ...(surfaces && {surfaceCheck: surfaces.counts})
       };
+    },
+
+    /** The surface samples re-read since the last call. */
+    takeSurfaces() {
+      return surfaces?.take() ?? [];
     },
 
     get retained() {

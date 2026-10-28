@@ -705,10 +705,14 @@ const pairedUnits = (count, unit = accessUnit) =>
     pts: (index + 1) * 1000
   }));
 
-function staggeredFake(events, {pushFails = null, stopFails = false, lagFallback = null} = {}) {
-  return () => {
+function staggeredFake(
+  events,
+  {pushFails = null, stopFails = false, lagFallback = null, surfaces = null} = {}
+) {
+  return (/** @type {any} */ options) => {
     let pending = false;
     events.push({type: 'staggered-create'});
+    if (surfaces) surfaces.options = options;
     return {
       async factory() {},
       start({frame}) {
@@ -716,6 +720,7 @@ function staggeredFake(events, {pushFails = null, stopFails = false, lagFallback
       },
       async push(unit, {sink, onDecoded, onPresented}) {
         events.push({type: 'staggered-push', pts: unit.pts});
+        if (surfaces) await new Promise(resolve => setTimeout(resolve, 15));
         if (unit.pts === pushFails && lagFallback)
           throw Object.assign(Error('Staggered checked status timed out'), {lagFallback});
         if (unit.pts === pushFails) throw Error('Short receive 10/20');
@@ -746,11 +751,77 @@ function staggeredFake(events, {pushFails = null, stopFails = false, lagFallback
         return pending;
       },
       get counts() {
-        return {submitted: 5, decoded: 5, presented: 5, tailDrained: 2, waiting: {}};
-      }
+        return {
+          submitted: 5,
+          decoded: 5,
+          presented: 5,
+          tailDrained: 2,
+          waiting: {},
+          ...(surfaces && {surfaceCheck: surfaces.counts})
+        };
+      },
+      takeSurfaces: () => surfaces?.samples.splice(0) ?? []
     };
   };
 }
+
+test('--surface-check needs a unit interval', {timeout: 5000}, async () => {
+  for (const value of ['--duration', '-1', '1.5']) {
+    const f = await fixture({units: pairedUnits(2)});
+    f.options.createStaggered = staggeredFake(f.events);
+    f.options.args.push('--staggered', '--surface-check', value);
+    await exercise(f, async () => {
+      await assert.rejects(() => run(f.options), /--surface-check takes a unit interval/);
+    });
+  }
+});
+
+test(
+  '--surface-check writes its samples to the rows and fails on a torn surface',
+  {timeout: 5000},
+  async () => {
+    const sample = {seq: 2, surface: 1, hash: '0000000a', reread: '0000000b', torn: true};
+    for (const torn of [0, 1]) {
+      const surfaces = {
+        counts: {every: 2, sampled: 1, rereads: 1, torn, pending: 0},
+        samples: [{...sample, torn: Boolean(torn)}]
+      };
+      const f = await fixture({units: pairedUnits(4)});
+      f.options.createStaggered = staggeredFake(f.events, {surfaces});
+      f.options.statsMs = 10;
+      f.options.args.push('--staggered', '--surface-check', '2');
+      await exercise(f, async () => {
+        const summary = await run(f.options);
+        assert.equal(surfaces.options.surfaceCheck, 2);
+        assert.deepEqual(summary.staggered.surfaceCheck, surfaces.counts);
+        const text = await fs.readFile(path.join(f.directory, 'logs', 'stats.jsonl'), 'utf8');
+        const rows = text
+          .trim()
+          .split('\n')
+          .map(JSON.parse)
+          .filter(row => row.codec);
+        assert.deepEqual(
+          rows.flatMap(row => row.surfaces),
+          [{...sample, torn: Boolean(torn)}]
+        );
+        const failure = 'surface check: 1 surfaces changed before reuse';
+        assert.equal(summary.failures.includes(failure), Boolean(torn));
+      });
+    }
+    const f = await fixture({units: pairedUnits(4)});
+    const surfaces = {counts: {}, samples: []};
+    f.options.createStaggered = staggeredFake(f.events, {surfaces});
+    f.options.statsMs = 10;
+    f.options.args.push('--staggered');
+    await exercise(f, async () => {
+      const summary = await run(f.options);
+      assert.equal(surfaces.options.surfaceCheck, undefined);
+      const text = await fs.readFile(path.join(f.directory, 'logs', 'stats.jsonl'), 'utf8');
+      assert.ok(!text.includes('surfaces'));
+      assert.equal(summary.pass !== undefined, true);
+    });
+  }
+);
 
 test(
   '--staggered queues 8 units by default so a source burst is not dropped',

@@ -28,6 +28,8 @@ const layout = {width: 1920, height: 1080, stride: 1920, sliceHeight: 1088};
 const noWait = async () => {};
 const RECV = ADDRESS.module + 0x800;
 const NO_OUTPUT = 0x2a0n;
+/** Where the surface check samples the fake's 1920x1080 frame. */
+const SAMPLE = {offset: 1079 * 1920 + 704};
 
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -76,6 +78,8 @@ function device() {
   Object.assign(decoder, {holding: false, held: [], slowFetch: null, fetched: [], published: []});
   // `double` names a unit that decodes into two outputs under one event set.
   decoder.double = null;
+  // `late` = {unit, over}: fetching `unit` also writes the surface `over` was fetched into.
+  decoder.late = null;
   const outputs = new Map();
   let setData = null;
   let aborted = false;
@@ -129,12 +133,16 @@ function device() {
       setData = Number(address);
       return 0;
     },
-    'movie.getOutput'([, index]) {
+    'movie.getOutput'([, index], memory) {
       const unit = outputs.get(Number(index));
       if (unit === undefined) return NO_OUTPUT;
       const slow = decoder.slowFetch;
       if (slow?.unit === unit && slow.steps-- > 0) return BLOCK;
       decoder.fetched.push({unit, address: setData});
+      memory.write32(setData + SAMPLE.offset, unit);
+      const late = decoder.late;
+      const over = late?.unit === unit && decoder.fetched.find(fetch => fetch.unit === late.over);
+      if (over) memory.write32(over.address + SAMPLE.offset, 0xbad);
       return 0;
     },
     'movie.releaseOutput'([, index]) {
@@ -193,6 +201,8 @@ function device() {
   };
   let surfaces = 0;
   const sink = {
+    sample: (index, offset, bytes) =>
+      fake.rpc.read(mapped + ring.frameOffset(index) + offset, bytes),
     async workerDestination() {
       const index = ++surfaces % 3;
       return {
@@ -774,6 +784,32 @@ test('an output event wake with nothing ready stops the run on the empty result'
     );
     await live.stop();
     assert.equal(live.retained, false, `lag ${lag}`);
+    await d.worker.finalize();
+  }
+});
+
+test('the surface check re-reads each sampled surface before its refill', async () => {
+  for (const lag of [1, 0]) {
+    const d = device();
+    d.decoder.late = {unit: 6, over: 4};
+    const live = await d.live(undefined, {lag, surfaceCheck: 2});
+    await stream(live, d.sink, 12);
+    const samples = live.takeSurfaces();
+    assert.deepEqual(
+      samples.slice(0, 3).map(sample => [sample.seq, sample.torn]),
+      [
+        [2, false],
+        [4, true],
+        [6, false]
+      ],
+      `lag ${lag}`
+    );
+    assert.equal(new Set(samples.map(sample => sample.hash)).size, samples.length);
+    const counts = live.counts.surfaceCheck;
+    assert.equal(counts.torn, 1);
+    assert.equal(counts.rereads, samples.length);
+    assert.equal(counts.sampled, counts.rereads + counts.pending, `lag ${lag}`);
+    await live.stop();
     await d.worker.finalize();
   }
 });
