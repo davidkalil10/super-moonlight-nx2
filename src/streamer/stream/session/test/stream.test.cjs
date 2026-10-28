@@ -586,6 +586,30 @@ test('decoder close frees every allocation once, after the movie objects', async
   }
 });
 
+test('two decoder cycles on one console leave nothing allocated', async () => {
+  const directory = await fixture();
+  const consoleMock = createConsole();
+  const live = () => consoleMock.allocations.filter(base => !consoleMock.frees.includes(base));
+  const destination = {address: 0x70000000, bytes: (1920 * 1080 * 3) / 2 + 0x1000};
+  try {
+    for (const cycle of [1, 2]) {
+      const decoder = await createDecoder({
+        rpc: consoleMock.rpc,
+        directory,
+        workerDirectory: path.join(directory, 'worker-' + cycle)
+      });
+      await decoder.configure(sps, pps, 30);
+      assert.ok(await decodeFrame(decoder, destination, cycle * 1000));
+      assert.notDeepEqual(live(), []);
+      await decoder.close();
+      assert.deepEqual(live(), [], 'live after cycle ' + cycle);
+    }
+    assert.equal(new Set(consoleMock.frees).size, consoleMock.frees.length, 'each base once');
+  } finally {
+    await fs.rm(directory, {recursive: true, force: true});
+  }
+});
+
 test('decoder close frees nothing when the split workers stay retained', async () => {
   const directory = await fixture();
   const consoleMock = createConsole();

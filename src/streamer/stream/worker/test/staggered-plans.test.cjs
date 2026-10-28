@@ -1314,6 +1314,23 @@ test('staggered finalize frees every region once, after the events', async () =>
   assert.ok(last >= 0 && last < f.calls.findIndex(call => call.free !== undefined));
 });
 
+test('two staggered cycles on one console leave nothing allocated', async () => {
+  const f = fixture();
+  for (const cycle of [1, 2]) {
+    const worker = await started(f);
+    await worker.stop();
+    await worker.finalize();
+    const done = freed(f.calls);
+    assert.deepEqual(
+      f.allocated.filter(base => !done.includes(base)),
+      [],
+      'live after cycle ' + cycle
+    );
+  }
+  assert.equal(f.allocated.length, 8);
+  assert.equal(new Set(freed(f.calls)).size, 8, 'each base once');
+});
+
 test('staggered finalize frees nothing while a worker may still run', async () => {
   const f = fixture();
   const worker = await started(f);
