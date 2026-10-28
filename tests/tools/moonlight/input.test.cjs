@@ -302,8 +302,8 @@ test('pad age counts stalls and gaps and ages each read against the freshest', (
     ageMaxMs: 16
   });
   assert.deepEqual(pad.take(), {reads: 0}, 'a take starts the next window');
-  pad.sample(block(0), 0, 1);
-  pad.sample(block(1), 10, 11);
+  pad.sample(block(105), 0, 1);
+  pad.sample(block(106), 10, 11);
   assert.equal(pad.take().stepMax, 1);
 });
 
