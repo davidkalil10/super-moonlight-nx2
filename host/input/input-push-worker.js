@@ -32,9 +32,10 @@ import * as pushPlan from './input-push-plan.js';
 const WORKER_BYTES = 0x400000;
 /** Where pthread_join stores the worker's exit value. */
 const EXIT_SLOT_OFFSET = 8;
-/** The record counter's allocation; the u32 sits at its start. */
+/** The record counter's allocation; the u32 sits at its start, the record buffer after it. */
 const COUNTER_BYTES = 0x1000;
 const COUNT_BYTES = 4;
+const BUFFER_OFFSET = 0x100;
 const DEFAULT_HZ = 120;
 
 const DEFAULT_TIMEOUT_MS = 5000;
@@ -102,7 +103,8 @@ async function verifySetup(rpc) {
 }
 
 /**
- * Allocates and zeroes the record counter, allocates the worker and plans its frame.
+ * Allocates and zeroes the record counter beside the record buffer, allocates the worker and
+ * plans its frame.
  * @param {Rpc} rpc
  * @param {{fd: number, sendFunction: number}} transport
  * @param {{state: number, ui: number | null, hz: number}} options
@@ -124,6 +126,7 @@ async function planWorker(rpc, transport, {state, ui, hz}) {
     send: transport.sendFunction,
     state,
     ui,
+    buffer: ui === null ? null : counter + BUFFER_OFFSET,
     counter,
     hz
   });

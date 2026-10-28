@@ -377,6 +377,7 @@ const STATE_AT = ADDRESS.mapped;
 const UI_AT = ADDRESS.mapped + 0x10c000;
 const PUSH_BASE = ADDRESS.heap + 0x1000000;
 const PUSH_COUNTER = ADDRESS.heap + 0x2000000;
+const PUSH_BUFFER = PUSH_COUNTER + 0x100;
 
 /**
  * A gate console whose send logs each block and hands it to deliver; short(count) may replace
@@ -393,7 +394,7 @@ function pushConsole({short = () => null, deliver = () => {}, hang = false} = {}
         deliver(bytes);
         return short(sends.length) ?? length;
       },
-      'os.sleepThread'() {
+      'thread.sleep'() {
         asleep = hang || !asleep;
         return asleep ? BLOCK : 0;
       }
@@ -412,6 +413,7 @@ async function startPush(fake, ui = UI_AT) {
     send: SEND,
     state: STATE_AT,
     ui,
+    buffer: ui === null ? null : PUSH_BUFFER,
     counter: PUSH_COUNTER,
     hz: 120
   });
@@ -429,25 +431,22 @@ async function startPush(fake, ui = UI_AT) {
   return {plan, program, thread, results};
 }
 
-const PASS = ['socket.send', 'socket.send', 'add'];
+const PASS = ['socket.send', 'add'];
 
-test('each push period sends the state and UI blocks at their addresses', async () => {
+test('each push period sends the state and UI blocks as one record', async () => {
   const fake = pushConsole();
   fake.memory.write(STATE_AT, Buffer.alloc(pushPlan.STATE_BYTES, 0x11));
   fake.memory.write(UI_AT, Buffer.alloc(pushPlan.UI_BYTES, 0x22));
   const {plan, results} = await startPush(fake);
   assert.equal(plan.recordBytes, 784 + 28);
   for (let period = 1; period < 5; period++) fake.advanceAll();
-  assert.equal(fake.sends.length, 2 * 5);
-  fake.sends.forEach((send, index) => {
-    const ui = index % 2 === 1;
-    assert.deepEqual(
-      [send.fd, send.address, send.length],
-      [PUSH_FD, ui ? UI_AT : STATE_AT, ui ? 28 : 784]
-    );
-    assert.ok(send.bytes.every(byte => byte === (ui ? 0x22 : 0x11)));
-  });
-  const next = ['os.sleepThread', 'restart', ...PASS];
+  assert.equal(fake.sends.length, 5);
+  for (const send of fake.sends) {
+    assert.deepEqual([send.fd, send.address, send.length], [PUSH_FD, PUSH_BUFFER, 812]);
+    assert.ok(send.bytes.subarray(0, 784).every(byte => byte === 0x11));
+    assert.ok(send.bytes.subarray(784).every(byte => byte === 0x22));
+  }
+  const next = ['thread.sleep', 'restart', ...PASS];
   assert.deepEqual(fake.trace, [...PASS, ...next, ...next, ...next, ...next]);
   assert.equal(fake.memory.read(PUSH_COUNTER, 4).readUInt32LE(), 5);
   const last = await results();
@@ -459,28 +458,29 @@ test('a stop during the push sleep ends the worker at the loop tail without a se
   const fake = pushConsole();
   const {program, thread} = await startPush(fake);
   fake.advanceAll();
-  assert.equal(fake.sends.length, 4);
+  assert.equal(fake.sends.length, 2);
   await program.stop();
   fake.advanceAll();
-  assert.equal(fake.sends.length, 4);
-  assert.deepEqual(fake.trace.slice(-2), ['os.sleepThread', 'exit']);
+  assert.equal(fake.sends.length, 2);
+  assert.deepEqual(fake.trace.slice(-2), ['thread.sleep', 'exit']);
   assert.equal(fake.workers.get(thread).exited, true);
   assert.equal(fake.memory.read(PUSH_COUNTER, 4).readUInt32LE(), 2);
 });
 
 test('a short or failed push send fails the check, and the exit then ends the worker', async () => {
-  const fake = pushConsole({short: count => (count === 3 ? 100 : null)});
+  const fake = pushConsole({short: count => (count === 2 ? 100 : null)});
   const {plan, program, thread, results} = await startPush(fake);
   fake.advanceAll();
   const last = await results();
-  assert.equal(last[plan.row.state], 100n);
+  assert.equal(last[plan.row.send], 100n);
   assert.throws(() => pushPlan.checkedPush(last, plan.row), /short or failed/);
-  last[plan.row.state] = 784n;
-  last[plan.row.ui] = 0xffffffffffffffffn;
+  last[plan.row.send] = 0xffffffffffffffffn;
   assert.throws(() => pushPlan.checkedPush(last, plan.row), /short or failed/);
+  last[plan.row.send] = 812n;
+  assert.doesNotThrow(() => pushPlan.checkedPush(last, plan.row));
   await program.stop();
   fake.advanceAll();
-  assert.equal(fake.sends.length, 4);
+  assert.equal(fake.sends.length, 2);
   assert.equal(fake.workers.get(thread).exited, true);
 });
 
@@ -492,13 +492,16 @@ test('the input push plan refuses a bad rate or block and drops the UI send with
     send: SEND,
     state: STATE_AT,
     ui: null,
+    buffer: null,
     counter: PUSH_COUNTER,
     hz: 120
   };
-  for (const bad of [{hz: 1000}, {hz: 60.5}, {state: 0}, {counter: PUSH_COUNTER + 2}, {fd: -1}])
+  const bads = [{hz: 1000}, {hz: 60.5}, {state: 0}, {counter: PUSH_COUNTER + 2}, {fd: -1}];
+  for (const bad of [...bads, {ui: UI_AT}])
     assert.throws(() => pushPlan.cycle({...options, ...bad}), /Input push needs/);
   const plan = pushPlan.cycle(options);
-  assert.equal(plan.row.ui, null);
+  assert.deepEqual(plan.row.copies, []);
+  assert.deepEqual(plan.calls[plan.row.send].args, [PUSH_FD, STATE_AT, 784, 0]);
   assert.equal(plan.calls.length, 3);
   assert.equal(plan.recordBytes, 784);
   assert.doesNotThrow(() => pushPlan.checkedPush([784n, 0n, 0n], plan.row));
@@ -544,8 +547,11 @@ async function pushWorker({before = () => {}, ...options} = {}) {
 test('the push worker verifies its calls and streams records to onData until stop', async () => {
   const {fake, worker, received, log} = await pushWorker();
   const verified = fake.rpc.lines.filter(line => line.startsWith('verify '));
-  for (const name of ['os.sleepThread', 'os.atomicAddU32'])
-    assert.ok(verified.some(line => line.startsWith(`verify ${name} `)), name);
+  for (const name of ['thread.sleep', 'os.atomicAddU32'])
+    assert.ok(
+      verified.some(line => line.startsWith(`verify ${name} `)),
+      name
+    );
   assert.equal(worker.recordBytes, 812);
   await worker.start();
   await assert.rejects(worker.start(), /start is not available/);
@@ -554,7 +560,7 @@ test('the push worker verifies its calls and streams records to onData until sto
   assert.equal(Buffer.concat(received).length, 3 * 812);
   const from = fake.rpc.lines.length;
   assert.deepEqual(await worker.stop(), {pushed: 3});
-  assert.equal(fake.sends.length, 6, 'no send after the stop');
+  assert.equal(fake.sends.length, 3, 'no send after the stop');
   const tail = fake.rpc.lines.slice(from);
   const at = pattern => tail.findIndex(line => pattern.test(line));
   assert.equal(at(/^write /), 0, 'the exit is selected first');
@@ -573,7 +579,8 @@ test('a push worker that does not stop is retained with its socket open', async 
   await worker.start();
   await assert.rejects(worker.stop(), /did not stop; restart SmileBASIC/);
   assert.equal(worker.retained, true);
-  assert.ok(!fake.rpc.lines.some(line => /thread\.join/.test(line)));
+  const calls = fake.rpc.lines.filter(line => !line.startsWith('verify '));
+  assert.ok(!calls.some(line => /thread\.join/.test(line)), 'no join of a running worker');
   assert.deepEqual(log, [['connect', '192.0.2.10']]);
   await assert.rejects(worker.stop(), /retained for safety/);
 });
@@ -592,7 +599,7 @@ test('a failed push join or spawn retains the socket', async () => {
 });
 
 test('a short push send closes the socket and rejects with the console count', async () => {
-  const {fake, worker, log} = await pushWorker({short: count => (count === 3 ? 100 : null)});
+  const {fake, worker, log} = await pushWorker({short: count => (count === 2 ? 100 : null)});
   await worker.start();
   fake.advanceAll();
   await assert.rejects(worker.stop(), error => {
