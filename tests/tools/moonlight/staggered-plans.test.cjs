@@ -505,6 +505,49 @@ test('lag 1 and gate on receive together keep the barrier', {timeout: 2000}, asy
   assert.equal(live.retained, false);
 });
 
+// Each prime is checked against the furthest receive a gate read saw: never two units ahead.
+test('the gate queue keeps every length-gate wake and descriptor over 200 units', async () => {
+  const d = device();
+  let live = null;
+  let seen = 0;
+  let overlapped = 0;
+  const watch = worker =>
+    Object.create(worker, {
+      readStatus: {
+        async value() {
+          const snapshot = await worker.readStatus();
+          seen = Math.max(seen, snapshot.receive.sequence);
+          return snapshot;
+        }
+      },
+      primeInput: {
+        async value(unit) {
+          assert.ok(unit.sequence - seen <= 1, `unit ${unit.sequence} primed two ahead`);
+          assert.ok(live.queued < 2, `unit ${unit.sequence} primed past the queue depth`);
+          if (live.queued) overlapped++;
+          return worker.primeInput(unit);
+        }
+      }
+    });
+  live = await d.live(watch, {gateOnReceive: true, gateQueue: true});
+  await stream(live, d.sink, 200);
+  assert.deepEqual(await live.finish({sink: d.sink}), {drained: 2});
+  assert.ok(overlapped > 0, 'some primes went out while the gate before them still ran');
+  const counts = withoutPacer(live.counts);
+  assert.equal(counts.decoded, 200);
+  assert.equal(counts.presented, 200);
+  assert.equal(d.decoder.coalesced, 0);
+  assert.equal(d.decoder.maxReady, 1);
+  submittedAfterAcquired(d.log);
+  assert.deepEqual(
+    d.log.filter(entry => entry.startsWith('acquire')),
+    Array.from({length: 200}, (_, index) => `acquire ${index + 1}`)
+  );
+  await live.stop();
+  await d.worker.finalize();
+  assert.equal(live.retained, false);
+});
+
 // Counts the signals of the output worker's fetch gate, and those that found it still set and
 // so merged with one not yet waited for. The worker frames and the host both set it here.
 function watchFetchGate(d) {

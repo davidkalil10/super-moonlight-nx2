@@ -97,7 +97,8 @@ const unitAt = sequence => ({data: Buffer.alloc(100 + sequence), pts: sequence *
 // renderer never applies a publication, and the discard calls in noFreeSurface find no
 // free surface. With decodeMs set as well, a gated unit is acquirable decodeMs after both its
 // gate and the previous unit's decode, and with receiveMs a sent unit lands in the receive
-// status receiveMs after its send.
+// status receiveMs after its send. A gate write must leave the primed descriptor of a later
+// unit in place, since the console reads it only after that gate opened decode.
 function simulatedDevice({
   late = new Set(),
   clock = null,
@@ -123,6 +124,7 @@ function simulatedDevice({
   let staleReceive = null;
   let slowReceive = null;
   const presents = [];
+  const primes = new Map();
   const regionAt = address =>
     regions.find(region => address >= region.base && address < region.base + region.bytes.length);
   const read = (address, length) => {
@@ -247,12 +249,16 @@ function simulatedDevice({
       if (bytes.length === inputPlan.DESCRIPTOR.bytes) {
         requests.push('prime');
         write(address, bytes);
+        primes.set(address, bytes.readUInt32LE(inputPlan.DESCRIPTOR.sequence));
         return {result: 0n};
       }
       requests.push(bytes.length === gates.WRITE_BYTES ? 'gate' : 'drain');
       write(address, bytes);
       if (bytes.length === gates.WRITE_BYTES) {
-        decoded = received;
+        decoded++;
+        for (const [at, primed] of primes)
+          if (primed > decoded)
+            assert.equal(read(at, 4).readUInt32LE(), primed, `gate zeroed primed unit ${primed}`);
         if (clock && decodeMs)
           decodeDone[decoded] = Math.max(clock.now, decodeDone[decoded - 1] ?? 0) + decodeMs;
         ringWord(status.STATUS.input, 8, 0);
@@ -1467,6 +1473,132 @@ test('admitted primes never merge length-gate wakes over 200 units', async () =>
   await consoleSide;
   assert.equal(merged, 0);
   assert.equal(received, last);
+});
+
+// staggered-live.js under the gate queue
+const queued = {gateOnReceive: true, gateQueue: true};
+
+async function pushAt(device, live, sequence, hooks = {}) {
+  const unit = unitAt(sequence);
+  device.pts.set(sequence, BigInt(unit.pts));
+  await live.push(unit, {sink: device.sink, ...hooks});
+}
+
+// The real worker, with unit `slow`'s receive pending in every status read until release().
+function slowReceive(slow) {
+  let holding = true;
+  return {
+    release: () => (holding = false),
+    async createWorker(settings) {
+      const worker = await createWorker(settings);
+      return Object.create(worker, {
+        readStatus: {
+          async value() {
+            const snapshot = await worker.readStatus();
+            if (holding && snapshot.receive.sequence >= slow)
+              snapshot.receive = {count: 0n, sequence: slow - 1};
+            return snapshot;
+          }
+        }
+      });
+    }
+  };
+}
+
+test('the gate queue needs gate on receive', () => {
+  assert.throws(() => create({createWorker, gateQueue: true}), /needs gate on receive/);
+});
+
+test('under the gate queue a slow receive holds the next prime, not its own push', async () => {
+  const device = simulatedDevice();
+  const slow = slowReceive(5);
+  const live = await liveOn(device, noPause, null, {...queued, createWorker: slow.createWorker});
+  await stream(device, live, 4);
+  while (live.queued) await tick();
+  const before = device.requests.length;
+  await pushAt(device, live, 5);
+  assert.equal(live.queued, 1, 'gate 5 still waits for its receive');
+  let sixth = false;
+  const pushed = pushAt(device, live, 6).then(() => (sixth = true));
+  for (let turn = 0; turn < 20; turn++) await tick();
+  assert.equal(sixth, false, 'unit 6 is not primed before unit 5 is seen received');
+  const requests = device.requests.slice(before);
+  assert.deepEqual(
+    requests.filter(request => request !== 'read'),
+    ['prime'],
+    'unit 5 went out and its gate never wrote'
+  );
+  slow.release();
+  await pushed;
+  for (let sequence = 7; sequence <= 12; sequence++) await pushAt(device, live, sequence);
+  assert.deepEqual(await live.finish({sink: device.sink}), {drained: 2});
+  const counts = live.counts;
+  assert.ok(counts.waiting.receive > 0);
+  assert.equal(counts.decoded, 12);
+  assert.equal(counts.presented, 12);
+  assert.equal(device.applied(), 12);
+  await live.stop();
+});
+
+test('each generation starts its gate queue over at unit 1', async () => {
+  const first = simulatedDevice();
+  const live = await liveOn(first, noPause, null, queued);
+  await stream(first, live, 8);
+  await live.finish({sink: first.sink});
+  assert.equal(live.queued, 0);
+  await assert.rejects(pushAt(first, live, 9), /not running/);
+  await live.stop();
+  const device = simulatedDevice();
+  const slow = slowReceive(1);
+  const next = await liveOn(device, noPause, null, {...queued, createWorker: slow.createWorker});
+  await pushAt(device, next, 1);
+  let second = false;
+  const pushed = pushAt(device, next, 2).then(() => (second = true));
+  for (let turn = 0; turn < 20; turn++) await tick();
+  assert.equal(second, false, 'unit 2 waits for the new generation to receive unit 1');
+  slow.release();
+  await pushed;
+  for (let sequence = 3; sequence <= 6; sequence++) await pushAt(device, next, sequence);
+  assert.deepEqual(await next.finish({sink: device.sink}), {drained: 2});
+  assert.equal(device.applied(), 6);
+  await next.stop();
+});
+
+test('the gate queue counts its queued gates toward the skip backlog', async () => {
+  const skipped = [];
+  for (const gateQueue of [false, true]) {
+    const device = simulatedDevice();
+    const options = {gateOnReceive: true, gateQueue, skipBacklog: 1};
+    const live = await liveOn(device, noPause, null, options);
+    for (let sequence = 1; sequence <= 12; sequence++)
+      await pushAt(device, live, sequence, {backlog: 1});
+    await live.finish({sink: device.sink});
+    assert.equal(live.counts.decoded, 12);
+    skipped.push(live.counts.skipped);
+    await live.stop();
+  }
+  assert.equal(skipped[0], 0);
+  assert.ok(skipped[1] > 0);
+});
+
+test('under the vsync rule a queued gate still finds the outputs it checks', async () => {
+  const device = simulatedDevice();
+  const live = await liveOn(device, noPause, null, {...queued, skipRule: 'vsync', skipBacklog: 1});
+  await stream(device, live, 24);
+  assert.deepEqual(await live.finish({sink: device.sink}), {drained: 2});
+  assert.equal(live.counts.decoded, 24);
+  assert.equal(live.counts.presented + live.counts.skipped, 24);
+  await live.stop();
+});
+
+test('stopping with gates queued drops them and stops the worker once', async () => {
+  const device = simulatedDevice();
+  const live = await liveOn(device, noPause, null, queued);
+  await stream(device, live, 6);
+  assert.ok(live.queued > 0);
+  await live.stop();
+  assert.equal(live.queued, 0);
+  assert.equal(live.retained, false);
 });
 
 // staggered-status.js

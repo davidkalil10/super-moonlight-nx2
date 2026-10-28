@@ -31,6 +31,14 @@
  * arrives (staggered-input-plan.js), sends it and gates it at once, so decode N opens a frame
  * earlier for one more exchange per unit.
  *
+ * Gate queue (gate on receive only): push() primes and sends a unit, queues its gate on
+ * gate-queue.js and returns, so a gate rereading a late receive no longer holds up the next
+ * unit. Every gate status read reports the console's receive sequence to the queue, which
+ * admits the next prime only once the unit before it is received. The queue lives with the
+ * held unit: it starts with unit 1 and goes at finish, as sequences restart per generation.
+ * A gate write covers both input descriptors, so a queued gate carries the unit primed behind
+ * it instead of zeroing that slot.
+ *
  * Rereads: a gate late on receive, input, acquire or fetch reads the status again right away,
  * since a pause costs the frame its vsync slot (request-budget.cjs staggeredRetryWait). A gate
  * waiting for the renderer to apply a publication sleeps to the vsync present-pacer predicts
@@ -48,6 +56,7 @@ import * as decodeWaits from './decode-wait.js';
 import * as receiveWaits from './receive-wait.js';
 import * as exchangeTiming from './exchange-timing.js';
 import * as gates from './staggered-gate.js';
+import {create as createGateQueue} from './gate-queue.js';
 import {create as createStaggeredWorker} from './staggered-worker.js';
 
 const RESTART = 'Staggered worker native objects retained; restart SmileBASIC';
@@ -373,6 +382,7 @@ function jsonSafe(value) {
  * @param {'backlog' | 'vsync'} [options.skipRule]
  * @param {number | null} [options.trimBacklogMs] age of the unit in hand that counts as stale
  * @param {boolean} [options.gateOnReceive] gate each unit as soon as it is sent
+ * @param {boolean} [options.gateQueue] run those gates off push() (gate on receive only)
  * @param {0 | 1 | 2} [options.lag] fetch each output this many gates after its decode opened
  * @param {boolean} [options.decodeWait] sleep through a pending acquire (vsync rule only)
  * @param {boolean} [options.receiveWait] sleep through a pending receive
@@ -389,6 +399,7 @@ function create({
   skipRule = 'backlog',
   trimBacklogMs = null,
   gateOnReceive = false,
+  gateQueue = false,
   lag = gates.OUTPUT_LAG,
   decodeWait = false,
   receiveWait = false,
@@ -403,6 +414,7 @@ function create({
     throw Error('The backlog trim needs a skip backlog of at least 1');
   if (lag !== 0 && lag !== 1 && lag !== gates.OUTPUT_LAG)
     throw Error('The staggered output lag is 0, 1 or 2');
+  if (gateQueue && !gateOnReceive) throw Error('The gate queue needs gate on receive');
   const periodMs = 1000 / presentHz;
   let worker = null;
   let transport = null;
@@ -412,6 +424,10 @@ function create({
   let finished = false;
   let retained = false;
   let held = null;
+  /** The held unit's gate queue, under gateQueue. */
+  let queue = null;
+  /** The last unit primed, which a queued gate before it must not zero. */
+  let primed = 0;
   const units = new Map();
   const destinations = new Map();
   const counts = {
@@ -505,6 +521,7 @@ function create({
       if (delay > 0) await pause(delay);
     },
     onRead: (snapshot, startedAt) => {
+      queue?.observeReceive(snapshot.receive.sequence);
       readMs = now() - startedAt;
       timing.record('status', startedAt, now(), references(expected));
       if (link && !link.received) {
@@ -557,11 +574,14 @@ function create({
     return {gate: lastGate, send: lastSend, decodeDone, receiveDone};
   };
 
-  /** Keeps the units and destinations later gates still check, and drops older ones. */
+  /**
+   * Keeps the units and destinations later gates still check, with one more for a queued gate
+   * still running behind the producer, and drops older ones.
+   */
   function remember(sequence, unit) {
     units.set(sequence, unit);
     units.delete(sequence - 4);
-    destinations.delete(sequence - 4);
+    destinations.delete(sequence - 5);
   }
 
   /** Counts the output the gate's fetch check covered as presented or skipped. */
@@ -787,6 +807,7 @@ function create({
       ));
     }
     enter('staggered-gate');
+    if (primed > sequence) next = units.get(sequence + 1);
     const gateStarted = now();
     onGate?.(gateStarted);
     await openGate(gateStarted, {
@@ -838,7 +859,8 @@ function create({
     /**
      * Gates the held unit with `unit` as its next, or starts the workers with the first unit,
      * then sends `unit` and holds it. Under gateOnReceive it primes `unit` instead, sends it
-     * and gates it with no next.
+     * and gates it with no next; under gateQueue it waits for the queue to admit the prime and
+     * queues the gate instead of awaiting it, and the queued gates count toward the backlog.
      * @param {{data: Buffer, pts: number | bigint, arrivedAt?: number}} unit
      * @param {any} [hooks]
      */
@@ -848,32 +870,40 @@ function create({
       if (next.length < 1 || next.length > transport.maxAccessUnit)
         throw Error('Access unit does not fit the staggered receive buffer');
       const enter = hooks.enter || (() => {});
-      if (held) {
-        if (!(next.pts > held.pts)) throw Error('Staggered loop needs increasing access-unit PTS');
-        if (gateOnReceive) {
-          enter('staggered-prime');
-          await worker.primeInput({sequence: held.sequence + 1, ...next});
-        } else await gate(held.sequence, held, next, {...hooks, arrivedAt: unit.arrivedAt});
-      } else {
+      const sequence = held ? held.sequence + 1 : 1;
+      if (held && !(next.pts > held.pts))
+        throw Error('Staggered loop needs increasing access-unit PTS');
+      if (held && !gateOnReceive)
+        await gate(held.sequence, held, next, {...hooks, arrivedAt: unit.arrivedAt});
+      if (!held && gateQueue) queue = createGateQueue();
+      if (queue) await queue.admit(sequence);
+      remember(sequence, next);
+      if (!held) {
         enter('staggered-start');
         await worker.start({sequence: 1, ...next});
+      } else if (gateOnReceive) {
+        enter('staggered-prime');
+        primed = sequence;
+        await worker.primeInput({sequence, ...next});
       }
-      const sequence = held ? held.sequence + 1 : 1;
-      remember(sequence, next);
       enter('staggered-send');
       await transport.send(unit.data);
       lastSend = now();
       hooks.onSent?.(lastSend);
       receive?.sent(sequence, next.length, lastSend);
-      if (gateOnReceive) await gate(sequence, next, null, {...hooks, arrivedAt: unit.arrivedAt});
+      const gateHooks = {...hooks, arrivedAt: unit.arrivedAt};
+      if (queue) {
+        const backlog = (hooks.backlog ?? 0) + queue.depth;
+        queue.push(sequence, () => gate(sequence, next, null, {...gateHooks, backlog}));
+      } else if (gateOnReceive) await gate(sequence, next, null, gateHooks);
       held = {sequence, ...next};
       counts.submitted++;
     },
 
     /**
-     * Gates the last unit (already gated under gateOnReceive), stops the input worker and
-     * drains the last `lag` outputs. With lag 0 the last gate already opened the last fetch,
-     * so the tail drains none and only waits for it.
+     * Gates the last unit (already gated under gateOnReceive, once the queue drained under
+     * gateQueue), stops the input worker and drains the last `lag` outputs. With lag 0 the
+     * last gate already opened the last fetch, so the tail drains none and only waits for it.
      * @param {any} [hooks]
      * @returns {Promise<{drained: number}>}
      */
@@ -882,9 +912,11 @@ function create({
       finished = true;
       const {sink, enter = () => {}, onDecoded, onPresented, onSkipped} = hooks;
       const last = held.sequence;
+      if (queue) await queue.drain();
       if (!gateOnReceive)
         await gate(last, held, {length: 1, pts: held.pts + 1n}, {...hooks, backlog: 0});
       held = null;
+      queue = null;
       enter('staggered-tail');
       await waitFinalInput(last);
       await worker.stopInput();
@@ -929,6 +961,12 @@ function create({
     async stop() {
       if (retained) throw Error(RESTART);
       if (!worker) return;
+      if (queue) {
+        // Queued gates are of units already primed and sent. Dropping them is safe because
+        // worker.stop() rewrites the exit dispatch before it signals; the running one finishes.
+        queue.clear();
+        await queue.drain().catch(() => {});
+      }
       try {
         await worker.stop();
       } catch (error) {
@@ -948,6 +986,11 @@ function create({
 
     get pending() {
       return held !== null && !finished;
+    },
+
+    /** Gates queued or running under gateQueue. */
+    get queued() {
+      return queue?.depth ?? 0;
     },
 
     get counts() {

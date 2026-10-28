@@ -710,7 +710,8 @@ async function create({
     /**
      * Under gate on receive: writes access unit `unit`'s descriptor and signals the length gate
      * in one exchange, before the unit is sent. The caller primes a unit only once the unit two
-     * before it, whose descriptor slot it reuses, is checked submitted.
+     * before it, whose descriptor slot it reuses, is submitted: checked by its gate, or under the
+     * gate queue implied by a status read that saw the unit before it received.
      * @param {{sequence: number, length: number, pts: bigint}} unit
      */
     async primeInput(unit) {
