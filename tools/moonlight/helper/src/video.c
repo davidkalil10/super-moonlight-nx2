@@ -18,6 +18,7 @@
 #include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/ioctl.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -124,6 +125,15 @@ static double now_ms(void) {
 
 static size_t frame_bytes(void) {
   return (size_t)options.width * options.height * 3;
+}
+
+/* Bytes written to fd that the reader has not taken: the send queue of node's socketpair, or
+ * what a pipe holds. -1 when neither ioctl answers. */
+static int unread_bytes(int fd) {
+  int bytes;
+  if (ioctl(fd, TIOCOUTQ, &bytes) == 0 || ioctl(fd, FIONREAD, &bytes) == 0)
+    return bytes;
+  return -1;
 }
 
 static bool write_all(int fd, const uint8_t *data, size_t size) {
@@ -262,6 +272,8 @@ static int setup(int format, int width, int height, int fps, void *context, int 
 
 static int submit(PDECODE_UNIT unit) {
   double started = now_ms();
+  double queue_ms = (LiGetMicroseconds() - unit->enqueueTimeUs) / 1000.0;
+  int queued = LiGetPendingVideoFrames();
   size_t needed = (size_t)unit->fullLength + AV_INPUT_BUFFER_PADDING_SIZE;
   if (needed > packet_capacity) {
     packet_data = realloc(packet_data, needed);
@@ -276,15 +288,21 @@ static int submit(PDECODE_UNIT unit) {
 
   bool keyframe = unit->frameType == FRAME_TYPE_IDR;
   if (options.raw_fd >= 0) {
+    int unread = unread_bytes(options.raw_fd);
+    double write_started = now_ms();
     if (!write_all(options.raw_fd, packet_data, offset)) {
       status("{\"event\":\"error\",\"message\":\"raw output closed\"}");
       LiInterruptConnection();
       return DR_OK;
     }
+    double written = now_ms();
+    double receive_ms = (LiGetMicroseconds() - unit->receiveTimeUs) / 1000.0;
     status("{\"type\":\"au\",\"seq\":%llu,\"frame\":%d,\"bytes\":%zu,\"keyframe\":%s,"
-           "\"pts\":%llu}",
+           "\"pts\":%llu,\"receiveMs\":%.2f,\"queueMs\":%.2f,\"queued\":%d,\"unread\":%d,"
+           "\"writeMs\":%.2f,\"writtenAt\":%.3f}",
            (unsigned long long)access_units++, unit->frameNumber, offset,
-           keyframe ? "true" : "false", (unsigned long long)unit->presentationTimeUs);
+           keyframe ? "true" : "false", (unsigned long long)unit->presentationTimeUs,
+           receive_ms, queue_ms, queued, unread, written - write_started, written);
   }
   if (!options.decode) {
     pthread_mutex_lock(&lock);

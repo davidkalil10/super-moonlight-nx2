@@ -105,6 +105,50 @@ function countsSince(now, before) {
 const tenths = value => Math.round(value * 10) / 10;
 
 /**
+ * Where a unit spent the time before arrivedAt, from the helper's stamps: receiveMs from its
+ * first packet to its write, queueMs in common-c's decode-unit queue behind `queued` others,
+ * `unread` bytes still in the raw channel before the write, and pipeMs from the write to
+ * arrivedAt. Null for a helper that does not stamp.
+ * @param {any} unit
+ * @param {number} arrivedMonotonic arrivedAt on CLOCK_MONOTONIC, the helper's clock
+ */
+function hiddenQueue(unit, arrivedMonotonic) {
+  if (typeof unit.writtenAt !== 'number') return null;
+  const pipeMs = arrivedMonotonic - unit.writtenAt;
+  const {receiveMs, queueMs, queued, unread, writeMs} = unit;
+  return {totalMs: receiveMs + pipeMs, pipeMs, receiveMs, queueMs, queued, unread, writeMs};
+}
+
+/**
+ * One stats row's time before arrivedAt: the mean and longest of each part over the units the
+ * helper stamped, or null when it stamped none.
+ * @param {{hidden?: ReturnType<typeof hiddenQueue>}[]} samples
+ */
+function hiddenTiming(samples) {
+  const hidden = samples.map(sample => sample.hidden).filter(value => value);
+  if (!hidden.length) return null;
+  /** @param {string} key */
+  const spread = key => {
+    const values = hidden.map(value => /** @type {any} */ (value)[key]);
+    const mean = values.reduce((sum, value) => sum + value, 0) / values.length;
+    return {mean: tenths(mean), max: tenths(Math.max(...values))};
+  };
+  return {
+    units: hidden.length,
+    totalMs: spread('totalMs'),
+    pipeMs: spread('pipeMs'),
+    receiveMs: spread('receiveMs'),
+    queueMs: spread('queueMs'),
+    queued: spread('queued'),
+    unread: spread('unread'),
+    writeMs: spread('writeMs')
+  };
+}
+
+/** @param {ReturnType<typeof hiddenTiming>} hidden */
+const withHidden = hidden => (hidden ? {hidden} : {});
+
+/**
  * One stats row's access-unit timing: the mean and longest wait from host arrival to send, and
  * over the units that went through a gate, the mean age at gate and how many were in hand.
  * @param {{arrivedAt: number, gatedAt: number | null, sentAt: number,
@@ -397,6 +441,8 @@ async function run({
   const {presentHz, skipRule, trimBacklogMs, gateOnReceive, outputLag} = options;
   const {decodeWait, receiveWait, avoidWindow, skipBacklog, audioFrames, bitrate} = options;
   if (!rpc.host) throw Error('Native TCP requires a fresh launcher session from this branch');
+  /** Moves `now` onto CLOCK_MONOTONIC, the clock of the helper's writtenAt. */
+  const monotonicOffset = Number(process.hrtime.bigint()) / 1e6 - now();
   const revision = sourceRevision || headRevision();
   const output = recordDirectory(revision);
   await writeManifest(output, rpc.a.session, revision);
@@ -666,6 +712,7 @@ async function run({
       queued,
       ...(staggeredLive ? {waiting: countsSince(staggeredLive.counts.waiting, waited)} : {}),
       au: auTiming(auSamples),
+      ...withHidden(hiddenTiming(auSamples)),
       ...(trimBacklogMs !== null ? {trimmed} : {}),
       ...withInputStage(bridge.take(), inputBridge),
       at: stage + '/' + (decoder?.step ?? '-'),
@@ -873,7 +920,13 @@ async function run({
   /** Hands a unit to the running staggered workers, timing it into the row's samples. */
   async function pushStaggered(unit) {
     pairing = true;
-    const sample = {arrivedAt: unit.arrivedAt, gatedAt: null, sentAt: null, inHand: null};
+    const sample = {
+      arrivedAt: unit.arrivedAt,
+      gatedAt: null,
+      sentAt: null,
+      inHand: null,
+      hidden: hiddenQueue(unit, unit.arrivedAt + monotonicOffset)
+    };
     try {
       await staggeredLive.push(unit, pushOptions(sample));
     } finally {
@@ -1012,4 +1065,4 @@ async function run({
   return writeSummary();
 }
 
-export {run, createIdrRequester, countsSince, auTiming, withInputStage};
+export {run, createIdrRequester, countsSince, auTiming, hiddenQueue, hiddenTiming, withInputStage};

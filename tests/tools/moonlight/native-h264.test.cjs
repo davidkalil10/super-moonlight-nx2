@@ -12,6 +12,8 @@ const {
   createIdrRequester,
   countsSince,
   auTiming,
+  hiddenQueue,
+  hiddenTiming,
   withInputStage
 } = require('../../../host/stream/native-h264.js');
 const {AccessUnits, parameterSets} = require('../../../host/stream/h264-stream.js');
@@ -24,6 +26,36 @@ test('stats rows report staggered waits since the previous row', () => {
   assert.deepEqual(countsSince({receive: 7, applied: 2}, {receive: 4, applied: 2}), {receive: 3});
   assert.deepEqual(countsSince({slot: 1}, {}), {slot: 1});
   assert.deepEqual(countsSince({}, {}), {});
+});
+
+test('the helper stamps split the time before arrival into its parts', () => {
+  const stamps = {receiveMs: 4, queueMs: 0.5, queued: 0, unread: 0, writeMs: 0.1};
+  assert.deepEqual(hiddenQueue({...stamps, writtenAt: 1000}, 1003), {
+    totalMs: 7,
+    pipeMs: 3,
+    ...stamps
+  });
+  assert.equal(hiddenQueue({seq: 1, bytes: 9}, 1003), null, 'an unstamped unit has none');
+  const late = {receiveMs: 6, queueMs: 2.5, queued: 2, unread: 4096, writeMs: 0.3};
+  assert.deepEqual(
+    hiddenTiming([
+      {hidden: hiddenQueue({...stamps, writtenAt: 1000}, 1003)},
+      {hidden: null},
+      {hidden: hiddenQueue({...late, writtenAt: 1020}, 1030)}
+    ]),
+    {
+      units: 2,
+      totalMs: {mean: 11.5, max: 16},
+      pipeMs: {mean: 6.5, max: 10},
+      receiveMs: {mean: 5, max: 6},
+      queueMs: {mean: 1.5, max: 2.5},
+      queued: {mean: 1, max: 2},
+      unread: {mean: 2048, max: 4096},
+      writeMs: {mean: 0.2, max: 0.3}
+    }
+  );
+  assert.equal(hiddenTiming([{hidden: null}]), null, 'a row with no stamps reports none');
+  assert.equal(hiddenTiming([]), null);
 });
 
 test('access-unit timing reports the wait to send, the age at gate and the units in hand', () => {
