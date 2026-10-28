@@ -180,7 +180,9 @@ function checkOutput(snapshot, expected) {
       if (!expected.ack.optional)
         throw gateError('Previous publication is not applied', true, 'applied');
     } else if (snapshot.current !== expected.ack.index)
-      throw gateError('Applied publication surface differs');
+      // The shader stores current before nativeApplied, but one bridge read can still see the
+      // new nativeApplied with the old current; the reader retries it (see tearOf).
+      throw gateError('Applied publication surface differs', true, 'torn');
   }
   return {
     outputIndex: snapshot.acquire.index,

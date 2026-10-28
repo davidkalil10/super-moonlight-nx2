@@ -116,6 +116,17 @@ function isApplied(nativeApplied, sequence) {
  */
 
 /**
+ * The mismatch a torn read leaves, or null for any other failure. A torn read cannot repeat,
+ * since the shader stores current before nativeApplied, so the same one twice is a wrong
+ * surface.
+ * @param {any} error
+ * @param {Snapshot} snapshot
+ */
+function tearOf(error, snapshot) {
+  return error.pending === 'torn' ? snapshot.nativeApplied + '/' + snapshot.current : null;
+}
+
+/**
  * Reads the status until it passes check(), retrying the next-slot acquire from the host while
  * that is all the gate waits for.
  * @param {any} worker
@@ -123,7 +134,6 @@ function isApplied(nativeApplied, sequence) {
  * @param {WaitOptions} [options]
  * @returns {Promise<Snapshot>}
  */
-
 async function waitChecked(
   worker,
   expected,
@@ -139,6 +149,7 @@ async function waitChecked(
   const until = Date.now() + timeoutMs;
   let nextInputRetry = 0;
   let pending = null;
+  let torn = null;
   while (Date.now() < until) {
     await beforeRead();
     const startedAt = now();
@@ -148,7 +159,10 @@ async function waitChecked(
       checked.check(snapshot, expected);
       return snapshot;
     } catch (error) {
-      if (!error.retryable) throw failedCheck(error, expected, snapshot);
+      const tear = tearOf(error, snapshot);
+      if (!error.retryable || (tear !== null && tear === torn))
+        throw failedCheck(error, expected, snapshot);
+      torn = tear;
       if (Date.now() >= nextInputRetry && isPendingInputSlot(snapshot, expected)) {
         await worker.retryInputSlot(expected.input.sequence);
         nextInputRetry = Date.now() + INPUT_RETRY_MS;
@@ -166,18 +180,28 @@ async function waitChecked(
  * input worker stopped.
  * @param {any} worker
  * @param {Expected} expected
- * @param {{timeoutMs?: number, pause?: (ms: number) => Promise<unknown>}} [options]
+ * @param {{timeoutMs?: number, pause?: (ms: number) => Promise<unknown>,
+ *   onReread?: (pending: string) => void}} [options]
  * @returns {Promise<Snapshot>}
  */
-async function waitOutput(worker, expected, {timeoutMs = DEFAULT_TIMEOUT_MS, pause = delay} = {}) {
+async function waitOutput(
+  worker,
+  expected,
+  {timeoutMs = DEFAULT_TIMEOUT_MS, pause = delay, onReread = () => {}} = {}
+) {
   const until = Date.now() + timeoutMs;
+  let torn = null;
   while (Date.now() < until) {
     const snapshot = await worker.readStatus();
     try {
       checked.checkOutput(snapshot, expected);
       return snapshot;
     } catch (error) {
-      if (!error.retryable) throw failedCheck(error, expected, snapshot);
+      const tear = tearOf(error, snapshot);
+      if (!error.retryable || (tear !== null && tear === torn))
+        throw failedCheck(error, expected, snapshot);
+      torn = tear;
+      onReread(error.pending);
     }
     await pause(POLL_MS);
   }
@@ -318,7 +342,13 @@ function create({
   let stale = 0;
   let cooling = 0;
   const waiting = {};
-  const waits = {timeoutMs, pause};
+  const waits = {
+    timeoutMs,
+    pause,
+    onReread: pending => {
+      if (pending === 'torn') waiting.torn = (waiting.torn || 0) + 1;
+    }
+  };
   const pacer = presentPacer.create({periodMs, now, sleep: ms => pause(ms)});
   const decode = decodeWait ? decodeWaits.create({now, sleep: ms => pause(ms)}) : null;
   /** Receive-wait sleeps since the start, for the stats rows. */

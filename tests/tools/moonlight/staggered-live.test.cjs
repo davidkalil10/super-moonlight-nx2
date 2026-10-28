@@ -15,7 +15,9 @@ const {
   create,
   RESTART,
   TRIM_FRAMES,
-  expectedFor
+  expectedFor,
+  waitChecked,
+  waitOutput
 } = require('../../../host/stream/staggered-live.js');
 const gate = require('../../../host/stream/staggered-gate.js');
 const input = require('../../../host/stream/staggered-input-plan.js');
@@ -1243,4 +1245,68 @@ test('tail output check requires acquisition and prior publication without a new
     () => checkOutput(state, {acquire: {sequence: 7, pts: 7000n}}),
     /output status/
   );
+});
+
+// A torn read: the status shows the ack applied (nativeApplied 14) but the previous surface.
+const TAIL = {
+  acquire: {sequence: 7, pts: 7000n},
+  fetch: {sequence: 6},
+  ack: {sequence: 14, index: 1}
+};
+
+/** A worker whose status reads present `currents` in turn, then the last one for good. */
+function tearing(currents) {
+  const worker = {
+    reads: 0,
+    async readStatus() {
+      const state = parse(statusSnapshot());
+      state.current = currents[Math.min(worker.reads++, currents.length - 1)];
+      return state;
+    }
+  };
+  return worker;
+}
+
+test('an applied publication on another surface is retried as a torn read', () => {
+  const state = parse(statusSnapshot());
+  state.current = 0;
+  assert.throws(() => checkOutput(state, TAIL), {
+    message: 'Applied publication surface differs',
+    retryable: true,
+    pending: 'torn'
+  });
+});
+
+test('a torn read passes on the next read and is counted', async () => {
+  const torn = [];
+  const tail = tearing([0, 1]);
+  const snapshot = await waitOutput(tail, TAIL, {pause: noPause, onReread: p => torn.push(p)});
+  assert.equal(snapshot.current, 1);
+  assert.equal(tail.reads, 2);
+  assert.deepEqual(torn, ['torn']);
+
+  const rereads = [];
+  const full = tearing([0, 1]);
+  await waitChecked(full, expected, {pause: noPause, onReread: p => rereads.push(p)});
+  assert.equal(full.reads, 2);
+  assert.deepEqual(rereads, ['torn']);
+});
+
+test('the same mismatch on two reads in a row is a wrong surface', async () => {
+  for (const wait of [waitOutput, waitChecked]) {
+    const worker = tearing([0]);
+    await assert.rejects(
+      wait(worker, wait === waitOutput ? TAIL : expected, {pause: noPause}),
+      error => {
+        assert.equal(error.checked.current, 0);
+        assert.equal(error.checked.nativeApplied, 14);
+        assert.equal(error.expected.ack.index, 1);
+        return /surface differs/.test(error.message);
+      }
+    );
+    assert.equal(worker.reads, 2);
+  }
+  const worker = tearing([0, 2, 2]);
+  await assert.rejects(waitOutput(worker, TAIL, {pause: noPause}), /surface differs/);
+  assert.equal(worker.reads, 3, 'a different mismatch starts over');
 });
