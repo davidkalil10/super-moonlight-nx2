@@ -34,23 +34,52 @@ const {
 const withoutPacer = require('./test-helpers.cjs').withoutPacer('status');
 
 // staggered-live.js
-test('acquire waits are binned by duration and split at 64 KB units', () => {
+test('acquire waits book both bounds, the pending reads and the immediate acquires', () => {
   const waits = createAcquireWaits();
-  for (const [ms, bytes] of [
-    [1.5, 30000],
-    [3, 30000],
-    [8, 31000],
-    [16.6, 29000],
-    [20, 210000],
-    [40.04, 215000]
-  ])
-    waits.add(ms, bytes);
+  // One wait: reads of [start, end] ms, `true` while the acquire is pending.
+  const wait = (unit, bytes, reads) => {
+    for (const [startedAt, endedAt, pending] of reads)
+      waits.observe(unit, pending, startedAt, endedAt, bytes);
+  };
+  wait(1, 30000, [[0, 2, false]]);
+  wait(2, 30000, [
+    [0, 2, true],
+    [7, 9, false],
+    [14, 16, false]
+  ]);
+  wait(3, 30000, [
+    [0, 2, true],
+    [7, 9, true],
+    [14, 16, false]
+  ]);
+  wait(4, 210000, [
+    [0, 2, true],
+    [7, 9, true],
+    [14, 16, true],
+    [21, 23, true],
+    [28, 30, true],
+    [35, 41, false]
+  ]);
   assert.deepEqual(waits.counts, {
-    small: {count: 4, bins: [1, 1, 0, 2, 0, 0], maxMs: 16.6},
-    large: {count: 2, bins: [0, 0, 0, 0, 1, 1], maxMs: 40}
+    small: {
+      immediate: 1,
+      count: 2,
+      reads: [1, 1, 0, 0],
+      bins: [0, 0, 0, 2, 0, 0],
+      lowerBins: [1, 0, 1, 0, 0, 0],
+      maxMs: 16
+    },
+    large: {
+      immediate: 0,
+      count: 1,
+      reads: [0, 0, 0, 1],
+      bins: [0, 0, 0, 0, 0, 1],
+      lowerBins: [0, 0, 0, 0, 1, 0],
+      maxMs: 41
+    }
   });
-  waits.counts.small.bins[0] = 9;
-  assert.equal(waits.counts.small.bins[0], 1, 'counts is a copy');
+  waits.counts.small.bins[3] = 9;
+  assert.equal(waits.counts.small.bins[3], 2, 'counts is a copy');
 });
 
 const layout = {width: 1920, height: 1080, stride: 1920, sliceHeight: 1088};
