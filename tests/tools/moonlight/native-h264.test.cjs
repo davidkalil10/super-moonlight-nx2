@@ -698,7 +698,7 @@ const pairedUnits = count =>
     pts: (index + 1) * 1000
   }));
 
-function staggeredFake(events, {pushFails = null, stopFails = false} = {}) {
+function staggeredFake(events, {pushFails = null, stopFails = false, lagFallback = null} = {}) {
   return () => {
     let pending = false;
     events.push({type: 'staggered-create'});
@@ -709,6 +709,8 @@ function staggeredFake(events, {pushFails = null, stopFails = false} = {}) {
       },
       async push(unit, {sink, onDecoded, onPresented}) {
         events.push({type: 'staggered-push', pts: unit.pts});
+        if (unit.pts === pushFails && lagFallback)
+          throw Object.assign(Error('Staggered checked status timed out'), {lagFallback});
         if (unit.pts === pushFails) throw Error('Short receive 10/20');
         if (pending) {
           await sink.workerDestination({current: 0, applied: 0});
@@ -1434,6 +1436,40 @@ test('--output-lag reaches the staggered scheduler and takes 0 to 2', {timeout: 
     });
   }
 });
+
+test(
+  'a lag 0 decoder timeout stops the run and records the fallback',
+  {timeout: 5000},
+  async () => {
+    const f = await fixture({units: pairedUnits(4)});
+    const lagFallback = {
+      at: 3,
+      waitedFor: 2,
+      reason: 'acquire 2 timed out at lag 0',
+      recommendedLag: 1
+    };
+    f.options.createStaggered = staggeredFake(f.events, {pushFails: 3000, lagFallback});
+    f.options.args.push('--staggered', '--output-lag', '0');
+    await exercise(f, async () => {
+      const summary = await run(f.options);
+      assert.equal(summary.stopReason, 'lag0-timeout');
+      assert.deepEqual(summary.lagFallback, lagFallback);
+      assert.equal(summary.pass, false);
+      assert.ok(
+        summary.failures.includes('lag 0 decoder wait timed out; rerun with --output-lag 1')
+      );
+      const events = (await fs.readFile(path.join(f.directory, 'logs', 'events.jsonl'), 'utf8'))
+        .trim()
+        .split('\n')
+        .map(JSON.parse);
+      assert.deepEqual(
+        events.find(entry => entry.event === 'lag-fallback').lagFallback,
+        lagFallback
+      );
+      assert.equal(events.find(entry => entry.event === 'native-stop').reason, 'lag0-timeout');
+    });
+  }
+);
 
 test(
   'the staggered-worker started event names the latency flags that were on',

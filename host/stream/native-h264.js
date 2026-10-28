@@ -432,7 +432,7 @@ function helperArgs(host, app, {width, height, fps, bitrate, audio}) {
  */
 function buildSummary(
   options,
-  {rows, staggeredLive, tail, socketAudioReport, inputPushStop, stopReason}
+  {rows, staggeredLive, tail, socketAudioReport, inputPushStop, stopReason, lagFallback}
 ) {
   const {presentHz, skipBacklog, skipRule, trimBacklogMs, gateOnReceive, outputLag} = options;
   const {decodeWait, receiveWait, avoidWindow, queue, inputHz, audioFrames, audio} = options;
@@ -462,7 +462,8 @@ function buildSummary(
     link: linkSeconds(steadyRows),
     ...scoring.summarize(rows, {warmup}),
     expect,
-    stopReason
+    stopReason,
+    ...(lagFallback && {lagFallback})
   };
 }
 
@@ -475,6 +476,8 @@ function score(summary, {expect, duration, socketAudioReport, inputPushStop, sto
   if (inputPushStop?.error || inputPushStop?.retained)
     result.failures.push('input push: ' + (inputPushStop.error ?? 'worker retained'));
   if (stopReason === 'console-stalled') result.failures.push('console stopped answering');
+  if (stopReason === 'lag0-timeout')
+    result.failures.push('lag 0 decoder wait timed out; rerun with --output-lag 1');
   if (duration !== null && stopReason !== 'duration')
     result.failures.push('ended before duration: ' + stopReason);
   result.pass = result.failures.length === 0;
@@ -566,6 +569,8 @@ async function run({
   let ending = null;
   let stopped = false;
   let stopReason = null;
+  /** Set when a lag 0 decoder wait timed out (staggered-live.js lagFallback). */
+  let lagFallback = null;
   const rows = [];
   const children = [];
   let inputBridge = {exchanges: 0, bridgeMs: 0};
@@ -635,6 +640,16 @@ async function run({
     helper?.kill('SIGINT');
     reader?.close();
     soundSource?.halt();
+  }
+
+  /**
+   * Ends a lag 0 run whose decoder wait timed out; lag 1 is the advice.
+   * @param {{at: number, waitedFor: number, reason: string, recommendedLag: number}} fallback
+   */
+  function endLagZero(fallback) {
+    lagFallback = fallback;
+    log({event: 'lag-fallback', lagFallback: fallback});
+    stop('lag0-timeout');
   }
 
   const onInterrupt = () => stop('SIGINT');
@@ -1212,7 +1227,8 @@ async function run({
       tail,
       socketAudioReport,
       inputPushStop,
-      stopReason
+      stopReason,
+      lagFallback
     });
     const result = score(summary, {
       expect: options.expect,
@@ -1248,6 +1264,7 @@ async function run({
   } catch (error) {
     failed = error;
     await logFailure(error);
+    if (error.lagFallback && !stopping) endLagZero(error.lagFallback);
     if (!stopping) throw error;
   } finally {
     await shutdown();

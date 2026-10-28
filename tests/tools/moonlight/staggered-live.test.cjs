@@ -1110,6 +1110,36 @@ test('lag 1 times out, bounded, on a decoder that holds an output back', async (
   await live.stop();
 });
 
+test('a lag 0 acquire that times out ends the run with lag 1 as the advice', async () => {
+  const device = simulatedDevice();
+  const live = await liveOn(device, noPause, null, {lag: 0, timeoutMs: 100});
+  const failure = await stream(device, live, 6).then(
+    () => null,
+    error => error
+  );
+  assert.match(failure?.message ?? '', /checked status timed out/);
+  assert.equal(failure.timedOut, true);
+  assert.equal(failure.pending, 'acquire');
+  const fallback = {at: 2, waitedFor: 1, reason: 'acquire 1 timed out at lag 0', recommendedLag: 1};
+  assert.deepEqual(failure.lagFallback, fallback);
+  assert.deepEqual(live.counts.lagFallback, fallback);
+  assert.equal(failure.expected.acquire.sequence, 1, 'the timeout logs what it expected');
+  await live.stop();
+});
+
+test('a timeout at lag 1 carries no lag fallback', async () => {
+  const device = simulatedDevice();
+  const live = await liveOn(device, noPause, null, {lag: 1, timeoutMs: 100});
+  const failure = await stream(device, live, 6).then(
+    () => null,
+    error => error
+  );
+  assert.equal(failure?.pending, 'acquire');
+  assert.equal(failure.lagFallback, undefined);
+  assert.equal(live.counts.lagFallback, undefined);
+  await live.stop();
+});
+
 test('the output lag is 0, 1 or 2', () => {
   assert.throws(() => create({createWorker, lag: 3}), /output lag is 0, 1 or 2/);
 });

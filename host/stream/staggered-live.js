@@ -244,10 +244,12 @@ async function waitChecked(
   let nextInputRetry = 0;
   let pending = null;
   let torn = null;
+  let last = null;
   while (Date.now() < until) {
     await beforeRead();
     const startedAt = now();
     const snapshot = await worker.readStatus();
+    last = snapshot;
     onRead(snapshot, startedAt);
     try {
       checked.check(snapshot, expected);
@@ -266,7 +268,12 @@ async function waitChecked(
     }
     await pause(POLL_MS, pending);
   }
-  throw Error('Staggered checked status timed out');
+  // `pending` names what the gate still waited for when the deadline hit.
+  const timeout = Object.assign(Error('Staggered checked status timed out'), {
+    pending,
+    timedOut: true
+  });
+  throw last ? failedCheck(timeout, expected, last) : timeout;
 }
 
 /**
@@ -452,6 +459,8 @@ function create({
   /** The publication before `published`, logged with a failed check. */
   let previous = null;
   let pending = null;
+  /** The lag 0 gate that timed out on the decoder, see lagFallback(). */
+  let fallback = null;
   let skips = 0;
   let stale = 0;
   let cooling = 0;
@@ -648,6 +657,27 @@ function create({
   }
 
   /**
+   * Ends a lag 0 run on a decoder timeout instead of switching lag: a lag 1 gate after a lag 0
+   * one would merge two fetch signals in the one auto-clear event.
+   * @param {any} error
+   * @param {number} sequence
+   * @param {Expected} expected
+   */
+  function lagFallback(error, sequence, expected) {
+    const waitedFor = expected[error.pending]?.sequence;
+    if (lag === 0 && error.timedOut && ['acquire', 'fetch'].includes(error.pending)) {
+      fallback = {
+        at: sequence,
+        waitedFor,
+        reason: `${error.pending} ${waitedFor} timed out at lag 0`,
+        recommendedLag: 1
+      };
+      error.lagFallback = {...fallback};
+    }
+    return error;
+  }
+
+  /**
    * A failed check also logs the publication before the last one: a current on it points at a
    * stale status read rather than a wrong surface.
    * @param {any} error
@@ -806,7 +836,7 @@ function create({
     const watch = acquireWatch(expected);
     const link = receiveWatch(expected);
     let snapshot = await waitChecked(worker, expected, rereadsFor(expected, watch, link)).catch(
-      withPrevious
+      error => withPrevious(lagFallback(error, sequence, expected))
     );
     countRead(expected, snapshot, onDecoded, onPresented, onSkipped);
     enter('staggered-input');
@@ -1032,7 +1062,8 @@ function create({
         exchanges: timing.counts,
         ...(receive && {receive: {...receiveSlept, fixedMs: receive.fixedMs}}),
         acquireWaits: acquireWaits.counts,
-        fetchWaits: fetchWaits.counts
+        fetchWaits: fetchWaits.counts,
+        ...(fallback && {lagFallback: {...fallback}})
       };
     },
 
