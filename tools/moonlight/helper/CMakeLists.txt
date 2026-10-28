@@ -23,22 +23,15 @@ target_include_directories(gamestream PUBLIC
 target_link_libraries(gamestream PUBLIC moonlight-common-c PkgConfig::DEPS)
 
 add_executable(hbmoonlight
-  src/main.c src/session.c src/status.c src/mailbox.c src/video.c src/audio.c src/input.c)
+  src/main.c src/session.c src/video.c src/audio.c src/input.c)
 target_compile_options(hbmoonlight PRIVATE -Wall -Wextra -Wno-unused-parameter)
 target_link_libraries(hbmoonlight PRIVATE gamestream Threads::Threads)
 
-# The bench and the input test live in moonlight-dev: they build when that
-# checkout sits beside this one, or where DEV_DIR points.
+# The input test lives in moonlight-dev: it builds when that checkout sits
+# beside this one, or where DEV_DIR points.
 set(DEV_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../../../moonlight-dev/tools/moonlight/helper"
   CACHE PATH "moonlight-dev helper directory")
-set(HAVE_DEV EXISTS "${DEV_DIR}/src/bench.c")
-
-if(${HAVE_DEV})
-  add_executable(hbmoonlight-bench ${DEV_DIR}/src/bench.c src/status.c src/mailbox.c src/video.c)
-  target_include_directories(hbmoonlight-bench PRIVATE src)
-  target_compile_options(hbmoonlight-bench PRIVATE -Wall -Wextra -Wno-unused-parameter)
-  target_link_libraries(hbmoonlight-bench PRIVATE gamestream Threads::Threads)
-endif()
+set(HAVE_DEV EXISTS "${DEV_DIR}/tests/input.c")
 
 include(CTest)
 if(BUILD_TESTING AND ${HAVE_DEV})

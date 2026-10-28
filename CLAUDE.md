@@ -31,8 +31,8 @@ Package `exports` replace the relative paths later in Phase 2.
 ## Build and test
 
 - Helper: `tools/moonlight/helper/build.sh [BUILD]`; the binary is `BUILD/build/hbmoonlight`.
-  The bench, encoder check and input test build only when `moonlight-dev` sits beside this
-  checkout (`DEV_DIR` in `helper/CMakeLists.txt`).
+  The input test builds only when `moonlight-dev` sits beside this checkout (`DEV_DIR` in
+  `helper/CMakeLists.txt`).
 - Package: `node apps/moonlight/build.js`. It regenerates `hbv.glsl`, `hbv2-tables.glsl`,
   `ring.glsl`, `state.bin` and `memory.bin`; `assets.py` regenerates the text atlas and
   `text.glsl`. Never edit those by hand. It compiles through `tools/moonlight/glslang-shim.sh`

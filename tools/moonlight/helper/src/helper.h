@@ -11,15 +11,12 @@
 void status(const char *format, ...) __attribute__((format(printf, 1, 2)));
 void json_string(char *out, size_t size, const char *text);
 
-struct mailbox;
-
 struct video_options {
   int width;
   int height;
   bool software;
   bool decode;
   int raw_fd;
-  struct mailbox *frames;
 };
 
 struct video_stats {

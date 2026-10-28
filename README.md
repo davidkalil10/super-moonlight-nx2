@@ -57,8 +57,8 @@ sudo dnf install gcc gcc-c++ cmake openssl-devel libcurl-devel expat-devel libuu
 `fetch.sh` pins the GPLv3 upstreams, never copied into this repo: moonlight-embedded
 (libgamestream: pairing, app list, launch; `discover.c` left out) at `f32e415`,
 moonlight-common-c at `b126e481` (has `LiSendTouchEvent`) and its enet at `dea6fb5`. A
-published `hbmoonlight` is GPLv3. The bench, the encoder check and the input test build only
-when `moonlight-dev` sits beside this checkout (`DEV_DIR` in `helper/CMakeLists.txt`).
+published `hbmoonlight` is GPLv3. The input test builds only when `moonlight-dev` sits beside
+this checkout (`DEV_DIR` in `helper/CMakeLists.txt`).
 `host/stream/helper.js` finds the binary: `$HBMOONLIGHT`, else the default build path.
 
 ## Run
