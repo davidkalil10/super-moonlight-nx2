@@ -806,7 +806,9 @@ test('the receive wait changes nothing while the receive keeps up', async () => 
   const reread = await receiveBound(false, {receiveMs: 0});
   const waited = await receiveBound(true, {receiveMs: 0});
   assert.deepEqual(waited.requests, reread.requests);
-  assert.deepEqual(withoutPacer(waited.counts), withoutPacer(reread.counts));
+  const {receive, ...waitedCounts} = withoutPacer(waited.counts);
+  assert.equal(receive.sleeps, 0);
+  assert.deepEqual(waitedCounts, withoutPacer(reread.counts));
   assert.equal(waited.elapsed, reread.elapsed);
 });
 
