@@ -1285,15 +1285,31 @@ test('the first gate error stops the queue and reaches the producer', async () =
   assert.deepEqual(ran, [1]);
 });
 
-test('clear drops the gates that have not started', async () => {
+test('clear drops the gates that have not started and refuses further primes', async () => {
   const queue = createGateQueue({depth: 3});
   let release;
   queue.push(1, () => new Promise(resolve => (release = resolve)));
   queue.push(2, async () => assert.fail('a dropped gate ran'));
-  queue.push(3, async () => assert.fail('a dropped gate ran'));
-  assert.deepEqual(queue.clear(), [2, 3]);
+  const waiting = queue.admit(3);
+  assert.deepEqual(queue.clear(), [2]);
   assert.equal(queue.depth, 1);
+  await assert.rejects(waiting, /Gate queue stopped/);
+  await assert.rejects(queue.admit(3), /Gate queue stopped/);
   release();
+  await queue.drain();
+});
+
+test('push refuses a gate beyond the depth', async () => {
+  const queue = createGateQueue();
+  const releases = [];
+  const gate = () => new Promise(resolve => releases.push(resolve));
+  queue.push(1, gate);
+  queue.push(2, gate);
+  assert.throws(() => queue.push(3, gate), /Gate queue is full/);
+  assert.equal(queue.depth, 2);
+  releases.shift()();
+  await tick();
+  releases.shift()();
   await queue.drain();
 });
 

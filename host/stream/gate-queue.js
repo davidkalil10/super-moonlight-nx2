@@ -9,8 +9,10 @@
  * waits until the gates' status reads saw unit N-1 received, and until fewer than `depth`
  * gates are queued or running. There is one producer: it awaits admit() before each push().
  *
- * The first gate error stops the queue: later gates never run, and the next admit(), push()
- * or drain() rejects with it.
+ * The first gate error stops the queue: later gates never run, admit() and drain() reject with
+ * it and push() throws it. push() also throws when the queue is already full, since a gate
+ * pushed without admit() could merge the console's wakes. clear(), for a stop, rejects any
+ * admit() still waiting, so nothing is primed after it.
  */
 
 /**
@@ -29,13 +31,14 @@ function create({depth = 2, received = 0} = {}) {
   let active = false;
   let seen = received;
   let failure = null;
+  let stopped = null;
 
   /** @param {number} sequence */
   const ready = sequence => seen >= sequence - 1 && queue.length + (active ? 1 : 0) < depth;
 
   const wake = () => {
     waiters = waiters.filter(waiter => {
-      if (failure) waiter.reject(failure);
+      if (failure || stopped) waiter.reject(failure || stopped);
       else if (ready(waiter.sequence)) waiter.resolve();
       else return true;
       return false;
@@ -64,7 +67,7 @@ function create({depth = 2, received = 0} = {}) {
      * @returns {Promise<void>}
      */
     admit(sequence) {
-      if (failure) return Promise.reject(failure);
+      if (failure || stopped) return Promise.reject(failure || stopped);
       if (ready(sequence)) return Promise.resolve();
       return new Promise((resolve, reject) => waiters.push({sequence, resolve, reject}));
     },
@@ -75,6 +78,7 @@ function create({depth = 2, received = 0} = {}) {
      */
     push(sequence, run) {
       if (failure) throw failure;
+      if (queue.length + (active ? 1 : 0) >= depth) throw Error('Gate queue is full');
       queue.push({sequence, run});
       running ??= loop();
     },
@@ -93,11 +97,13 @@ function create({depth = 2, received = 0} = {}) {
       if (failure) throw failure;
     },
     /**
-     * Drops the gates not started yet, for a stop; returns their units.
+     * Drops the gates not started yet and rejects a waiting admit(), for a stop; returns the
+     * dropped units. The gate already running finishes, and drain() still waits for it.
      * @returns {number[]}
      */
     clear() {
       const dropped = queue.splice(0).map(gate => gate.sequence);
+      stopped = Error('Gate queue stopped');
       wake();
       return dropped;
     },
