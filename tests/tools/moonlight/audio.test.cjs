@@ -282,13 +282,17 @@ function clock() {
   return {
     now: () => time,
     sleep: ms => new Promise(resolve => waiters.push({at: time + ms, resolve})),
+    /** Moves the clock on without waking anyone, as a blocked event loop does. */
+    stall(ms) {
+      time += ms;
+    },
     async advance(ms) {
       const end = time + ms;
       for (;;) {
         waiters.sort((a, b) => a.at - b.at);
         if (!waiters.length || waiters[0].at > end) break;
         const next = waiters.shift();
-        time = next.at;
+        time = Math.max(time, next.at);
         next.resolve();
         await flush();
       }
@@ -427,6 +431,56 @@ test('a flood drops the oldest whole chunks and counts overruns', async () => {
   assert.equal(report.overruns, 2);
   assert.equal(report.droppedBytes, 2 * CHUNK);
   assert.equal(report.underruns, 0);
+});
+
+test('a 103 ms stall refills both console slots and trims its backlog on time', async () => {
+  const f = fakes();
+  const time = clock();
+  const source = await create({...f.options, now: time.now, sleep: time.sleep});
+  const input = new PassThrough();
+  source.attach(input);
+  let next = 1;
+  const produce = async count => {
+    for (let index = 0; index < count; index++) input.write(filled(next++));
+    await flush();
+  };
+  const steady = async chunks => {
+    for (let index = 0; index < chunks; index++) {
+      await time.advance(40);
+      await produce(1);
+    }
+  };
+  // The loop blocks from just before a send; the three chunks Sunshine sent meanwhile land
+  // together, ahead of the late wake-up.
+  const stall = async () => {
+    await time.advance(39);
+    time.stall(103);
+    await produce(3);
+    await time.advance(0);
+  };
+  const sent = () => f.sends.slice(3).map(chunk => chunk[0]);
+
+  await produce(1);
+  await steady(5);
+  await stall();
+  // Before: one chunk on the late wake-up, the backlog kept as 160 ms of latency.
+  assert.deepEqual(sent().slice(-2), [6, 7], 'both console slots refilled at once');
+  await time.advance(18);
+  await produce(1);
+  await steady(4);
+  await stall();
+  assert.deepEqual(sent().slice(-2), [14, 15]);
+  await time.advance(18);
+  await produce(1);
+  await steady(2);
+  // Each stall skipped one chunk (8, then 16); every other chunk goes out 40 ms after it came.
+  assert.deepEqual(sent(), [1, 2, 3, 4, 5, 6, 7, 9, 10, 11, 12, 13, 14, 15, 17, 18, 19]);
+  const report = await source.close();
+  assert.equal(report.late, 2);
+  assert.equal(report.trimmed, 2);
+  assert.equal(report.overruns, 0, 'before: the second stall overflowed the queue');
+  assert.equal(report.underruns, 0);
+  assert.equal(report.silenceChunks, 1);
 });
 
 test('stop halts pacing before the worker stops, then closes TCP', async () => {

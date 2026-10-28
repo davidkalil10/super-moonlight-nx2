@@ -7,6 +7,12 @@
  * drops its oldest whole chunks. With `tone`, a 500 Hz test tone replaces the input, which
  * is still drained.
  *
+ * A pacer that falls more than the console's two slots behind (an event-loop stall) refills
+ * both slots at once, which the console has played out by then, and skips the rest of the
+ * stall in whole chunks. The audio of the skipped chunks lands in the queue after the stall
+ * and is trimmed from its head at the next on-time sends, so the host does not keep it as
+ * latency until an overflow throws it away.
+ *
  * The rpc is wrapped so a lost bridge is noticed: the console objects are then retained
  * rather than closed, and the report asks for a SmileBASIC restart.
  */
@@ -25,6 +31,8 @@ const PRIMED = 2;
 const DEFAULT_BUFFER_BYTES = 7680;
 const HEALTH_MS = 1000;
 const MAX_PENDING_CHUNKS = 4;
+/** How long after a late send the on-time sends trim the queue back to one chunk. */
+const SETTLE_MS = 1000;
 const TONE_HZ = 500;
 const TONE_AMPLITUDE = 8000;
 /** Errors that mean the bridge itself is gone, not just one call. */
@@ -156,6 +164,7 @@ async function create({
     droppedBytes: 0,
     receivedBytes: 0,
     late: 0,
+    trimmed: 0,
     healthPolls: 0,
     lastCycle: null,
     cycleCheck: null,
@@ -217,6 +226,7 @@ async function create({
   let failed = false;
   let polling = null;
   let closing = null;
+  let settleUntil = -Infinity;
   /** @type {(value?: unknown) => void} */
   let wake = () => {};
 
@@ -237,6 +247,14 @@ async function create({
       const dropped = queue.dropOldest(Math.min(wholeChunkBytes, queue.bytes));
       stats.droppedBytes += dropped;
       stats.overruns += Math.round(dropped / bufferBytes) || 1;
+    }
+  }
+
+  /** Drops the oldest whole chunks while more than one is queued, counting them. */
+  function trimSurplus() {
+    while (queue.bytes >= 2 * bufferBytes) {
+      queue.dropOldest(bufferBytes);
+      stats.trimmed++;
     }
   }
 
@@ -280,16 +298,22 @@ async function create({
 
   const pacing = (async () => {
     let due = now();
+    let slept = false;
     while (!halted) {
       const wait = due - now();
       if (wait > 0) {
         await pause(wait);
+        slept = true;
         continue;
       }
-      if (now() - due > PRIMED * bufferMs) {
+      const behind = now() - due;
+      if (behind > PRIMED * bufferMs) {
         stats.late++;
-        due = now();
+        due += Math.floor((behind - (PRIMED - 1) * bufferMs) / bufferMs) * bufferMs;
+        settleUntil = now() + SETTLE_MS;
       }
+      if (slept && behind < bufferMs && now() <= settleUntil) trimSurplus();
+      slept = false;
       const chunk = nextChunk();
       await audio.send(chunk);
       stats.sent++;
