@@ -69,20 +69,20 @@ staggered-output-plan.js). Their status words are read by staggered-status.js.
 
 ## Flags (stream-options.js checkFlags; live.js passes them through)
 
-| flag                         | does                                                         | default           |
-| ---------------------------- | ------------------------------------------------------------ | ----------------- |
-| `--output-lag 0\|1\|2`       | fetch each output 0/1/2 gates after its decode opened        | 2                 |
-| `--skip-backlog N\|off`      | skip an output once more than N units are queued             | 2 (1 under vsync) |
-| `--skip-rule backlog\|vsync` | publish by backlog, or by the predicted vsync                | backlog           |
-| `--trim-backlog-ms N`        | skip one output after 3 gates whose unit in hand is N ms old | off               |
-| `--drain-gates N`            | skip one output after N gates with units waiting at the gate | off               |
-| `--gate-on-receive`          | prime and gate N when it arrives, not on N+1 (60 Hz)         | off               |
-| `--gate-queue`               | run those gates off push(), at most one unit primed ahead    | off               |
-| `--decode-wait`              | sleep through a pending acquire (vsync rule only)            | off               |
-| `--receive-wait`             | sleep through a predicted receive (receive-wait.js)          | off               |
-| `--avoid-window B-A`         | keep status reads out of a span around the predicted vsync   | off               |
-| `--present-hz 60\|120`       | present rate                                                 | 60                |
-| `--surface-check K`          | hash every Kth fetched surface; a torn re-read fails the run | 0 (off)           |
+| flag                         | does                                                         | default                           |
+| ---------------------------- | ------------------------------------------------------------ | --------------------------------- |
+| `--output-lag 0\|1\|2`       | fetch each output 0/1/2 gates after its decode opened        | 1 at 60 Hz, else 2                |
+| `--skip-backlog N\|off`      | skip an output once more than N units are queued             | 1 at 60 Hz or under vsync, else 2 |
+| `--skip-rule backlog\|vsync` | publish by backlog, or by the predicted vsync                | backlog                           |
+| `--trim-backlog-ms N`        | skip one output after 3 gates whose unit in hand is N ms old | off                               |
+| `--drain-gates N`            | skip one output after N gates with units waiting at the gate | off                               |
+| `--gate-on-receive`          | prime and gate N when it arrives, not on N+1 (60 Hz)         | off                               |
+| `--gate-queue`               | run those gates off push(), at most one unit primed ahead    | off                               |
+| `--decode-wait`              | sleep through a pending acquire (vsync rule only)            | off                               |
+| `--receive-wait`             | sleep through a predicted receive (receive-wait.js)          | off                               |
+| `--avoid-window B-A`         | keep status reads out of a span around the predicted vsync   | off                               |
+| `--present-hz 60\|120`       | present rate                                                 | 60                                |
+| `--surface-check K`          | hash every Kth fetched surface; a torn re-read fails the run | 0 (off)                           |
 
 Refusals: lag 0 with `--gate-on-receive`, `--gate-queue` or 120 Hz; `--gate-queue` without
 `--gate-on-receive`; `--gate-on-receive` at 120 Hz.

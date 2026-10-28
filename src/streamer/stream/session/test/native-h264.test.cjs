@@ -1855,7 +1855,32 @@ test(
     assert.equal(lagZero.sps.pocType, 0);
     const plain = await started([]);
     assert.equal(plain.started, true);
-    for (const key of ['trimBacklogMs', 'gateOnReceive', 'outputLag']) assert.ok(!(key in plain));
+    assert.equal(plain.outputLag, 1);
+    for (const key of ['trimBacklogMs', 'gateOnReceive']) assert.ok(!(key in plain));
+  }
+);
+
+test(
+  '60 Hz defaults to lag 1 and skip 1, 120 Hz keeps lag 2 and skip 2',
+  {timeout: 5000},
+  async () => {
+    for (const [args, expected] of [
+      [[], {outputLag: 1, skipBacklog: 1}],
+      [['--present-hz', '120'], {outputLag: undefined, skipBacklog: 2}],
+      [['--output-lag', '2', '--skip-backlog', '2'], {outputLag: 2, skipBacklog: 2}]
+    ]) {
+      const f = await fixture({units: pairedUnits(4)});
+      f.options.createStaggered = staggeredFake(f.events);
+      f.options.args.push('--staggered', ...args);
+      await exercise(f, async () => {
+        const summary = await run(f.options);
+        assert.deepEqual(
+          {outputLag: summary.outputLag, skipBacklog: summary.skipBacklog},
+          expected,
+          args.join(' ')
+        );
+      });
+    }
   }
 );
 

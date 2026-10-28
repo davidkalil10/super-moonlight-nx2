@@ -126,7 +126,10 @@ function parseOptions(args, rpc, width, height, fps, env = process.env) {
   if (inputPush && args.includes('--no-input'))
     throw Error('--input-push cannot be combined with --no-input');
   const skipRule = cli.option(args, '--skip-rule') ?? 'backlog';
-  const skipDefault = skipRule === 'vsync' ? 1 : 2;
+  const presentHz = cli.number(args, '--present-hz', 60);
+  // D (lag 1, skip 1) won at 60 Hz; 120 Hz keeps lag 2.
+  const at60 = presentHz === 60;
+  const skipDefault = at60 || skipRule === 'vsync' ? 1 : 2;
   const flags = {
     host,
     app,
@@ -139,13 +142,13 @@ function parseOptions(args, rpc, width, height, fps, env = process.env) {
     inputHz: cli.number(args, '--input-hz', inputPush ? 120 : 60),
     inputPush,
     inputPushPad: args.includes('--input-push-pad'),
-    presentHz: cli.number(args, '--present-hz', 60),
+    presentHz,
     skipRule,
     trimBacklogMs: cli.number(args, '--trim-backlog-ms', null),
     drainGates: cli.number(args, '--drain-gates', null),
     gateOnReceive: args.includes('--gate-on-receive'),
     gateQueue: args.includes('--gate-queue'),
-    outputLag: cli.number(args, '--output-lag', null),
+    outputLag: cli.number(args, '--output-lag', at60 ? 1 : null),
     surfaceCheck: cli.number(args, '--surface-check', 0),
     decodeWait: args.includes('--decode-wait'),
     receiveWait: args.includes('--receive-wait'),
