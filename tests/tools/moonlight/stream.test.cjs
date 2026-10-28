@@ -1156,7 +1156,7 @@ test('a keyframe after many late receives sleeps at most one period', async () =
 });
 
 test('the link binds after a pending gate and the next first read waits', async () => {
-  const {wait, clock, sleeps} = await predictor({baseMs: 1, startPerKbMs: 0.5});
+  const {wait, clock, sleeps} = await predictor({baseMs: 1, perKbMs: 0.5});
   wait.sent(1, 8 * KB, 0);
   assert.equal(await wait.beforeRead(1, false, 1), false, 'unbound: the first read goes out');
   wait.observe(1, 1, false, {pendingSeen: false});

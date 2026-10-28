@@ -158,7 +158,9 @@ async function simulate({
       await clock.sleep(busyUntil - clock.now());
     };
     const decode = decodeWait ? decodeWaits.create({now: clock.now, sleep: clock.sleep}) : null;
-    const receive = receiveWait ? receiveWaits.create({now: clock.now, sleep: clock.sleep}) : null;
+    const receive = receiveWait
+      ? receiveWaits.create({maxSleepMs: timing.vsyncMs, now: clock.now, sleep: clock.sleep})
+      : null;
     receive?.sent(0, UNIT_BYTES, sent);
     const applied = [];
     const apply = (frame, fetchDone, skip) => {
