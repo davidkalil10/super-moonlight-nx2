@@ -6,6 +6,8 @@
  * sockaddr_in plus a random token into a console allocation. The console then opens a
  * socket, connects and sends the token with finite native jobs. The host accepts only the
  * connection that presents the token, so a stray client cannot take the data path.
+ * receive() hands on what the console sends after the token, for workers that push data the
+ * other way.
  *
  * While a connect or send job may still be running on the console, the socket is not
  * closed on failure: the job could otherwise touch a reused descriptor.
@@ -104,7 +106,8 @@ function authenticate(candidate, token, accept) {
   const received = Buffer.alloc(token.length);
   let used = 0;
   candidate.on('error', () => {});
-  candidate.on('data', chunk => {
+  /** @param {Buffer} chunk */
+  const onToken = chunk => {
     if (used + chunk.length > token.length) {
       candidate.destroy();
       return;
@@ -117,8 +120,10 @@ function authenticate(candidate, token, accept) {
       candidate.destroy();
       return;
     }
+    candidate.removeListener('data', onToken);
     accept(candidate);
-  });
+  };
+  candidate.on('data', onToken);
 }
 
 /**
@@ -210,7 +215,10 @@ async function connectWithToken({run, errno, addresses, fd, base, tokenBytes}) {
  * @property {number} port The host listening port.
  * @property {number} maxAccessUnit
  * @property {number} recvFunction Address of nn::socket::Recv, for console workers.
+ * @property {number} sendFunction Address of nn::socket::Send, for console workers.
  * @property {(bytes: Buffer) => Promise<void>} send Writes to the authenticated connection.
+ * @property {(listener: (bytes: Buffer) => void) => void} receive Hands every chunk the
+ *   console sends after the token to listener.
  * @property {() => void} abort Drops the host side without touching the console.
  * @property {() => Promise<void>} close
  */
@@ -302,6 +310,7 @@ async function create({
       port: listeningPort,
       maxAccessUnit: MAX_ACCESS_UNIT,
       recvFunction: addresses.recv,
+      sendFunction: addresses.send,
       async send(bytes) {
         if (closed || !socket || socket.destroyed) throw Error('Native TCP data socket is closed');
         if (!Buffer.isBuffer(bytes) || bytes.length < 1 || bytes.length > MAX_ACCESS_UNIT)
@@ -309,6 +318,11 @@ async function create({
         await new Promise((resolve, reject) => {
           socket.write(bytes, error => (error ? reject(error) : resolve()));
         });
+      },
+      receive(listener) {
+        if (closed || !socket || socket.destroyed) throw Error('Native TCP data socket is closed');
+        socket.on('data', listener);
+        socket.resume();
       },
       abort() {
         socket?.destroy();
