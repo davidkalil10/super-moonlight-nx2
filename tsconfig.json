@@ -37,6 +37,7 @@
     "src/streamer/audio/audio-socket-worker.js",
     "src/streamer/audio/audio-stream.js",
     "src/streamer/stream/worker/staggered-input-plan.js",
+    "src/streamer/stream/scheduler/staggered-checks.js",
     "src/streamer/stream/scheduler/staggered-live.js",
     "src/streamer/stream/worker/staggered-output-plan.js",
     "src/streamer/stream/worker/staggered-status.js",

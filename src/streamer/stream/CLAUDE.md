@@ -169,8 +169,8 @@ gate-queue.js contract (one producer, which awaits `admit()` before each `push()
 - `clear()`, for a stop, rejects any waiting `admit()` and makes `push()` throw, so nothing is
   primed or queued after it.
 
-Acquire waits (`createAcquireWaits`), split by unit size. Reads are about 5 ms apart, so a wait
-is only known between two bounds; fetch waits are booked the same way.
+Acquire waits (`createAcquireWaits`, staggered-checks.js), split by unit size. Reads are about
+5 ms apart, so a wait is only known between two bounds; fetch waits are booked the same way.
 
 | bin             | counts                                                                     |
 | --------------- | -------------------------------------------------------------------------- |

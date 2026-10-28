@@ -178,7 +178,7 @@ function checkApplied(snapshot, ack) {
     throw gateError('Previous publication is not applied', true, 'applied');
   }
 
-  // Invariant 14 (staggered-live.js tearOf retries it).
+  // Invariant 14 (staggered-checks.js tearOf retries it).
   if (snapshot.current !== ack.index)
     throw gateError('Applied publication surface differs', true, 'torn');
 }
