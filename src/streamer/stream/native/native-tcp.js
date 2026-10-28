@@ -14,7 +14,7 @@
  */
 import net from 'node:net';
 import crypto from 'node:crypto';
-import {allocate} from '../../../../../hbl-platform/sdk/native/allocate.js';
+import {allocate, release} from '../../../../../hbl-platform/sdk/native/allocate.js';
 import {verify} from '../../../../../hbl-platform/sdk/native/symbols.js';
 import {createFinite} from '../../../../../hbl-platform/sdk/native/jobs.js';
 import definitions from '../../../../../hbl-platform/sdk/native/socket-functions.json' with {type: 'json'};
@@ -346,6 +346,8 @@ async function create({
         closeServer();
         if (signed(await call('socketClose', [fd])) < 0)
           throw Error('Console TCP close failed (errno ' + (await errno()) + ')');
+        // A job still running may read the address block, so it goes only with the worker.
+        if (await worker.close()) await release(rpc, base);
       }
     };
   } catch (error) {

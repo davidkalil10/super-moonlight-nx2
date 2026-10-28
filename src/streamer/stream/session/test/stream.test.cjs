@@ -37,6 +37,7 @@ const MODULE_BASE = 0x50000000;
 const HEAP = 0x60000000;
 const COPY = 0x5872f0;
 const ALLOCATE = 5732112;
+const FREE = 5616480;
 const QUERY = 0x158314;
 const READ = 0x586fb0;
 
@@ -761,6 +762,10 @@ test('native TCP setup verifies the socket API and authenticates a separate conn
         const count = Math.min(8, remaining);
         candidate.emit('data', addressBlock.subarray(address - BASE, address - BASE + count));
         return [BigInt(count)];
+      },
+      async close() {
+        calls.push('worker-close');
+        return true;
       }
     })
   });
@@ -789,6 +794,85 @@ test('native TCP rejects invalid endpoints before opening a listener', () => {
   assert.deepEqual(endpoint('192.0.2.10', 0), {host: '192.0.2.10', port: 0});
   assert.throws(() => endpoint('not-an-address', 0), /IPv4/);
   assert.throws(() => endpoint('192.0.2.10', 65536), /port/);
+});
+
+/** A connected transport whose close() records the socket close, worker close and frees. */
+async function openTcp({socketClose = 0n, workerClosed = true} = {}) {
+  const calls = [];
+  const server = new EventEmitter();
+  server.listen = (port, host, callback) => callback();
+  server.address = () => ({port: 42123});
+  server.close = () => {};
+  const candidate = new EventEmitter();
+  candidate.pause = () => {};
+  candidate.setNoDelay = () => {};
+  candidate.destroy = () => {};
+  let block;
+  const rpc = {
+    a: {sdk: SDK},
+    output: 0x20000000,
+    request: async () => ({verified: true}),
+    async call(offset, args) {
+      if (offset === FREE) calls.push('free ' + args[0].toString(16));
+      const output = Buffer.alloc(8);
+      output.writeBigUInt64LE(BigInt(BASE));
+      return {result: 0n, output};
+    },
+    async callAddress(address) {
+      if (address === SDK + socketDefinitions.socketInitialized.offset) return {result: 1n};
+      if (address === SDK + socketDefinitions.socket.offset) return {result: 7n};
+      if (address === SDK + socketDefinitions.socketClose.offset) {
+        calls.push('socket-close');
+        return {result: socketClose};
+      }
+      return {result: 0n};
+    },
+    async write(address, bytes) {
+      block = Buffer.from(bytes);
+    }
+  };
+  const transport = await createTcp({
+    rpc,
+    host: '192.0.2.10',
+    createServer: () => server,
+    makeToken: () => Buffer.alloc(16, 0x5a),
+    createWorker: async () => ({
+      async run([call]) {
+        if (call.function === SDK + socketDefinitions.connect.offset) {
+          server.emit('connection', candidate);
+          return [0n];
+        }
+        const [, address, remaining] = call.args;
+        candidate.emit('data', block.subarray(address - BASE, address - BASE + remaining));
+        return [BigInt(remaining)];
+      },
+      async close() {
+        calls.push('worker-close');
+        return workerClosed;
+      }
+    })
+  });
+  return {transport, calls};
+}
+
+test('native TCP close frees the address block after the socket and the worker', async () => {
+  const {transport, calls} = await openTcp();
+  assert.deepEqual(calls, []);
+  await transport.close();
+  await transport.close();
+  assert.deepEqual(calls, ['socket-close', 'worker-close', 'free ' + BASE.toString(16)]);
+});
+
+test('native TCP close keeps the address block while the worker is retained', async () => {
+  const {transport, calls} = await openTcp({workerClosed: false});
+  await transport.close();
+  assert.deepEqual(calls, ['socket-close', 'worker-close']);
+});
+
+test('native TCP close frees nothing when the console socket does not close', async () => {
+  const {transport, calls} = await openTcp({socketClose: 0xffffffffn});
+  await assert.rejects(transport.close(), /Console TCP close failed/);
+  assert.deepEqual(calls, ['socket-close']);
 });
 
 function failingTcp(run) {
