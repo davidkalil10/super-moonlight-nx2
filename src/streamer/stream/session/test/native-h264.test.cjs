@@ -663,6 +663,7 @@ test(
           halt() {
             f.events.push({type: 'socket-audio-halt'});
           },
+          report: () => ({late: 0, overruns: 0, underruns: 0}),
           async close() {
             f.events.push({type: 'socket-audio-close'});
             return {sent: 4, underruns: 0, overruns: 0, droppedBytes: 0, error: null};

@@ -431,6 +431,12 @@ function helperArgs(host, app, {width, height, fps, bitrate, audio}) {
 }
 
 /**
+ * The socket audio counters so far, so a long run shows when they moved.
+ * @param {{late: number, overruns: number, underruns: number}} report
+ */
+const audioCounters = ({late, overruns, underruns}) => ({late, overruns, underruns});
+
+/**
  * The run's summary record, before scoring; the steady rows are those after the warmup.
  * @param {ReturnType<typeof parseOptions>} options
  */
@@ -949,6 +955,7 @@ async function run({
       link: linkQuality(inputBridge),
       ...(inputPush ? {inputPush: pushCounts} : {}),
       ...(surfaceCheck ? {surfaces: staggeredLive?.takeSurfaces() ?? []} : {}),
+      ...(soundSource ? {audio: audioCounters(soundSource.report())} : {}),
       at: stage + '/' + (decoder?.step ?? '-'),
       ms: Object.fromEntries(Object.entries(stageMs).map(([k, v]) => [k, Math.round(v)]))
     };
