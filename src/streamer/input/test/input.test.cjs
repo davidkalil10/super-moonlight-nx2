@@ -10,14 +10,7 @@ const {
   NEUTRAL,
   NPAD
 } = require('../controller.js');
-const {
-  TOUCH_BYTES,
-  parseTouch,
-  createTracker,
-  step,
-  flush,
-  touchLine
-} = require('../touch.js');
+const {TOUCH_BYTES, parseTouch, createTracker, step, flush, touchLine} = require('../touch.js');
 const {frame, keysWatch} = require('../input-feeder.js');
 const padAge = require('../pad-age.js');
 

@@ -18,7 +18,10 @@
  */
 import {allocate} from '../../../../../hbl-platform/sdk/native/allocate.js';
 import {verify} from '../../../../../hbl-platform/sdk/native/symbols.js';
-import {CONTEXT_X30, CONTEXT_SP} from '../../../../../hbl-platform/smilebasic/engine/shared/frames.js';
+import {
+  CONTEXT_X30,
+  CONTEXT_SP
+} from '../../../../../hbl-platform/smilebasic/engine/shared/frames.js';
 import {
   CODE,
   verifyCode,

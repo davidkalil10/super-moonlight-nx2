@@ -2,7 +2,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const definitions = require('../../../console-api/movie-functions.json');
-const registration = require('../../../console-api/movie-event-functions.json').registerClientEvents;
+const registration =
+  require('../../../console-api/movie-event-functions.json').registerClientEvents;
 const {CODE} = require('../../../../../../hbl-platform/sdk/native/thread.js');
 const ring = require('../../../shared/ring.js');
 const status = require('../../worker/staggered-status.js');

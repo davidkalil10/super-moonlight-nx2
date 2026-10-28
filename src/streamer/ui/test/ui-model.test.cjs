@@ -4,13 +4,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const {EventEmitter} = require('node:events');
-const {
-  ITEM,
-  APPS_PER_PAGE,
-  HOSTS_PER_PAGE,
-  makeModel,
-  reduce
-} = require('../model.js');
+const {ITEM, APPS_PER_PAGE, HOSTS_PER_PAGE, makeModel, reduce} = require('../model.js');
 const settings = require('../settings.js');
 const {createService} = require('../service.js');
 const {
@@ -22,15 +16,7 @@ const {
   MEMORY_BYTES
 } = require('../../shared/ring.js');
 const {createPages} = require('../pages.js');
-const {
-  SERVICE,
-  TYPE,
-  query,
-  parsePacket,
-  candidates,
-  merge,
-  discover
-} = require('../discover.js');
+const {SERVICE, TYPE, query, parsePacket, candidates, merge, discover} = require('../discover.js');
 const hosts = require('../hosts.js');
 const {tempFile, uiPage} = require('../../test-support/test-helpers.cjs');
 

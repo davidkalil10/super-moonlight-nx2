@@ -12,8 +12,9 @@ const definitions = require('../../../console-api/movie-functions.json');
 const {create: createDecoder} = require('../../native/native-decoder.js');
 const code =
   require('../../../../../../hbl-platform/smilebasic/engine/switch2/app/thread-code.json').functions;
-const TICK = require('../../../../../../hbl-platform/smilebasic/engine/switch2/app/timing-code.json')
-  .functions.tick.offset;
+const TICK =
+  require('../../../../../../hbl-platform/smilebasic/engine/switch2/app/timing-code.json').functions
+    .tick.offset;
 const ring = require('../../../shared/ring.js');
 const {create} = require('../../native/native-sink.js');
 const socketDefinitions = require('../../../../../../hbl-platform/sdk/native/socket-functions.json');
@@ -838,9 +839,7 @@ test('a worker lost mid-job leaves the console socket open', async () => {
 
 // helper.js
 test('the helper default is the main-c33e545 build and $HBMOONLIGHT wins', () => {
-  const url = require('node:url').pathToFileURL(
-    path.join(__dirname, '../protocol-binary.js')
-  );
+  const url = require('node:url').pathToFileURL(path.join(__dirname, '../protocol-binary.js'));
   const script = `import {HELPER} from '${url.href}'; console.log(HELPER);`;
   const helper = env =>
     spawnSync(process.execPath, ['--input-type=module', '-e', script], {
@@ -1235,7 +1234,14 @@ test('expectations parse strictly and score the summary', () => {
 });
 
 test('a dropped frame or an IDR after the warmup fails unless the limits allow it', () => {
-  const rows = [row(30, {dropped: 9, idr: 2}), row(30), row(30), row(30), row(6, {dropped: 24, idr: 4}), row(30)];
+  const rows = [
+    row(30, {dropped: 9, idr: 2}),
+    row(30),
+    row(30),
+    row(30),
+    row(6, {dropped: 24, idr: 4}),
+    row(30)
+  ];
   const summary = summarize(rows);
   assert.deepEqual(verdict(summary, {}), {pass: false, failures: ['dropped 0', 'idr 0']});
   assert.deepEqual(verdict(summary, {dropped: 24, idr: 4}), {pass: true, failures: []});

@@ -4,15 +4,12 @@ const assert = require('node:assert/strict');
 const {ADDRESS} = require('../../../../../../hbl-platform/tests/recording-rpc.cjs');
 const {gateConsole, BLOCK} = require('../../../../../../hbl-platform/tests/gate-worker-mock.cjs');
 const definitions = require('../../../console-api/movie-functions.json');
-const registration = require('../../../console-api/movie-event-functions.json').registerClientEvents;
+const registration =
+  require('../../../console-api/movie-event-functions.json').registerClientEvents;
 const ring = require('../../../shared/ring.js');
 const inputPlan = require('../staggered-input-plan.js');
 const outputPlan = require('../staggered-output-plan.js');
-const {
-  create: createWorker,
-  ACQUIRE_ACK,
-  create
-} = require('../staggered-worker.js');
+const {create: createWorker, ACQUIRE_ACK, create} = require('../staggered-worker.js');
 const {create: createLive} = require('../../scheduler/staggered-live.js');
 const input = require('../staggered-input-plan.js');
 const status = require('../staggered-status.js');

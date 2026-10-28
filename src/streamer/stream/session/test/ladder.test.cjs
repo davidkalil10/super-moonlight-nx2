@@ -48,8 +48,10 @@ test('R1 takes its ms from the passing R0 attempt', () => {
   const failed = {rung: 'R0', pass: false, gateAgeMs: 40};
   const passed = {rung: 'R0-retry', pass: true, gateAgeMs: 22};
   assert.equal(ladder.controlFor([failed, passed]), passed);
-  assert.equal(ladder.controlFor([failed, {rung: 'R0-retry', pass: false, gateAgeMs: 30}]).gateAgeMs,
-    30);
+  assert.equal(
+    ladder.controlFor([failed, {rung: 'R0-retry', pass: false, gateAgeMs: 30}]).gateAgeMs,
+    30
+  );
   assert.equal(ladder.controlFor([{rung: 'R0', pass: false, gateAgeMs: null}]), null);
 });
 
@@ -59,12 +61,16 @@ test('a flag is on only where native-h264.js records it', () => {
   assert.equal(ladder.flagOn([], {started, summary}), '-');
   assert.equal(ladder.flagOn(['--trim-backlog-ms', '30'], {started, summary}), 'on');
   assert.equal(ladder.flagOn(['--trim-backlog-ms', '31'], {started, summary}), 'FLAG-NOT-ON');
-  assert.equal(ladder.flagOn(['--gate-on-receive', '--receive-wait'], {started, summary}),
-    'FLAG-NOT-ON');
+  assert.equal(
+    ladder.flagOn(['--gate-on-receive', '--receive-wait'], {started, summary}),
+    'FLAG-NOT-ON'
+  );
   assert.equal(ladder.flagOn(['--skip-backlog', '1'], {started, summary}), 'on');
   assert.equal(ladder.flagOn(['--input-hz', '120'], {started: null, summary}), 'NO-START');
-  assert.equal(ladder.flagOn(['--input-hz', '120'], {started, summary: {inputHz: 60}}),
-    'FLAG-NOT-ON');
+  assert.equal(
+    ladder.flagOn(['--input-hz', '120'], {started, summary: {inputHz: 60}}),
+    'FLAG-NOT-ON'
+  );
 });
 
 test('the estimate fed the T304 typical column comes to its ~175 ms', () => {
@@ -88,10 +94,21 @@ test('a counts pipe error marks the rung INPUT-COUNTS-INCOMPLETE', t => {
     {event: 'staggered-worker', started: true, outputLag: 1},
     {event: 'input-counts-error', message: 'EPIPE'}
   ];
-  fs.writeFileSync(path.join(directory, 'events.jsonl'),
-    events.map(event => JSON.stringify(event)).join('\n') + '\n');
-  fs.writeFileSync(path.join(directory, 'summary.json'), JSON.stringify(
-    {fps: 60, dropped: 0, idr: 0, pass: true, failures: [], au: {waitMs: 20, gateAgeMs: 18}}));
+  fs.writeFileSync(
+    path.join(directory, 'events.jsonl'),
+    events.map(event => JSON.stringify(event)).join('\n') + '\n'
+  );
+  fs.writeFileSync(
+    path.join(directory, 'summary.json'),
+    JSON.stringify({
+      fps: 60,
+      dropped: 0,
+      idr: 0,
+      pass: true,
+      failures: [],
+      au: {waitMs: 20, gateAgeMs: 18}
+    })
+  );
   const records = ladder.readRecords(directory);
   const row = ladder.row('R4b', ['--output-lag', '1'], records);
   assert.equal(row.flagOn, 'on');

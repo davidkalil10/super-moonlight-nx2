@@ -8,7 +8,6 @@ kept verbatim in the team notes (moonlight docs archive).
 
 ## Layout
 
-
 ## Sibling checkouts
 
 Code outside this repo is required by relative path from sibling checkouts (README.md names
