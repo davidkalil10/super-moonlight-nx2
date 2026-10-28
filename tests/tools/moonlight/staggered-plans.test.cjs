@@ -70,6 +70,12 @@ function device() {
   const log = [];
   const queue = [];
   const decoder = {event: null, ready: [], maxReady: 0, coalesced: 0, released: []};
+  // Lag 0 probes: `holding` keeps submitted outputs back from the event, `slowFetch` blocks
+  // GetOutputBuffer of one unit for some worker steps, and `fetched` and `published` log what
+  // each fetch copied and each publication the shader applied.
+  Object.assign(decoder, {holding: false, held: [], slowFetch: null, fetched: [], published: []});
+  const outputs = new Map();
+  let setData = null;
   let aborted = false;
   let nextInput = 0;
   let nextOutput = 0;
@@ -88,6 +94,10 @@ function device() {
     },
     'movie.sendInput'([, , , , pts]) {
       log.push(`submit ${sequenceOf(pts)}`);
+      if (decoder.holding) {
+        decoder.held.push({index: nextOutput++ % 4, pts});
+        return 0;
+      }
       const event = fake.events.get(decoder.event);
       if (event.set) decoder.coalesced++;
       decoder.ready.push({index: nextOutput++ % 4, pts});
@@ -103,12 +113,22 @@ function device() {
       const output = decoder.ready.shift();
       if (!output) return NO_OUTPUT;
       log.push(`acquire ${sequenceOf(output.pts)}`);
+      outputs.set(output.index, sequenceOf(output.pts));
       memory.write32(index, output.index);
       memory.write64(pts, output.pts);
       return 0;
     },
-    'movie.bufferSetData': () => 0,
-    'movie.getOutput': () => 0,
+    'movie.bufferSetData'([, address]) {
+      setData = Number(address);
+      return 0;
+    },
+    'movie.getOutput'([, index]) {
+      const unit = outputs.get(Number(index));
+      const slow = decoder.slowFetch;
+      if (slow?.unit === unit && slow.steps-- > 0) return BLOCK;
+      decoder.fetched.push({unit, address: setData});
+      return 0;
+    },
     'movie.releaseOutput'([, index]) {
       decoder.released.push(index);
       return 0;
@@ -120,6 +140,10 @@ function device() {
     onRead(_address, _length, memory) {
       const sequence = memory.read(mapped + ring.CONTROL.nativeSequence, 4).readUInt32LE();
       if (!sequence) return;
+      if (decoder.published.at(-1)?.publication !== sequence) {
+        const unit = memory.read(mapped + status.STATUS.fetch + 24, 4).readUInt32LE();
+        decoder.published.push({publication: sequence, unit});
+      }
       memory.write32(
         mapped + ring.CONTROL.current,
         memory.read(mapped + ring.CONTROL.nativeIndex, 4).readUInt32LE()
@@ -191,6 +215,12 @@ function device() {
     format: ADDRESS.heap - 0x4000,
     transport,
     publication: {mapped, color: 1}
+  };
+  /** Hands the held outputs to the decoder event, as a late decode would. */
+  decoder.deliver = () => {
+    decoder.ready.push(...decoder.held.splice(0));
+    decoder.maxReady = Math.max(decoder.maxReady, decoder.ready.length);
+    fake.signal(decoder.event);
   };
   return {
     fake,
@@ -473,6 +503,156 @@ test('lag 1 and gate on receive together keep the barrier', {timeout: 2000}, asy
   await live.stop();
   await d.worker.finalize();
   assert.equal(live.retained, false);
+});
+
+// Counts the signals of the output worker's fetch gate, and those that found it still set and
+// so merged with one not yet waited for. The worker frames and the host both set it here.
+function watchFetchGate(d) {
+  const control = d.worker.outputEvent - 0x400;
+  const state = d.fake.events.get(control + outputPlan.CONTROL.fetchGate);
+  assert.ok(state, 'fetch gate initialized');
+  const watched = {signals: 0, merged: 0, state};
+  let set = state.set;
+  Object.defineProperty(state, 'set', {
+    get: () => set,
+    set(value) {
+      if (value) {
+        watched.signals++;
+        if (set) watched.merged++;
+      }
+      set = value;
+    }
+  });
+  return watched;
+}
+
+// At lag 0 every publication is the fetch of its own unit, into the surface reserved for it.
+function ownUnits(d, units) {
+  assert.deepEqual(
+    d.decoder.fetched,
+    Array.from({length: units}, (_, index) => ({
+      unit: index + 1,
+      address: ADDRESS.mapped + ring.frameOffset((index + 1) % 3)
+    }))
+  );
+  assert.ok(d.decoder.published.length > 0);
+  for (const {publication, unit} of d.decoder.published) assert.equal(unit, publication);
+}
+
+test('at lag 0 each output is fetched by its own gate', {timeout: 2000}, async () => {
+  const d = device();
+  const live = await d.live(undefined, {lag: 0});
+  const fetchGate = watchFetchGate(d);
+  assert.deepEqual(await fetchedAtPush(d, live, 9), [0, 1, 2, 3, 4, 5, 6, 7, 8]);
+  assert.deepEqual(await live.finish({sink: d.sink}), {drained: 0});
+  const counts = withoutPacer(live.counts);
+  assert.equal(counts.decoded, 9);
+  assert.equal(counts.presented, 9);
+  assert.equal(counts.tailDrained, 0);
+  // One signal per gate, plus the stop wake of the output worker.
+  assert.deepEqual(fetchGate, {signals: 10, merged: 0, state: fetchGate.state});
+  ownUnits(d, 9);
+  await live.stop();
+  await d.worker.finalize();
+  assert.equal(live.retained, false);
+});
+
+test('200 units at lag 0 never stall or merge a fetch signal', {timeout: 60000}, async () => {
+  const d = device();
+  const live = await d.live(undefined, {lag: 0});
+  const fetchGate = watchFetchGate(d);
+  await stream(live, d.sink, 200);
+  assert.deepEqual(await live.finish({sink: d.sink}), {drained: 0});
+  const counts = withoutPacer(live.counts);
+  assert.equal(counts.submitted, 200);
+  assert.equal(counts.decoded, 200);
+  assert.equal(counts.presented, 200);
+  assert.equal(counts.skipped, 0);
+  assert.equal(fetchGate.signals, 201);
+  assert.equal(fetchGate.merged, 0);
+  assert.equal(d.decoder.coalesced, 0);
+  assert.equal(d.decoder.maxReady, 1);
+  submittedAfterAcquired(d.log);
+  assert.deepEqual(
+    d.log.filter(entry => entry.startsWith('acquire')),
+    Array.from({length: 200}, (_, index) => `acquire ${index + 1}`)
+  );
+  ownUnits(d, 200);
+  assert.equal(d.decoder.published.at(-1).unit, 200);
+  await live.stop();
+  await d.worker.finalize();
+  assert.equal(live.retained, false);
+});
+
+test('a slow lag 0 fetch of N-1 makes gate N reread rather than signal again', async () => {
+  const d = device();
+  const live = await d.live(undefined, {lag: 0});
+  const fetchGate = watchFetchGate(d);
+  // What each gate write found: no fetch signal left for the worker, and the fetch it checked.
+  const atGate = [];
+  const onGate = () => atGate.push({set: fetchGate.state.set, fetched: d.decoder.fetched.length});
+  d.decoder.slowFetch = {unit: 4, steps: 6};
+  for (let sequence = 1; sequence <= 9; sequence++)
+    await live.push(unitAt(sequence), {sink: d.sink, onGate});
+  assert.deepEqual(
+    atGate,
+    Array.from({length: 8}, (_, index) => ({set: false, fetched: index}))
+  );
+  assert.equal(d.decoder.slowFetch.steps, -1);
+  assert.deepEqual(await live.finish({sink: d.sink}), {drained: 0});
+  const counts = withoutPacer(live.counts);
+  assert.ok(counts.waiting.fetch >= 1, 'gate 5 reread the pending fetch');
+  assert.equal(live.counts.fetchWaits.small.count, 1);
+  assert.equal(counts.decoded, 9);
+  assert.equal(counts.presented, 9);
+  assert.equal(fetchGate.merged, 0);
+  ownUnits(d, 9);
+  await live.stop();
+  await d.worker.finalize();
+});
+
+test('a lag 0 stop in each phase ends both workers at their exit', async () => {
+  // Units pushed, then what the stop finds: submits, the last fetch, the fetch gate latched.
+  const phases = {
+    'before the first gate': {units: 1, submitted: 0, fetched: 0, latched: false},
+    'before the gate': {units: 5, submitted: 4, fetched: 4, latched: false},
+    'after the signal': {units: 6, submitted: 5, fetched: 4, latched: true},
+    'during the fetch': {units: 6, submitted: 5, fetched: 5, latched: false}
+  };
+  for (const [phase, want] of Object.entries(phases)) {
+    const d = device();
+    const live = await d.live(undefined, {lag: 0});
+    const fetchGate = watchFetchGate(d);
+    for (let sequence = 1; sequence <= want.units; sequence++) {
+      if (sequence === 6) {
+        for (let poll = 0; poll < 5; poll++) await d.worker.readStatus();
+        if (phase === 'after the signal') d.decoder.holding = true;
+        else d.decoder.slowFetch = {unit: 5, steps: 40};
+      }
+      await live.push(unitAt(sequence), {sink: d.sink});
+    }
+    for (let poll = 0; poll < 5; poll++) await d.worker.readStatus();
+    const parked = await d.worker.readStatus();
+    assert.equal(parked.input.sequence, want.submitted, phase);
+    assert.equal(fetchGate.state.set, want.latched, phase);
+    if (phase === 'during the fetch') {
+      assert.equal(parked.acquire.sequence, 5, phase);
+      assert.equal(parked.fetch.sequence, 4, phase);
+      assert.ok(d.decoder.slowFetch.steps > 0, phase);
+    } else assert.equal(parked.fetch.sequence, want.fetched, phase);
+    assert.equal(fetchGate.merged, 0, phase);
+    const submitted = d.log.filter(entry => entry.startsWith('submit'));
+    await live.stop();
+    assert.equal(live.retained, false, phase);
+    assert.deepEqual(d.worker.diagnostics.joined, [true, true], phase);
+    assert.deepEqual(
+      d.log.filter(entry => entry.startsWith('submit')),
+      submitted,
+      phase
+    );
+    assert.equal((await d.worker.readStatus()).fetch.sequence, want.fetched, phase);
+    await d.worker.finalize();
+  }
 });
 
 // staggered-input-plan.js

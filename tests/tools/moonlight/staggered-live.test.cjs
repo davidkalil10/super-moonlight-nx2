@@ -1104,8 +1104,30 @@ test('lag 1 times out, bounded, on a decoder that holds an output back', async (
   await live.stop();
 });
 
-test('the output lag is 1 or 2', () => {
-  assert.throws(() => create({createWorker, lag: 3}), /output lag is 1 or 2/);
+test('the output lag is 0, 1 or 2', () => {
+  assert.throws(() => create({createWorker, lag: 3}), /output lag is 0, 1 or 2/);
+});
+
+test('at lag 0 a gate expects the output before it both acquired and fetched', () => {
+  const units = new Map(
+    [1, 2, 3, 4, 5].map(sequence => [sequence, {length: 10, pts: BigInt(sequence)}])
+  );
+  const destinations = new Map([[4, {sequence: 7, index: 1}]]);
+  assert.deepEqual(expectedFor(5, units, destinations, 0), {
+    receive: {sequence: 5, bytes: 10},
+    input: {sequence: 4},
+    acquire: {sequence: 4, pts: 4n},
+    fetch: {sequence: 4},
+    ack: {sequence: 7, index: 1}
+  });
+  assert.deepEqual(expectedFor(1, units, new Map(), 0), {receive: {sequence: 1, bytes: 10}});
+  assert.deepEqual(Object.keys(expectedFor(5, units, new Map([[4, {skip: true}]]), 0)), [
+    'receive',
+    'input',
+    'acquire',
+    'fetch'
+  ]);
+  assert.throws(() => expectedFor(5, units, new Map(), 0), /Missing prior/);
 });
 
 test('at lag 1 a gate expects the output one behind and the fetch before it', () => {
@@ -1239,7 +1261,70 @@ test('at lag 1 the write fetches the output one behind decode', () => {
   assert.equal(bytes.readUInt32LE(outputSlot0), 5);
   assert.equal(bytes.readBigUInt64LE(outputSlot0 + 8), 0n);
   assert.throws(() => gate.gateWrite({snapshot: snapshot(), ...request, lag: 1}), /one AU behind/);
-  assert.throws(() => gate.gateWrite({snapshot: snapshot(), ...request, lag: 3}), /lag is 1 or 2/);
+  assert.throws(
+    () => gate.gateWrite({snapshot: snapshot(), ...request, lag: 3}),
+    /lag is 0, 1 or 2/
+  );
+});
+
+test('at lag 0 the write fetches its own unit behind a fetched N-1', () => {
+  const lagZero = snapshot();
+  lagZero.acquire = {...lagZero.acquire, sequence: 4, pts: 4n};
+  lagZero.fetch = {...lagZero.fetch, sequence: 4};
+  const expected = {...request.expected, acquire: {sequence: 4, pts: 4n}, fetch: {sequence: 4}};
+  const {offset, bytes} = gate.gateWrite({snapshot: lagZero, ...request, expected, lag: 0});
+  const outputSlot0 = output.CONTROL.descriptors[0] - offset;
+  const outputSlot1 = output.CONTROL.descriptors[1] - offset;
+  assert.equal(bytes.readUInt32LE(outputSlot0), 5);
+  assert.equal(bytes.readBigUInt64LE(outputSlot0 + 8), BigInt(destination.address));
+  assert.equal(bytes.readUInt32LE(outputSlot1), 6);
+  assert.equal(bytes.readBigUInt64LE(outputSlot1 + 8), 0n);
+  assert.equal(bytes.readBigUInt64LE(input.DESCRIPTOR.fetchGate), BigInt(request.fetchGate));
+  assert.equal(
+    bytes.readBigUInt64LE(input.DESCRIPTOR.bytes + input.DESCRIPTOR.fetchGate),
+    BigInt(request.ignoredFetchGate)
+  );
+  const unfetched = {...expected, fetch: {sequence: 3}};
+  const behind = {...lagZero, fetch: {...lagZero.fetch, sequence: 3}};
+  assert.throws(
+    () => gate.gateWrite({snapshot: behind, ...request, expected: unfetched, lag: 0}),
+    /fetch of the acquired output/
+  );
+  assert.throws(() => gate.gateWrite({snapshot: snapshot(), ...request, lag: 0}), /one AU behind/);
+  assert.throws(
+    () => gate.gateWrite({snapshot: lagZero, ...request, expected, destination: null, lag: 0}),
+    /target/
+  );
+});
+
+test('at lag 0 the first gate already names output 1 and opens its fetch', () => {
+  const initial = snapshot();
+  initial.receive = {count: 40000n, sequence: 1};
+  const first = {
+    snapshot: initial,
+    ...request,
+    expected: {receive: {sequence: 1, bytes: 40000}},
+    current: {sequence: 1, length: 40000, pts: 1n},
+    next: {sequence: 2, length: 41000, pts: 2n},
+    lag: 0
+  };
+  const {offset, bytes} = gate.gateWrite(first);
+  assert.equal(bytes.readBigUInt64LE(input.DESCRIPTOR.fetchGate), BigInt(request.fetchGate));
+  assert.equal(
+    bytes.readBigUInt64LE(input.DESCRIPTOR.bytes + input.DESCRIPTOR.fetchGate),
+    BigInt(request.ignoredFetchGate)
+  );
+  assert.equal(bytes.readUInt32LE(output.CONTROL.descriptors[0] - offset), 1);
+  assert.equal(
+    bytes.readBigUInt64LE(output.CONTROL.descriptors[0] - offset + 8),
+    BigInt(destination.address)
+  );
+  assert.equal(bytes.readUInt32LE(output.CONTROL.descriptors[1] - offset), 2);
+  assert.throws(() => gate.gateWrite({...first, destination: null}), /target/);
+  assert.throws(
+    () => gate.gateWrite({...first, current: {sequence: 2, length: 40000, pts: 1n}}),
+    /Invalid staggered current/
+  );
 });
 
 // gate-queue.js

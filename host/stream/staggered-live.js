@@ -1,9 +1,10 @@
 /**
  * Host scheduler for the staggered live path. The input worker receives each access unit over
- * native TCP and the output worker fetches the unit two behind it (one with lag 1), so a steady
- * frame costs one checked status read and one combined gate write. Every gate goes through
- * the worker's checked writes (staggered-gate / staggered-status); call order, the odd tail
- * drain and stop are the ones the removed probe-staggered-ladder.cjs proved on the console.
+ * native TCP and the output worker fetches the unit two behind it (one with lag 1, the unit itself
+ * with lag 0, right after its decode), so a steady frame costs one checked status read and one
+ * combined gate write. Every gate goes through the worker's checked writes (staggered-gate /
+ * staggered-status); call order, the odd tail drain and stop are the ones the removed
+ * probe-staggered-ladder.cjs proved on the console.
  *
  * Skip and catch-up: with more than skipBacklog units (SKIP_BACKLOG by default) queued on the
  * host, an output is still decoded, fetched and released but copied to a free surface behind a
@@ -296,6 +297,9 @@ async function waitOutput(
  * What the gate after access unit `sequence` expects: its receive, the submit of the unit
  * before it, the output `lag` behind it (two by default) and, once there is one, the fetch of
  * the output before that and the publication that fetch presented unless it was skipped.
+ * With lag 0 the gate names output `sequence` itself, so it expects output `sequence - 1`
+ * both acquired and fetched: the fetch gate is one auto-clear event, and this keeps at most
+ * one fetch signal outstanding and the descriptor slot of `sequence - 1` read before reuse.
  * @param {number} sequence
  * @param {Map<number, {length: number, pts: bigint}>} units
  * @param {Map<number, any>} destinations Output sequence to the surface it was fetched into.
@@ -305,12 +309,13 @@ async function waitOutput(
 function expectedFor(sequence, units, destinations, lag = gates.OUTPUT_LAG) {
   const value = {receive: {sequence, bytes: units.get(sequence).length}};
   if (sequence >= 2) value.input = {sequence: sequence - 1};
-  const acquired = sequence - lag;
+  const acquired = sequence - Math.max(lag, 1);
+  const fetched = lag === 0 ? acquired : acquired - 1;
   if (acquired >= 1) value.acquire = {sequence: acquired, pts: units.get(acquired).pts};
-  if (acquired >= 2) {
-    const destination = destinations.get(acquired - 1);
+  if (fetched >= 1) {
+    const destination = destinations.get(fetched);
     if (!destination) throw Error('Missing prior staggered output destination');
-    value.fetch = {sequence: acquired - 1};
+    value.fetch = {sequence: fetched};
     if (!destination.skip) value.ack = {sequence: destination.sequence, index: destination.index};
   }
   return value;
@@ -368,7 +373,7 @@ function jsonSafe(value) {
  * @param {'backlog' | 'vsync'} [options.skipRule]
  * @param {number | null} [options.trimBacklogMs] age of the unit in hand that counts as stale
  * @param {boolean} [options.gateOnReceive] gate each unit as soon as it is sent
- * @param {1 | 2} [options.lag] fetch each output this many gates after its decode opened
+ * @param {0 | 1 | 2} [options.lag] fetch each output this many gates after its decode opened
  * @param {boolean} [options.decodeWait] sleep through a pending acquire (vsync rule only)
  * @param {boolean} [options.receiveWait] sleep through a pending receive
  * @param {{beforeMs: number, afterMs: number} | null} [options.avoid] span around a predicted
@@ -396,7 +401,8 @@ function create({
   if (trimBacklogMs !== null && vsyncRule) throw Error('The backlog trim needs the backlog rule');
   if (trimBacklogMs !== null && skipBacklog < 1)
     throw Error('The backlog trim needs a skip backlog of at least 1');
-  if (lag !== 1 && lag !== gates.OUTPUT_LAG) throw Error('The staggered output lag is 1 or 2');
+  if (lag !== 0 && lag !== 1 && lag !== gates.OUTPUT_LAG)
+    throw Error('The staggered output lag is 0, 1 or 2');
   const periodMs = 1000 / presentHz;
   let worker = null;
   let transport = null;
@@ -866,7 +872,8 @@ function create({
 
     /**
      * Gates the last unit (already gated under gateOnReceive), stops the input worker and
-     * drains the last `lag` outputs.
+     * drains the last `lag` outputs. With lag 0 the last gate already opened the last fetch,
+     * so the tail drains none and only waits for it.
      * @param {any} [hooks]
      * @returns {Promise<{drained: number}>}
      */
@@ -905,6 +912,10 @@ function create({
         },
         waits
       ).catch(withPrevious);
+      if (lag === 0) {
+        counts.decoded++;
+        onDecoded?.(1);
+      }
       counts.presented++;
       onPresented?.(1);
       await worker.stopOutput();

@@ -8,7 +8,8 @@
  * frame that submits N. Each submit therefore follows the acquisition of every earlier output,
  * so the auto-clear decoder event never carries two unacquired outputs. Releasing N-2 before
  * that wait is what lets the output worker reach N-1. The acknowledgement event starts
- * signalled for N=1, standing in for the host-decoded IDR.
+ * signalled for N=1, standing in for the host-decoded IDR. With output lag 0 the descriptor's
+ * fetch gate is N's own, from N=1 on, so the fetch of N follows its acquire.
  *
  * Stop rewrites the dispatches to the exit frame before it signals the gate and the
  * acknowledgement, so a stop wake never reaches SendInput. A descriptor the worker can reach
@@ -183,9 +184,10 @@ function putDescriptor(descriptors, slot, unit, address, index, fetchGate) {
 
 /**
  * Both input descriptors for the gate that submits `current`: its own, naming the checked
- * input slot and the fetch gate (the ignored one until an output is acquired), and the next
- * unit's, which stays on the ignored gate until its own gate write. A null `next` leaves the
- * next descriptor a zero placeholder for its prime.
+ * input slot and the fetch gate (the ignored one until an output is acquired, unless
+ * `fetchCurrent` fetches the output of `current` itself), and the next unit's, which stays on
+ * the ignored gate until its own gate write. A null `next` leaves the next descriptor a zero
+ * placeholder for its prime.
  * @param {object} options
  * @param {import('./staggered-status.js').Snapshot} options.snapshot
  * @param {import('./staggered-status.js').Expected} options.expected
@@ -194,9 +196,19 @@ function putDescriptor(descriptors, slot, unit, address, index, fetchGate) {
  * @param {AccessUnit} options.next
  * @param {number} options.fetchGate
  * @param {number} options.ignoredFetchGate
+ * @param {boolean} [options.fetchCurrent]
  * @returns {Buffer}
  */
-function gateWrite({snapshot, expected, input, current, next, fetchGate, ignoredFetchGate}) {
+function gateWrite({
+  snapshot,
+  expected,
+  input,
+  current,
+  next,
+  fetchGate,
+  ignoredFetchGate,
+  fetchCurrent = false
+}) {
   const checked = status.check(snapshot, expected);
   if (isUncheckedSlot(input, expected, checked.inputIndex))
     throw Error('Staggered input slot is not the checked decoder buffer');
@@ -210,7 +222,7 @@ function gateWrite({snapshot, expected, input, current, next, fetchGate, ignored
     current,
     input.address,
     input.index,
-    expected.acquire ? fetchGate : ignoredFetchGate
+    fetchCurrent || expected.acquire ? fetchGate : ignoredFetchGate
   );
   putDescriptor(
     descriptors,
