@@ -636,6 +636,12 @@ test('old shaders and noncoherent allocations are rejected before any frame is w
   assert.deepEqual(f.writes, []);
 });
 
+test('an unsupported color space is rejected before any frame is written', async () => {
+  const f = sinkFixture();
+  await assert.rejects(create(f.rpc, f.storage, {color: 3}), /Unsupported native video color/);
+  assert.deepEqual(f.writes, []);
+});
+
 test('worker destinations avoid the displayed and unpublished surfaces', async () => {
   const f = sinkFixture();
   const sink = await create(f.rpc, f.storage);
@@ -773,6 +779,52 @@ test('native TCP rejects invalid endpoints before opening a listener', () => {
   assert.deepEqual(endpoint('192.0.2.10', 0), {host: '192.0.2.10', port: 0});
   assert.throws(() => endpoint('not-an-address', 0), /IPv4/);
   assert.throws(() => endpoint('192.0.2.10', 65536), /port/);
+});
+
+function failingTcp(run) {
+  const closes = [];
+  const server = new EventEmitter();
+  server.listen = (port, host, callback) => callback();
+  server.address = () => ({port: 42123});
+  server.close = () => {};
+  const rpc = {
+    a: {sdk: SDK},
+    output: 0x20000000,
+    request: async () => ({verified: true}),
+    async call() {
+      const output = Buffer.alloc(8);
+      output.writeBigUInt64LE(BigInt(BASE));
+      return {result: 0n, output};
+    },
+    async callAddress(address, args) {
+      if (address === SDK + socketDefinitions.socketInitialized.offset) return {result: 1n};
+      if (address === SDK + socketDefinitions.socket.offset) return {result: 7n};
+      if (address === SDK + socketDefinitions.socketClose.offset) closes.push(args[0]);
+      return {result: 0n};
+    },
+    async write() {}
+  };
+  const transport = createTcp({
+    rpc,
+    host: '192.0.2.10',
+    createServer: () => server,
+    createWorker: async () => ({run})
+  });
+  return {transport, closes};
+}
+
+test('a refused console connect closes the console socket', async () => {
+  const {transport, closes} = failingTcp(async () => [-1n]);
+  await assert.rejects(transport, /Console TCP connect failed/);
+  assert.deepEqual(closes, [7]);
+});
+
+test('a worker lost mid-job leaves the console socket open', async () => {
+  const {transport, closes} = failingTcp(async () => {
+    throw Error('worker lost');
+  });
+  await assert.rejects(transport, /worker lost/);
+  assert.deepEqual(closes, []);
 });
 
 // publication-metadata.js

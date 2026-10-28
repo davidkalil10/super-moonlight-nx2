@@ -143,6 +143,14 @@ test('torn slot is rejected', () => {
   assert.strictEqual(new hbv2.Decoder().step([words]), 0);
 });
 
+test('apply refuses a slot that is not newer than the applied one', () => {
+  const words = keyframe(hbv2.toFrame(scene(64, 48), 64, 48), 1),
+    decoder = new hbv2.Decoder();
+  decoder.apply(words);
+  assert.throws(() => decoder.apply(words), /Slot is not eligible/);
+  assert.strictEqual(decoder.applied, 1);
+});
+
 test('P frames apply in order and only on their reference', () => {
   const first = hbv2.toFrame(scene(320, 176), 320, 176),
     moved = hbv2.toFrame(scene(320, 176, 3), 320, 176),
