@@ -9,9 +9,10 @@
  *
  * A pacer that falls more than the console's two slots behind (an event-loop stall) refills
  * both slots at once, which the console has played out by then, and skips the rest of the
- * stall in whole chunks. The audio of the skipped chunks lands in the queue after the stall
- * and is trimmed from its head at the next on-time sends, so the host does not keep it as
- * latency until an overflow throws it away.
+ * stall in whole chunks. The audio of the skipped chunks lands in the queue after the stall;
+ * that many chunks, no more, are trimmed from its head at the next on-time sends that find a
+ * spare chunk queued, so the host does not keep them as latency until an overflow throws
+ * them away. Trimmed chunks count in droppedBytes as well.
  *
  * The rpc is wrapped so a lost bridge is noticed: the console objects are then retained
  * rather than closed, and the report asks for a SmileBASIC restart.
@@ -31,7 +32,7 @@ const PRIMED = 2;
 const DEFAULT_BUFFER_BYTES = 7680;
 const HEALTH_MS = 1000;
 const MAX_PENDING_CHUNKS = 4;
-/** How long after a late send the on-time sends trim the queue back to one chunk. */
+/** How long after a late send the chunks it skipped may still be trimmed. */
 const SETTLE_MS = 1000;
 const TONE_HZ = 500;
 const TONE_AMPLITUDE = 8000;
@@ -227,6 +228,7 @@ async function create({
   let polling = null;
   let closing = null;
   let settleUntil = -Infinity;
+  let owed = 0;
   /** @type {(value?: unknown) => void} */
   let wake = () => {};
 
@@ -250,11 +252,12 @@ async function create({
     }
   }
 
-  /** Drops the oldest whole chunks while more than one is queued, counting them. */
+  /** Drops up to the owed chunks from the head while more than one is queued, counting them. */
   function trimSurplus() {
-    while (queue.bytes >= 2 * bufferBytes) {
-      queue.dropOldest(bufferBytes);
+    while (owed && queue.bytes >= 2 * bufferBytes) {
+      stats.droppedBytes += queue.dropOldest(bufferBytes);
       stats.trimmed++;
+      owed--;
     }
   }
 
@@ -309,10 +312,13 @@ async function create({
       const behind = now() - due;
       if (behind > PRIMED * bufferMs) {
         stats.late++;
-        due += Math.floor((behind - (PRIMED - 1) * bufferMs) / bufferMs) * bufferMs;
+        const skipped = Math.floor((behind - (PRIMED - 1) * bufferMs) / bufferMs);
+        due += skipped * bufferMs;
+        owed += skipped;
         settleUntil = now() + SETTLE_MS;
       }
-      if (slept && behind < bufferMs && now() <= settleUntil) trimSurplus();
+      if (now() > settleUntil) owed = 0;
+      if (slept && behind < bufferMs) trimSurplus();
       slept = false;
       const chunk = nextChunk();
       await audio.send(chunk);

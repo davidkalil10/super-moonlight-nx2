@@ -302,7 +302,13 @@ function clock() {
   };
 }
 
-function fakes({stopError = null, retainOnStop = false, startError = null, sendError = null} = {}) {
+function fakes({
+  stopError = null,
+  retainOnStop = false,
+  startError = null,
+  sendError = null,
+  onSend = null
+} = {}) {
   const events = [];
   const sends = [];
   let retained = false;
@@ -320,6 +326,7 @@ function fakes({stopError = null, retainOnStop = false, startError = null, sendE
     async send(bytes) {
       if (sendError) throw sendError;
       sends.push(bytes);
+      if (onSend) await onSend();
     },
     async health() {
       events.push('health');
@@ -433,8 +440,13 @@ test('a flood drops the oldest whole chunks and counts overruns', async () => {
   assert.equal(report.underruns, 0);
 });
 
-test('a 103 ms stall refills both console slots and trims its backlog on time', async () => {
-  const f = fakes();
+/**
+ * Two 103 ms stalls, with the three chunks Sunshine sent during each landing either before
+ * the late wake-up or, as node's timers-before-poll order has it, during its first send.
+ */
+async function stalls(order) {
+  let landing = null;
+  const f = fakes({onSend: () => landing?.()});
   const time = clock();
   const source = await create({...f.options, now: time.now, sleep: time.sleep});
   const input = new PassThrough();
@@ -450,12 +462,15 @@ test('a 103 ms stall refills both console slots and trims its backlog on time', 
       await produce(1);
     }
   };
-  // The loop blocks from just before a send; the three chunks Sunshine sent meanwhile land
-  // together, ahead of the late wake-up.
   const stall = async () => {
     await time.advance(39);
     time.stall(103);
-    await produce(3);
+    if (order === 'poll first') await produce(3);
+    else
+      landing = () => {
+        landing = null;
+        return produce(3);
+      };
     await time.advance(0);
   };
   const sent = () => f.sends.slice(3).map(chunk => chunk[0]);
@@ -479,8 +494,51 @@ test('a 103 ms stall refills both console slots and trims its backlog on time', 
   assert.equal(report.late, 2);
   assert.equal(report.trimmed, 2);
   assert.equal(report.overruns, 0, 'before: the second stall overflowed the queue');
+  assert.equal(report.droppedBytes, 2 * CHUNK, 'trimmed chunks count as dropped');
   assert.equal(report.underruns, 0);
   assert.equal(report.silenceChunks, 1);
+}
+
+test('a 103 ms stall refills both console slots and trims its backlog on time', () =>
+  stalls('poll first'));
+
+test('the stall backlog may land during the first refill send', () => stalls('timer first'));
+
+test('after a stall only the skipped chunks are trimmed, not a later clump', async () => {
+  const f = fakes();
+  const time = clock();
+  const source = await create({...f.options, now: time.now, sleep: time.sleep});
+  const input = new PassThrough();
+  source.attach(input);
+  let next = 1;
+  const produce = async count => {
+    for (let index = 0; index < count; index++) input.write(filled(next++));
+    await flush();
+  };
+  await produce(1);
+  for (let index = 0; index < 5; index++) {
+    await time.advance(40);
+    await produce(1);
+  }
+  await time.advance(39);
+  time.stall(103);
+  await produce(3);
+  await time.advance(18);
+  await produce(1);
+  // An early clump inside the settle window: two chunks at once, then none.
+  await time.advance(40);
+  await produce(2);
+  await time.advance(40);
+  await time.advance(40);
+  await produce(1);
+  await time.advance(40);
+  assert.deepEqual(
+    f.sends.slice(3).map(chunk => chunk[0]),
+    [1, 2, 3, 4, 5, 6, 7, 9, 10, 11, 12, 13]
+  );
+  const report = await source.close();
+  assert.equal(report.trimmed, 1, 'one chunk owed, one trimmed');
+  assert.equal(report.underruns, 0, 'the clump covers the tick after it');
 });
 
 test('stop halts pacing before the worker stops, then closes TCP', async () => {
