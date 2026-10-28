@@ -982,7 +982,12 @@ test('a failed receive or unchecked input slot cannot produce a decode gate writ
     /checked decoder buffer/
   );
   assert.throws(
-    () => input.gateWrite({snapshot: checkedSnapshot(), ...gate, input: {...gate.input, capacity: 30000}}),
+    () =>
+      input.gateWrite({
+        snapshot: checkedSnapshot(),
+        ...gate,
+        input: {...gate.input, capacity: 30000}
+      }),
     /checked decoder buffer/
   );
 });
@@ -1070,14 +1075,8 @@ test('staggered output frames acquire before a host fetch gate and publish once'
       outAddresses.control + output.CONTROL.acquireDispatch[slot]
     );
   }
-  assert.equal(
-    built.calls.acquire[0][1].args[1],
-    outAddresses.mapped + status.STATUS.acquire + 8
-  );
-  assert.equal(
-    built.calls.fetch[0][4].args[0],
-    outAddresses.mapped + ring.CONTROL.nativeSequence
-  );
+  assert.equal(built.calls.acquire[0][1].args[1], outAddresses.mapped + status.STATUS.acquire + 8);
+  assert.equal(built.calls.fetch[0][4].args[0], outAddresses.mapped + ring.CONTROL.nativeSequence);
 });
 
 test('the output worker acknowledges an acquisition only after stamping it', () => {
@@ -1183,7 +1182,9 @@ function fixture() {
   const read = (address, length) => {
     const region = regionAt(address);
     assert.ok(region, `unmapped read at ${address.toString(16)}`);
-    return Buffer.from(region.bytes.subarray(address - region.base, address - region.base + length));
+    return Buffer.from(
+      region.bytes.subarray(address - region.base, address - region.base + length)
+    );
   };
   const write = (address, bytes) => {
     const region = regionAt(address);
@@ -1211,10 +1212,8 @@ function fixture() {
         write(args[0], thread);
       }
       if (address === sdk + CODE.tryWait.offset) return {result: 1n};
-      if (address === moduleBase + definitions.bufferData.offset)
-        return {result: 0x7900000000n};
-      if (address === moduleBase + definitions.bufferCapacity.offset)
-        return {result: 0x100000n};
+      if (address === moduleBase + definitions.bufferData.offset) return {result: 0x7900000000n};
+      if (address === moduleBase + definitions.bufferCapacity.offset) return {result: 0x100000n};
       if (address === moduleBase + definitions.acquireInput.offset) {
         const index = Buffer.alloc(4);
         index.writeInt32LE(1);
@@ -1242,12 +1241,14 @@ function fixture() {
   };
   const module = {
     base: moduleBase,
-    symbols: [{
-      name: registration.symbol,
-      section: '.text',
-      offset: registration.offset,
-      size: registration.size
-    }]
+    symbols: [
+      {
+        name: registration.symbol,
+        section: '.text',
+        offset: registration.offset,
+        size: registration.size
+      }
+    ]
   };
   const functions = Object.fromEntries(
     Object.entries(definitions).map(([name, definition]) => [name, moduleBase + definition.offset])
@@ -1287,15 +1288,9 @@ test('staggered workers install two alternating frames and can stop both waits',
   const control = 0x62000000;
   const inputExit = 0x60000000 + 0x3f0000;
   const outputExit = 0x61000000 + 0x3f0000;
-  for (const offset of [
-    ...inputPlan.CONTROL.sendDispatch,
-    ...inputPlan.CONTROL.receiveDispatch
-  ])
+  for (const offset of [...inputPlan.CONTROL.sendDispatch, ...inputPlan.CONTROL.receiveDispatch])
     assert.equal(f.read(control + offset, 8).readBigUInt64LE(), BigInt(inputExit));
-  for (const offset of [
-    ...outputPlan.CONTROL.fetchDispatch,
-    ...outputPlan.CONTROL.acquireDispatch
-  ])
+  for (const offset of [...outputPlan.CONTROL.fetchDispatch, ...outputPlan.CONTROL.acquireDispatch])
     assert.equal(f.read(control + offset, 8).readBigUInt64LE(), BigInt(outputExit));
 });
 
@@ -1308,16 +1303,16 @@ test('short receive keeps staggered decode and fetch gates closed', async () => 
   f.write(f.publication.mapped + status.STATUS.receive, receive);
   const before = f.calls.filter(call => call.combined).length;
   await assert.rejects(
-    () => worker.openGates({
-      snapshot: status.parse(f.read(
-        f.publication.mapped + status.READ_START,
-        status.READ_END - status.READ_START
-      )),
-      expected: {receive: {sequence: 1, bytes: 40000}},
-      inputSlot: {index: 0, address: 0x7900000000, capacity: 0x100000},
-      current: {sequence: 1, length: 40000, pts: 1n},
-      next: {sequence: 2, length: 40000, pts: 2n}
-    }),
+    () =>
+      worker.openGates({
+        snapshot: status.parse(
+          f.read(f.publication.mapped + status.READ_START, status.READ_END - status.READ_START)
+        ),
+        expected: {receive: {sequence: 1, bytes: 40000}},
+        inputSlot: {index: 0, address: 0x7900000000, capacity: 0x100000},
+        current: {sequence: 1, length: 40000, pts: 1n},
+        next: {sequence: 2, length: 40000, pts: 2n}
+      }),
     /Short receive/
   );
   assert.equal(f.calls.filter(call => call.combined).length, before);
@@ -1380,10 +1375,7 @@ test('input buffers are cached and a missing slot can be reacquired exceptionall
   pending.writeUInt32LE(1, 12);
   f.write(f.publication.mapped + status.STATUS.input + 8, pending);
   assert.deepEqual(await worker.retryInputSlot(1), {status: 0, index: 1});
-  assert.equal(
-    f.read(f.publication.mapped + status.STATUS.input + 8, 8).readBigUInt64LE(),
-    0n
-  );
+  assert.equal(f.read(f.publication.mapped + status.STATUS.input + 8, 8).readBigUInt64LE(), 0n);
   await worker.stop();
   await worker.finalize();
   assert.equal(f.calls.filter(call => call.address === f.functions.bufferDestroy).length, 1);
@@ -1408,12 +1400,13 @@ test('tail output drain opens only a checked fetch gate', async () => {
   const wrong = await worker.readStatus();
   wrong.acquire.pts = 2n;
   await assert.rejects(
-    () => worker.drainOutput({
-      snapshot: wrong,
-      expected: {acquire: {sequence: 1, pts: 1n}},
-      destination,
-      frame
-    }),
+    () =>
+      worker.drainOutput({
+        snapshot: wrong,
+        expected: {acquire: {sequence: 1, pts: 1n}},
+        destination,
+        frame
+      }),
     /Decoder output PTS 2 is not the expected 1/
   );
   assert.equal(f.calls.filter(call => call.combined).length, 0);
