@@ -548,6 +548,8 @@ async function run({
   const bridge = instrument(rpc, () => stage);
   rpc = watchBridge(bridge.rpc);
   let stopping = false;
+  /** The error that ended the stream, already logged by logFailure(). */
+  let failed = null;
   let pairing = false;
   let decoder = null;
   let transport = null;
@@ -1025,7 +1027,7 @@ async function run({
         retained = true;
       }
       const dropped = staggeredLive.gateError;
-      if (dropped)
+      if (dropped && dropped !== failed)
         log({
           event: 'staggered-gate-dropped-error',
           error: dropped.message,
@@ -1244,6 +1246,7 @@ async function run({
     await openStream();
     await streamUnits();
   } catch (error) {
+    failed = error;
     await logFailure(error);
     if (!stopping) throw error;
   } finally {

@@ -1367,6 +1367,34 @@ test('a gate error that stop dropped is logged', {timeout: 5000}, async () => {
   });
 });
 
+test('a gate error that already failed a push is logged once', {timeout: 5000}, async () => {
+  const f = await fixture({units: pairedUnits(4)});
+  const fake = staggeredFake(f.events)();
+  const failure = Error('Staggered receive is pending');
+  f.options.createStaggered = () =>
+    Object.create(fake, {
+      push: {
+        async value() {
+          throw failure;
+        }
+      },
+      gateError: {get: () => failure}
+    });
+  f.options.args.push('--staggered', '--gate-on-receive', '--gate-queue');
+  await exercise(f, async () => {
+    await assert.rejects(run(f.options), /Staggered receive is pending/);
+    const events = (await fs.readFile(path.join(f.directory, 'logs', 'events.jsonl'), 'utf8'))
+      .trim()
+      .split('\n')
+      .map(JSON.parse);
+    const logged = events.filter(entry => entry.message === failure.message || entry.error);
+    assert.deepEqual(
+      logged.map(entry => entry.event),
+      ['native-error']
+    );
+  });
+});
+
 test('--output-lag reaches the staggered scheduler and takes 0 to 2', {timeout: 5000}, async () => {
   for (const lag of [1, 0]) {
     const f = await fixture({units: pairedUnits(4)});
