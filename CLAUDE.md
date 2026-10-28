@@ -96,8 +96,8 @@ that remains open.
 
 ## Tests and simulators
 
-- The tests import the runtime one level up, inside this repo, so a worktree always tests its
-  own code; only the other repos must sit beside the checkout.
+- Each test imports the code beside its `test/` directory, so a worktree always tests its own
+  code; only the other repos must sit beside the checkout.
 - `tsconfig.json` lists the hbl-moonlight modules that went through the readability
   rewrite; add each component as it lands. TypeScript is a dev dependency only, hbl-moonlight
   itself has no build step.
@@ -105,11 +105,10 @@ that remains open.
   file) boundary. Helpers shared inside this tree live in
   `src/streamer/test-support/test-helpers.cjs`; the only cross-repo ones are the hbl-platform/tests
   mocks.
-- The root `.gitignore` has no `node_modules` entry, so a symlinked `node_modules` shows as
-  untracked; add files by path in a checkout that links one.
+- The root `.gitignore` ignores `node_modules`, a symlink included.
 - No test binds the launcher port 39380; native TCP tests listen on port 0.
-- `src/streamer/stream/scheduler/test/request-budget.cjs` is the offline cost model; run it before any device
-  run. Console probes live in sibling `hbl-dev/sdk/tools`: the user runs them, one at a time,
+- `src/streamer/stream/scheduler/test/request-budget.cjs` is the offline cost model; run it
+  before any device run. Console probes live in sibling `hbl-dev/sdk/tools`: the user runs them, one at a time,
   per `DEVICE-RULES.md` in hbl-notes.
 - A test change that alters what the runtime sends needs its reason in the commit.
 

@@ -53,8 +53,8 @@ call onto `glslc -Os --target-env=vulkan1.0`. `GLSLC` picks the glslc for both t
 and the shim; a `GLSLANG` setting is ignored with a notice.
 
 `build.sh` compiles natively when the -devel packages are present, otherwise inside a rootless
-podman `quay.io/fedora/fedora:44` image (`helper/Containerfile`); rig and m5 run the same
-Fedora 44 sonames, so the container binary runs on m5 as is. Native packages:
+podman `quay.io/fedora/fedora:44` image (`src/streamer/protocol/Containerfile`); rig and m5 run
+the same Fedora 44 sonames, so the container binary runs on m5 as is. Native packages:
 
 ```sh
 sudo dnf install gcc gcc-c++ cmake openssl-devel libcurl-devel expat-devel libuuid-devel \
