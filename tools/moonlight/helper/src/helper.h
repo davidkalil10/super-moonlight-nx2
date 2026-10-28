@@ -44,6 +44,8 @@ int session_fail(const char *message, const char *detail);
 int session_connect(struct _SERVER_DATA *server, char *host);
 bool session_key_directory(char *path, size_t size);
 int session_find_app(struct _SERVER_DATA *server, const char *wanted);
+struct _APP_LIST;
+struct _APP_LIST *session_host_order(struct _APP_LIST *apps);
 void session_configure(STREAM_CONFIGURATION *config, int width, int height, int fps,
                        int bitrate, int formats);
 void session_listener(CONNECTION_LISTENER_CALLBACKS *listener);

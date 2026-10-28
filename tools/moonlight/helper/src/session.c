@@ -97,6 +97,18 @@ int session_connect(SERVER_DATA *server, char *host) {
   return 0;
 }
 
+/* libgamestream prepends each <App> it parses, so its list is the host's order reversed. */
+PAPP_LIST session_host_order(PAPP_LIST apps) {
+  PAPP_LIST ordered = NULL;
+  while (apps) {
+    PAPP_LIST next = apps->next;
+    apps->next = ordered;
+    ordered = apps;
+    apps = next;
+  }
+  return ordered;
+}
+
 int session_find_app(SERVER_DATA *server, const char *wanted) {
   PAPP_LIST apps;
   if (gs_applist(server, &apps) != GS_OK)

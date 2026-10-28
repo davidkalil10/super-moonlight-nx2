@@ -27,7 +27,7 @@ add_executable(hbmoonlight
 target_compile_options(hbmoonlight PRIVATE -Wall -Wextra -Wno-unused-parameter)
 target_link_libraries(hbmoonlight PRIVATE gamestream Threads::Threads)
 
-# The input test lives in tests/: it builds when that directory is there, or where
+# The input and app-order tests live in tests/: it builds when that directory is there, or where
 # DEV_DIR points.
 set(DEV_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../../tests/tools/moonlight/helper"
   CACHE PATH "tests helper directory")
@@ -39,4 +39,10 @@ if(BUILD_TESTING AND ${HAVE_DEV})
   target_include_directories(hbmoonlight-input-check PRIVATE src ${UPSTREAM_DIR}/moonlight-common-c/src)
   target_compile_options(hbmoonlight-input-check PRIVATE -Wall -Wextra -Wno-unused-parameter -UNDEBUG)
   add_test(NAME input-routing COMMAND hbmoonlight-input-check)
+
+  add_executable(hbmoonlight-apps-check ${DEV_DIR}/tests/apps.c src/session.c)
+  target_include_directories(hbmoonlight-apps-check PRIVATE src)
+  target_compile_options(hbmoonlight-apps-check PRIVATE -Wall -Wextra -Wno-unused-parameter -UNDEBUG)
+  target_link_libraries(hbmoonlight-apps-check PRIVATE gamestream Threads::Threads)
+  add_test(NAME app-order COMMAND hbmoonlight-apps-check)
 endif()

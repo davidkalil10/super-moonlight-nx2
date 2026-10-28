@@ -226,6 +226,7 @@ static int list(int argc, char **argv) {
   PAPP_LIST apps;
   if (gs_applist(&server, &apps) != GS_OK)
     return session_fail("cannot read the app list", gs_error);
+  apps = session_host_order(apps);
 
   char unique_id[64];
   if (covers && (mkdir(covers, 0700) != 0 && errno != EEXIST)) {
