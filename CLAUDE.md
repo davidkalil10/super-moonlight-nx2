@@ -8,6 +8,17 @@ kept verbatim in the team notes (moonlight docs archive).
 
 ## Layout
 
+```
+src/renderer/   console side: moonlight/ is the HB package, built from the HBV codecs beside it
+src/streamer/   PC side: protocol/ (hbmoonlight, C), stream/{session,scheduler,worker,native}/,
+                input/, audio/, ui/, shared/ (ring.js, feed.js), console-api/ (native ABI
+                tables), test-support/
+```
+
+The component CLAUDE.md files hold their rules, and code comments cite them:
+`src/streamer/stream/` (staggered contract, numbered invariants, flags), `src/streamer/input/`
+(pull vs push input), `src/streamer/protocol/` (helper build) and `src/renderer/` (package).
+
 ## Sibling checkouts
 
 Code outside this repo is required by relative path from sibling checkouts (README.md names
@@ -207,6 +218,12 @@ under 8.3 ms, and the bridge feeds 120 slots per second. The first is out inside
   AcquireInput; the input index is pipelined one frame ahead and `-1` never reaches SendInput).
   Live streams use the staggered input and output workers fed over native TCP; the first frame
   stays host-driven to establish the output layout.
+- `src/streamer/stream/session/protocol-binary.js` pins the default helper to
+  `moonlight-helper-main-c33e545`; bump the pin with each helper build, `$HBMOONLIGHT`
+  overrides it.
+- `--output-lag 0` (60 Hz only) is refused on a stream that can reorder and ends the run on a
+  decoder-wait timeout; `--surface-check K` re-reads sampled surfaces before reuse to catch a
+  late write. Both stay opt-in until the next slot decides them (src/streamer/stream/CLAUDE.md).
 - Validated on SmileBASIC 4.4.9 / Switch 2 23.0.1: a 128x96 test frame decoded and displayed,
   then a 1920x1080 Sunshine stream with sound. The first protocol-2 run presented 1-2 fps and
   dropped audio under the combined RPC load, which led to protocol 3 and the TCP data path.
@@ -218,6 +235,8 @@ under 8.3 ms, and the bridge feeds 120 slots per second. The first is out inside
   fingers on the real panel are not confirmed.
 - Controller and touch share one 784-byte read per frame; `--sources` (extra pad sources far
   outside that window) is deliberately unsupported in the feeder.
+- `--input-push` moves that read to a console worker that pushes records over native TCP
+  (`--input-hz` defaults to 120 there); opt-in until its A/B runs (src/streamer/input/CLAUDE.md).
 - `game-audio.js` opens AudioOut only for a package with effects, so the stream owns it while
   Moonlight runs. The `underruns` counter is a host-side proxy that misses gaps shorter than a
   poll; the honest live measure is `GetAudioOutBufferCount` reaching 0 or played-sample deltas.
