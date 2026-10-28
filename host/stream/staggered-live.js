@@ -488,6 +488,75 @@ function create({
   }
 
   /**
+   * Counts what a gate's status read covered: the decode it expected and the output its fetch
+   * check settled, presented or skipped.
+   */
+  function countRead(expected, snapshot, onDecoded, onPresented, onSkipped) {
+    if (expected.acquire) {
+      counts.decoded++;
+      onDecoded?.(1);
+    }
+    if (!vsyncRule) {
+      shown(expected, onPresented, onSkipped);
+      return;
+    }
+    if (expected.fetch && destinations.get(expected.fetch.sequence).skip) {
+      counts.skipped++;
+      onSkipped?.(1);
+    }
+    confirm(snapshot, onPresented);
+  }
+
+  /**
+   * Picks the destination of the output `lag` units behind `sequence`. Under the vsync rule a
+   * missing discard surface waits for the pending publication to apply, then picks again.
+   * @returns {Promise<{destination: any, snapshot: any}>} The status the gate opens on too.
+   */
+  async function pickDestination(sequence, snapshot, expected, watch, link, hooks) {
+    const {sink, onPresented, onTrimmed, arrivedAt, backlog} = hooks;
+    let destination = await target(sink, snapshot, backlog, arrivedAt, onTrimmed);
+    if (!destination && vsyncRule) {
+      expected.ack = {
+        sequence: pending.sequence,
+        index: pending.index,
+        openedAt: pending.openedAt
+      };
+      await pacer.beforeRead(pending.openedAt);
+      snapshot = await waitChecked(worker, expected, rereadsFor(expected, watch, link));
+      confirm(snapshot, onPresented);
+      destination = await target(sink, snapshot, backlog);
+    }
+    destinations.set(sequence - lag, destination);
+    return {destination, snapshot};
+  }
+
+  /**
+   * Opens the gate that submits `sequence`, receives `next` and fetches into `destination`,
+   * then notes when it opened for the exchange bins, the decode wait and the pacer.
+   */
+  async function openGate(
+    gateStarted,
+    {sequence, current, next, snapshot, expected, inputSlot, destination}
+  ) {
+    await worker.openGates({
+      snapshot,
+      expected,
+      inputSlot,
+      current: {sequence, length: current.length, pts: current.pts},
+      next: next && {sequence: sequence + 1, length: next.length, pts: next.pts},
+      destination,
+      published,
+      frame: layout,
+      ...(lag !== gates.OUTPUT_LAG && {lag})
+    });
+    timing.record('gate', gateStarted, now(), references(expected));
+    lastGate = now();
+    decode?.opened(sequence, lastGate);
+    if (destination) fetchOpened = lastGate;
+    if (pending && destination === published) pending.openedAt = fetchOpened;
+  }
+
+  /**
    * Checks the status after access unit `sequence`, then opens the gate that submits it,
    * receives `next` and fetches the output two behind it.
    * @param {number} sequence
@@ -519,17 +588,7 @@ function create({
     const watch = acquireWatch(expected);
     const link = receiveWatch(expected);
     let snapshot = await waitChecked(worker, expected, rereadsFor(expected, watch, link));
-    if (expected.acquire) {
-      counts.decoded++;
-      onDecoded?.(1);
-    }
-    if (vsyncRule) {
-      if (expected.fetch && destinations.get(expected.fetch.sequence).skip) {
-        counts.skipped++;
-        onSkipped?.(1);
-      }
-      confirm(snapshot, onPresented);
-    } else shown(expected, onPresented, onSkipped);
+    countRead(expected, snapshot, onDecoded, onPresented, onSkipped);
     enter('staggered-input');
     const inputSlot = await worker.inputSlot(
       sequence === 1 ? firstInput.index : snapshot.input.nextIndex
@@ -537,39 +596,28 @@ function create({
     let destination = null;
     if (sequence > lag) {
       enter('destination');
-      destination = await target(sink, snapshot, backlog, arrivedAt, onTrimmed);
-      if (!destination && vsyncRule) {
-        expected.ack = {
-          sequence: pending.sequence,
-          index: pending.index,
-          openedAt: pending.openedAt
-        };
-        await pacer.beforeRead(pending.openedAt);
-        snapshot = await waitChecked(worker, expected, rereadsFor(expected, watch, link));
-        confirm(snapshot, onPresented);
-        destination = await target(sink, snapshot, backlog);
-      }
-      destinations.set(sequence - lag, destination);
+      const hooks = {sink, onPresented, onTrimmed, arrivedAt, backlog};
+      ({destination, snapshot} = await pickDestination(
+        sequence,
+        snapshot,
+        expected,
+        watch,
+        link,
+        hooks
+      ));
     }
     enter('staggered-gate');
     const gateStarted = now();
     onGate?.(gateStarted);
-    await worker.openGates({
+    await openGate(gateStarted, {
+      sequence,
+      current,
+      next,
       snapshot,
       expected,
       inputSlot,
-      current: {sequence, length: current.length, pts: current.pts},
-      next: next && {sequence: sequence + 1, length: next.length, pts: next.pts},
-      destination,
-      published,
-      frame: layout,
-      ...(lag !== gates.OUTPUT_LAG && {lag})
+      destination
     });
-    timing.record('gate', gateStarted, now(), references(expected));
-    lastGate = now();
-    decode?.opened(sequence, lastGate);
-    if (destination) fetchOpened = lastGate;
-    if (pending && destination === published) pending.openedAt = fetchOpened;
   }
 
   /**
