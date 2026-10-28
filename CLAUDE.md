@@ -252,4 +252,10 @@ Mesa/NVDEC notes.
   change with the test suite, then a live pair before it lands: the 60 fps control
   in the reference shape (fps=59, dropped=0, idr=0), then the 120 run.
 - Format, then rename/extract, never both in one commit.
+- Code reads in blocks: blank lines between setup, validation, action and return, one concern
+  per block. Split a long boolean chain into named checks (`fdOk`, `bufferOk`) with early
+  returns, at most about three terms per group; no nested ternaries, no clever one-liners.
+  `isBoundedSetup` in `src/streamer/audio/audio-socket-worker.js` is the model.
+- Comments: the JSDoc types tsc needs, file headers of at most three lines, short why-notes.
+  Design prose goes in the component's CLAUDE.md, and comments cite it instead of restating it.
 - No live console runs unless the user is at the console (`DEVICE-RULES.md` in hbl-notes).
