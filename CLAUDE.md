@@ -103,7 +103,7 @@ that remains open.
 - No test binds the launcher port 39380; native TCP tests listen on port 0.
 - `tests/tools/moonlight/request-budget.cjs` is the offline cost model; run it before any device
   run. Console probes live in sibling `hbl-dev/sdk/tools`: the user runs them, one at a time,
-  per DEVICE-RULES.md.
+  per `DEVICE-RULES.md` in hbl-notes.
 - A test change that alters what the runtime sends needs its reason in the commit.
 
 ## Bridge budget (measured)
@@ -256,4 +256,4 @@ Mesa/NVDEC notes.
   change with the `tests/` suite, then a live pair before it lands: the 60 fps control
   in the reference shape (fps=59, dropped=0, idr=0), then the 120 run.
 - Format, then rename/extract, never both in one commit.
-- No live console runs unless the user is at the console (DEVICE-RULES.md).
+- No live console runs unless the user is at the console (`DEVICE-RULES.md` in hbl-notes).

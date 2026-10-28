@@ -225,9 +225,9 @@ test('generated tables match the checked-in shader header', () => {
   if (fs.existsSync(glsl)) assert.strictEqual(fs.readFileSync(glsl, 'utf8'), hbv2.glslTables());
 });
 
-// Round-trips the real host RPC code (native.cjs over a TCP Connection) against
-// the byte-level fake console (fake-console/shared/console.cjs) for console
-// protocols 1, 2 and 3, over a loopback socket. Proves small writes still work
+// Round-trips the real host RPC code (hbl-platform/smilebasic/engine/lib/native.js over a
+// TCP Connection) against the byte-level fake console (fake-console/shared/console.cjs) for
+// console protocols 1, 2 and 3, over a loopback socket. Proves small writes still work
 // on every protocol, a 200 KiB write lands byte-exact in one protocol-3
 // exchange, short reads work, and the data-length cap is enforced.
 const TOKEN = [1, 2, 3, 4];

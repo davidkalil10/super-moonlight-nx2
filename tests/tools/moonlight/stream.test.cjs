@@ -28,8 +28,8 @@ const {instrument, requestsFor, watchBridge} = require('../../../host/stream/bri
 // A faithful in-process console: the real NativeClient frames exchanges onto a
 // fake connection that executes the two call records against a memory model and
 // the movie::Decoder ABI, so every wire exchange is counted exactly as the
-// console loop would see it. Worker gadget calls (six.cjs) run their target
-// synchronously, matching the frame layout six.cjs writes.
+// console loop would see it. Worker gadget calls (hbl-platform/sdk/native/six.js) run their
+// target synchronously, matching the frame layout six.js writes.
 const SCRATCH = 0x20000000;
 const SDK = 0x40000000;
 const MODULE_BASE = 0x50000000;
@@ -159,10 +159,11 @@ function createConsole() {
     }
   }
 
-  // A gadget-level emulator for any worker frame six.cjs or frames.cjs build()
-  // produces. It only knows the thread-code gadget semantics (shared by both and
-  // device-proven through six.cjs), not any one layout, so it walks the chain and
-  // runs each movie/memcpy call exactly as the console thread would.
+  // A gadget-level emulator for any worker frame hbl-platform/sdk/native/six.js or
+  // hbl-platform/smilebasic/engine/shared/frames.js build() produces. It only knows the
+  // thread-code gadget semantics (shared by both and device-proven through six.js), not any
+  // one layout, so it walks the chain and runs each movie/memcpy call exactly as the console
+  // thread would.
   const LOAD_TABLE = SDK + code.loadTable.offset;
   const CALL4 = SDK + code.call4.offset;
   const SAVE = SDK + code.saveResult64.offset;
@@ -317,7 +318,8 @@ function createConsole() {
     protocol: 3
   });
 
-  // Mirror hbl-platform/smilebasic/engine/shared/rpc.cjs + bridge.cjs dispatch onto the client.
+  // Mirror hbl-platform/smilebasic/engine/shared/rpc.cjs + engine/lib/bridge.js dispatch onto the
+  // client.
   const invoke = (op, args = [], outputBytes) => {
     const padded = [...args, ...Array(Math.max(0, 4 - args.length)).fill(0)];
     if (outputBytes === undefined)

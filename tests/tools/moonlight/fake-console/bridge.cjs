@@ -10,7 +10,7 @@
 // verify-function checks the bytes against hbl-platform/smilebasic/reference/sdk-checks.json.
 //   --pad  cycles a scripted controller + touch state every 500 ms
 // Env: RATE, STALL, DECODE as in shared/rpc.cjs; HB_PIPELINE as on the launcher.
-// Usage: node tools/moonlight/fake-console/bridge.cjs DIR [--pad]
+// Usage: node tests/tools/moonlight/fake-console/bridge.cjs DIR [--pad]
 const fs = require('node:fs');
 const path = require('node:path');
 const {serve} = require('../../../../../hbl-platform/smilebasic/engine/lib/bridge.js');

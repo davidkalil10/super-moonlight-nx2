@@ -428,8 +428,8 @@ flat memory buffer; `formats.test.cjs` round-trips the real `native.js` through 
 
 ### Live test pass
 
-Only with the user at the console (DEVICE-RULES.md). From `hbl-moonlight`, against a fresh
-`./start.sh --app moonlight` session showing the HBV2 test card, in order:
+Only with the user at the console (`DEVICE-RULES.md` in hbl-notes). From `hbl-moonlight`,
+against a fresh `./start.sh --app moonlight` session showing the HBV2 test card, in order:
 
 1. Video: `node host/stream/live.js --moonlight 192.168.8.245 Desktop --codec h264 --staggered --no-input --no-audio`
    (the h264 flags are above).

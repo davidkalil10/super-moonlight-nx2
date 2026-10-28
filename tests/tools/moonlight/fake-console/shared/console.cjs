@@ -1,7 +1,7 @@
 // Byte-level model of the bootstrap RPC() loop (hbl-platform/smilebasic/bootstrap.bas), used
-// to round-trip the real host (native.cjs over a TCP Connection) offline. It is
-// not the timing sim in rpc.cjs; it parses actual request packets and mirrors
-// the loop statement for statement:
+// to round-trip the real host (hbl-platform/smilebasic/engine/lib/native.js over a TCP
+// Connection) offline. It is not the timing sim in rpc.cjs; it parses actual request packets
+// and mirrors the loop statement for statement:
 //   protocol 1   single 0x8080 recv, response always 0x8000 bytes of output
 //   protocol 2   single 0x8080 recv, honor the u16 response length at byte 80
 //   protocol 3   two-phase recv: 0x80 header (data length u32 at byte 88, cap

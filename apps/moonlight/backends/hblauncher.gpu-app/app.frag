@@ -14,7 +14,7 @@ uint uiWord(uint index){ return ring.words[index]; }
 
 float planeByte(uint offset){ return float((ring.words[offset>>2]>>((offset&3u)*8u))&255u); }
 
-// Bilinear sample of one plane of the decoded frame; mirrors hbv2.cjs toRgb.
+// Bilinear sample of one plane of the decoded frame; mirrors tools/moonlight/hbv2.js toRgb.
 float planeSample(uint base,uint stride,uvec2 size,vec2 s){
  vec2 q=s-0.5,f=q-floor(q);
  ivec2 i=ivec2(floor(q)),hi=ivec2(size)-1;
