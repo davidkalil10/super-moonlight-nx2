@@ -8,7 +8,8 @@
  *                     [--raw-h264-fd FD | --raw-hevc-fd FD] [--rgb]
  *
  * A raw fd receives every access unit in order as Annex B and turns off the
- * RGB24 output unless --rgb is also given.
+ * RGB24 output unless --rgb is also given. HBL_PROBE_PATCH=x,y,w,h turns on
+ * the loopback latency probe on the raw output (see video.c).
  *
  * Pairing and app control come from moonlight-embedded's libgamestream, the
  * stream itself from moonlight-common-c. Client keys live in
@@ -293,6 +294,9 @@ static void report_stats(bool audio) {
          video.decoded, video.written, video.dropped, video.failed,
          video.decoded ? video.decode_ms / video.decoded : 0.0,
          audio ? audio_take_dropped() : 0);
+  if (video.probed)
+    status("{\"event\":\"probe-stats\",\"probed\":%u,\"meanMs\":%.2f,\"maxMs\":%.2f}",
+           video.probed, video.probe_ms / video.probed, video.probe_max_ms);
 }
 
 static bool read_input(char *line, size_t size, size_t *used) {
@@ -385,6 +389,10 @@ static int stream(int argc, char **argv) {
                                 .software = flag(argc, argv, "--software"),
                                 .decode = raw_fd < 0 || flag(argc, argv, "--rgb"),
                                 .raw_fd = raw_fd};
+  const char *patch = getenv("HBL_PROBE_PATCH");
+  video.probing = raw_fd >= 0 && patch &&
+                  sscanf(patch, "%d,%d,%d,%d", &video.probe[0], &video.probe[1],
+                         &video.probe[2], &video.probe[3]) == 4;
   video_configure(&video);
   DECODER_RENDERER_CALLBACKS video_callbacks_set;
   video_callbacks(&video_callbacks_set);

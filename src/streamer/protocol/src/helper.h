@@ -17,6 +17,8 @@ struct video_options {
   bool software;
   bool decode;
   int raw_fd;
+  bool probing;
+  int probe[4]; /* x, y, w, h in stream pixels */
 };
 
 struct video_stats {
@@ -25,6 +27,9 @@ struct video_stats {
   unsigned dropped;
   unsigned failed;
   double decode_ms;
+  unsigned probed;
+  double probe_ms;
+  double probe_max_ms;
 };
 
 void video_configure(const struct video_options *options);

@@ -7,7 +7,13 @@
  *
  * With a raw fd, every access unit is written in order as Annex B (IDR units
  * start with SPS/PPS, plus VPS for HEVC) and announced as an "au" status line.
- * Decoding is skipped when only the raw output is wanted. */
+ * Decoding is skipped when only the raw output is wanted.
+ *
+ * The loopback probe (options.probing) decodes each raw unit again, in
+ * software and only after it was written, and logs a "probe-patch" line with
+ * the unit's receive time each time the mean luma of the probe rect crosses
+ * mid-grey. The stream has no reordering, so a unit's frame comes out of its
+ * own packet. */
 #include "helper.h"
 
 #include <errno.h>
@@ -218,18 +224,103 @@ static const char *codec_name(int format) {
 
 static uint64_t access_units;
 
+static AVCodecContext *probe_codec;
+static AVPacket *probe_packet;
+static AVFrame *probe_frame;
+static bool probe_started;
+static int probe_state;
+
+static uint64_t clock_us(clockid_t id) {
+  struct timespec time;
+  clock_gettime(id, &time);
+  return (uint64_t)time.tv_sec * 1000000 + (uint64_t)time.tv_nsec / 1000;
+}
+
+static void probe_open(enum AVCodecID id) {
+  const AVCodec *decoder = avcodec_find_decoder(id);
+  probe_codec = decoder ? avcodec_alloc_context3(decoder) : NULL;
+  if (probe_codec) {
+    probe_codec->flags |= AV_CODEC_FLAG_LOW_DELAY;
+    probe_codec->thread_type = FF_THREAD_SLICE;
+    probe_codec->thread_count = 2;
+  }
+  if (!probe_codec || avcodec_open2(probe_codec, decoder, NULL) < 0) {
+    status("{\"event\":\"error\",\"message\":\"cannot open the probe decoder\"}");
+    avcodec_free_context(&probe_codec);
+    return;
+  }
+  probe_packet = av_packet_alloc();
+  probe_frame = av_frame_alloc();
+  probe_started = false;
+  probe_state = -1;
+  status("{\"event\":\"probe-patch\",\"rect\":[%d,%d,%d,%d]}", options.probe[0],
+         options.probe[1], options.probe[2], options.probe[3]);
+}
+
+/* Mean luma of the probe rect, clipped to the frame, or -1 when nothing is left of it. */
+static int probe_luma(const AVFrame *decoded) {
+  int x0 = options.probe[0], y0 = options.probe[1];
+  int x1 = x0 + options.probe[2], y1 = y0 + options.probe[3];
+  if (x1 > decoded->width)
+    x1 = decoded->width;
+  if (y1 > decoded->height)
+    y1 = decoded->height;
+  if (x0 < 0 || y0 < 0 || x1 <= x0 || y1 <= y0)
+    return -1;
+  uint64_t sum = 0;
+  for (int y = y0; y < y1; y++) {
+    const uint8_t *row = decoded->data[0] + (size_t)y * decoded->linesize[0];
+    for (int x = x0; x < x1; x++)
+      sum += row[x];
+  }
+  return (int)(sum / ((uint64_t)(x1 - x0) * (uint64_t)(y1 - y0)));
+}
+
+static void probe(PDECODE_UNIT unit, uint64_t seq, size_t bytes, bool keyframe) {
+  if (!probe_codec || (!probe_started && !keyframe))
+    return;
+  uint64_t wall = clock_us(CLOCK_REALTIME);
+  uint64_t received =
+      unit->receiveTimeUs ? wall - (LiGetMicroseconds() - unit->receiveTimeUs) : 0;
+  probe_packet->data = packet_data;
+  probe_packet->size = (int)bytes;
+  probe_packet->flags = keyframe ? AV_PKT_FLAG_KEY : 0;
+  probe_started = avcodec_send_packet(probe_codec, probe_packet) == 0;
+  while (probe_started && avcodec_receive_frame(probe_codec, probe_frame) == 0) {
+    int luma = probe_luma(probe_frame);
+    int state = luma >= 128;
+    if (luma >= 0 && state != probe_state) {
+      uint64_t decoded = clock_us(CLOCK_REALTIME);
+      status("{\"event\":\"probe-patch\",\"seq\":%llu,\"frame\":%d,\"luma\":%d,\"state\":%d,"
+             "\"receivedUs\":%llu,\"decodedUs\":%llu,\"probeMs\":%.2f}",
+             (unsigned long long)seq, unit->frameNumber, luma, state,
+             (unsigned long long)received, (unsigned long long)decoded, (decoded - wall) / 1000.0);
+      probe_state = state;
+    }
+  }
+  double ms = (clock_us(CLOCK_REALTIME) - wall) / 1000.0;
+  pthread_mutex_lock(&lock);
+  stats.probed++;
+  stats.probe_ms += ms;
+  if (ms > stats.probe_max_ms)
+    stats.probe_max_ms = ms;
+  pthread_mutex_unlock(&lock);
+}
+
 static int setup(int format, int width, int height, int fps, void *context, int flags) {
   access_units = 0;
-  if (!options.decode) {
-    status("{\"event\":\"video\",\"codec\":\"%s\",\"decode\":false,\"stream\":\"%dx%d@%d\"}",
-           codec_name(format), width, height, fps);
-    return 0;
-  }
   enum AVCodecID id = AV_CODEC_ID_H264;
   if (format & VIDEO_FORMAT_MASK_H265)
     id = AV_CODEC_ID_HEVC;
   else if (format & VIDEO_FORMAT_MASK_AV1)
     id = AV_CODEC_ID_AV1;
+  if (options.probing)
+    probe_open(id);
+  if (!options.decode) {
+    status("{\"event\":\"video\",\"codec\":\"%s\",\"decode\":false,\"stream\":\"%dx%d@%d\"}",
+           codec_name(format), width, height, fps);
+    return 0;
+  }
 
   const AVCodec *decoder = avcodec_find_decoder(id);
   codec = decoder ? avcodec_alloc_context3(decoder) : NULL;
@@ -297,13 +388,14 @@ static int submit(PDECODE_UNIT unit) {
     }
     double written = now_ms();
     double receive_ms = (LiGetMicroseconds() - unit->receiveTimeUs) / 1000.0;
+    uint64_t seq = access_units++;
     status("{\"type\":\"au\",\"seq\":%llu,\"frame\":%d,\"bytes\":%zu,\"keyframe\":%s,"
            "\"pts\":%llu,\"receiveMs\":%.2f,\"queueMs\":%.2f,\"queued\":%d,\"unread\":%d,"
            "\"writeMs\":%.2f,\"hostMs\":%.1f,\"writtenAt\":%.3f}",
-           (unsigned long long)access_units++, unit->frameNumber, offset,
-           keyframe ? "true" : "false", (unsigned long long)unit->presentationTimeUs,
-           receive_ms, queue_ms, queued, unread, written - write_started,
-           unit->frameHostProcessingLatency / 10.0, written);
+           (unsigned long long)seq, unit->frameNumber, offset, keyframe ? "true" : "false",
+           (unsigned long long)unit->presentationTimeUs, receive_ms, queue_ms, queued, unread,
+           written - write_started, unit->frameHostProcessingLatency / 10.0, written);
+    probe(unit, seq, offset, keyframe);
   }
   if (!options.decode) {
     pthread_mutex_lock(&lock);
@@ -343,6 +435,9 @@ static void cleanup(void) {
   frames = NULL;
 
   avcodec_free_context(&codec);
+  avcodec_free_context(&probe_codec);
+  av_packet_free(&probe_packet);
+  av_frame_free(&probe_frame);
   av_buffer_unref(&device);
   av_packet_free(&packet);
   av_frame_free(&frame);
