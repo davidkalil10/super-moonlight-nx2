@@ -56,7 +56,9 @@ const STAMP = {
   setStatus: status.STATUS.fetch,
   getStatus: status.STATUS.fetch + 8,
   releaseStatus: status.STATUS.fetch + 16,
-  fetchSequence: status.STATUS.fetch + 24
+  fetchSequence: status.STATUS.fetch + 24,
+  readyTick: status.TICKS.ready,
+  publishTick: status.TICKS.publish
 };
 const SEQUENCE_BYTES = 4;
 /** The metadata the shader reads from ring.CONTROL.nativeIndex through nativeCommit. */
@@ -181,6 +183,20 @@ function buildFrame(address, sdk, calls, verified, mapped, results) {
 
 /** Native results each fetch frame stamps: SetData, GetOutputBuffer and Release status. */
 const FETCH_RESULTS = {0: STAMP.setStatus, 1: STAMP.getStatus, 2: STAMP.releaseStatus};
+/** The same with the publish tick before the sequence copy. */
+const TICKED_FETCH_RESULTS = {...FETCH_RESULTS, 4: STAMP.publishTick};
+/** The acquire frame's AcquireOutputBufferIndex status, after the ready tick when it is on. */
+const ACQUIRE_RESULTS = {1: STAMP.acquireStatus};
+const TICKED_ACQUIRE_RESULTS = {1: STAMP.readyTick, 2: STAMP.acquireStatus};
+
+/**
+ * The console tick call of the stage measurement, or none while it is off.
+ * @param {number | null} ticks
+ */
+function tickCall(ticks) {
+  if (ticks === null) return [];
+  return [{function: ticks, args: [0, 0, 0, 0]}];
+}
 
 /**
  * Address helpers for one plan: the worker's regions, control page and ring words, and the
@@ -199,21 +215,22 @@ function addressing({sdk, base, control, mapped}) {
 }
 
 /**
- * The acquire frame of `slot`: wait for an output, acquire and stamp it, acknowledge the
- * acquisition, park on the fetch gate, then jump to the fetch frame.
+ * The acquire frame of `slot`: wait for an output, take the ready tick if on, acquire and
+ * stamp it, acknowledge the acquisition, park on the fetch gate, then jump to the fetch frame.
  * @param {ReturnType<typeof addressing>} a
  * @param {number} slot
  * @param {{functions: Record<string, number>, decoder: number, event: number,
- *   acquireAck: number}} options
+ *   acquireAck: number, ticks: number | null}} options
  */
 function acquireCalls(
   {at, ringAt, copy, jump, sync},
   slot,
-  {functions, decoder, event, acquireAck}
+  {functions, decoder, event, acquireAck, ticks}
 ) {
   const descriptor = at(CONTROL.descriptors[slot]);
   return [
     {function: sync('waitEvent'), args: [event, 0, 0, 0]},
+    ...tickCall(ticks),
     {
       function: functions.acquireOutput,
       args: [
@@ -256,15 +273,20 @@ function restoreCalls({loc, copy}, slot, acquireBytes) {
 
 /**
  * The fetch frame of `slot`: copy the held output into the descriptor's surface, release it,
- * publish the metadata and then the sequence, stamp the fetch, restore, jump to the acquire
- * frame.
+ * publish the metadata, take the publish tick if on, publish the sequence, stamp the fetch,
+ * restore, jump to the acquire frame.
  * @param {ReturnType<typeof addressing>} a
  * @param {number} slot
  * @param {{functions: Record<string, number>, decoder: number, output: number,
- *   format: number}} options
+ *   format: number, ticks: number | null}} options
  * @param {ReturnType<typeof restoreCalls>} restore
  */
-function fetchCalls({at, ringAt, copy, jump}, slot, {functions, decoder, output, format}, restore) {
+function fetchCalls(
+  {at, ringAt, copy, jump},
+  slot,
+  {functions, decoder, output, format, ticks},
+  restore
+) {
   const descriptor = at(CONTROL.descriptors[slot]);
   return [
     {
@@ -293,6 +315,7 @@ function fetchCalls({at, ringAt, copy, jump}, slot, {functions, decoder, output,
         0
       ]
     },
+    ...tickCall(ticks),
     {
       function: copy,
       args: [
@@ -340,32 +363,48 @@ function sizedFrame(frame, address, calls, restore, results) {
  * @param {number} options.decoder
  * @param {number} options.output The movie Buffer GetOutputBuffer fills.
  * @param {number} options.format The MediaData GetOutputBuffer fills.
+ * @param {number | null} [options.ticks] The console tick function, under HBL_STAGE_TICKS=1.
  */
-function plan({sdk, base, control, mapped, event, acquireAck, functions, decoder, output, format}) {
+function plan({
+  sdk,
+  base,
+  control,
+  mapped,
+  event,
+  acquireAck,
+  functions,
+  decoder,
+  output,
+  format,
+  ticks = null
+}) {
   const addresses = [sdk, base, control, mapped, event, acquireAck, decoder, output, format];
   const names = ['acquireOutput', 'bufferSetData', 'getOutput', 'releaseOutput'];
   if (!addresses.every(isAddress) || !names.every(name => isAddress(functions?.[name])))
     throw Error('Invalid staggered output frame addresses');
+  if (ticks !== null && !isAddress(ticks)) throw Error('Invalid staggered output frame addresses');
 
   const a = addressing({sdk, base, control, mapped});
   const verified = new Set(Object.values(functions));
   const frame = (address, calls, results = {}) =>
     buildFrame(address, sdk, calls, verified, mapped, results);
-  const units = {functions, decoder, event, acquireAck, output, format};
+  const units = {functions, decoder, event, acquireAck, output, format, ticks};
+  const acquireResults = ticks === null ? ACQUIRE_RESULTS : TICKED_ACQUIRE_RESULTS;
+  const fetchResults = ticks === null ? FETCH_RESULTS : TICKED_FETCH_RESULTS;
 
   const acquire = [];
   const fetch = [];
   const calls = {acquire: [], fetch: []};
   for (let slot = 0; slot < SLOTS; slot++) {
     const list = acquireCalls(a, slot, units);
-    acquire.push(frame(a.loc.acquire[slot], list, {1: STAMP.acquireStatus}));
+    acquire.push(frame(a.loc.acquire[slot], list, acquireResults));
     calls.acquire.push(list);
   }
 
   for (let slot = 0; slot < SLOTS; slot++) {
     const restore = restoreCalls(a, slot, acquire[slot].frame.length);
     const list = fetchCalls(a, slot, units, restore);
-    fetch.push(sizedFrame(frame, a.loc.fetch[slot], list, restore, FETCH_RESULTS));
+    fetch.push(sizedFrame(frame, a.loc.fetch[slot], list, restore, fetchResults));
     calls.fetch.push(list);
   }
 

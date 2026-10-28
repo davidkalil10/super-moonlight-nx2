@@ -1342,6 +1342,35 @@ test(
 );
 
 test(
+  'HBL_STAGE_TICKS=1 reaches the staggered scheduler and nothing else does',
+  {timeout: 5000},
+  async () => {
+    const createdWith = async value => {
+      const f = await fixture({units: pairedUnits(4)});
+      const created = [];
+      const fake = staggeredFake(f.events);
+      f.options.createStaggered = options => {
+        created.push(options);
+        return fake();
+      };
+      f.options.args.push('--staggered');
+      const previous = process.env.HBL_STAGE_TICKS;
+      process.env.HBL_STAGE_TICKS = value;
+      try {
+        await exercise(f, () => run(f.options));
+      } finally {
+        if (previous === undefined) delete process.env.HBL_STAGE_TICKS;
+        else process.env.HBL_STAGE_TICKS = previous;
+      }
+      return created[0];
+    };
+
+    assert.equal((await createdWith('1')).stageTicks, true);
+    for (const value of ['0', 'true']) assert.ok(!('stageTicks' in (await createdWith(value))));
+  }
+);
+
+test(
   '--gate-queue reaches the staggered scheduler, needs --gate-on-receive and refuses 120 Hz',
   {timeout: 5000},
   async () => {

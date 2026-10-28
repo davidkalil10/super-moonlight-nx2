@@ -60,6 +60,7 @@ const DEFAULT_PRESENT_HZ = 60;
  * @param {number} [options.surfaceCheck] sample every this many published surfaces, 0 for off
  * @param {{beforeMs: number, afterMs: number} | null} [options.avoid] span around a predicted
  *   decode-done or receive-done no status read starts in
+ * @param {boolean} [options.stageTicks] the workers stamp console ticks (HBL_STAGE_TICKS=1)
  * @param {() => number} [options.now]
  */
 function create({
@@ -77,6 +78,7 @@ function create({
   receiveWait = false,
   surfaceCheck = 0,
   avoid = null,
+  stageTicks = false,
   now = Date.now
 } = {}) {
   if (!SKIP_RULES.includes(skipRule)) throw Error('Unknown staggered skip rule ' + skipRule);
@@ -596,7 +598,11 @@ function create({
     async factory(options) {
       if (worker || retained) throw Error('Staggered worker already exists');
       transport = options.transport;
-      worker = await createWorker(gateOnReceive ? {...options, gateOnReceive} : options);
+      worker = await createWorker({
+        ...options,
+        ...(gateOnReceive && {gateOnReceive}),
+        ...(stageTicks && {stageTicks})
+      });
       return worker;
     },
 

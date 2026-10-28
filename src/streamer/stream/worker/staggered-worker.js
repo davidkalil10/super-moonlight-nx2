@@ -18,6 +18,7 @@ import {
   join
 } from '../../../../../hbl-platform/sdk/native/thread.js';
 import SYNC from '../../../../../hbl-platform/sdk/native/os-sync-functions.json' with {type: 'json'};
+import TIMING from '../../../../../hbl-platform/smilebasic/engine/switch2/app/timing-code.json' with {type: 'json'};
 import MOVIE_EVENTS from '../../console-api/movie-event-functions.json' with {type: 'json'};
 import * as inputPlan from './staggered-input-plan.js';
 import * as outputPlan from './staggered-output-plan.js';
@@ -310,15 +311,18 @@ function mayBeRunning(worker) {
 }
 
 /**
- * Verifies the code, copy and preamble the frames run through and the movie module's
- * RegisterClientEvents, and resolves the sync functions the workers call.
+ * Verifies the code, copy and preamble the frames run through, the console tick when the stage
+ * ticks are on, and the movie module's RegisterClientEvents, and resolves the sync functions
+ * the workers call.
  * @param {StaggeredRpc} rpc
  * @param {{base: number, symbols: any[]}} module
+ * @param {boolean} stageTicks
  * @returns {Promise<Record<string, number>>}
  */
-async function verifySetup(rpc, module) {
+async function verifySetup(rpc, module, stageTicks) {
   const sdk = rpc.a.sdk;
   await verifyCode(rpc);
+  if (stageTicks) await verifyCode(rpc, [TIMING.functions.tick]);
   await verifyCopy(rpc);
   await verifyPreamble(rpc);
 
@@ -405,6 +409,7 @@ async function initializeControl(rpc, sync, control, gateOnReceive) {
  * @param {number} options.output
  * @param {number} options.format
  * @param {boolean} options.gateOnReceive
+ * @param {boolean} options.stageTicks
  * @returns {WorkerState[]} The input worker, then the output worker.
  */
 function planWorkers({
@@ -416,10 +421,12 @@ function planWorkers({
   decoder,
   output,
   format,
-  gateOnReceive
+  gateOnReceive,
+  stageTicks
 }) {
   const {inputBase, outputBase, control, scratch} = regions;
   const at = offset => control + offset;
+  const ticks = stageTicks ? sdk + TIMING.functions.tick.offset : null;
   const input = inputPlan.plan({
     sdk,
     base: inputBase,
@@ -431,7 +438,8 @@ function planWorkers({
     functions,
     decoder,
     acquireAck: at(ACQUIRE_ACK),
-    lengthGate: gateOnReceive ? at(inputPlan.CONTROL.lengthGate) : null
+    lengthGate: gateOnReceive ? at(inputPlan.CONTROL.lengthGate) : null,
+    ticks
   });
 
   const video = outputPlan.plan({
@@ -444,7 +452,8 @@ function planWorkers({
     functions,
     decoder,
     output,
-    format
+    format,
+    ticks
   });
 
   return [
@@ -468,6 +477,7 @@ function planWorkers({
  * @param {number} [options.stopTimeoutMs]
  * @param {boolean} [options.gateOnReceive] each receive waits for primeInput (see
  *   staggered-input-plan.js)
+ * @param {boolean} [options.stageTicks] the frames stamp console ticks (HBL_STAGE_TICKS=1)
  */
 async function create({
   rpc,
@@ -479,13 +489,14 @@ async function create({
   transport,
   publication,
   stopTimeoutMs = 5000,
-  gateOnReceive = false
+  gateOnReceive = false,
+  stageTicks = false
 }) {
   if (isUnboundedSetup(transport, publication))
     throw Error('Staggered worker needs bounded TCP and native publication');
 
   const sdk = rpc.a.sdk;
-  const sync = await verifySetup(rpc, module);
+  const sync = await verifySetup(rpc, module, stageTicks);
   const regions = await allocateRegions(rpc, transport);
   const {control} = regions;
   const at = offset => control + offset;
@@ -500,7 +511,8 @@ async function create({
     decoder,
     output,
     format,
-    gateOnReceive
+    gateOnReceive,
+    stageTicks
   });
   const [inputWorker, outputWorker] = workers;
   const input = inputWorker.plan;

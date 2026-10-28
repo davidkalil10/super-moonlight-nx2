@@ -49,7 +49,9 @@ const STAMP = {
   nextSlotStatus: status.STATUS.input + 8,
   nextIndex: status.STATUS.input + 16,
   inputSequence: status.STATUS.input + 20,
-  inputCount: status.STATUS.input + 24
+  inputCount: status.STATUS.input + 24,
+  receiveTick: status.TICKS.receive,
+  submitTick: status.TICKS.submit
 };
 const SEQUENCE_BYTES = 4;
 
@@ -260,6 +262,17 @@ function buildFrame(address, sdk, calls, verified, mapped, results) {
 
 /** Native results each send frame stamps: SendInput and the next AcquireInput status. */
 const SEND_RESULTS = {1: STAMP.sendStatus, 2: STAMP.nextSlotStatus};
+/** The same with the submit tick right after SendInput. */
+const TICKED_SEND_RESULTS = {1: STAMP.sendStatus, 2: STAMP.submitTick, 3: STAMP.nextSlotStatus};
+
+/**
+ * The console tick call of the stage measurement, or none while it is off.
+ * @param {number | null} ticks
+ */
+function tickCall(ticks) {
+  if (ticks === null) return [];
+  return [{function: ticks, args: [0, 0, 0, 0]}];
+}
 
 /**
  * Address helpers for one plan: the worker's regions, control page and ring words, and the
@@ -278,18 +291,18 @@ function addressing({sdk, base, control, mapped}) {
 }
 
 /**
- * The receive frame of `slot`: wait on the length gate if there is one, read the unit, stamp
- * its sequence, park on the decode gate, open the descriptor's fetch gate, wait for the
- * acquisition acknowledgement, then jump to the send frame.
+ * The receive frame of `slot`: wait on the length gate if there is one, read the unit, take
+ * the receive tick if on, stamp its sequence, park on the decode gate, open the descriptor's
+ * fetch gate, wait for the acquisition acknowledgement, then jump to the send frame.
  * @param {ReturnType<typeof addressing>} a
  * @param {number} slot
  * @param {{scratch: number, fd: number, recvFunction: number, acquireAck: number,
- *   lengthGate: number | null}} options
+ *   lengthGate: number | null, ticks: number | null}} options
  */
 function receiveCalls(
   {at, ringAt, copy, jump, sync},
   slot,
-  {scratch, fd, recvFunction, acquireAck, lengthGate}
+  {scratch, fd, recvFunction, acquireAck, lengthGate, ticks}
 ) {
   const descriptor = at(CONTROL.descriptors[slot]);
   const lengthWait = [];
@@ -302,6 +315,7 @@ function receiveCalls(
       function: recvFunction,
       args: [fd, scratch, {u32: descriptor + DESCRIPTOR.length}, MSG_WAITALL]
     },
+    ...tickCall(ticks),
     {
       function: copy,
       args: [ringAt(STAMP.receiveSequence), descriptor + DESCRIPTOR.sequence, SEQUENCE_BYTES, 0]
@@ -337,14 +351,16 @@ function restoreCalls({loc, copy}, slot, receiveBytes) {
 }
 
 /**
- * The send frame of `slot`: copy the unit into its input buffer, submit it, acquire the next
- * input buffer, stamp the sequence, restore, jump to the receive frame.
+ * The send frame of `slot`: copy the unit into its input buffer, submit it, take the submit
+ * tick if on, acquire the next input buffer, stamp the sequence, restore, jump to the receive
+ * frame.
  * @param {ReturnType<typeof addressing>} a
  * @param {number} slot
- * @param {{scratch: number, functions: Record<string, number>, decoder: number}} options
+ * @param {{scratch: number, functions: Record<string, number>, decoder: number,
+ *   ticks: number | null}} options
  * @param {ReturnType<typeof restoreCalls>} restore
  */
-function sendCalls({at, ringAt, copy, jump}, slot, {scratch, functions, decoder}, restore) {
+function sendCalls({at, ringAt, copy, jump}, slot, {scratch, functions, decoder, ticks}, restore) {
   const descriptor = at(CONTROL.descriptors[slot]);
   return [
     {
@@ -367,6 +383,7 @@ function sendCalls({at, ringAt, copy, jump}, slot, {scratch, functions, decoder}
         0
       ]
     },
+    ...tickCall(ticks),
     {
       function: functions.acquireInput,
       args: [decoder, ringAt(STAMP.nextIndex), ringAt(STAMP.inputCount), 0]
@@ -399,14 +416,16 @@ function sizedFrame(frame, address, calls, restore, results) {
 /**
  * @param {number[]} addresses
  * @param {number | null} lengthGate
+ * @param {number | null} ticks
  * @param {number} fd
  * @param {Record<string, number>} functions
- * @returns {boolean} True when every address, the length gate if any, fd and the decoder
- *   functions are valid.
+ * @returns {boolean} True when every address, the length gate and tick function if any, fd
+ *   and the decoder functions are valid.
  */
-function isPlannable(addresses, lengthGate, fd, functions) {
+function isPlannable(addresses, lengthGate, ticks, fd, functions) {
   if (!addresses.every(isAddress)) return false;
   if (lengthGate !== null && !isAddress(lengthGate)) return false;
+  if (ticks !== null && !isAddress(ticks)) return false;
   if (!Number.isInteger(fd) || fd < 0) return false;
   return ['sendInput', 'acquireInput'].every(name => isAddress(functions?.[name]));
 }
@@ -426,6 +445,7 @@ function isPlannable(addresses, lengthGate, fd, functions) {
  * @param {number} options.acquireAck The output worker's acquisition acknowledgement event.
  * @param {number | null} [options.lengthGate] The event each receive waits on first, under gate
  *   on receive.
+ * @param {number | null} [options.ticks] The console tick function, under HBL_STAGE_TICKS=1.
  */
 function plan({
   sdk,
@@ -438,33 +458,37 @@ function plan({
   functions,
   decoder,
   acquireAck,
-  lengthGate = null
+  lengthGate = null,
+  ticks = null
 }) {
   const addresses = [sdk, base, control, mapped, scratch, recvFunction, decoder, acquireAck];
-  if (!isPlannable(addresses, lengthGate, fd, functions))
+  if (!isPlannable(addresses, lengthGate, ticks, fd, functions))
     throw Error('Invalid staggered input frame addresses');
 
   const a = addressing({sdk, base, control, mapped});
   const verified = new Set([recvFunction, functions.sendInput, functions.acquireInput]);
   const frame = (address, calls, results = {}) =>
     buildFrame(address, sdk, calls, verified, mapped, results);
-  const units = {scratch, fd, recvFunction, functions, decoder, acquireAck, lengthGate};
+  const units = {scratch, fd, recvFunction, functions, decoder, acquireAck, lengthGate, ticks};
   /** The recv call's logical index: after the length-gate wait when there is one. */
   const recvCall = lengthGate === null ? 0 : 1;
+  const receiveResults = {[recvCall]: STAMP.receiveCount};
+  if (ticks !== null) receiveResults[recvCall + 1] = STAMP.receiveTick;
+  const sendResults = ticks === null ? SEND_RESULTS : TICKED_SEND_RESULTS;
 
   const receive = [];
   const send = [];
   const calls = {receive: [], send: []};
   for (let slot = 0; slot < SLOTS; slot++) {
     const list = receiveCalls(a, slot, units);
-    receive.push(frame(a.loc.receive[slot], list, {[recvCall]: STAMP.receiveCount}));
+    receive.push(frame(a.loc.receive[slot], list, receiveResults));
     calls.receive.push(list);
   }
 
   for (let slot = 0; slot < SLOTS; slot++) {
     const restore = restoreCalls(a, slot, receive[slot].frame.length);
     const list = sendCalls(a, slot, units, restore);
-    send.push(sizedFrame(frame, a.loc.send[slot], list, restore, SEND_RESULTS));
+    send.push(sizedFrame(frame, a.loc.send[slot], list, restore, sendResults));
     calls.send.push(list);
   }
 

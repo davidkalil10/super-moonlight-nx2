@@ -1679,6 +1679,18 @@ test('staggered host gate accepts one complete checked status snapshot', () => {
   });
 });
 
+test('the stage tick words read 0 by default and come back as u64 ticks', () => {
+  const bytes = statusSnapshot();
+  assert.deepEqual(parse(bytes).ticks, {receive: 0n, submit: 0n, ready: 0n, publish: 0n});
+
+  const words = {receive: 0x1000000001n, submit: 2n, ready: 3n, publish: 0xffffffffffffffffn};
+  for (const [stamp, tick] of Object.entries(words))
+    bytes.writeBigUInt64LE(tick, status.TICKS[stamp] - READ_START);
+  assert.deepEqual(parse(bytes).ticks, words);
+  assert.deepEqual(check(parse(bytes), expected), check(parse(statusSnapshot()), expected));
+  for (const offset of Object.values(status.TICKS)) assert.ok(offset + 8 <= READ_END);
+});
+
 test('staggered host gate keeps decode and fetch closed on incomplete or wrong results', () => {
   const bytes = statusSnapshot();
   bytes.writeUInt32LE(8, STATUS.receive + 8 - READ_START);

@@ -19,6 +19,11 @@ const INPUT = {sendStatus: 0, nextSlotStatus: 8, nextIndex: 16, sequence: 20};
 const ACQUIRE = {status: 0, index: 8, pts: 16, sequence: 24};
 /** Field offsets inside the fetch group. */
 const FETCH = {setStatus: 0, getStatus: 8, releaseStatus: 16, sequence: 24};
+/**
+ * Console ticks of the stage measurement (HBL_STAGE_TICKS=1), in free words inside the read:
+ * received, submitted, decoder output ready and published.
+ */
+const TICKS = {receive: 0x210, submit: 0x240, ready: 0x288, publish: 0x290};
 const SEQUENCE_BYTES = 4;
 
 const READ_START = ring.CONTROL.current;
@@ -42,6 +47,8 @@ const NO_INPUT_SLOT = [0x100en, 0x1011n];
  * @property {{status: bigint, index: number, pts: bigint, sequence: number}} acquire
  * @property {{setStatus: bigint, getStatus: bigint, releaseStatus: bigint,
  *   sequence: number}} fetch
+ * @property {{receive: bigint, submit: bigint, ready: bigint, publish: bigint}} [ticks] 0 unless
+ *   the stage ticks are on.
  */
 
 /**
@@ -100,6 +107,12 @@ function parse(bytes) {
       getStatus: u64(STATUS.fetch + FETCH.getStatus),
       releaseStatus: u64(STATUS.fetch + FETCH.releaseStatus),
       sequence: u32(STATUS.fetch + FETCH.sequence)
+    },
+    ticks: {
+      receive: u64(TICKS.receive),
+      submit: u64(TICKS.submit),
+      ready: u64(TICKS.ready),
+      publish: u64(TICKS.publish)
     }
   };
 }
@@ -255,4 +268,4 @@ function check(snapshot, expected) {
   };
 }
 
-export {STATUS, READ_START, READ_END, parse, check, checkOutput};
+export {STATUS, TICKS, READ_START, READ_END, parse, check, checkOutput};

@@ -146,7 +146,7 @@ async function run({
   const options = parseOptions(args, rpc, width, height, fps);
   const {audio, socketTone, socketAudio, duration, inputPush, audioFrames} = options;
   const {presentHz, skipRule, trimBacklogMs, gateOnReceive, outputLag, surfaceCheck} = options;
-  const {decodeWait, receiveWait, avoidWindow, skipBacklog, gateQueue} = options;
+  const {decodeWait, receiveWait, avoidWindow, skipBacklog, gateQueue, stageTicks} = options;
   if (!rpc.host) throw Error('Native TCP requires a fresh launcher session from this branch');
   /** Moves `now` onto CLOCK_MONOTONIC, the clock of the helper's writtenAt. */
   const monotonicOffset = Number(process.hrtime.bigint()) / 1e6 - now();
@@ -335,6 +335,7 @@ async function run({
       ...(gateQueue && {gateQueue}),
       ...(outputLag !== null && {lag: /** @type {0 | 1 | 2} */ (outputLag)}),
       ...(surfaceCheck && {surfaceCheck}),
+      ...(stageTicks && {stageTicks}),
       decodeWait,
       receiveWait,
       avoid: avoidWindow,

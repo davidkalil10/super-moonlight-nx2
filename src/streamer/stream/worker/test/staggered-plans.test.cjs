@@ -17,6 +17,8 @@ const input = require('../staggered-input-plan.js');
 const status = require('../staggered-status.js');
 const SYNC = require('../../../../../../hbl-platform/sdk/native/os-sync-functions.json');
 const {CODE} = require('../../../../../../hbl-platform/sdk/native/thread.js');
+const {CALL4_X19} = require('../../../../../../hbl-platform/smilebasic/engine/shared/frames.js');
+const timing = require('../../../../../../hbl-platform/smilebasic/engine/switch2/app/timing-code.json');
 const output = require('../staggered-output-plan.js');
 const withoutPacer = require('../../../test-support/test-helpers.cjs').withoutPacer('gate');
 
@@ -447,6 +449,32 @@ test('by default decode N waits for unit N+1', async () => {
   await live.finish({sink: d.sink});
   await live.stop();
   await d.worker.finalize();
+});
+
+test('the stage ticks stay zero by default and advance with every unit when on', async () => {
+  /** The ticks after 4 and after 9 units of one stream. */
+  const ticksOf = async schedule => {
+    const d = device();
+    const live = await d.live(undefined, schedule);
+    const seen = [];
+    for (let sequence = 1; sequence <= 9; sequence++) {
+      await live.push(unitAt(sequence), {sink: d.sink});
+      if (sequence === 4 || sequence === 9) seen.push((await d.worker.readStatus()).ticks);
+    }
+    await live.finish({sink: d.sink});
+    await live.stop();
+    await d.worker.finalize();
+    return seen;
+  };
+
+  const zero = {receive: 0n, submit: 0n, ready: 0n, publish: 0n};
+  assert.deepEqual(await ticksOf({}), [zero, zero]);
+
+  const [early, late] = await ticksOf({stageTicks: true});
+  for (const stamp of Object.keys(zero)) {
+    assert.ok(early[stamp] > 0n, stamp);
+    assert.ok(late[stamp] > early[stamp], stamp);
+  }
 });
 
 test('stopping a worker parked on the length gate submits nothing more', async () => {
@@ -1010,6 +1038,61 @@ test('with a length gate each receive waits on it first and stamps the recv coun
   assert.throws(() => input.plan({...addresses, lengthGate: -1}), /addresses/);
 });
 
+/** The ring word a built frame points logical call `logical`'s result at. */
+function resultWord(built, mapped, logical) {
+  const native = built.proof.logicalResultIndices[logical];
+  return Number(built.frame.readBigUInt64LE(built.proof.stackOffsets[native] + CALL4_X19)) - mapped;
+}
+
+const tickAt = sdk => ({function: sdk + timing.functions.tick.offset, args: [0, 0, 0, 0]});
+const withoutTicks = (calls, sdk) => calls.filter(call => call.function !== tickAt(sdk).function);
+
+test('without stage ticks the input frames are the plain ones', () => {
+  const plain = input.plan(addresses);
+  const off = input.plan({...addresses, ticks: null});
+  const lengthGate = addresses.control + input.CONTROL.lengthGate;
+  const gated = input.plan({...addresses, lengthGate});
+  for (let slot = 0; slot < 2; slot++) {
+    assert.deepEqual(off.calls.receive[slot], plain.calls.receive[slot]);
+    assert.deepEqual(off.calls.send[slot], plain.calls.send[slot]);
+    assert.deepEqual(off.receive[slot].frame, plain.receive[slot].frame);
+    assert.deepEqual(off.send[slot].frame, plain.send[slot].frame);
+    assert.equal(plain.calls.receive[slot].length, 6);
+    assert.equal(plain.calls.send[slot].length, 7);
+    assert.equal(resultWord(plain.receive[slot], addresses.mapped, 0), status.STATUS.receive);
+    assert.equal(resultWord(gated.receive[slot], addresses.mapped, 1), status.STATUS.receive);
+    assert.equal(resultWord(plain.send[slot], addresses.mapped, 1), status.STATUS.input);
+    assert.equal(resultWord(plain.send[slot], addresses.mapped, 2), status.STATUS.input + 8);
+  }
+});
+
+test('stage ticks stamp the receive after recv and the submit after SendInput', () => {
+  const ticks = addresses.sdk + timing.functions.tick.offset;
+  const plain = input.plan(addresses);
+  const ticked = input.plan({...addresses, ticks});
+  const lengthGate = addresses.control + input.CONTROL.lengthGate;
+  const gated = input.plan({...addresses, lengthGate, ticks});
+  for (let slot = 0; slot < 2; slot++) {
+    const receive = ticked.calls.receive[slot];
+    const send = ticked.calls.send[slot];
+    assert.deepEqual(receive[1], tickAt(addresses.sdk));
+    assert.deepEqual(gated.calls.receive[slot][2], tickAt(addresses.sdk));
+    assert.deepEqual(send[2], tickAt(addresses.sdk));
+    assert.deepEqual(withoutTicks(receive, addresses.sdk), plain.calls.receive[slot]);
+    assert.deepEqual(withoutTicks(send, addresses.sdk), plain.calls.send[slot]);
+
+    const word = (built, logical) => resultWord(built, addresses.mapped, logical);
+    assert.equal(word(ticked.receive[slot], 0), status.STATUS.receive);
+    assert.equal(word(ticked.receive[slot], 1), status.TICKS.receive);
+    assert.equal(word(gated.receive[slot], 1), status.STATUS.receive);
+    assert.equal(word(gated.receive[slot], 2), status.TICKS.receive);
+    assert.equal(word(ticked.send[slot], 1), status.STATUS.input);
+    assert.equal(word(ticked.send[slot], 2), status.TICKS.submit);
+    assert.equal(word(ticked.send[slot], 3), status.STATUS.input + 8);
+  }
+  assert.throws(() => input.plan({...addresses, ticks: -1}), /addresses/);
+});
+
 test('a gate write with no next leaves a zero placeholder on the ignored fetch gate', () => {
   const bytes = input.gateWrite({snapshot: checkedSnapshot(), ...gate, next: null});
   assert.equal(bytes.readUInt32LE(0), 5);
@@ -1102,6 +1185,49 @@ test('the output worker acknowledges an acquisition only after stamping it', () 
     });
   }
   assert.throws(() => output.plan({...outAddresses, acquireAck: 0}), /addresses/);
+});
+
+test('without stage ticks the output frames are the plain ones', () => {
+  const plain = output.plan(outAddresses);
+  const off = output.plan({...outAddresses, ticks: null});
+  for (let slot = 0; slot < 2; slot++) {
+    assert.deepEqual(off.calls.acquire[slot], plain.calls.acquire[slot]);
+    assert.deepEqual(off.calls.fetch[slot], plain.calls.fetch[slot]);
+    assert.deepEqual(off.acquire[slot].frame, plain.acquire[slot].frame);
+    assert.deepEqual(off.fetch[slot].frame, plain.fetch[slot].frame);
+    assert.equal(plain.calls.acquire[slot].length, 6);
+    assert.equal(plain.calls.fetch[slot].length, 9);
+    assert.equal(resultWord(plain.acquire[slot], outAddresses.mapped, 1), status.STATUS.acquire);
+    for (const logical of [0, 1, 2])
+      assert.equal(
+        resultWord(plain.fetch[slot], outAddresses.mapped, logical),
+        status.STATUS.fetch + logical * 8
+      );
+  }
+});
+
+test('stage ticks stamp the ready after the output wait and the publish before its sequence', () => {
+  const ticks = outAddresses.sdk + timing.functions.tick.offset;
+  const plain = output.plan(outAddresses);
+  const ticked = output.plan({...outAddresses, ticks});
+  for (let slot = 0; slot < 2; slot++) {
+    const acquire = ticked.calls.acquire[slot];
+    const fetch = ticked.calls.fetch[slot];
+    assert.deepEqual(acquire[1], tickAt(outAddresses.sdk));
+    assert.equal(acquire[2].function, outAddresses.functions.acquireOutput);
+    assert.deepEqual(fetch[4], tickAt(outAddresses.sdk));
+    assert.equal(fetch[5].args[0], outAddresses.mapped + ring.CONTROL.nativeSequence);
+    assert.deepEqual(withoutTicks(acquire, outAddresses.sdk), plain.calls.acquire[slot]);
+    assert.deepEqual(withoutTicks(fetch, outAddresses.sdk), plain.calls.fetch[slot]);
+
+    const word = (built, logical) => resultWord(built, outAddresses.mapped, logical);
+    assert.equal(word(ticked.acquire[slot], 1), status.TICKS.ready);
+    assert.equal(word(ticked.acquire[slot], 2), status.STATUS.acquire);
+    for (const logical of [0, 1, 2])
+      assert.equal(word(ticked.fetch[slot], logical), status.STATUS.fetch + logical * 8);
+    assert.equal(word(ticked.fetch[slot], 4), status.TICKS.publish);
+  }
+  assert.throws(() => output.plan({...outAddresses, ticks: 0.5}), /addresses/);
 });
 
 test('staggered output descriptor checks ring surface and commits matching metadata', () => {
@@ -1266,8 +1392,9 @@ function fixture() {
 
 const freed = calls => calls.filter(call => call.free !== undefined).map(call => call.free);
 
-async function started(fixture) {
+async function started(fixture, settings = {}) {
   const worker = await create({
+    ...settings,
     rpc: fixture.rpc,
     module: fixture.module,
     functions: fixture.functions,
@@ -1301,6 +1428,30 @@ test('staggered workers install two alternating frames and can stop both waits',
     assert.equal(f.read(control + offset, 8).readBigUInt64LE(), BigInt(inputExit));
   for (const offset of [...outputPlan.CONTROL.fetchDispatch, ...outputPlan.CONTROL.acquireDispatch])
     assert.equal(f.read(control + offset, 8).readBigUInt64LE(), BigInt(outputExit));
+});
+
+test('the worker verifies the console tick only with the stage ticks on', async () => {
+  const verifiedBy = async settings => {
+    const f = fixture();
+    const verified = [];
+    f.rpc.request = async body => {
+      verified.push(body);
+      return {verified: true};
+    };
+    const worker = await started(f, settings);
+    await worker.stop();
+    await worker.finalize();
+    return verified.filter(body => body.address === f.sdk + timing.functions.tick.offset);
+  };
+
+  assert.deepEqual(await verifiedBy({}), []);
+  assert.deepEqual(await verifiedBy({stageTicks: true}), [
+    {
+      command: 'verify-function',
+      address: 0x40000000 + timing.functions.tick.offset,
+      hex: timing.functions.tick.bytes
+    }
+  ]);
 });
 
 test('staggered finalize frees every region once, after the events', async () => {

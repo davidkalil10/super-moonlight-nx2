@@ -1150,10 +1150,11 @@ function runDirectory() {
   return directory;
 }
 
-function live(directory, args) {
+function live(directory, args, env = process.env) {
   const result = spawnSync(process.execPath, [LIVE, directory, ...args], {
     encoding: 'utf8',
-    timeout: 20000
+    timeout: 20000,
+    env
   });
   return {status: result.status, error: result.stderr.trim().split('\n').at(-1)};
 }
@@ -1187,6 +1188,23 @@ test('a valid vsync and decode-wait set passes parsing and stops at the session 
       live(directory, [...H264, ...staggered, '--skip-rule', 'vsync', '--decode-wait']),
       {status: 1, error: 'Native TCP requires a fresh launcher session from this branch'}
     );
+});
+
+test('HBL_STAGE_TICKS=1 needs --staggered, and any other value is off', t => {
+  const directory = runDirectory();
+  t.after(() => fsSync.rmSync(directory, {recursive: true, force: true}));
+  const session = 'Native TCP requires a fresh launcher session from this branch';
+  const env = value => ({...process.env, HBL_STAGE_TICKS: value});
+  assert.deepEqual(live(directory, H264, env('1')), {
+    status: 1,
+    error: 'HBL_STAGE_TICKS=1 needs --staggered'
+  });
+  assert.deepEqual(live(directory, [...H264, '--staggered'], env('1')), {
+    status: 1,
+    error: session
+  });
+  for (const value of ['0', 'yes', ''])
+    assert.deepEqual(live(directory, H264, env(value)), {status: 1, error: session});
 });
 
 test('live.js streams H.264 by default and refuses any other codec', t => {

@@ -26,6 +26,8 @@ function checkFlags(args, flags) {
   checkSkipFlags(flags);
   checkGateFlags(flags);
   checkRunFlags(args, flags);
+  if (flags.stageTicks && !args.includes('--staggered'))
+    throw Error('HBL_STAGE_TICKS=1 needs --staggered');
 }
 
 /** --skip-backlog, --skip-rule, --decode-wait and --trim-backlog-ms. */
@@ -87,8 +89,11 @@ function defaultAudioFrames(socketAudio, rpc) {
   return rpc.a.protocol >= 3 ? 960 : 1920;
 }
 
-/** Reads the stream flags; throws on the first one that is missing or out of range. */
-function parseOptions(args, rpc, width, height, fps) {
+/**
+ * Reads the stream flags, and HBL_STAGE_TICKS from `env`; throws on the first one that is
+ * missing or out of range.
+ */
+function parseOptions(args, rpc, width, height, fps, env = process.env) {
   const at = args.indexOf('--moonlight');
   const host = args[at + 1];
   const app = args[at + 2];
@@ -122,6 +127,7 @@ function parseOptions(args, rpc, width, height, fps) {
     surfaceCheck: cli.number(args, '--surface-check', 0),
     decodeWait: args.includes('--decode-wait'),
     receiveWait: args.includes('--receive-wait'),
+    stageTicks: env.HBL_STAGE_TICKS === '1',
     avoidWindow: exchangeTiming.parseAvoid(cli.option(args, '--avoid-window') ?? undefined),
     skipBacklog:
       cli.option(args, '--skip-backlog') === 'off'
