@@ -47,6 +47,11 @@
     "../hbl-moonlight/host/stream/native-tcp.js",
     "../hbl-moonlight/host/stream/native-sink.js",
     "../hbl-moonlight/host/stream/native-decoder.js",
-    "../hbl-moonlight/host/audio/socket-audio-source.js"
+    "../hbl-moonlight/host/audio/socket-audio-source.js",
+    "../hbl-moonlight/host/stream/decode-wait.js",
+    "../hbl-moonlight/host/stream/exchange-timing.js",
+    "../hbl-moonlight/host/stream/receive-wait.js",
+    "../hbl-moonlight/host/stream/native-h264.js",
+    "../hbl-moonlight/host/stream/live.js"
   ]
 }
