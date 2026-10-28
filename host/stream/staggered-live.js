@@ -62,6 +62,34 @@ const PENDING_INPUT = [0x100en, 0x1011n];
 const DEFAULT_TIMEOUT_MS = 5000;
 const DEFAULT_PRESENT_HZ = 60;
 const POLL_MS = 5;
+/** Upper edges in ms of the acquire-wait bins: 2, 4, 8 ms, one and two frames; the last is open. */
+const ACQUIRE_BINS_MS = [2, 4, 8, 1000 / 60, 2000 / 60];
+/** Units at or above this size count as large: keyframes run about 210 KB, P-frames about 30. */
+const LARGE_UNIT_BYTES = 64 * 1024;
+
+/**
+ * How long gates waited for the output worker's acquire, split by the size of the unit: from the
+ * first status read that found the acquire pending to the read that found it done.
+ */
+function createAcquireWaits() {
+  const empty = () => ({count: 0, bins: ACQUIRE_BINS_MS.map(() => 0).concat(0), maxMs: 0});
+  const sizes = {small: empty(), large: empty()};
+  return {
+    /** @param {number} ms @param {number} bytes */
+    add(ms, bytes) {
+      const size = sizes[bytes >= LARGE_UNIT_BYTES ? 'large' : 'small'];
+      const bin = ACQUIRE_BINS_MS.findIndex(edge => ms < edge);
+      size.count++;
+      size.bins[bin === -1 ? ACQUIRE_BINS_MS.length : bin]++;
+      size.maxMs = Math.max(size.maxMs, Math.round(ms * 10) / 10);
+    },
+    get counts() {
+      const copy = size => ({...size, bins: [...size.bins]});
+      return {small: copy(sizes.small), large: copy(sizes.large)};
+    }
+  };
+}
+
 /** Least time between host retries of the input worker's next-slot acquire. */
 const INPUT_RETRY_MS = 20;
 /** Serial-number arithmetic: a u32 distance below this means "at or after". */
@@ -342,6 +370,9 @@ function create({
   let stale = 0;
   let cooling = 0;
   const waiting = {};
+  const acquireWaits = createAcquireWaits();
+  /** The acquire the current gate's reads are timing: since its first pending read. */
+  let acquireWait = {unit: 0, since: null, done: true};
   const waits = {
     timeoutMs,
     pause,
@@ -426,6 +457,7 @@ function create({
         decode.observe(watch.unit, now(), watch.acquired, watch);
         watch.pendingSeen ||= !watch.acquired;
       }
+      if (expected.acquire) timeAcquire(expected.acquire.sequence, snapshot, startedAt);
       if (expected.ack) {
         const applied = isApplied(snapshot.nativeApplied, expected.ack.sequence);
         pacer.observe(startedAt, applied, expected.ack.openedAt ?? null);
@@ -437,6 +469,24 @@ function create({
       waiting[pending] = (waiting[pending] || 0) + 1;
     }
   });
+
+  /**
+   * Times the acquire of `unit` across one gate's reads and books it once it is seen done.
+   * @param {number} unit
+   * @param {{acquire: {sequence: number}}} snapshot
+   * @param {number} startedAt
+   */
+  function timeAcquire(unit, snapshot, startedAt) {
+    if (acquireWait.unit !== unit) acquireWait = {unit, since: null, done: false};
+    if (acquireWait.done) return;
+    if (snapshot.acquire.sequence < unit) {
+      acquireWait.since ??= startedAt;
+      return;
+    }
+    acquireWait.done = true;
+    if (acquireWait.since !== null)
+      acquireWaits.add(now() - acquireWait.since, units.get(unit)?.length ?? 0);
+  }
 
   /**
    * The predicted decode-done and receive-done for a gate's expected units.
@@ -849,7 +899,8 @@ function create({
         pacer: pacer.counters,
         waiting: {...waiting},
         exchanges: timing.counts,
-        ...(receive && {receive: {...receiveSlept, fixedMs: receive.fixedMs}})
+        ...(receive && {receive: {...receiveSlept, fixedMs: receive.fixedMs}}),
+        acquireWaits: acquireWaits.counts
       };
     },
 
@@ -859,4 +910,4 @@ function create({
   };
 }
 
-export {create, waitChecked, waitOutput, expectedFor, RESTART, TRIM_FRAMES};
+export {create, waitChecked, waitOutput, expectedFor, createAcquireWaits, RESTART, TRIM_FRAMES};

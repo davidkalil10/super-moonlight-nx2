@@ -17,7 +17,8 @@ const {
   TRIM_FRAMES,
   expectedFor,
   waitChecked,
-  waitOutput
+  waitOutput,
+  createAcquireWaits
 } = require('../../../host/stream/staggered-live.js');
 const gate = require('../../../host/stream/staggered-gate.js');
 const input = require('../../../host/stream/staggered-input-plan.js');
@@ -33,6 +34,25 @@ const {
 const withoutPacer = require('./test-helpers.cjs').withoutPacer('status');
 
 // staggered-live.js
+test('acquire waits are binned by duration and split at 64 KB units', () => {
+  const waits = createAcquireWaits();
+  for (const [ms, bytes] of [
+    [1.5, 30000],
+    [3, 30000],
+    [8, 31000],
+    [16.6, 29000],
+    [20, 210000],
+    [40.04, 215000]
+  ])
+    waits.add(ms, bytes);
+  assert.deepEqual(waits.counts, {
+    small: {count: 4, bins: [1, 1, 0, 2, 0, 0], maxMs: 16.6},
+    large: {count: 2, bins: [0, 0, 0, 0, 1, 1], maxMs: 40}
+  });
+  waits.counts.small.bins[0] = 9;
+  assert.equal(waits.counts.small.bins[0], 1, 'counts is a copy');
+});
+
 const layout = {width: 1920, height: 1080, stride: 1920, sliceHeight: 1088};
 const noPause = async () => {};
 /** sha256 of every write, gate payload, request and send of defaultStreamDigest() on 14e29df. */
