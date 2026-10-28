@@ -5,6 +5,6 @@
 /** @type {string} */
 const HELPER =
   process.env.HBMOONLIGHT ||
-  '/media/storage2/builds/HBLauncher/moonlight-helper-main-47b81a0/build/hbmoonlight';
+  '/media/storage2/builds/HBLauncher/moonlight-helper-main-c33e545/build/hbmoonlight';
 
 export {HELPER};

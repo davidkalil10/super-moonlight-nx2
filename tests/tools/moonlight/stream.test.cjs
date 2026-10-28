@@ -837,7 +837,7 @@ test('a worker lost mid-job leaves the console socket open', async () => {
 });
 
 // helper.js
-test('the helper default is the main-47b81a0 build and $HBMOONLIGHT wins', () => {
+test('the helper default is the main-c33e545 build and $HBMOONLIGHT wins', () => {
   const url = require('node:url').pathToFileURL(
     path.join(__dirname, '../../../host/stream/helper.js')
   );
@@ -851,7 +851,7 @@ test('the helper default is the main-47b81a0 build and $HBMOONLIGHT wins', () =>
   delete env.HBMOONLIGHT;
   assert.equal(
     helper(env),
-    '/media/storage2/builds/HBLauncher/moonlight-helper-main-47b81a0/build/hbmoonlight'
+    '/media/storage2/builds/HBLauncher/moonlight-helper-main-c33e545/build/hbmoonlight'
   );
   assert.equal(helper({...env, HBMOONLIGHT: '/x/hbmoonlight'}), '/x/hbmoonlight');
 });
