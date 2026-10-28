@@ -1,5 +1,5 @@
 {
-  "name": "moonlight-dev",
+  "name": "hbl-moonlight-tests",
   "private": true,
   "scripts": {
     "test": "node --test $(git ls-files '*.test.cjs')",

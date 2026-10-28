@@ -27,10 +27,10 @@ add_executable(hbmoonlight
 target_compile_options(hbmoonlight PRIVATE -Wall -Wextra -Wno-unused-parameter)
 target_link_libraries(hbmoonlight PRIVATE gamestream Threads::Threads)
 
-# The input test lives in moonlight-dev: it builds when that checkout sits
-# beside this one, or where DEV_DIR points.
-set(DEV_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../../../moonlight-dev/tools/moonlight/helper"
-  CACHE PATH "moonlight-dev helper directory")
+# The input test lives in tests/: it builds when that directory is there, or where
+# DEV_DIR points.
+set(DEV_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../../tests/tools/moonlight/helper"
+  CACHE PATH "tests helper directory")
 set(HAVE_DEV EXISTS "${DEV_DIR}/tests/input.c")
 
 include(CTest)

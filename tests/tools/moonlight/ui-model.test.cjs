@@ -6,8 +6,8 @@ const {
   HOSTS_PER_PAGE,
   makeModel,
   reduce
-} = require('../../../hbl-moonlight/host/ui/model.js');
-const settings = require('../../../hbl-moonlight/host/ui/settings.js');
+} = require('../../../host/ui/model.js');
+const settings = require('../../../host/ui/settings.js');
 
 const HOSTS = [
   {name: 'Rig', address: '192.168.8.245'},

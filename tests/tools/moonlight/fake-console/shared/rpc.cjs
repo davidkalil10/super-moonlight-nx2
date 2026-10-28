@@ -8,8 +8,8 @@
 //   DECODE  1 runs the full JS decoder (slower); otherwise a light apply that
 //           only advances `applied`, enough for link/fps behaviour
 // Point feed.js at this directory; it reads app-moonlight-*.json.
-const ring = require('../../../../../hbl-moonlight/tools/moonlight/ring.js');
-const hbv2 = require('../../../../../hbl-moonlight/tools/moonlight/hbv2.js');
+const ring = require('../../../../../tools/moonlight/ring.js');
+const hbv2 = require('../../../../../tools/moonlight/hbv2.js');
 const {mapped: BASE} = require('../app-moonlight-1.json').privateStorage;
 
 const EXCHANGE = 0x8000,

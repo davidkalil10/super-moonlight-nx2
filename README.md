@@ -3,7 +3,7 @@
 Moonlight for HBLauncher: stream PC games from Sunshine to the Switch 2. The console runs
 the Moonlight HB package (`apps/moonlight/`), the PC runs the host side (`host/`,
 `tools/moonlight/`): the `hbmoonlight` client, the stream senders and the console UI
-service. Tests, simulators and research live in the sibling `moonlight-dev`.
+service. Tests, simulators and research live in `tests/`.
 
 ```
 Sunshine (rig, 192.168.8.245)
@@ -57,8 +57,8 @@ sudo dnf install gcc gcc-c++ cmake openssl-devel libcurl-devel expat-devel libuu
 `fetch.sh` pins the GPLv3 upstreams, never copied into this repo: moonlight-embedded
 (libgamestream: pairing, app list, launch; `discover.c` left out) at `f32e415`,
 moonlight-common-c at `b126e481` (has `LiSendTouchEvent`) and its enet at `dea6fb5`. A
-published `hbmoonlight` is GPLv3. The input test builds only when `moonlight-dev` sits beside
-this checkout (`DEV_DIR` in `helper/CMakeLists.txt`).
+published `hbmoonlight` is GPLv3. The input test builds from `tests/` (`DEV_DIR` in
+`helper/CMakeLists.txt`).
 `host/stream/helper.js` finds the binary: `$HBMOONLIGHT`, else the default build path.
 
 ## Run
@@ -317,4 +317,4 @@ and 960-frame (20 ms) buffers on protocol 3, 1920 (40 ms) otherwise.
 
 ## Tests
 
-In `moonlight-dev`: `npm test`, `npm run typecheck`, `node apps/moonlight/check.cjs [CLIP]`.
+In `tests/`: `npm test`, `npm run typecheck`, `node apps/moonlight/check.cjs [CLIP]`.

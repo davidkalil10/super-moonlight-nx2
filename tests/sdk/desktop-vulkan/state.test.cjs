@@ -17,8 +17,8 @@ const {
   encodeFrames,
   checkFrames
 } = require('./state.js');
-const {STATE, STATE_BYTES, DATA_OFFSET} = require('../../../hbl-platform/sdk/host/layout.js');
-const {builds} = require('../../../hbl-platform/sdk/build.js');
+const {STATE, STATE_BYTES, DATA_OFFSET} = require('../../../../hbl-platform/sdk/host/layout.js');
+const {builds} = require('../../../../hbl-platform/sdk/build.js');
 const {gpuStatus, run} = require('./run.cjs');
 const {preparePackage} = require('./hello-world.cjs');
 
@@ -103,7 +103,7 @@ test('keeps-clock-and-frame-app-owned-for-current-template', async t => {
   const gpu = gpuStatus(path.join(root, 'runner'));
   if (gpu.reason) return t.diagnostic('GPU half not run: ' + gpu.reason);
   const {program} = require('./backend.js');
-  const {readPackage} = require('../../../hbl-platform/sdk/package/manifest.js');
+  const {readPackage} = require('../../../../hbl-platform/sdk/package/manifest.js');
   const files = program(await readPackage(await preparePackage(root)));
   const seeded = initialState();
   seeded.writeFloatLE(5, STATE.time);

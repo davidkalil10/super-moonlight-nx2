@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const KB = 1024;
 
 async function predictor(options = {}) {
-  const {create} = await import('../../../hbl-moonlight/host/stream/receive-wait.js');
+  const {create} = await import('../../../host/stream/receive-wait.js');
   const clock = {now: 0};
   const sleeps = [];
   const wait = create({

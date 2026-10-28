@@ -3,12 +3,8 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const {
-  gate,
-  readStorage,
-  OVERLAY_READ
-} = require('../../../hbl-moonlight/host/input/input-feeder.js');
-const {UI, UI_MAGIC} = require('../../../hbl-moonlight/tools/moonlight/ring.js');
+const {gate, readStorage, OVERLAY_READ} = require('../../../host/input/input-feeder.js');
+const {UI, UI_MAGIC} = require('../../../tools/moonlight/ring.js');
 
 function block(magic, overlay) {
   const bytes = Buffer.alloc(OVERLAY_READ.bytes);

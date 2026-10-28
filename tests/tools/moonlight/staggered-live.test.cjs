@@ -8,23 +8,22 @@ const withoutPacer = ({pacer, exchanges, ...counts}) => (
   assert.equal(typeof exchanges.status.ms, 'number'),
   counts
 );
-const definitions = require('../../../hbl-moonlight/sdk/native/movie-functions.json');
-const registration =
-  require('../../../hbl-moonlight/sdk/native/movie-event-functions.json').registerClientEvents;
-const {CODE} = require('../../../hbl-platform/sdk/native/thread.js');
-const ring = require('../../../hbl-moonlight/tools/moonlight/ring.js');
-const status = require('../../../hbl-moonlight/host/stream/staggered-status.js');
-const gates = require('../../../hbl-moonlight/host/stream/staggered-gate.js');
-const outputPlan = require('../../../hbl-moonlight/host/stream/staggered-output-plan.js');
-const inputPlan = require('../../../hbl-moonlight/host/stream/staggered-input-plan.js');
+const definitions = require('../../../sdk/native/movie-functions.json');
+const registration = require('../../../sdk/native/movie-event-functions.json').registerClientEvents;
+const {CODE} = require('../../../../hbl-platform/sdk/native/thread.js');
+const ring = require('../../../tools/moonlight/ring.js');
+const status = require('../../../host/stream/staggered-status.js');
+const gates = require('../../../host/stream/staggered-gate.js');
+const outputPlan = require('../../../host/stream/staggered-output-plan.js');
+const inputPlan = require('../../../host/stream/staggered-input-plan.js');
 const {MODEL, simulate} = require('./request-budget.cjs');
-const {create: createWorker} = require('../../../hbl-moonlight/host/stream/staggered-worker.js');
+const {create: createWorker} = require('../../../host/stream/staggered-worker.js');
 const {
   create,
   RESTART,
   TRIM_FRAMES,
   expectedFor
-} = require('../../../hbl-moonlight/host/stream/staggered-live.js');
+} = require('../../../host/stream/staggered-live.js');
 
 const layout = {width: 1920, height: 1080, stride: 1920, sliceHeight: 1088};
 const noPause = async () => {};

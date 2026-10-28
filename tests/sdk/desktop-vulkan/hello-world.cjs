@@ -11,10 +11,13 @@ const fs = require('node:fs');
 const path = require('node:path');
 const {backend, build, ID, SECTION_DIR} = require('./backend.js');
 const {initialState} = require('./state.js');
-const {readPackage} = require('../../../hbl-platform/sdk/package/manifest.js');
-const {loadApp, select} = require('../../../hbl-platform/sdk/package/loader.js');
+const {readPackage} = require('../../../../hbl-platform/sdk/package/manifest.js');
+const {loadApp, select} = require('../../../../hbl-platform/sdk/package/loader.js');
 
-const TEMPLATE = path.resolve(__dirname, '../../../HBLauncher/sdk/template/hb-package/hello-world');
+const TEMPLATE = path.resolve(
+  __dirname,
+  '../../../../HBLauncher/sdk/template/hb-package/hello-world'
+);
 const BACKEND_ONE = 'backends/hblauncher.gpu-app';
 const SCRIPT = path.join(__dirname, 'fixtures/hello-world-input-time.json');
 const SECTION = {

@@ -5,9 +5,9 @@ const fs = require('node:fs');
 const path = require('node:path');
 const {backend, ID, SECTION_DIR} = require('./backend.js');
 const {preparePackage} = require('./hello-world.cjs');
-const {readPackage} = require('../../../hbl-platform/sdk/package/manifest.js');
-const {loadApp, select} = require('../../../hbl-platform/sdk/package/loader.js');
-const {builds} = require('../../../hbl-platform/sdk/build.js');
+const {readPackage} = require('../../../../hbl-platform/sdk/package/manifest.js');
+const {loadApp, select} = require('../../../../hbl-platform/sdk/package/loader.js');
+const {builds} = require('../../../../hbl-platform/sdk/build.js');
 
 fs.mkdirSync(builds('desktop-vulkan'), {recursive: true});
 const scratch = fs.mkdtempSync(path.join(builds('desktop-vulkan'), 'backend-'));

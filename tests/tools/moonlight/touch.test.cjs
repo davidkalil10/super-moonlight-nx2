@@ -7,8 +7,8 @@ const {
   step,
   flush,
   touchLine
-} = require('../../../hbl-moonlight/host/input/touch.js');
-const {frame} = require('../../../hbl-moonlight/host/input/input-feeder.js');
+} = require('../../../host/input/touch.js');
+const {frame} = require('../../../host/input/input-feeder.js');
 
 // Build the raw nn::hid TouchScreenState<16> region (what parseTouch receives).
 function touchBytes(points, count) {

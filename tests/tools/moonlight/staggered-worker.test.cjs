@@ -1,18 +1,18 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const definitions = require('../../../hbl-moonlight/sdk/native/movie-functions.json');
+const definitions = require('../../../sdk/native/movie-functions.json');
 const registration =
-  require('../../../hbl-moonlight/sdk/native/movie-event-functions.json').registerClientEvents;
-const {CODE} = require('../../../hbl-platform/sdk/native/thread.js');
-const ring = require('../../../hbl-moonlight/tools/moonlight/ring.js');
-const status = require('../../../hbl-moonlight/host/stream/staggered-status.js');
-const inputPlan = require('../../../hbl-moonlight/host/stream/staggered-input-plan.js');
-const outputPlan = require('../../../hbl-moonlight/host/stream/staggered-output-plan.js');
-const SYNC = require('../../../hbl-platform/sdk/native/os-sync-functions.json');
+  require('../../../sdk/native/movie-event-functions.json').registerClientEvents;
+const {CODE} = require('../../../../hbl-platform/sdk/native/thread.js');
+const ring = require('../../../tools/moonlight/ring.js');
+const status = require('../../../host/stream/staggered-status.js');
+const inputPlan = require('../../../host/stream/staggered-input-plan.js');
+const outputPlan = require('../../../host/stream/staggered-output-plan.js');
+const SYNC = require('../../../../hbl-platform/sdk/native/os-sync-functions.json');
 const {
   ACQUIRE_ACK,
   create
-} = require('../../../hbl-moonlight/host/stream/staggered-worker.js');
+} = require('../../../host/stream/staggered-worker.js');
 
 function fixture() {
   const sdk = 0x40000000;

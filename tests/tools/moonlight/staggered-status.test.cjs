@@ -7,8 +7,8 @@ const {
   parse,
   check,
   checkOutput
-} = require('../../../hbl-moonlight/host/stream/staggered-status.js');
-const ring = require('../../../hbl-moonlight/tools/moonlight/ring.js');
+} = require('../../../host/stream/staggered-status.js');
+const ring = require('../../../tools/moonlight/ring.js');
 
 function snapshot() {
   const bytes = Buffer.alloc(READ_END - READ_START);

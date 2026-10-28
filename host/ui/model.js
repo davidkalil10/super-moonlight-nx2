@@ -1,5 +1,5 @@
 /**
- * The console UI state machine: pure, so moonlight-dev drives it without a console. The host
+ * The console UI state machine: pure, so the tests drive it without a console. The host
  * service feeds it the commands the console forwards (A/B/X/Y/ADJUST/CHORD on an item) and the
  * results of its own work (lists, PINs, stream events); it answers with the next model and the
  * intents the service must run. Screens and transitions: research/moonlight-ui-design.md.

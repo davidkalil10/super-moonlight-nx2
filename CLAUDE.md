@@ -1,8 +1,9 @@
 # hbl-moonlight
 
 The Moonlight streaming app and its host side, split out of HBLauncher (Phase 1 of the
-rewrite, `hbl-notes/team/REWRITE.md`). Runtime code only: tests, probes and research live in
-`moonlight-dev`. README.md has the build, run, flags and the console/host contract.
+rewrite, `hbl-notes/team/REWRITE.md`). Runtime code at the top; tests, probes and
+research in `tests/`, with its own README.md and CLAUDE.md. README.md has the build, run,
+flags and the console/host contract.
 
 ## Layout
 
@@ -31,8 +32,7 @@ Package `exports` replace the relative paths later in Phase 2.
 ## Build and test
 
 - Helper: `tools/moonlight/helper/build.sh [BUILD]`; the binary is `BUILD/build/hbmoonlight`.
-  The input test builds only when `moonlight-dev` sits beside this checkout (`DEV_DIR` in
-  `helper/CMakeLists.txt`).
+  It also builds the input test from `tests/` (`DEV_DIR` in `helper/CMakeLists.txt`).
 - Package: `node apps/moonlight/build.js`. It regenerates `hbv.glsl`, `hbv2-tables.glsl`,
   `ring.glsl`, `state.bin` and `memory.bin`; `assets.py` regenerates the text atlas and
   `text.glsl`. Never edit those by hand. It compiles through `tools/moonlight/glslang-shim.sh`
@@ -40,7 +40,7 @@ Package `exports` replace the relative paths later in Phase 2.
   that build byte for byte, and glslangValidator builds different bytes. It also refuses any
   argument; the check that writes nothing is `node ../hbl-platform/sdk/build.js --check
   apps/moonlight`.
-- Tests: none here. Run `npm test` and `npm run typecheck` in `moonlight-dev`, plus
+- Tests: run `npm test` and `npm run typecheck` in `tests/`, plus
   `node apps/moonlight/check.cjs` there for shader changes.
 
 ## Decisions
@@ -93,7 +93,7 @@ The pacer stayed at 8.33 ms and did not learn the panel's 16.67 ms apply grid in
   latches the decoder failed. Staggered workers that fail to stop, or a lost bridge, retain the
   native objects until SmileBASIC restarts.
 - `apps/moonlight/README.md` is not part of the package fingerprint (manifest bytes, listed
-  assets and entry sources only), but `moonlight-dev/apps/moonlight/package.test.cjs` pins the
+  assets and entry sources only), but `tests/apps/moonlight/package.test.cjs` pins the
   shader, state, data, memory and icon hashes.
 
 ## Rules
@@ -101,7 +101,7 @@ The pacer stayed at 8.33 ms and did not learn the panel's 16.67 ms apply grid in
 - The frozen reference is the 1080p60 worker at HBLauncher 4bdeb1a and its records
   (`native-h264/2026-10-25T17-20-16-026Z-4bdeb1a4`): they stay untouched and every change is
   measured against them. Main may change exchange count and pacing for 120 fps. Prove each
-  change with the `moonlight-dev` tests, then a live pair before it lands: the 60 fps control
+  change with the `tests/` suite, then a live pair before it lands: the 60 fps control
   in the reference shape (fps=59, dropped=0, idr=0), then the 120 run.
 - Format, then rename/extract, never both in one commit.
 - No live console runs unless the user is at the console (DEVICE-RULES.md).

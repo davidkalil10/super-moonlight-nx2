@@ -10,8 +10,8 @@
  * hello-world shader advances itself. Other offsets come from layout.js.
  */
 import fs from 'node:fs';
-import {STATE, STATE_BYTES, CONNECTED_BIT} from '../../../hbl-platform/sdk/host/layout.js';
-import {NPAD} from '../../../hbl-platform/sdk/host/npad.js';
+import {STATE, STATE_BYTES, CONNECTED_BIT} from '../../../../hbl-platform/sdk/host/layout.js';
+import {NPAD} from '../../../../hbl-platform/sdk/host/npad.js';
 
 const SCRIPT_FORMAT = 'hb-desktop-frame-script';
 const SCRIPT_VERSION = 1;

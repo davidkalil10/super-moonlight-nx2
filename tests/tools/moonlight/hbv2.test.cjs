@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
-const hbv2 = require('../../../hbl-moonlight/tools/moonlight/hbv2.js');
+const hbv2 = require('../../../tools/moonlight/hbv2.js');
 
 function scene(width, height, shift = 0) {
   const rgb = Buffer.alloc(width * height * 3);
@@ -147,7 +147,7 @@ test('skipped macroblocks are copied lazily from the previous frame', () => {
 });
 
 test('generated tables match the checked-in shader header', () => {
-  const here = path.join(__dirname, '../../../hbl-moonlight/tools/moonlight'),
+  const here = path.join(__dirname, '../../../tools/moonlight'),
     shaders = path.join(here, '../../apps/moonlight/backends/hblauncher.gpu-app');
   const glsl = path.join(shaders, 'hbv2-tables.glsl');
   if (fs.existsSync(glsl)) assert.strictEqual(fs.readFileSync(glsl, 'utf8'), hbv2.glslTables());

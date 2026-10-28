@@ -10,7 +10,7 @@ card. Design, format and measurements: the [repo README](../../README.md).
 `--codec h264` also accepts the helper's raw H.264 stream and decodes it through
 the console's native movie API into NV12 surfaces. Audio, controller and touch
 remain enabled. Setup, DUT results and performance limits are documented in
-moonlight-dev [CLAUDE.md](../../../moonlight-dev/CLAUDE.md) (Native H.264).
+the tests [CLAUDE.md](../../tests/CLAUDE.md) (Native H.264).
 
 The app is an HB package (`manifest.json`, see the package spec in hbl-platform's README):
 `assets/` holds the icon and text atlas and `backends/hblauncher.gpu-app/` the shaders
@@ -22,7 +22,7 @@ Build and check from the project root:
 ```sh
 node apps/moonlight/build.js           # needs glslc 2026.1 (Fedora 44) and spirv-val
 node ../hbl-platform/sdk/build.js --check apps/moonlight  # checks the package, writes nothing
-node ../moonlight-dev/apps/moonlight/check.cjs  # desktop Vulkan decode check, bit-exact against hbv2.js
+node tests/apps/moonlight/check.cjs  # desktop Vulkan decode check, bit-exact against hbv2.js
 ```
 
 Private memory (`manifest.json` `memory.bytes`, layout in `tools/moonlight/ring.js`) holds the
@@ -52,7 +52,7 @@ The committed SPIR-V under `backends/hblauncher.gpu-app/` is the build of glslc
 it reproduces all three files byte for byte, which the package test pins. glslangValidator
 16.2.0 builds different bytes, so `build.js` refuses before writing anything when `glslc`
 (or `GLSLC`) prints another version. Moving to a new glslc means changing `GLSLC_VERSION` in
-`build.js` and the pinned hashes in `moonlight-dev` together.
+`build.js` and the pinned hashes in `tests/` together.
 `GLSLC` picks the glslc for both the version check and the shim; a `GLSLANG` setting is
 ignored with a notice.
 

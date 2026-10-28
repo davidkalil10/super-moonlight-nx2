@@ -5,10 +5,10 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const ladder = require('../../../HBLauncher/tools/moonlight/ladder.cjs');
-const fake = require('../../../HBLauncher/tools/moonlight/ladder-fake.cjs');
+const ladder = require('../../../../HBLauncher/tools/moonlight/ladder.cjs');
+const fake = require('../../../../HBLauncher/tools/moonlight/ladder-fake.cjs');
 
-const MOON = path.resolve(__dirname, '../../../hbl-moonlight');
+const MOON = path.resolve(__dirname, '../../..');
 
 test('every rung carries the T115 control arguments and its own flags', () => {
   const control = ladder.base('192.168.8.245');

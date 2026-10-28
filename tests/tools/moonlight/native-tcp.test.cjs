@@ -1,8 +1,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const {EventEmitter} = require('node:events');
-const definitions = require('../../../hbl-platform/sdk/native/socket-functions.json');
-const {create, endpoint} = require('../../../hbl-moonlight/host/stream/native-tcp.js');
+const definitions = require('../../../../hbl-platform/sdk/native/socket-functions.json');
+const {create, endpoint} = require('../../../host/stream/native-tcp.js');
 
 const SDK = 0x40000000;
 const BASE = 0x60000000;

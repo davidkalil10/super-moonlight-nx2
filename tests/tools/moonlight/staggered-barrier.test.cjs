@@ -10,16 +10,15 @@ const withoutPacer = ({pacer, exchanges, ...counts}) => (
   assert.equal(typeof exchanges.gate.ms, 'number'),
   counts
 );
-const {ADDRESS} = require('../../../hbl-platform-dev/sdk/tests/recording-rpc.cjs');
-const {gateConsole, BLOCK} = require('../../../hbl-platform-dev/sdk/tests/gate-worker-mock.cjs');
-const definitions = require('../../../hbl-moonlight/sdk/native/movie-functions.json');
-const registration =
-  require('../../../hbl-moonlight/sdk/native/movie-event-functions.json').registerClientEvents;
-const ring = require('../../../hbl-moonlight/tools/moonlight/ring.js');
-const inputPlan = require('../../../hbl-moonlight/host/stream/staggered-input-plan.js');
-const outputPlan = require('../../../hbl-moonlight/host/stream/staggered-output-plan.js');
-const {create: createWorker} = require('../../../hbl-moonlight/host/stream/staggered-worker.js');
-const {create: createLive} = require('../../../hbl-moonlight/host/stream/staggered-live.js');
+const {ADDRESS} = require('../../../../hbl-platform-dev/sdk/tests/recording-rpc.cjs');
+const {gateConsole, BLOCK} = require('../../../../hbl-platform-dev/sdk/tests/gate-worker-mock.cjs');
+const definitions = require('../../../sdk/native/movie-functions.json');
+const registration = require('../../../sdk/native/movie-event-functions.json').registerClientEvents;
+const ring = require('../../../tools/moonlight/ring.js');
+const inputPlan = require('../../../host/stream/staggered-input-plan.js');
+const outputPlan = require('../../../host/stream/staggered-output-plan.js');
+const {create: createWorker} = require('../../../host/stream/staggered-worker.js');
+const {create: createLive} = require('../../../host/stream/staggered-live.js');
 
 const layout = {width: 1920, height: 1080, stride: 1920, sliceHeight: 1088};
 const noWait = async () => {};

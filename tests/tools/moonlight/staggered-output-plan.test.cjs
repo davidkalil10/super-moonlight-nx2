@@ -1,9 +1,9 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const output = require('../../../hbl-moonlight/host/stream/staggered-output-plan.js');
-const status = require('../../../hbl-moonlight/host/stream/staggered-status.js');
-const ring = require('../../../hbl-moonlight/tools/moonlight/ring.js');
-const SYNC = require('../../../hbl-platform/sdk/native/os-sync-functions.json');
+const output = require('../../../host/stream/staggered-output-plan.js');
+const status = require('../../../host/stream/staggered-status.js');
+const ring = require('../../../tools/moonlight/ring.js');
+const SYNC = require('../../../../hbl-platform/sdk/native/os-sync-functions.json');
 
 const addresses = {
   sdk: 0x7100000000,

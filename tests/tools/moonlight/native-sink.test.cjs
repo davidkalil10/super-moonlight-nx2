@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const ring = require('../../../hbl-moonlight/tools/moonlight/ring.js');
-const {create} = require('../../../hbl-moonlight/host/stream/native-sink.js');
+const ring = require('../../../tools/moonlight/ring.js');
+const {create} = require('../../../host/stream/native-sink.js');
 
 test('host publication fields occupy different cache lines from GPU-written control', () => {
   const gpu = [

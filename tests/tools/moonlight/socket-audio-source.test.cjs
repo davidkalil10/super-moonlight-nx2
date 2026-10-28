@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const {PassThrough} = require('node:stream');
-const {create} = require('../../../hbl-moonlight/host/audio/socket-audio-source.js');
+const {create} = require('../../../host/audio/socket-audio-source.js');
 
 const CHUNK = 7680;
 const flush = () => new Promise(resolve => setImmediate(resolve));

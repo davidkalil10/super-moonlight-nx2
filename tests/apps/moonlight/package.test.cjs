@@ -7,9 +7,9 @@ const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
 const path = require('node:path');
 
-const moonlight = path.resolve(__dirname, '../../../hbl-moonlight');
-const platform = path.resolve(__dirname, '../../../hbl-platform');
-const launcher = path.resolve(__dirname, '../../../HBLauncher');
+const moonlight = path.resolve(__dirname, '../../..');
+const platform = path.resolve(__dirname, '../../../../hbl-platform');
+const launcher = path.resolve(__dirname, '../../../../HBLauncher');
 const PACKAGE = path.join(moonlight, 'apps/moonlight');
 
 const PINNED = {

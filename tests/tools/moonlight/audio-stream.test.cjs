@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 const {PassThrough} = require('node:stream');
 const {EventEmitter} = require('node:events');
-const {stream, ByteQueue} = require('../../../hbl-moonlight/host/audio/audio-stream.js');
+const {stream, ByteQueue} = require('../../../host/audio/audio-stream.js');
 
 // one-shot input that delivers a whole buffer in a single data event, used to
 // exercise the host-ring overrun path deterministically (a PassThrough would
@@ -13,7 +13,7 @@ function burst() {
   return e;
 }
 
-const {mockRpc} = require('../../../hbl-platform-dev/sdk/tests/audio-out-mock.cjs');
+const {mockRpc} = require('../../../../hbl-platform-dev/sdk/tests/audio-out-mock.cjs');
 const BUFFER_BYTES = 3840 * 4;
 
 function sine(buffers) {

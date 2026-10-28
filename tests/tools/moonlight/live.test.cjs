@@ -5,7 +5,7 @@ const os = require('node:os');
 const path = require('node:path');
 const {spawnSync} = require('node:child_process');
 
-const LIVE = path.resolve(__dirname, '../../../hbl-moonlight/host/stream/live.js');
+const LIVE = path.resolve(__dirname, '../../../host/stream/live.js');
 const H264 = ['--codec', 'h264', '--moonlight', 'host', 'Desktop'];
 
 function runDirectory() {

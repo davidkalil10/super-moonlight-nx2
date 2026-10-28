@@ -12,7 +12,7 @@ const {
   countsSince,
   auTiming,
   withInputStage
-} = require('../../../hbl-moonlight/host/stream/native-h264.js');
+} = require('../../../host/stream/native-h264.js');
 
 const accessUnit = Buffer.from('0000016742001eab00000168ce0100000165abcd', 'hex');
 const pcm = Buffer.from('0001020304050607', 'hex');

@@ -1,8 +1,8 @@
-# moonlight-dev
+# hbl-moonlight tests
 
 Tests, simulators and research for `hbl-moonlight` (Phase 1 of the rewrite,
 `hbl-notes/team/REWRITE.md`). Nothing here ships to users. README.md has the test commands,
-the tools and the live test pass; `hbl-moonlight/README.md` has the runtime contract. The docs
+the tools and the live test pass; `../README.md` has the runtime contract. The docs
 this file replaced are kept verbatim in hbl-notes `research/moonlight-docs-archive/`.
 
 ## Sibling checkouts
@@ -10,14 +10,14 @@ this file replaced are kept verbatim in hbl-notes `research/moonlight-docs-archi
 Everything runs against the runtime code by relative path:
 
 ```
-<dir>/moonlight-dev
-<dir>/hbl-moonlight      the code under test
+<dir>/hbl-moonlight      the code under test, these tests in tests/
 <dir>/hbl-platform       bridge, sdk/host, sdk/native, sdk/package
 <dir>/hbl-platform-dev   sdk/tests/recording-rpc.cjs, audio-out-mock, gate-worker-mock
 <dir>/HBLauncher         package-backend.js and the hb-package hello-world template
 ```
 
-A worktree must see the right `../hbl-moonlight`: the tests import `../../../hbl-moonlight`.
+The tests import the runtime one level up, inside this repo, so a worktree always tests its
+own code; only the other repos must sit beside the checkout.
 
 ## Build and test
 

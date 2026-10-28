@@ -8,12 +8,12 @@ const fs = require('node:fs/promises'),
   os = require('node:os');
 const assert = require('node:assert/strict');
 const {execFileSync} = require('node:child_process');
-const {testCard} = require('../../../hbl-moonlight/apps/moonlight/build.js');
+const {testCard} = require('../../../apps/moonlight/build.js');
 
-const moonlight = path.resolve(__dirname, '../../../hbl-moonlight');
+const moonlight = path.resolve(__dirname, '../../..');
 const app = path.join(moonlight, 'apps/moonlight');
 const backend = path.join(app, 'backends/hblauncher.gpu-app');
-const platform = path.resolve(__dirname, '../../../hbl-platform');
+const platform = path.resolve(__dirname, '../../../../hbl-platform');
 const ring = require(path.join(moonlight, 'tools/moonlight/ring.js'));
 const {STATE} = require(path.join(platform, 'sdk/host/layout.js'));
 const {NPAD} = require(path.join(platform, 'sdk/host/npad.js'));

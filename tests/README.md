@@ -1,15 +1,14 @@
-# moonlight-dev
+# hbl-moonlight tests
 
 Tests, simulators and offline tools for `hbl-moonlight`. Nothing here ships to users. The
-runtime, its flags and the console/host contract are documented in `hbl-moonlight/README.md`.
+runtime, its flags and the console/host contract are documented in `../README.md`.
 
 ## Checkouts
 
 Everything runs against the runtime code by relative path:
 
 ```
-<dir>/moonlight-dev
-<dir>/hbl-moonlight      the code under test
+<dir>/hbl-moonlight      the code under test, these tests in tests/
 <dir>/hbl-platform       bridge, sdk/host, sdk/native, sdk/package
 <dir>/hbl-platform-dev   sdk/tests mocks (recording-rpc, audio-out-mock, gate-worker-mock)
 <dir>/HBLauncher         sdk/host/package-backend.js, the hb-package hello-world template
@@ -62,9 +61,9 @@ HBV2 decoder over the ring and writes back `applied`.
 ```sh
 # HBV1 slots of a clip, fed on the measured 5.7 MB/s link
 node tools/moonlight/encode.cjs clip.mp4 clip.hbv --size 1920x1088
-node ../hbl-moonlight/tools/moonlight/feed.js tools/moonlight/fake-console clip.hbv
+node ../tools/moonlight/feed.js tools/moonlight/fake-console clip.hbv
 # a 1.5 s stall at t=4 s
-STALL=1500@4000 node ../hbl-moonlight/tools/moonlight/feed.js tools/moonlight/fake-console clip.hbv
+STALL=1500@4000 node ../tools/moonlight/feed.js tools/moonlight/fake-console clip.hbv
 ```
 
 Env: `RATE` (link bytes/s, default 5.7e6), `STALL=ms@at` (pause the dispatch once), `DECODE=1`
@@ -79,7 +78,7 @@ every 500 ms. `HB_PIPELINE` works as on the launcher.
 
 ```sh
 HB_PIPELINE=2 RATE=12e6 node tools/moonlight/fake-console/bridge.cjs /tmp/fake --pad &
-node ../hbl-moonlight/host/input/input-feeder.js /tmp/fake
+node ../host/input/input-feeder.js /tmp/fake
 ```
 
 `shared/console.cjs` is a separate byte-level model of the `bootstrap.bas` `RPC()` loop for
@@ -92,7 +91,7 @@ Only with the user at the console (DEVICE-RULES.md). From `hbl-moonlight`, again
 `./start.sh --app moonlight` session showing the HBV2 test card, in order:
 
 1. Video: `node host/stream/live.js --moonlight 192.168.8.245 Desktop --codec h264 --staggered --no-input --no-audio`
-   (the h264 flags are in `hbl-moonlight/README.md`).
+   (the h264 flags are in `../README.md`).
 2. Input: drop `--no-input`. Sticks and taps move the host cursor; touch is native multi-touch.
 3. Audio: drop `--no-audio`. If `OpenDefaultAudioOut` fails, the audio process prints a hint
    and exits while video and input keep running.

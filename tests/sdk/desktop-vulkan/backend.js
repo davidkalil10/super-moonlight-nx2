@@ -9,9 +9,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import {createRequire} from 'node:module';
-import {STATE_BYTES} from '../../../hbl-platform/sdk/host/layout.js';
-import {headers, compile} from '../../../hbl-platform/sdk/build.js';
-import {INTERFACE_HEADERS} from '../../../hbl-platform/sdk/package/lint.js';
+import {STATE_BYTES} from '../../../../hbl-platform/sdk/host/layout.js';
+import {headers, compile} from '../../../../hbl-platform/sdk/build.js';
+import {INTERFACE_HEADERS} from '../../../../hbl-platform/sdk/package/lint.js';
 import {MAX_DATA_BYTES, checkData, checkState, clockProvider, loadFrameScript} from './state.js';
 
 const require = createRequire(import.meta.url);
@@ -34,10 +34,10 @@ const SPIRV_HEADER_BYTES = 20;
 const MAX_SPIRV_BYTES = 4 * 1024 * 1024;
 const FULL_SCREEN_VERTEX = path.join(
   import.meta.dirname,
-  '../../../hbl-platform/sdk/include/fullscreen.vert'
+  '../../../../hbl-platform/sdk/include/fullscreen.vert'
 );
 
-/** @typedef {import('../../../hbl-platform/sdk/package/manifest.js').Package} Package */
+/** @typedef {import('../../../../hbl-platform/sdk/package/manifest.js').Package} Package */
 
 /**
  * @typedef {object} Program Real paths of the files the section names.
@@ -142,7 +142,7 @@ function program(pkg) {
   };
 }
 
-/** @type {import('../../../hbl-platform/sdk/package/loader.js').Backend<object>} */
+/** @type {import('../../../../hbl-platform/sdk/package/loader.js').Backend<object>} */
 const backend = {
   id: ID,
   abi: ABI,

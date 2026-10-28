@@ -3,9 +3,9 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
-const {NativeClient} = require('../../../hbl-platform/smilebasic/engine/lib/native.js');
-const definitions = require('../../../hbl-moonlight/sdk/native/movie-functions.json');
-const {create: createDecoder} = require('../../../hbl-moonlight/host/stream/native-decoder.js');
+const {NativeClient} = require('../../../../hbl-platform/smilebasic/engine/lib/native.js');
+const definitions = require('../../../sdk/native/movie-functions.json');
+const {create: createDecoder} = require('../../../host/stream/native-decoder.js');
 
 // A faithful in-process console: the real NativeClient frames exchanges onto a
 // fake connection that executes the two call records against a memory model and
@@ -21,8 +21,8 @@ const ALLOCATE = 5732112;
 const QUERY = 0x158314;
 const READ = 0x586fb0;
 const code =
-  require('../../../hbl-platform/smilebasic/engine/switch2/app/thread-code.json').functions;
-const TICK = require('../../../hbl-platform/smilebasic/engine/switch2/app/timing-code.json')
+  require('../../../../hbl-platform/smilebasic/engine/switch2/app/thread-code.json').functions;
+const TICK = require('../../../../hbl-platform/smilebasic/engine/switch2/app/timing-code.json')
   .functions.tick.offset;
 
 function createConsole() {
