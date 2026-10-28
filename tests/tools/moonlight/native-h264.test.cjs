@@ -60,7 +60,7 @@ test('the helper stamps split the time before arrival into its parts', () => {
   const hosted = hiddenTiming(
     [3, 0, 5.2].map(ms => ({hidden: hiddenQueue({...stamps, hostMs: ms, writtenAt: 1000}, 1003)}))
   );
-  assert.deepEqual(hosted?.hostMs, {mean: 4.1, max: 5.2}, 'host times of 0 are skipped');
+  assert.deepEqual(hosted?.hostMs, {units: 2, mean: 4.1, max: 5.2}, 'host times of 0 are skipped');
   assert.equal(hosted?.units, 3);
   assert.equal(hiddenTiming([]), null);
 });

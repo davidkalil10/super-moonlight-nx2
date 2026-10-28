@@ -134,7 +134,8 @@ function hiddenTiming(samples) {
   });
   /** @param {string} key */
   const spread = key => meanMax(hidden.map(value => /** @type {any} */ (value)[key]));
-  // The host leaves its processing time at 0 when it sends none, or for a repeated frame.
+  // The host leaves its processing time at 0 when it sends none, or for a repeated frame, so
+  // hostMs counts its own units.
   const hosted = hidden.map(value => /** @type {any} */ (value).hostMs).filter(ms => ms > 0);
   return {
     units: hidden.length,
@@ -145,7 +146,7 @@ function hiddenTiming(samples) {
     queued: spread('queued'),
     unread: spread('unread'),
     writeMs: spread('writeMs'),
-    ...(hosted.length ? {hostMs: meanMax(hosted)} : {})
+    ...(hosted.length ? {hostMs: {units: hosted.length, ...meanMax(hosted)}} : {})
   };
 }
 
