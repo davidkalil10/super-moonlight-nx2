@@ -24,13 +24,13 @@ function tempFile(prefix, name) {
  */
 const withoutPacer =
   exchange =>
-  ({pacer, exchanges, acquireWaits, fetchWaits, ...counts}) => (
-    assert.equal(typeof pacer.reads, 'number'),
-    assert.equal(typeof exchanges[exchange].ms, 'number'),
-    assert.deepEqual(Object.keys(acquireWaits), ['small', 'large']),
-    assert.deepEqual(Object.keys(fetchWaits), ['small', 'large']),
-    counts
-  );
+  ({pacer, exchanges, acquireWaits, fetchWaits, ...counts}) => {
+    assert.equal(typeof pacer.reads, 'number');
+    assert.equal(typeof exchanges[exchange].ms, 'number');
+    assert.deepEqual(Object.keys(acquireWaits), ['small', 'large']);
+    assert.deepEqual(Object.keys(fetchWaits), ['small', 'large']);
+    return counts;
+  };
 
 const uiPage = () => import('../ui/page.js');
 
@@ -53,6 +53,7 @@ function bitWriter() {
     nal(header) {
       const rbsp = [...bits, 1];
       while (rbsp.length % 8) rbsp.push(0);
+
       const out = [header];
       let zeros = 0;
       for (let at = 0; at < rbsp.length; at += 8) {
@@ -64,10 +65,19 @@ function bitWriter() {
         zeros = byte ? 0 : zeros + 1;
         out.push(byte);
       }
+
       return Buffer.from(out);
     }
   };
   return writer;
+}
+
+/** Eight scaling lists: the first present with a single delta of -8, the rest absent. */
+function scalingLists(w) {
+  for (let list = 0; list < 8; list++) {
+    if (list === 0) w.u(1, 1).se(-8);
+    else w.u(1, 0);
+  }
 }
 
 /**
@@ -90,14 +100,17 @@ function spsNal({
       .ue(0)
       .u(1, 0)
       .u(1, scaling ? 1 : 0);
-    if (scaling) for (let list = 0; list < 8; list++) list === 0 ? w.u(1, 1).se(-8) : w.u(1, 0);
+    if (scaling) scalingLists(w);
   }
+
   w.ue(0).ue(pocType);
   if (pocType === 0) w.ue(2);
   if (pocType === 1) w.u(1, 0).se(0).se(0).ue(1).se(-2);
   w.ue(1).u(1, 0).ue(119).ue(67).u(1, 1).u(1, 1).u(1, 1).ue(0).ue(0).ue(0).ue(4);
+
   w.u(1, vui ? 1 : 0);
   if (!vui) return w.nal(0x67);
+
   w.u(1, 1).u(8, 255).u(16, 1).u(16, 1).u(1, 0);
   w.u(1, 1).u(3, 5).u(1, 0).u(1, 1).u(8, 1).u(8, 1).u(8, 1).u(1, 0);
   w.u(1, 1).u(32, 1).u(32, 120).u(1, 1);
@@ -105,6 +118,7 @@ function spsNal({
   if (hrd) w.ue(0).u(4, 0).u(4, 0).ue(20000).ue(20000).u(1, 0).u(5, 23).u(5, 23).u(5, 23).u(5, 24);
   w.u(1, 0);
   if (hrd) w.u(1, 0);
+
   w.u(1, 0).u(1, reorder === null ? 0 : 1);
   if (reorder !== null)
     w.u(1, 1)

@@ -1,10 +1,6 @@
 /**
- * Live test feeder: streams pre-encoded HBV1 slots into the running Moonlight app's frame ring
- * and reports the sustained write rate. Each slot is restamped with a sequence newer than
- * anything already in the ring, paced to the target frame rate with up to `--depth` writes in
- * flight; frames that fall more than one interval behind are dropped.
- *
- * Usage: node src/streamer/shared/feed.js runs/launcher-XXXX CLIP.hbv [--fps 60] [--seconds 60] [--depth 1]
+ * Live test feeder: streams a pre-encoded HBV1 clip into the running app's ring, paced to
+ * --fps with up to --depth writes in flight, and reports the sustained write rate.
  */
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -42,11 +38,14 @@ async function findPrivateStorage(directory) {
  */
 async function nextSequence(rpc, mapped) {
   let newest = (await rpc.read(mapped + ring.CONTROL.applied, 4)).readUInt32LE();
+
   for (let slot = 0; slot < ring.SLOTS; slot++) {
     const header = await rpc.read(mapped + ring.slotOffset(slot), SLOT_HEADER_BYTES);
-    if ([hbv.MAGIC, hbv2.MAGIC].includes(header.readUInt32LE()))
+    const magic = header.readUInt32LE();
+    if ([hbv.MAGIC, hbv2.MAGIC].includes(magic))
       newest = Math.max(newest, header.readUInt32LE(SEQUENCE_OFFSET));
   }
+
   return newest + 1;
 }
 
@@ -79,12 +78,13 @@ function stampedSlot(slots, frame, sequence) {
  * @param {number} digits
  * @returns {number}
  */
-const fixed = (value, digits) => +value.toFixed(digits);
+const fixed = (value, digits) => Number(value.toFixed(digits));
 
 async function main() {
   const args = process.argv.slice(2);
   const [run, clip] = args;
   if (!run || !clip) throw Error(USAGE);
+
   const option = (name, fallback) => cli.number(args, name, fallback);
   const fps = option('--fps', 60);
   const seconds = option('--seconds', 60);
@@ -96,10 +96,10 @@ async function main() {
   if (slots.length % SLOT) throw Error(clip + ' is not a whole number of 32 KiB HBV1 slots');
 
   const storage = await findPrivateStorage(directory);
+  const coherence = storage.memoryFlags & HOST_COHERENT ? 'host coherent' : 'NOT host coherent';
   console.log(
     `Private storage at 0x${storage.mapped.toString(16)}, ${storage.bytes} bytes, ` +
-      `memory flags 0x${storage.memoryFlags.toString(16)} ` +
-      `(${storage.memoryFlags & HOST_COHERENT ? 'host coherent' : 'NOT host coherent'})`
+      `memory flags 0x${storage.memoryFlags.toString(16)} (${coherence})`
   );
 
   const first = await nextSequence(rpc, storage.mapped);
@@ -109,17 +109,26 @@ async function main() {
   let sequence = 0;
   let dropped = 0;
   let stopping = false;
-  process.on('SIGINT', () => (stopping = true));
+  process.on('SIGINT', () => {
+    stopping = true;
+  });
+
   while (!stopping && performance.now() - started < seconds * 1000) {
     const due = started + sequence * interval;
     const now = performance.now();
+
+    // A frame more than one interval late is dropped rather than sent in a burst.
     if (now - due > interval) {
       const skip = Math.floor((now - due) / interval);
       dropped += skip;
       sequence += skip;
-    } else if (due > now) await new Promise(resolve => setTimeout(resolve, due - now));
+    } else if (due > now) {
+      await new Promise(resolve => setTimeout(resolve, due - now));
+    }
+
     const slot = stampedSlot(slots, sequence, first + sequence);
     while (inFlight.size >= depth) await Promise.race(inFlight);
+
     const before = performance.now();
     const write = rpc
       .write(storage.mapped + ring.slotOffset(first + sequence), slot)
@@ -149,6 +158,7 @@ async function main() {
     megabytesPerSecond: fixed((exchanges.length * SLOT) / elapsed / 1e6, 2),
     memoryFlags: storage.memoryFlags
   };
+
   const out = path.join(directory, `moonlight-feed-${Date.now()}.json`);
   await fs.writeFile(out, JSON.stringify(result, null, 2));
   console.log(JSON.stringify(result, null, 2));
