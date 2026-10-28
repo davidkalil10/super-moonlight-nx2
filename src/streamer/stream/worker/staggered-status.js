@@ -14,9 +14,9 @@ const STATUS = {
 /** Field offsets inside the receive group. */
 const RECEIVE = {count: 0, sequence: 8};
 /** Field offsets inside the input group. */
-const INPUT = {sendStatus: 0, nextSlotStatus: 8, nextIndex: 16, sequence: 20};
+const INPUT = {sendStatus: 0, nextSlotStatus: 8, nextIndex: 16, sequence: 20, remaining: 24};
 /** Field offsets inside the acquire group. */
-const ACQUIRE = {status: 0, index: 8, pts: 16, sequence: 24};
+const ACQUIRE = {status: 0, index: 8, pts: 16, sequence: 24, remaining: 36};
 /** Field offsets inside the fetch group. */
 const FETCH = {setStatus: 0, getStatus: 8, releaseStatus: 16, sequence: 24};
 /**
@@ -52,8 +52,9 @@ const NO_INPUT_SLOT = [0x100en, 0x1011n];
  * @property {number} nativeApplied Last publication sequence the shader applied.
  * @property {{count: bigint, sequence: number}} receive
  * @property {{sendStatus: bigint, nextSlotStatus: bigint, nextIndex: number,
- *   sequence: number}} input
- * @property {{status: bigint, index: number, pts: bigint, sequence: number}} acquire
+ *   sequence: number, remaining: number}} input `remaining` is the tail AcquireInput's count.
+ * @property {{status: bigint, index: number, pts: bigint, sequence: number,
+ *   remaining: number}} acquire `remaining` is AcquireOutputBufferIndex's count.
  * @property {{setStatus: bigint, getStatus: bigint, releaseStatus: bigint,
  *   sequence: number}} fetch
  * @property {{receive: bigint, submit: bigint, ready: bigint, publish: bigint}} [ticks] 0 unless
@@ -103,13 +104,15 @@ function parse(bytes) {
       sendStatus: u64(STATUS.input + INPUT.sendStatus),
       nextSlotStatus: u64(STATUS.input + INPUT.nextSlotStatus),
       nextIndex: i32(STATUS.input + INPUT.nextIndex),
-      sequence: u32(STATUS.input + INPUT.sequence)
+      sequence: u32(STATUS.input + INPUT.sequence),
+      remaining: i32(STATUS.input + INPUT.remaining)
     },
     acquire: {
       status: u64(STATUS.acquire + ACQUIRE.status),
       index: i32(STATUS.acquire + ACQUIRE.index),
       pts: u64(STATUS.acquire + ACQUIRE.pts),
-      sequence: u32(STATUS.acquire + ACQUIRE.sequence)
+      sequence: u32(STATUS.acquire + ACQUIRE.sequence),
+      remaining: i32(STATUS.acquire + ACQUIRE.remaining)
     },
     fetch: {
       setStatus: u64(STATUS.fetch + FETCH.setStatus),

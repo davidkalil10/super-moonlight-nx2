@@ -1441,9 +1441,11 @@ test('the live counts book the stage ticks of real frames only when they are on'
     return live.counts;
   };
 
-  assert.ok(!('ticks' in (await countsOf({}))));
-  const {ticks} = await countsOf({stageTicks: true});
+  const off = await countsOf({});
+  assert.ok(!('ticks' in off) && !('slots' in off));
+  const {ticks, slots} = await countsOf({stageTicks: true});
   assert.ok(ticks.paired > 0);
+  assert.ok(slots.input.indices.length > 0 && slots.output.indices.length > 0);
   for (const stage of ['receiveSubmit', 'decode', 'readyPublish', 'publishApplied', 'sendPresent'])
     assert.ok(ticks[stage].n > 0 && ticks[stage].p50 >= 0, stage);
 });

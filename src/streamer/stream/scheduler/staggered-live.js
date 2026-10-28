@@ -11,6 +11,7 @@ import * as exchangeTiming from './exchange-timing.js';
 import * as gates from '../worker/staggered-gate.js';
 import {create as createGateQueue} from './gate-queue.js';
 import {create as createStageTicks} from './stage-ticks.js';
+import {create as createSlotReadout} from './slot-readout.js';
 import {create as createStaggeredWorker} from '../worker/staggered-worker.js';
 import {
   createAcquireWaits,
@@ -180,6 +181,7 @@ function create({
   let fetchOpened = null;
   const timing = exchangeTiming.create();
   const ticks = stageTicks ? createStageTicks() : null;
+  const slots = stageTicks ? createSlotReadout() : null;
   /** When the last gate opened and the last unit went out, for the exchange bins. */
   let lastGate = null;
   let lastSend = null;
@@ -232,6 +234,7 @@ function create({
       readMs = now() - startedAt;
       timing.record('status', startedAt, now(), references(expected));
       ticks?.observe(snapshot, startedAt);
+      slots?.observe(snapshot);
 
       if (link && !link.received) {
         link.received =
@@ -833,7 +836,8 @@ function create({
         fetchWaits: fetchWaits.counts,
         ...(fallback && {lagEnd: {...fallback}}),
         ...(surfaces && {surfaceCheck: surfaces.counts}),
-        ...(ticks && {ticks: ticks.summary})
+        ...(ticks && {ticks: ticks.summary}),
+        ...(slots && {slots: slots.summary})
       };
     },
 

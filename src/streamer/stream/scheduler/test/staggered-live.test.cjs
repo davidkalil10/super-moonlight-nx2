@@ -1762,6 +1762,16 @@ test('the stage tick words read 0 by default and come back as u64 ticks', () => 
   for (const offset of Object.values(status.TICKS)) assert.ok(offset + 8 <= READ_END);
 });
 
+test('the acquire counts come back from the words both acquire calls write in the read', () => {
+  const bytes = statusSnapshot();
+  bytes.writeInt32LE(3, status.STATUS.input + 24 - READ_START);
+  bytes.writeInt32LE(2, status.STATUS.acquire + 36 - READ_START);
+  const parsed = parse(bytes);
+  assert.equal(parsed.input.remaining, 3);
+  assert.equal(parsed.acquire.remaining, 2);
+  assert.deepEqual(check(parsed, expected), check(parse(statusSnapshot()), expected));
+});
+
 test('staggered host gate keeps decode and fetch closed on incomplete or wrong results', () => {
   const bytes = statusSnapshot();
   bytes.writeUInt32LE(8, STATUS.receive + 8 - READ_START);
