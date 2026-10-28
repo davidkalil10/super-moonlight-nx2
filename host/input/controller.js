@@ -2,9 +2,9 @@
  * Console controller state to moonlight-common-c gamepad state.
  *
  * The launcher worker writes the selected NpadState to binding 0 every frame (and five pad
- * sources at 0x7f0000 + 640, see sdk/host/hardware.js). This module reads those bytes and maps
- * them to the fields of LiSendMultiControllerEvent: buttonFlags (Limelight.h *_FLAG bits),
- * leftTrigger/rightTrigger 0-255, stick axes int16 with Y up.
+ * sources at 0x7f0000 + 640, see HBLauncher/sdk/host/hardware.js). This module reads those
+ * bytes and maps them to the fields of LiSendMultiControllerEvent: buttonFlags (Limelight.h
+ * *_FLAG bits), leftTrigger/rightTrigger 0-255, stick axes int16 with Y up.
  *
  * Face buttons map by position by default (Nintendo B to A_FLAG, A to B_FLAG, Y to X_FLAG,
  * X to Y_FLAG); layout 'labels' maps by printed letter. HOME and Capture are not in NpadState,

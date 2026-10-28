@@ -1,4 +1,4 @@
-// Byte-level model of the bootstrap RPC() loop (smilebasic/bootstrap.bas), used
+// Byte-level model of the bootstrap RPC() loop (hbl-platform/smilebasic/bootstrap.bas), used
 // to round-trip the real host (native.cjs over a TCP Connection) offline. It is
 // not the timing sim in rpc.cjs; it parses actual request packets and mirrors
 // the loop statement for statement:

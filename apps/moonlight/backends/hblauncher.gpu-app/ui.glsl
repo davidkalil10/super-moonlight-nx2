@@ -1,6 +1,7 @@
 // Console UI: pages the host publishes into the two UI buffers, the cursor and the commands the
 // console owns. Include after ring.glsl with uiWord() defined on the private memory; the compute
-// shader defines UI_COMPUTE and includes hb.glsl first. Contract: research/moonlight-ui-design.md.
+// shader defines UI_COMPUTE and includes hb.glsl first. Contract: the moonlight-ui-design.md team
+// note.
 const uint UI_PAGE_MAGIC=0x47504248u;
 const uint UI_HDR_EPOCH=1u,UI_HDR_SEQUENCE=2u,UI_HDR_FLAGS=3u,UI_HDR_ITEMS=4u,UI_HDR_TEXTS=5u,UI_HDR_IMAGES=6u;
 const uint UI_HDR_BODY=7u,UI_HDR_BACKGROUND=8u,UI_HDR_HOME=9u,UI_HDR_CHECKSUM=10u;

@@ -60,8 +60,8 @@ const CONTROL = {
 };
 /**
  * Byte offsets of the console UI block in the control page, above written[]. The host owns
- * uiMagic..uiPage and hostAck/hostBusy; the compute shader owns uiApplied..cmdEpoch. See
- * research/moonlight-ui-design.md "Memory and words".
+ * uiMagic..uiPage and hostAck/hostBusy; the compute shader owns uiApplied..cmdEpoch. See team
+ * note moonlight-ui-design.md, "Memory and words".
  */
 const UI_BLOCK = 0xc000;
 const UI = {

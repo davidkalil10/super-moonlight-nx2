@@ -1,4 +1,4 @@
-// HBV2 decode on the compute shader; mirrors tools/moonlight/hbv2.cjs.
+// HBV2 decode on the compute shader; mirrors tools/moonlight/hbv2.js.
 // Include after ring.glsl, hbv2-tables.glsl and a coherent std430 buffer
 // "memory" with uint words[] bound to the private storage. Call hbv2Step()
 // from every invocation of the workgroup.

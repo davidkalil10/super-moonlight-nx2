@@ -6,9 +6,9 @@
  * sampling number, a u32 count, a u32 pad, then sixteen 40-byte TouchState entries {deltaTime
  * u64, attributes u32, fingerId u32, x, y, diameterX, diameterY, rotationAngle, reserved}. The
  * launcher shader reads c.touch[2] as the count and c.touch[8]/[9] as point 0 x/y, scaling them
- * by 1.5 onto the 1920x1080 screen (homebrew-launcher/shaders/launcher.comp), so the panel
- * reports 1280x720 coordinates. Attributes bit 1 means the finger lifted this frame (the same
- * bit the shader tests as `touch[6]&2u`).
+ * by 1.5 onto the 1920x1080 screen (HBLauncher/homebrew-launcher/shaders/launcher.comp), so
+ * the panel reports 1280x720 coordinates. Attributes bit 1 means the finger lifted this frame
+ * (the same bit the shader tests as `touch[6]&2u`).
  *
  * fingerId is the pointer id tracked across frames: slots compact when a finger lifts, so the
  * slot index is not stable. The panel reports no pressure, so down/move carry 0.0, which

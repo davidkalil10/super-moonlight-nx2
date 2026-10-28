@@ -1,7 +1,8 @@
 /* hbmoonlight: headless Moonlight client for the HBLauncher PC host.
  *
  *   hbmoonlight pair HOST [--timeout SECONDS]
- *   hbmoonlight list HOST
+ *   hbmoonlight list HOST [--covers DIR]
+ *   hbmoonlight quit HOST
  *   hbmoonlight stream HOST APP [--size WxH] [--fps N] [--bitrate KBPS]
  *                     [--codec h264|hevc] [--software] [--audio-fd FD] [--quit]
  *                     [--raw-h264-fd FD | --raw-hevc-fd FD] [--rgb]

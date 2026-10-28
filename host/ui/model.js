@@ -2,7 +2,7 @@
  * The console UI state machine: pure, so the tests drive it without a console. The host
  * service feeds it the commands the console forwards (A/B/X/Y/ADJUST/CHORD on an item) and the
  * results of its own work (lists, PINs, stream events); it answers with the next model and the
- * intents the service must run. Screens and transitions: research/moonlight-ui-design.md.
+ * intents the service must run. Screens and transitions: team note moonlight-ui-design.md.
  *
  * Item ids are the host's: ITEM groups a page's rows into id ranges so a command names a host,
  * an app or a setting without the console knowing what a row is.

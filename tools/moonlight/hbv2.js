@@ -11,7 +11,7 @@
  * with its zero prefix read from the low bits.
  *
  * This file is the reference decoder and a plan-driven reference encoder; the console decoder is
- * apps/moonlight/shaders/hbv2.glsl. Shared tables are generated from here.
+ * apps/moonlight/backends/hblauncher.gpu-app/hbv2.glsl. Shared tables are generated from here.
  */
 
 const MAGIC = 0x32564248;

@@ -1,7 +1,7 @@
 /**
  * Stream settings the console UI offers, persisted next to hosts.json and turned into the
  * arguments of the next launch. Only values the console path has run are offered (team note
- * research/ui-settings-catalog.md); the two toggles without host plumbing stay greyed until it
+ * ui-settings-catalog.md); the two toggles without host plumbing stay greyed until it
  * lands, so the page shows them without pretending they work.
  */
 import fs from 'node:fs';

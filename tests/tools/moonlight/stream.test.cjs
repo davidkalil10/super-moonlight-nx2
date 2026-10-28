@@ -317,7 +317,7 @@ function createConsole() {
     protocol: 3
   });
 
-  // Mirror smilebasic/engine/shared/rpc.cjs + bridge.cjs dispatch onto the client.
+  // Mirror hbl-platform/smilebasic/engine/shared/rpc.cjs + bridge.cjs dispatch onto the client.
   const invoke = (op, args = [], outputBytes) => {
     const padded = [...args, ...Array(Math.max(0, 4 - args.length)).fill(0)];
     if (outputBytes === undefined)

@@ -4,7 +4,7 @@
  * host's: a page is text strips (alpha-8, rasterised on the PC) and RGBA8 images at absolute
  * screen positions, plus the item rects the console cursor moves over. The shader validates a
  * page with the same rules as validate() here before it draws it. Contract: team note
- * research/moonlight-ui-design.md, "Memory and words".
+ * moonlight-ui-design.md, "Memory and words".
  *
  * ui.glsl mirrors the layout below; changing a constant or offset changes the format.
  */
