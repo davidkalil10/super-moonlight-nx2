@@ -1240,22 +1240,32 @@ test(
   }
 );
 
-test('--output-lag reaches the staggered scheduler and takes 1 or 2', {timeout: 5000}, async () => {
-  const f = await fixture({units: pairedUnits(4)});
-  const created = [];
-  const fake = staggeredFake(f.events);
-  f.options.createStaggered = options => {
-    created.push(options);
-    return fake();
-  };
-  f.options.args.push('--staggered', '--output-lag', '1');
-  await exercise(f, async () => {
-    const summary = await run(f.options);
-    assert.equal(created[0].lag, 1);
-    assert.equal(summary.outputLag, 1);
-  });
+test('--output-lag reaches the staggered scheduler and takes 0 to 2', {timeout: 5000}, async () => {
+  for (const lag of [1, 0]) {
+    const f = await fixture({units: pairedUnits(4)});
+    const created = [];
+    const fake = staggeredFake(f.events);
+    f.options.createStaggered = options => {
+      created.push(options);
+      return fake();
+    };
+    f.options.args.push('--staggered', '--output-lag', String(lag));
+    await exercise(f, async () => {
+      const summary = await run(f.options);
+      assert.equal(created[0].lag, lag);
+      assert.equal(summary.outputLag, lag);
+    });
+  }
   for (const [args, message] of [
-    [['--staggered', '--output-lag', '3'], /--output-lag takes 1 or 2/]
+    [['--staggered', '--output-lag', '3'], /--output-lag takes 0, 1 or 2/],
+    [
+      ['--staggered', '--output-lag', '0', '--gate-on-receive'],
+      /--output-lag 0 is untested with --gate-on-receive/
+    ],
+    [
+      ['--staggered', '--output-lag', '0', '--present-hz', '120'],
+      /--output-lag 0 is untested at --present-hz 120/
+    ]
   ]) {
     const g = await fixture();
     await exercise(g, async () => {
@@ -1295,6 +1305,7 @@ test(
     assert.equal(flagged.trimBacklogMs, 40);
     assert.equal(flagged.gateOnReceive, true);
     assert.equal(flagged.outputLag, 1);
+    assert.equal((await started(['--output-lag', '0'])).outputLag, 0);
     const plain = await started([]);
     assert.equal(plain.started, true);
     for (const key of ['trimBacklogMs', 'gateOnReceive', 'outputLag']) assert.ok(!(key in plain));

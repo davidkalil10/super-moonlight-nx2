@@ -11,7 +11,8 @@
  *   [--trim-backlog-ms N] (backlog rule: skip one output once the unit in hand is N ms old
  *     at 3 gates in a row)
  *   [--gate-on-receive] (prime and gate each unit as it arrives instead of on the next one)
- *   [--output-lag 1|2] (fetch each output 1 or 2 gates after its decode opened; 2 by default)
+ *   [--output-lag 0|1|2] (fetch each output 0, 1 or 2 gates after its decode opened; 2 by
+ *     default, 0 only at 60 Hz without --gate-on-receive)
  *   [--decode-wait] (with --skip-rule vsync) [--receive-wait] [--avoid-window BEFORE-AFTER]
  *   [--socket-audio | --socket-audio-tone] (PCM or a 500 Hz test tone over native TCP to a
  *     console worker)

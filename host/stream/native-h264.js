@@ -281,8 +281,12 @@ function checkFlags(args, flags) {
     throw Error('--avoid-window needs --decode-wait or --receive-wait to predict the events');
   if (gateOnReceive && presentHz === 120)
     throw Error('--gate-on-receive is untested at --present-hz 120');
-  if (outputLag !== null && outputLag !== 1 && outputLag !== 2)
-    throw Error('--output-lag takes 1 or 2');
+  if (outputLag !== null && outputLag !== 0 && outputLag !== 1 && outputLag !== 2)
+    throw Error('--output-lag takes 0, 1 or 2');
+  if (outputLag === 0 && gateOnReceive)
+    throw Error('--output-lag 0 is untested with --gate-on-receive');
+  if (outputLag === 0 && presentHz !== 60)
+    throw Error('--output-lag 0 is untested at --present-hz 120');
   if (!Number.isInteger(audioFrames) || audioFrames < FRAME_STEP || audioFrames % FRAME_STEP)
     throw Error('--audio-frames takes a multiple of 240');
   if (socketAudio && audioFrames > SOCKET_AUDIO_FRAMES)
@@ -643,7 +647,7 @@ async function run({
       skipRule: /** @type {'backlog' | 'vsync'} */ (skipRule),
       ...(trimBacklogMs !== null && {trimBacklogMs}),
       ...(gateOnReceive && {gateOnReceive}),
-      ...(outputLag !== null && {lag: /** @type {1 | 2} */ (outputLag)}),
+      ...(outputLag !== null && {lag: /** @type {0 | 1 | 2} */ (outputLag)}),
       decodeWait,
       receiveWait,
       avoid: avoidWindow,
