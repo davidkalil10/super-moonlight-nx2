@@ -2,12 +2,14 @@
  * Predicts when the console has received a unit, so a staggered gate whose receive is pending
  * sleeps off the bridge instead of rereading the status back to back. The console starts
  * receiving unit N+1 when gate N opens and the host sends it right after, so a unit is
- * predicted received at its send plus a base plus its size times a per-kilobyte estimate. A
- * read past the prediction that still finds the receive pending grows the estimate by growMs
- * for that unit's size; a read that slept and then saw the receive shrinks it by shrinkMs, so
- * a faster link still shows. A gate's first read waits only while the link is bound, that is,
- * the previous gate found its receive pending, so a gate whose receive keeps up reads at once
- * (request-budget.cjs receiveWait).
+ * predicted received at its send plus a fixed estimate plus its size times perKbMs. Only the
+ * fixed estimate learns: most of a pending receive is the input thread still submitting the
+ * unit before, which does not scale with size. A read past the prediction that still finds
+ * the receive pending grows it by growMs; a read that slept and then saw the receive shrinks
+ * it by shrinkMs, so a faster link still shows. A sleep never exceeds maxSleepMs, since a
+ * longer one loses the frame its vsync slot anyway. A gate's first read waits only while the
+ * link is bound, that is, the previous gate found its receive pending, so a gate whose
+ * receive keeps up reads at once (request-budget.cjs receiveWait).
  */
 
 /**
@@ -18,31 +20,33 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 /**
  * @param {object} [options]
- * @param {number} [options.baseMs] receive latency independent of the size
- * @param {number} [options.startPerKbMs] first per-kilobyte estimate
- * @param {number} [options.growMs] added to a unit's prediction when a read past it finds
+ * @param {number} [options.baseMs] first estimate of the latency independent of the size
+ * @param {number} [options.perKbMs] link time per kilobyte
+ * @param {number} [options.growMs] added to the estimate when a read past a prediction finds
  *   the receive pending
  * @param {number} [options.shrinkMs] taken off when a read that slept finds it received
+ * @param {number} [options.maxSleepMs] the longest a read sleeps, and the estimate's ceiling
  * @param {() => number} [options.now]
  * @param {(ms: number) => Promise<unknown>} [options.sleep]
  */
 function create({
   baseMs = 1,
-  startPerKbMs = 0.2,
+  perKbMs = 0.2,
   growMs = 0.5,
   shrinkMs = 0.1,
+  maxSleepMs = 1000 / 60,
   now = Date.now,
   sleep = delay
 } = {}) {
   /** @type {Map<number, {at: number, kb: number, grown?: boolean}>} */
   const sends = new Map();
-  let perKbMs = startPerKbMs;
+  let fixedMs = Math.min(baseMs, maxSleepMs);
   let bound = false;
 
   /** @param {number} unit */
   const predicted = unit => {
     const send = /** @type {{at: number, kb: number, grown?: boolean}} */ (sends.get(unit));
-    return send.at + baseMs + send.kb * perKbMs;
+    return send.at + fixedMs + send.kb * perKbMs;
   };
 
   return {
@@ -68,7 +72,7 @@ function create({
       if (!(pending || bound) || !sends.has(unit)) return false;
       const start = predicted(unit) - readMs;
       if (start <= now()) return false;
-      await sleep(start - now());
+      await sleep(Math.min(start - now(), maxSleepMs));
       return true;
     },
     /**
@@ -84,12 +88,12 @@ function create({
       if (!send) return;
       if (!received) {
         if (at >= predicted(unit) && !send.grown) {
-          perKbMs += growMs / send.kb;
+          fixedMs = Math.min(maxSleepMs, fixedMs + growMs);
           send.grown = true;
         }
         return;
       }
-      if (waited) perKbMs = Math.max(0, perKbMs - shrinkMs / send.kb);
+      if (waited) fixedMs = Math.max(0, fixedMs - shrinkMs);
       bound = waited || pendingSeen;
     },
     /**
@@ -99,8 +103,8 @@ function create({
     predictedAt(unit) {
       return sends.has(unit) ? predicted(unit) : null;
     },
-    get perKbMs() {
-      return perKbMs;
+    get fixedMs() {
+      return fixedMs;
     }
   };
 }

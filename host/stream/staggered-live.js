@@ -309,7 +309,9 @@ function create({
   const waits = {timeoutMs, pause};
   const pacer = presentPacer.create({periodMs, now, sleep: ms => pause(ms)});
   const decode = decodeWait ? decodeWaits.create({now, sleep: ms => pause(ms)}) : null;
-  const receive = receiveWait ? receiveWaits.create({now, sleep: ms => pause(ms)}) : null;
+  const receive = receiveWait
+    ? receiveWaits.create({maxSleepMs: periodMs, now, sleep: ms => pause(ms)})
+    : null;
   /** How long the last status read took, for the decode wait. */
   let readMs = 0;
   /** When the last gate opened a fetch, for the pacer's vsync prediction. */

@@ -1093,7 +1093,7 @@ test('a gate whose receive keeps up reads at once', async () => {
 });
 
 test('a pending receive sleeps to its prediction less the read time', async () => {
-  const {wait, clock, sleeps} = await predictor({baseMs: 1, startPerKbMs: 0.25});
+  const {wait, clock, sleeps} = await predictor({baseMs: 1, perKbMs: 0.25});
   wait.sent(1, 24 * KB, 0);
   clock.now = 2;
   assert.equal(await wait.beforeRead(1, true, 2), true);
@@ -1104,21 +1104,55 @@ test('a pending receive sleeps to its prediction less the read time', async () =
 });
 
 test('the estimate grows on a late receive and shrinks on an early one', async () => {
-  const {wait, clock} = await predictor({baseMs: 1, startPerKbMs: 0.2, growMs: 0.5, shrinkMs: 0.1});
+  const {wait, clock} = await predictor({baseMs: 1, perKbMs: 0.2, growMs: 0.5, shrinkMs: 0.1});
   wait.sent(1, 10 * KB, 0);
   clock.now = 3;
   wait.observe(1, 3, false, {pendingSeen: false});
-  assert.equal(wait.perKbMs, 0.2 + 0.5 / 10, 'a pending read past the prediction grows it');
+  assert.equal(wait.fixedMs, 1.5, 'a pending read past the prediction grows it');
   wait.observe(1, 4, false, {pendingSeen: true});
-  assert.equal(wait.perKbMs, 0.2 + 0.5 / 10, 'a stalled unit grows it once, not per reread');
+  assert.equal(wait.fixedMs, 1.5, 'a stalled unit grows it once, not per reread');
   clock.now = 1;
   wait.sent(2, 10 * KB, 1);
   wait.observe(2, 1.5, false, {pendingSeen: false});
-  assert.equal(wait.perKbMs, 0.25, 'a pending read before the prediction changes nothing');
+  assert.equal(wait.fixedMs, 1.5, 'a pending read before the prediction changes nothing');
   wait.observe(2, 4, true, {waited: true, pendingSeen: true});
-  assert.equal(wait.perKbMs, 0.25 - 0.1 / 10, 'a waited read that found it received shrinks it');
+  assert.equal(wait.fixedMs, 1.4, 'a waited read that found it received shrinks it');
   wait.observe(2, 4, true, {waited: false, pendingSeen: false});
-  assert.equal(wait.perKbMs, 0.25 - 0.1 / 10, 'a read that did not wait leaves it');
+  assert.equal(wait.fixedMs, 1.4, 'a read that did not wait leaves it');
+});
+
+// The R4a collapse (research/r4a-collapse.md): late receives of small units grew a per-KB
+// slope until each keyframe slept about 200 ms and the stream fell to keyframes alone.
+test('late small receives move a keyframe prediction by the step alone', async () => {
+  const {wait, clock} = await predictor({baseMs: 1, perKbMs: 0.2, growMs: 0.5});
+  wait.sent(1, 210 * KB, 0);
+  const before = wait.predictedAt(1);
+  wait.sent(2, KB, 0);
+  clock.now = 5;
+  wait.observe(2, 5, false, {pendingSeen: false});
+  const moved = wait.predictedAt(1) - before;
+  assert.ok(Math.abs(moved - 0.5) < 1e-9, `moved ${moved} ms`);
+});
+
+test('a keyframe after many late receives sleeps at most one period', async () => {
+  const {wait, clock, sleeps} = await predictor({baseMs: 1, perKbMs: 0.2});
+  for (let unit = 1; unit <= 50; unit++) {
+    wait.sent(unit, 31 * KB, clock.now);
+    clock.now += 40;
+    wait.observe(unit, clock.now, false, {pendingSeen: false});
+    wait.observe(unit, clock.now + 1, true, {waited: false, pendingSeen: true});
+  }
+  wait.sent(51, 210 * KB, clock.now);
+  assert.equal(await wait.beforeRead(51, false, 3), true, 'still bound by the late receives');
+  assert.ok(sleeps.at(-1) <= 1000 / 60, `${sleeps.at(-1)} ms sleep`);
+  assert.ok(wait.fixedMs <= 1000 / 60, `${wait.fixedMs} ms estimate`);
+  const ceiling = wait.fixedMs;
+  for (let unit = 52; unit <= 60; unit++) {
+    wait.sent(unit, 210 * KB, clock.now);
+    assert.equal(await wait.beforeRead(unit, false, 3), true);
+    wait.observe(unit, clock.now + 3, true, {waited: true, pendingSeen: false});
+  }
+  assert.ok(Math.abs(wait.fixedMs - (ceiling - 9 * 0.1)) < 1e-9, 'each slept hit takes a step');
 });
 
 test('the link binds after a pending gate and the next first read waits', async () => {
