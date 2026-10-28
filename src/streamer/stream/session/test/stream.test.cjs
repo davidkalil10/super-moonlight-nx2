@@ -11,7 +11,8 @@ const fsSync = require('node:fs');
 const {spawnSync} = require('node:child_process');
 const {NativeClient} = require('../../../../../../hbl-platform/smilebasic/engine/lib/native.js');
 const definitions = require('../../../console-api/movie-functions.json');
-const {create: createDecoder} = require('../../native/native-decoder.js');
+const modeDefinitions = require('../../../console-api/movie-mode-functions.json');
+const {create: createDecoder, modeFromEnv} = require('../../native/native-decoder.js');
 const code =
   require('../../../../../../hbl-platform/smilebasic/engine/switch2/app/thread-code.json').functions;
 const TICK =
@@ -81,9 +82,14 @@ function createConsole() {
   };
 
   const functions = new Map(
-    Object.entries(definitions).map(([k, d]) => [MODULE_BASE + d.offset, k])
+    Object.entries({...definitions, ...modeDefinitions}).map(([k, d]) => [
+      MODULE_BASE + d.offset,
+      k
+    ])
   );
   const log = [];
+  const created = [];
+  const verified = [];
   let available = 0;
   let inputBuffer = 0;
   let lastThread = 0n;
@@ -95,6 +101,8 @@ function createConsole() {
     const a = args.map(Number);
     switch (name) {
       case 'decoderCreate':
+      case 'decoderCreateMode':
+        created.push(a);
         poke64(a[0] + 8, 0x11n);
         return 0n;
       case 'mediaCreate':
@@ -354,6 +362,7 @@ function createConsole() {
     async request(req) {
       if (req.command === 'verify-function') {
         native.functions.add(req.address);
+        verified.push(req.address);
         return {verified: true};
       }
       throw Error('Unhandled bridge command ' + req.command);
@@ -371,6 +380,8 @@ function createConsole() {
   return {
     rpc,
     log,
+    created,
+    verified,
     allocations,
     frees,
     reset() {
@@ -383,11 +394,11 @@ function createConsole() {
   };
 }
 
-async function fixture() {
+async function fixture(inspected = definitions) {
   const root = path.join(os.tmpdir(), 'hbl-native-decoder');
   await fs.mkdir(root, {recursive: true});
   const directory = await fs.mkdtemp(path.join(root, 'dec-'));
-  const symbols = Object.values(definitions).map(d => ({
+  const symbols = Object.values(inspected).map(d => ({
     name: d.symbol,
     section: '.text',
     offset: d.offset,
@@ -404,13 +415,14 @@ const STEADY_STATE_EXCHANGES = 10;
 const sps = Buffer.from('6742001eab', 'hex');
 const pps = Buffer.from('68ce0100', 'hex');
 
-async function build() {
-  const directory = await fixture();
+async function build({inspected, ...options} = {}) {
+  const directory = await fixture(inspected);
   const consoleMock = createConsole();
   const decoder = await createDecoder({
     rpc: consoleMock.rpc,
     directory,
-    workerDirectory: path.join(directory, 'worker')
+    workerDirectory: path.join(directory, 'worker'),
+    ...options
   });
   const destination = {address: 0x70000000, bytes: (1920 * 1080 * 3) / 2 + 0x1000};
   return {consoleMock, decoder, directory, destination};
@@ -568,6 +580,70 @@ test('split mode registers its workers before Start and stops them before decode
     await decoder.close().catch(() => {});
     await fs.rm(directory, {recursive: true, force: true});
   }
+});
+
+const moduleAddresses = table =>
+  Object.values(table)
+    .map(d => MODULE_BASE + d.offset)
+    .sort();
+const movieVerified = consoleMock =>
+  consoleMock.verified.filter(address => address >= MODULE_BASE && address < HEAP).sort();
+
+test('without HBL_DECODER_MODE the decoder verifies and builds exactly as before', async () => {
+  assert.equal(process.env.HBL_DECODER_MODE, undefined);
+  const {consoleMock, decoder, directory} = await build();
+  try {
+    assert.deepEqual(movieVerified(consoleMock), moduleAddresses(definitions));
+    // The bridge pads direct calls to four registers, so the address tells the two apart.
+    assert.deepEqual(
+      consoleMock.created.map(args => args.slice(1, 3)),
+      [[1, 4]]
+    );
+    assert.equal(consoleMock.log.includes('decoderCreate'), true);
+    assert.equal(consoleMock.log.includes('decoderCreateMode'), false);
+    await decoder.close();
+  } finally {
+    await fs.rm(directory, {recursive: true, force: true});
+  }
+});
+
+test('a decoder mode builds through the verified mode constructor', async () => {
+  const inspected = {...definitions, ...modeDefinitions};
+  const {consoleMock, decoder, directory} = await build({inspected, mode: 2});
+  try {
+    assert.deepEqual(movieVerified(consoleMock), moduleAddresses(inspected));
+    assert.deepEqual(
+      consoleMock.created.map(args => args.slice(1)),
+      [[1, 4, 2]]
+    );
+    assert.equal(consoleMock.log.includes('decoderCreate'), false);
+    await decoder.close();
+  } finally {
+    await fs.rm(directory, {recursive: true, force: true});
+  }
+});
+
+test('a decoder mode on a module without the mode constructor calls nothing', async () => {
+  const directory = await fixture();
+  const consoleMock = createConsole();
+  try {
+    await assert.rejects(
+      createDecoder({rpc: consoleMock.rpc, directory, mode: 1}),
+      /differs from the inspected build/
+    );
+    assert.deepEqual([consoleMock.verified, consoleMock.log], [[], []]);
+  } finally {
+    await fs.rm(directory, {recursive: true, force: true});
+  }
+});
+
+test('HBL_DECODER_MODE is unset, empty or a whole number up to 2', () => {
+  assert.equal(modeFromEnv({}), null);
+  assert.equal(modeFromEnv({HBL_DECODER_MODE: ''}), null);
+  assert.equal(modeFromEnv({HBL_DECODER_MODE: '0'}), 0);
+  assert.equal(modeFromEnv({HBL_DECODER_MODE: '2'}), 2);
+  for (const value of ['3', '-1', '1.5', 'x'])
+    assert.throws(() => modeFromEnv({HBL_DECODER_MODE: value}), /from 0 to 2/);
 });
 
 test('decoder close frees every allocation once, after the movie objects', async () => {

@@ -28,8 +28,8 @@ src/renderer (console GPU)        compute picks/decodes, fragment draws
 - `src/streamer/input/`: `input-feeder.js`, `controller.js`, `touch.js`.
 - `src/streamer/ui/`: the console UI service (see Console UI service).
 - `src/streamer/shared/`: `ring.js` and `feed.js`; `test-support/`: helpers the tests share.
-- `src/streamer/console-api/movie-functions.json`, `movie-event-functions.json`: the native
-  symbols only Moonlight uses.
+- `src/streamer/console-api/movie-functions.json`, `movie-event-functions.json`,
+  `movie-mode-functions.json`: the native symbols only Moonlight uses.
 
 It needs `hbl-platform` beside it (bridge, `sdk/host`, `sdk/native`, `sdk/build.js`; the tests
 also use its `tests/` mocks) and, for the tests, `HBLauncher`; the layout is in

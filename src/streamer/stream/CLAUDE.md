@@ -265,6 +265,9 @@ call counter.
   builds a decoder, two media objects (configuration, output format) and two buffers (input,
   output) in module memory. `configure()` turns SPS/PPS into a configuration and starts the
   decoder; `close()` destroys all of it in reverse.
+  - `HBL_DECODER_MODE=0..2` (probe only, values unknown): builds through
+    `Decoder(type, format, DecoderMode)` from movie-mode-functions.json. That table is checked
+    and verified only when the flag is set, so unset verifies and calls exactly as before.
   - Host mode: one finite worker frame per AU carries SendInput, AcquireOutput and the next
     AcquireInput; `receive()` points the output buffer at the destination surface and fetches
     in one paired exchange. Input slots are pipelined: the host polls only when the slot came

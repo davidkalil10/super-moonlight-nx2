@@ -5,6 +5,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import definitions from '../../console-api/movie-functions.json' with {type: 'json'};
+import modeDefinitions from '../../console-api/movie-mode-functions.json' with {type: 'json'};
 import {create as createModule} from '../../../../../hbl-platform/sdk/native/module.js';
 import {createFinite} from '../../../../../hbl-platform/sdk/native/jobs.js';
 import {builds} from '../../../../../hbl-platform/sdk/build.js';
@@ -48,6 +49,8 @@ const SIZING_BYTES = MEMORY.alignment + WORD_BYTES - MEMORY.outputSize;
 /** movie::DecoderType and movie::DecoderOutputFormat of the decoder this module builds. */
 const DECODER_TYPE = 1;
 const DECODER_OUTPUT_FORMAT = 4;
+/** The largest movie::DecoderMode a probe may ask for; the values are not known. */
+const MAX_DECODER_MODE = 2;
 /** The decoder's implementation pointer, nonzero once the constructor succeeded. */
 const DECODER_IMPLEMENTATION_OFFSET = 8;
 const POINTER_BYTES = 8;
@@ -126,11 +129,35 @@ const queueFailed = (status, index) =>
 const nv12Bytes = (stride, sliceHeight) => (stride * sliceHeight * 3) / 2;
 
 /**
+ * The movie::DecoderMode HBL_DECODER_MODE asks for, or null when it is unset or empty, and
+ * the decoder is built exactly as without it.
+ * @param {Record<string, string | undefined>} env
+ * @returns {number | null}
+ */
+function modeFromEnv(env) {
+  const value = env.HBL_DECODER_MODE;
+  if (!value) return null;
+
+  const mode = Number(value);
+  if (!Number.isInteger(mode) || mode < 0 || mode > MAX_DECODER_MODE)
+    throw Error('HBL_DECODER_MODE must be a whole number from 0 to ' + MAX_DECODER_MODE);
+  return mode;
+}
+
+/**
+ * The functions a decoder of `mode` calls: the mode constructor joins only when a mode is
+ * asked for, so an unset mode verifies and calls the same set as before.
+ * @param {number | null} mode
+ */
+const definitionsFor = mode => (mode === null ? definitions : {...definitions, ...modeDefinitions});
+
+/**
  * @param {any} movieModule The compatibility-module.json of the loaded movie module.
+ * @param {Record<string, any>} used The definitions the decoder will call.
  * @returns {boolean}
  */
-function matchesInspectedBuild(movieModule) {
-  return Object.values(definitions).every(definition =>
+function matchesInspectedBuild(movieModule, used) {
+  return Object.values(used).every(definition =>
     movieModule.symbols.some(symbol => sameSymbol(symbol, definition))
   );
 }
@@ -148,12 +175,13 @@ function sameSymbol(symbol, definition) {
 /**
  * Reads the movie module's description and checks it against the inspected build.
  * @param {string} directory
+ * @param {Record<string, any>} used The definitions the decoder will call.
  */
-async function loadMovieModule(directory) {
+async function loadMovieModule(directory, used) {
   const movieModule = JSON.parse(
     /** @type {any} */ (await fs.readFile(path.join(directory, MODULE_FILE)))
   );
-  if (!matchesInspectedBuild(movieModule))
+  if (!matchesInspectedBuild(movieModule, used))
     throw Error('The loaded movie module differs from the inspected build');
   return movieModule;
 }
@@ -266,6 +294,7 @@ function outputAt(control, start, status) {
  * @property {((options: object) => Promise<any>) | null} [splitWorkerFactory]
  * @property {(event: object) => void} [log]
  * @property {() => boolean} [cancelled]
+ * @property {number | null} [mode] A movie::DecoderMode to build with (HBL_DECODER_MODE).
  */
 
 /**
@@ -459,9 +488,12 @@ function movieCalls(api, fn, worker, rpc, cancelled) {
  * @param {any} api
  * @param {(field: keyof typeof MEMORY) => number} pointer
  * @param {[string, number][]} owned
+ * @param {number | null} mode
  */
-async function construct(api, pointer, owned) {
-  await api.call('decoderCreate', [pointer('decoder'), DECODER_TYPE, DECODER_OUTPUT_FORMAT]);
+async function construct(api, pointer, owned, mode) {
+  const decoder = [pointer('decoder'), DECODER_TYPE, DECODER_OUTPUT_FORMAT];
+  if (mode === null) await api.call('decoderCreate', decoder);
+  else await api.call('decoderCreateMode', [...decoder, mode]);
   owned.push(['decoderDestroy', pointer('decoder')]);
   const implementation = await api.read(
     MEMORY.decoder + DECODER_IMPLEMENTATION_OFFSET,
@@ -788,17 +820,19 @@ async function create({
   publication = null,
   splitWorkerFactory = null,
   log = () => {},
-  cancelled = () => false
+  cancelled = () => false,
+  mode = modeFromEnv(process.env)
 }) {
   if (!WORKER_MODES.includes(workerMode)) throw Error('Unknown decoder worker mode');
   if (workerMode === 'split' && (!transport || !splitWorkerFactory))
     throw Error('Split decoder needs a TCP transport and a worker factory');
 
-  const movieModule = await loadMovieModule(directory);
+  const used = definitionsFor(mode);
+  const movieModule = await loadMovieModule(directory, used);
   workerDirectory ||= defaultWorkerDirectory();
   const api = await createModule(rpc, {
     base: movieModule.base,
-    definitions,
+    definitions: used,
     directory: workerDirectory
   });
   const fn = api.functions;
@@ -828,7 +862,7 @@ async function create({
     cancelled
   });
   try {
-    await construct(api, movie.pointer, owned);
+    await construct(api, movie.pointer, owned, mode);
   } catch (error) {
     try {
       await decoder.close();
@@ -840,4 +874,4 @@ async function create({
   return decoder;
 }
 
-export {create};
+export {create, modeFromEnv};
