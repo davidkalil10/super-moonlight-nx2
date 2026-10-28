@@ -49,9 +49,8 @@ HB package backend two (offscreen Vulkan); its README is read by `readme.test.cj
   (typing, scroll, drag, pan) as raw RGB24.
 - `tools/moonlight/controller-watch.cjs [RUN_DIR] [--hz 60] [--labels] [--sources]`: prints
   the console controller as Moonlight gamepad state.
-- `tools/moonlight/helper/`: `bench.c` (`hbmoonlight-bench FILE h264|hevc WxH [--software]
-  [--raw-fd FD] [--rgb]` pushes an Annex B file through the helper's video callbacks),
-  and `tests/input.c`, built by the hbl-moonlight helper CMake project.
+- `tools/moonlight/helper/tests/input.c`: the helper input-routing test, built by the
+  hbl-moonlight helper CMake project.
 
 ## Fake console
 
