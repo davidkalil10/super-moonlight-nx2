@@ -18,7 +18,7 @@ import path from 'node:path';
 import * as session from '../../../../hbl-platform/sdk/host/session.js';
 import * as cli from '../../../../hbl-platform/sdk/cli.js';
 import {sdkResolver} from '../../../../hbl-platform/sdk/native/symbols.js';
-import {allocate} from '../../../../hbl-platform/sdk/native/allocate.js';
+import {allocate, release} from '../../../../hbl-platform/sdk/native/allocate.js';
 import * as audioOut from '../../../../hbl-platform/sdk/host/audio-out.js';
 
 const SAMPLE_RATE = 48000;
@@ -349,9 +349,9 @@ function stream(options) {
     await call('FlushAudioOutBuffers', base);
     await drain();
     check(Number(await call('GetAudioOutBufferCount', base)) === 0, 'AudioOut queue did not drain');
-    try {
-      await call('CloseAudioOut', base);
-    } catch {}
+    // Only a closed AudioOut no longer touches its region.
+    if (await call('CloseAudioOut', base).then(() => true, () => false))
+      await release(rpc, base);
 
     if (inputError) throw inputError;
     return stats;

@@ -247,6 +247,60 @@ test('stop() drains and tears down cleanly mid-stream', async () => {
   );
 });
 
+/**
+ * Records the frees on `mock` (audio-out-mock answers every rpc.call as the allocation), each
+ * with how many AudioOut calls came before it.
+ */
+function recordFrees(mock) {
+  const frees = [];
+  const call = mock.rpc.call;
+  mock.rpc.call = async (offset, args, outputBytes) => {
+    if (offset !== FREE) return call(offset, args, outputBytes);
+    frees.push({base: args[0], at: mock.log.calls.length});
+    return {result: 0n, output: Buffer.alloc(8)};
+  };
+  return frees;
+}
+
+async function stoppedStream(mock) {
+  const input = new PassThrough();
+  const session = stream({
+    rpc: mock.rpc,
+    input,
+    queue: 3,
+    prime: 2,
+    maxPending: 64 * BUFFER_BYTES,
+    sleep: virtualSleep(mock),
+    now: () => mock.clock.t
+  });
+  input.write(sine(6));
+  await new Promise(r => setTimeout(r, 20));
+  session.stop();
+  return session.done;
+}
+
+test('a stream frees its AudioOut region once AudioOut is closed', async () => {
+  const mock = mockRpc();
+  const frees = recordFrees(mock);
+  await stoppedStream(mock);
+  const closed = mock.log.calls.findIndex(name => name.includes('CloseAudioOut'));
+  assert.equal(frees.length, 1);
+  assert.ok(closed >= 0 && frees[0].at > closed);
+});
+
+test('a stream whose AudioOut did not close keeps its region', async () => {
+  const mock = mockRpc();
+  const frees = recordFrees(mock);
+  const callAddress = mock.rpc.callAddress;
+  mock.rpc.callAddress = async (...args) => {
+    const reply = await callAddress(...args);
+    if (mock.log.calls.at(-1).includes('CloseAudioOut')) throw Error('close failed');
+    return reply;
+  };
+  await stoppedStream(mock);
+  assert.deepEqual(frees, []);
+});
+
 test('reports a hint when OpenDefaultAudioOut fails', async () => {
   const mock = mockRpc({openFail: true});
   const input = new PassThrough();
