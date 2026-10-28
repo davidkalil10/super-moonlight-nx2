@@ -192,7 +192,11 @@ function createService({
 
   /** @template T @param {() => Promise<T>} work @returns {Promise<T>} */
   const transfer = work => (chain = chain.then(work, work));
-  const writeWord = (address, value) => transfer(() => memory.write(mapped + address, u32(value)));
+  /** Skipped once the bridge is gone, so stopping a stream after that cannot reject. */
+  const writeWord = (address, value) =>
+    transfer(async () => {
+      if (!lost) await memory.write(mapped + address, u32(value));
+    });
 
   /**
    * Reads the header back and writes it again while it differs. The console can write back the
@@ -273,7 +277,7 @@ function createService({
     if (lost || !isBridgeGone(error)) return;
     lost = true;
     log({event: 'bridge-gone', message: error.message, hint: RESET_HINT});
-    detach();
+    detach().catch(error => log({event: 'detach-failed', message: error.message}));
   }
 
   /** Dispatches from a callback that cannot wait for it. */

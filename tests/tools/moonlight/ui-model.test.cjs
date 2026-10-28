@@ -973,13 +973,18 @@ test('a stream line after the bridge closed is caught and detaches once', async 
   const {console, events, service, stream} = fixture;
   const seen = await unhandled(async () => {
     console.gone = true;
+    const writes = console.writes.length;
     stream.line('stderr', '{"event":"console-stalled","silentMs":5000}');
     stream.line('stderr', '{"event":"log","message":"late"}');
     await until(() => named(events, 'detach').length, 'detach');
+    assert.equal(console.writes.length, writes, 'stopping the stream writes no busy flag');
   });
   assert.deepEqual(seen, []);
+  assert.deepEqual(stream.kills, ['SIGINT', 'SIGKILL'], 'the live stream is still stopped');
   assert.ok(named(events, 'dispatch-failed').length >= 1);
   assert.equal(named(events, 'bridge-gone').length, 1);
+  assert.equal(named(events, 'detach').length, 1);
+  assert.equal(named(events, 'detach-failed').length, 0);
   assert.equal(service.lost(), true);
 });
 
