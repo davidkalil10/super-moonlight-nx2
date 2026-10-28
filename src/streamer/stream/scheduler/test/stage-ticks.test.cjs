@@ -43,38 +43,77 @@ test('the stage ticks count at 31.25 MHz and add the host leg to submit→publis
   });
 });
 
-test('a tick read with the sequence before it is torn and never paired', () => {
-  const book = create();
-  const read = (receive, tick, input, submit) =>
+/** Reads of the receive and submit stamps: [receive, tick, input, submit]. */
+function reads(book, rows) {
+  for (const [receive, tick, input, submit] of rows)
     book.observe(snapshot({receive, input, ticks: {receive: ms(tick), submit: ms(submit)}}), 0);
-  read(1, 5, 2, 12);
-  read(2, 10, 2, 12);
-  // Unit 3's receive tick under unit 2's sequence.
-  read(2, 26, 2, 12);
-  read(3, 26, 3, 28);
-  read(3, 26, 3, 28);
+}
+
+const twice = value => ({p50: value, p95: value, max: value, n: 2});
+
+test('a newer tick under the held sequence is torn, and the held tick still books', () => {
+  const book = create();
+  // Unit 3's receive tick under unit 2's sequence, in the third read.
+  reads(book, [
+    [1, 5, 2, 12],
+    [2, 10, 2, 12],
+    [2, 26, 2, 12],
+    [3, 26, 3, 28],
+    [3, 26, 3, 28]
+  ]);
 
   const {receiveSubmit, torn, paired} = book.summary;
-  assert.deepEqual(receiveSubmit, once(2));
+  assert.deepEqual(receiveSubmit, twice(2));
   assert.equal(torn, 1);
-  assert.equal(paired, 3);
+  assert.equal(paired, 5);
+});
+
+test('one read per unit, as at lag 1, books each unit once the next one shows', () => {
+  const book = create();
+  reads(book, [
+    [1, 10, 1, 13],
+    [2, 30, 2, 33],
+    [3, 50, 3, 53],
+    [4, 70, 4, 73]
+  ]);
+
+  const {receiveSubmit, torn, paired} = book.summary;
+  assert.deepEqual(receiveSubmit, {p50: 3, p95: 3, max: 3, n: 3});
+  assert.equal(torn, 0);
+  assert.equal(paired, 6);
+});
+
+test('a held tick that shows again under the next sequence was torn and never books', () => {
+  const book = create();
+  // The second read shows unit 3's receive tick under unit 2's sequence.
+  reads(book, [
+    [1, 5, 1, 7],
+    [2, 26, 2, 12],
+    [3, 26, 3, 28],
+    [4, 40, 4, 42]
+  ]);
+
+  const {receiveSubmit, torn, paired} = book.summary;
+  assert.deepEqual(receiveSubmit, twice(2));
+  assert.equal(torn, 1);
+  assert.equal(paired, 5);
 });
 
 test('a sequence going back starts a new generation of units', () => {
   const book = create();
-  const read = (receive, tick, input, submit) =>
-    book.observe(snapshot({receive, input, ticks: {receive: ms(tick), submit: ms(submit)}}), 0);
-  read(5, 100, 4, 90);
-  read(5, 100, 4, 90);
-  read(1, 1, 0, 0);
-  read(1, 1, 0, 0);
-  read(5, 50, 5, 52);
-  read(5, 50, 5, 52);
+  reads(book, [
+    [5, 100, 4, 90],
+    [5, 100, 4, 90],
+    [1, 1, 0, 0],
+    [1, 1, 0, 0],
+    [5, 50, 5, 52],
+    [5, 50, 5, 52]
+  ]);
 
   assert.deepEqual(book.summary.receiveSubmit, once(2));
 });
 
-test('publish→applied runs from the first read showing the fetch to the first showing it applied', () => {
+test('publish→applied runs from the first read showing the fetch to the first applied', () => {
   const book = create();
   book.publishes(6, 20);
   book.observe(snapshot({fetch: 5, applied: 19}), 100);

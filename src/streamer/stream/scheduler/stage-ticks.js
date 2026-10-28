@@ -56,8 +56,8 @@ function create() {
   const units = new Map();
   /** @type {Record<string, number[]>} */
   const samples = Object.fromEntries(STAGES.map(stage => [stage, []]));
-  /** Each tick's (sequence, tick) in the previous read. */
-  let last = {};
+  /** Each tick's latest (sequence, tick), booked unless a later read contradicts it. */
+  let held = {};
   let torn = 0;
   let paired = 0;
 
@@ -68,7 +68,8 @@ function create() {
 
     entry = {ticks: {}, booked: new Set()};
     units.set(sequence, entry);
-    for (const old of units.keys()) if (old <= sequence - MAX_UNITS) units.delete(old);
+    const oldest = sequence - MAX_UNITS + 1;
+    for (const old of units.keys()) if (!isApplied(old, oldest)) units.delete(old);
     return entry;
   }
 
@@ -91,36 +92,58 @@ function create() {
     if (submitPublish !== null) book(entry, 'sendPresent', submitPublish + entry.publishApplied);
   }
 
-  /** A read with any sequence behind the previous one starts a new generation. */
+  /** A read with any sequence behind the held one starts a new generation. */
   function wentBack(snapshot) {
     return Object.entries(SEQUENCES).some(
-      ([stamp, sequenceOf]) => last[stamp] && sequenceOf(snapshot) < last[stamp].sequence
+      ([stamp, sequenceOf]) => held[stamp] && !isApplied(sequenceOf(snapshot), held[stamp].sequence)
     );
   }
 
-  /** Pairs a tick with its sequence once two reads in a row show both unchanged. */
-  function pair(stamp, sequence, tick) {
-    const before = last[stamp];
-    last[stamp] = {sequence, tick};
-    if (!before || before.sequence !== sequence) return;
-    if (before.tick !== tick) {
-      torn++;
-      return;
-    }
-    if (tick === 0n || sequence === 0) return;
-
+  /** Books a held (sequence, tick) into its unit, once. */
+  function commit(stamp, {sequence, tick}) {
     const entry = unit(sequence);
     if (entry.ticks[stamp] !== undefined) return;
+
     entry.ticks[stamp] = tick;
     paired++;
     bookStages(entry);
+  }
+
+  /**
+   * Takes one read's (sequence, tick). Each tick is stamped before its sequence, so a torn read
+   * shows the next unit's tick under the previous sequence. One read per gate is the norm at
+   * lag 1, so a held pair is booked unless the next read contradicts it.
+   */
+  function pair(stamp, sequence, tick) {
+    if (tick === 0n || sequence === 0) return;
+
+    const before = held[stamp];
+    if (!before) {
+      held[stamp] = {sequence, tick};
+      return;
+    }
+
+    if (sequence === before.sequence) {
+      // A newer tick under the same sequence: this read is torn; the held one is the unit's.
+      if (tick !== before.tick) torn++;
+      else commit(stamp, before);
+      return;
+    }
+
+    held[stamp] = {sequence, tick};
+    // The held tick reappears under the next sequence: the held read was the torn one.
+    if (tick === before.tick) {
+      torn++;
+      return;
+    }
+    commit(stamp, before);
   }
 
   /** Notes the first read showing a published unit fetched, then the first showing it applied. */
   function seePublications(snapshot, at) {
     for (const [sequence, entry] of units) {
       if (entry.publication === undefined || entry.publishApplied !== undefined) continue;
-      if (entry.fetchSeenAt === undefined && snapshot.fetch.sequence >= sequence)
+      if (entry.fetchSeenAt === undefined && isApplied(snapshot.fetch.sequence, sequence))
         entry.fetchSeenAt = at;
       if (entry.fetchSeenAt === undefined) continue;
       if (!isApplied(snapshot.nativeApplied, entry.publication)) continue;
@@ -139,7 +162,7 @@ function create() {
       if (!snapshot.ticks) return;
       if (wentBack(snapshot)) {
         units.clear();
-        last = {};
+        held = {};
       }
 
       for (const [stamp, sequenceOf] of Object.entries(SEQUENCES))

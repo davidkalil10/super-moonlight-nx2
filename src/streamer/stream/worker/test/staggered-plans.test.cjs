@@ -1448,6 +1448,32 @@ test('the live counts book the stage ticks of real frames only when they are on'
     assert.ok(ticks[stage].n > 0 && ticks[stage].p50 >= 0, stage);
 });
 
+test('at lag 1 with skips the stage ticks book from one read per gate', async () => {
+  const d = device();
+  const sink = {
+    ...d.sink,
+    async discardDestination(presentation) {
+      const index = [0, 1, 2].find(item => item !== presentation.current);
+      const address = ADDRESS.mapped + ring.frameOffset(index);
+      return {index, address, bytes: ring.FRAME_BYTES, color: 1, skip: true};
+    }
+  };
+  const live = await d.live(undefined, {lag: 1, skipBacklog: 1, stageTicks: true});
+
+  // Every third unit arrives behind a backlog, so its output is skipped.
+  for (let sequence = 1; sequence <= 12; sequence++)
+    await live.push(unitAt(sequence), {sink, backlog: sequence % 3 === 0 ? 2 : 0});
+  await live.finish({sink});
+  await live.stop();
+  await d.worker.finalize();
+
+  const {skipped, ticks} = live.counts;
+  assert.ok(skipped > 0, 'some outputs were skipped');
+  assert.ok(ticks.paired > 0, 'ticks paired at lag 1');
+  assert.ok(ticks.decode.n > 0, 'decode booked at lag 1');
+  assert.ok(ticks.publishApplied.n > 0, 'published units booked');
+});
+
 test('the worker verifies the console tick only with the stage ticks on', async () => {
   const verifiedBy = async settings => {
     const f = fixture();
