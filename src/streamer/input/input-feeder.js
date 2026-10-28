@@ -152,8 +152,9 @@ function readStorage(directory) {
 
 /**
  * The push mode reader: records arrive whole or split and are applied in order. A repeated
- * frameIndex is a launcher frame already seen (the push outruns the pad copy) and only feeds
- * the overlay gate; a frameIndex going back means a new launcher session. More than
+ * STATE.frames is a launcher frame already seen (the push outruns the pad copy) and only feeds
+ * the overlay gate; a count going back means a new launcher session. Not frameIndex: it stays
+ * 0 under time service version 1 (pad-age.js). More than
  * MAX_BACKLOG records waiting at once keeps only the newest, after lifting open touches. With
  * no record for STALL_MS, check() lifts every touch and sends the pad back to neutral; with
  * none for SILENT_MS since the attach or the last record, it throws once. A record that is
@@ -206,14 +207,14 @@ function createPushReader({
       if (next.release) release();
     }
 
-    const frameIndex = record.readUInt32LE(STATE.frameIndex);
-    if (frameIndex === lastFrame) return;
+    const frames = record.readUInt32LE(STATE.frames);
+    if (frames === lastFrame) return;
 
-    if (lastFrame !== null && frameIndex < lastFrame) {
-      log(`Input push frameIndex went back from ${lastFrame} to ${frameIndex}; new session`);
+    if (lastFrame !== null && frames < lastFrame) {
+      log(`Input push frame count went back from ${lastFrame} to ${frames}; new session`);
       release();
     }
-    lastFrame = frameIndex;
+    lastFrame = frames;
     if (paused) return;
 
     const state = record.subarray(0, STATE_BYTES);
@@ -278,7 +279,7 @@ function createPushReader({
       if (lastAt !== null && !stalled && at - lastAt >= STALL_MS) {
         stalled = true;
         release();
-        log(`Input push stalled at frameIndex ${lastFrame}`);
+        log(`Input push stalled at frame ${lastFrame}`);
       }
 
       if (heardAt === null || at - heardAt < SILENT_MS) return;

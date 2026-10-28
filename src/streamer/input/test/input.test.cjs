@@ -656,9 +656,13 @@ const {createPushReader, runPush} = require('../input-feeder.js');
 
 const BUTTON_A = 0b0001;
 
-/** One pushed record: the state block with its frameIndex, then the UI words. */
-function pushRecord(frameIndex, {buttons = 0, touch = [], overlay = false} = {}) {
+/**
+ * One pushed record: the state block with its app frame count, then the UI words. frameIndex
+ * (word 52) stays 0 unless given, as under time service version 1.
+ */
+function pushRecord(frames, {buttons = 0, touch = [], overlay = false, frameIndex = 0} = {}) {
   const state = stateBytes({buttons, touch});
+  state.writeUInt32LE(frames, 88);
   state.writeUInt32LE(frameIndex, 52);
   const ui = Buffer.alloc(pushPlan.UI_BYTES);
   ui.writeUInt32LE(UI_MAGIC, 0);
@@ -721,6 +725,26 @@ test('the push reader presses Start from its chord and logs only the pad + and -
   assert.deepEqual(logs, [], 'a chord is not a + press');
   reader.data(pushRecord(2, {buttons: NPAD.plus}));
   assert.match(logs.at(-1), /^Input keys: \+ down, - up at /);
+});
+
+test('the push reader steps on the app frame count, not on frameIndex', () => {
+  const lines = [];
+  const reader = createPushReader({layout: 'position', write: line => lines.push(line), log() {}});
+  const controllers = () => parsed(lines).filter(line => line.type === 'controller');
+  reader.attach(812);
+
+  // Version 1: frameIndex stays 0 while the app counts frames.
+  reader.data(pushRecord(1, {buttons: BUTTON_A}));
+  reader.data(pushRecord(2));
+  reader.data(pushRecord(3, {buttons: BUTTON_A}));
+  assert.deepEqual(
+    controllers().map(line => line.buttonFlags),
+    [0x2000, 0, 0x2000]
+  );
+
+  const before = lines.length;
+  reader.data(pushRecord(3, {frameIndex: 7}));
+  assert.equal(lines.length, before, 'a frame already seen stays skipped whatever frameIndex says');
 });
 
 test('once the UI magic was seen, a shifted idle record no longer passes as detached', () => {
@@ -892,7 +916,7 @@ test('push mode feeds records, drops a backlog burst and releases after a silenc
     await until(() => logs.length === 1);
     assert.deepEqual(touchActions(lines), ['down 1', 'up 1', 'down 2', 'up 2']);
     assert.equal(parsed(lines).at(-1).buttonFlags, 0, 'a silence sends the pad back to neutral');
-    assert.deepEqual(logs, ['Input push stalled at frameIndex 8']);
+    assert.deepEqual(logs, ['Input push stalled at frame 8']);
     const counts = push.take();
     assert.equal(counts.pushed, 9);
     assert.equal(counts.dropped, 5);
