@@ -108,8 +108,8 @@ that remains open.
 - The root `.gitignore` ignores `node_modules`, a symlink included.
 - No test binds the launcher port 39380; native TCP tests listen on port 0.
 - `src/streamer/stream/scheduler/test/request-budget.cjs` is the offline cost model; run it
-  before any device run. Console probes live in sibling `hbl-dev/sdk/tools`: the user runs them, one at a time,
-  per `DEVICE-RULES.md` in hbl-notes.
+  before any device run. Console probes live in sibling `hbl-dev/sdk/tools`: the user runs them,
+  one at a time, per `DEVICE-RULES.md` in hbl-notes.
 - A test change that alters what the runtime sends needs its reason in the commit.
 
 ## Bridge budget (measured)

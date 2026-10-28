@@ -21,7 +21,7 @@ and audio"). Test from the repo root: `node --test src/streamer/audio/test/audio
    into it, append it. It blocks in recv and in the wait, so stop() points it at its exit and
    sends two silent chunks before waiting and joining.
 3. While a native job or the worker may still hold the AudioOut, or once the watched rpc saw
-   the bridge go, the objects are retained, never closed; the report asks for a restart.
+   the bridge go, the objects are retained (stream invariant 8); the report asks for a restart.
 4. The source sends one chunk per chunk duration on its own clock, silence when the queue is
    dry, so the worker never starves. Past maxPending the oldest whole chunks drop; `tone`
    replaces the input with 500 Hz but still drains it.

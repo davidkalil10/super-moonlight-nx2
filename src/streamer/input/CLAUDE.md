@@ -55,17 +55,19 @@ the panel and read-size facts.
 - The block at STATE.touch (byte 128) is nn::hid::TouchScreenState<16>: u64 sampling number,
   u32 count, u32 pad, then sixteen 40-byte entries {deltaTime u64, attributes, fingerId, x, y,
   diameterX, diameterY, rotationAngle, reserved}. Coordinates are 1280x720; the launcher shader
-  scales point 0 by 1.5 onto 1920x1080. Attributes bit 1 means the finger lifted this frame.
+  (HBLauncher/homebrew-launcher/shaders/launcher.comp) scales point 0 by 1.5 onto 1920x1080.
+  Attributes bit 1 means the finger lifted this frame: ATTR_END, the bit the shader tests as
+  `touch[6]&2u`.
 - fingerId is the pointer id, since slots compact when a finger lifts. The panel has no
   pressure, so down/move send 0.0 ("pressure unknown").
 
 ## Pad age (pad-age.js)
 
 The logic shader bumps STATE.frames once per launcher frame right after the pad copy: no step
-between reads is a stall, more than one is missed frames. The time service words stay zero
-under service version 1. Age is the read's end minus frames x period, relative to the freshest
-read since the last take. It assumes the launcher runs at the period, so take once per stats
-row to keep a stall to one row.
+between reads is a stall, more than one is missed frames. The time service words (clockMs,
+frameIndex) stay zero under service version 1, which Moonlight uses. Age is the read's end minus
+frames x period, relative to the freshest read since the last take. It assumes the launcher runs at
+the period, so take once per stats row to keep a stall to one row.
 
 ## Push worker (input-push-plan.js, input-push-worker.js)
 
@@ -77,8 +79,9 @@ row to keep a stall to one row.
 - The frame cannot branch, so checkedPush checks the last pass's send count at stop, like the
   audio recycle check.
 - create() verifies code, copy and sync functions, opens the TCP link (console to host here),
-  allocates counter and worker; start() spawns. stop() points the worker at its exit; the host
-  keeps reading until the join so a send never blocks. If the worker may still hold the socket
+  allocates counter and worker; start() spawns. stop() points the worker at its exit, and since it
+  only sleeps it leaves within one period; the host keeps reading until the join so a send
+  never blocks. If the worker may still hold the socket
   it is retained: host end dropped, console descriptor open, SmileBASIC needs a restart.
 
 ## Test
