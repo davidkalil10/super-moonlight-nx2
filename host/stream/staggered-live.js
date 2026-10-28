@@ -491,6 +491,7 @@ function create({
    * A failed check also logs the publication before the last one: a current on it points at a
    * stale status read rather than a wrong surface.
    * @param {any} error
+   * @returns {never}
    */
   function withPrevious(error) {
     if (error.expected)
