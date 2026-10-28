@@ -40,6 +40,7 @@ const HOSTS_PER_PAGE = 6;
  *   settings: Record<string, any>
  * }} Model
  * @typedef {{op: string, item: number, value: number}} Command
+ * @typedef {{apps: App[], currentGame: number, message?: string | null}} Listed
  * @typedef {{model: Model, intents: Intent[]}} Step
  */
 
@@ -234,7 +235,11 @@ function onCommand(model, command) {
   }
 }
 
-/** The host's apps arrived: show them and fetch their covers. */
+/**
+ * The host's apps arrived: show them and fetch their covers.
+ * @param {Model} model @param {Listed} listed
+ * @returns {Step}
+ */
 function onListed(model, {apps, currentGame, message}) {
   if (!['connecting', 'pairing', 'quitting'].includes(model.screen)) return same(model);
 
@@ -256,7 +261,7 @@ function onListed(model, {apps, currentGame, message}) {
 
 /**
  * @param {Model} model
- * @param {{type: string, [key: string]: any}} event A console command or a service result.
+ * @param {any} event A console command or a service result, told apart by type.
  * @returns {Step}
  */
 function reduce(model, event) {

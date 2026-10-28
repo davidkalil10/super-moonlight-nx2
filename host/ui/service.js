@@ -51,7 +51,7 @@ const STOP_GRACE_MS = 10000;
 /** How often the poll loop checks app-runtime.json for the active app. */
 const RUNTIME_CHECK_MS = 500;
 /** Every child gets its stdout and stderr piped, nothing on stdin. */
-const PIPED = ['ignore', 'pipe', 'pipe'];
+const PIPED = /** @type {const} */ (['ignore', 'pipe', 'pipe']);
 
 /** One little-endian 32-bit word. */
 function u32(value) {
@@ -79,7 +79,11 @@ function createChildren({
   helperPath = HELPER,
   liveScript = path.join(import.meta.dirname, '../stream/live.js')
 } = {}) {
-  /** Collects the output for exited, or hands each line to onLine as it arrives. */
+  /**
+   * Collects the output for exited, or hands each line to onLine as it arrives.
+   * @param {import('node:child_process').ChildProcess} child
+   * @param {{onLine?: (stream: string, line: string) => void, collect?: boolean}} options
+   */
   function wrap(child, {onLine, collect}) {
     let out = '';
     let err = '';
@@ -96,7 +100,10 @@ function createChildren({
       child.on('close', (code, signal) => resolve({code, signal, out, err}));
       child.on('error', error => resolve({code: -1, signal: null, out, err: error.message}));
     });
-    return {exited, cancel: (signal = 'SIGINT') => child.kill(signal)};
+    return {
+      exited,
+      cancel: (/** @type {NodeJS.Signals} */ signal = 'SIGINT') => child.kill(signal)
+    };
   }
 
   const start = (file, args) => spawnProcess(file, args, {stdio: [...PIPED]});
@@ -168,11 +175,12 @@ function createService({
   let stream = null;
   let quitResult = null;
   let covers = new Map();
-  /** Every memory transfer, in order. */
+  /** @type {Promise<unknown>} Every memory transfer, in order. */
   let chain = Promise.resolve();
   /** Every model event and publish, in order. */
   let queue = Promise.resolve();
 
+  /** @template T @param {() => Promise<T>} work @returns {Promise<T>} */
   const transfer = work => (chain = chain.then(work, work));
   const writeWord = (address, value) => transfer(() => memory.write(mapped + address, u32(value)));
 

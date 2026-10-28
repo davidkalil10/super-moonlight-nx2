@@ -585,6 +585,7 @@ function createPages(raster) {
      */
     page(model, covers = new Map()) {
       const host = model.host?.name ?? '';
+      /** @type {[string, string][]} */
       const cancel = [['B', 'Cancel']];
       switch (model.screen) {
         case 'hosts':
