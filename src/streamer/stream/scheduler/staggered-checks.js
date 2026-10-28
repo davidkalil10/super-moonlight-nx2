@@ -149,7 +149,7 @@ function isApplied(nativeApplied, sequence) {
 
 /**
  * The mismatch a torn read leaves, or null for any other failure. The same one twice is a wrong
- * surface (invariant 14).
+ * surface (invariant 13).
  * @param {any} error
  * @param {Snapshot} snapshot
  */
@@ -181,12 +181,10 @@ async function waitChecked(
   let nextInputRetry = 0;
   let pending = null;
   let torn = null;
-  let last = null;
   while (Date.now() < until) {
     await beforeRead();
     const startedAt = now();
     const snapshot = await worker.readStatus();
-    last = snapshot;
     onRead(snapshot, startedAt);
 
     try {
@@ -208,12 +206,7 @@ async function waitChecked(
     }
     await pause(POLL_MS, pending);
   }
-  // `pending` names what the gate still waited for when the deadline hit.
-  const timeout = Object.assign(Error('Staggered checked status timed out'), {
-    pending,
-    timedOut: true
-  });
-  throw last ? failedCheck(timeout, expected, last) : timeout;
+  throw Error('Staggered checked status timed out');
 }
 
 /**
@@ -253,8 +246,6 @@ async function waitOutput(
  * What the gate after access unit `sequence` expects: its receive, the submit of the unit
  * before it, the output `lag` behind it (two by default) and, once there is one, the fetch of
  * the output before that and the publication that fetch presented unless it was skipped.
- * With lag 0 the gate names output `sequence` itself and expects `sequence - 1` acquired and
- * fetched (invariants 3 and 4).
  * @param {number} sequence
  * @param {Map<number, {length: number, pts: bigint}>} units
  * @param {Map<number, any>} destinations Output sequence to the surface it was fetched into.
@@ -265,8 +256,8 @@ function expectedFor(sequence, units, destinations, lag = gates.OUTPUT_LAG) {
   const value = {receive: {sequence, bytes: units.get(sequence).length}};
   if (sequence >= 2) value.input = {sequence: sequence - 1};
 
-  const acquired = sequence - Math.max(lag, 1);
-  const fetched = lag === 0 ? acquired : acquired - 1;
+  const acquired = sequence - lag;
+  const fetched = acquired - 1;
   if (acquired >= 1) value.acquire = {sequence: acquired, pts: units.get(acquired).pts};
   if (fetched >= 1) {
     const destination = destinations.get(fetched);

@@ -15,7 +15,7 @@ const READ_WRITE = 3;
 /** nativeReady through nativeApplied, read once to check the shader ABI and seed the sequence. */
 const READY_BYTES = ring.CONTROL.nativeApplied + WORD_BYTES - ring.CONTROL.nativeReady;
 const READY_SEQUENCE_OFFSET = ring.CONTROL.nativeApplied - ring.CONTROL.nativeReady;
-/** current through nativeApplied, the presentation state of worker publication (Invariant 14). */
+/** current through nativeApplied, the presentation state of worker publication (Invariant 13). */
 const STATE_BYTES = ring.CONTROL.nativeApplied + WORD_BYTES - ring.CONTROL.current;
 const STATE_APPLIED_OFFSET = ring.CONTROL.nativeApplied - ring.CONTROL.current;
 /** How much of the control page a timeout reports. */
@@ -271,20 +271,6 @@ async function create(rpc, storage, {cancelled = () => false, color = 1} = {}) {
     },
 
     wait,
-
-    /**
-     * Reads `bytes` of native surface `index` from `offset`, for --surface-check.
-     * @param {number} index
-     * @param {number} offset
-     * @param {number} bytes
-     */
-    sample(index, offset, bytes) {
-      const inRing = index >= 0 && index < ring.NATIVE_FRAMES;
-      if (!inRing || offset < 0 || offset + bytes > ring.FRAME_BYTES)
-        throw Error('Native surface sample out of range');
-
-      return rpc.read(storage.mapped + ring.frameOffset(index) + offset, bytes);
-    },
 
     /** Clears the published sequence so the shader stops showing native frames. */
     async close() {

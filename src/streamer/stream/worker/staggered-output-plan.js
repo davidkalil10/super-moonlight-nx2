@@ -1,6 +1,6 @@
 /**
  * Output worker frames for the staggered lag-2 path: acquire and stamp one output, then ack it
- * (Invariant 13); fetch copies it into the ring surface, releases it and publishes it.
+ * (Invariant 12); fetch copies it into the ring surface, releases it and publishes it.
  */
 import {build, CALL4_X19} from '../../../../../hbl-platform/smilebasic/engine/shared/frames.js';
 import {CODE, IPC_COPY} from '../../../../../hbl-platform/sdk/native/thread.js';

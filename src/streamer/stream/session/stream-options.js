@@ -75,19 +75,12 @@ function checkGateFlags(flags) {
     throw Error('--gate-on-receive is untested at --present-hz 120');
   if (gateQueue && !gateOnReceive) throw Error('--gate-queue needs --gate-on-receive');
 
-  const knownLag = outputLag === 0 || outputLag === 1 || outputLag === 2;
-  if (outputLag !== null && !knownLag) throw Error('--output-lag takes 0, 1 or 2');
-  if (outputLag !== 0) return;
-  if (gateQueue) throw Error('--output-lag 0 is untested with --gate-queue');
-  if (gateOnReceive) throw Error('--output-lag 0 is untested with --gate-on-receive');
-  if (flags.presentHz !== 60) throw Error('--output-lag 0 is untested at --present-hz 120');
+  const knownLag = outputLag === 1 || outputLag === 2;
+  if (outputLag !== null && !knownLag) throw Error('--output-lag takes 1 or 2');
 }
 
-/** --surface-check, --audio-frames, --queue, --duration, --warmup and --expect. */
-function checkRunFlags(args, {surfaceCheck, audioFrames, socketAudio, queue, duration, warmup}) {
-  if (!Number.isInteger(surfaceCheck) || surfaceCheck < 0)
-    throw Error('--surface-check takes a unit count, 0 for off');
-
+/** --audio-frames, --queue, --duration, --warmup and --expect. */
+function checkRunFlags(args, {audioFrames, socketAudio, queue, duration, warmup}) {
   const audioStep = Number.isInteger(audioFrames) && audioFrames >= FRAME_STEP;
   if (!audioStep || audioFrames % FRAME_STEP) throw Error('--audio-frames takes a multiple of 240');
   if (socketAudio && audioFrames > SOCKET_AUDIO_FRAMES)
@@ -149,7 +142,6 @@ function parseOptions(args, rpc, width, height, fps, env = process.env) {
     gateOnReceive: args.includes('--gate-on-receive'),
     gateQueue: args.includes('--gate-queue'),
     outputLag: cli.number(args, '--output-lag', at60 ? 1 : null),
-    surfaceCheck: cli.number(args, '--surface-check', 0),
     decodeWait: args.includes('--decode-wait'),
     receiveWait: args.includes('--receive-wait'),
     stageTicks: env.HBL_STAGE_TICKS === '1',

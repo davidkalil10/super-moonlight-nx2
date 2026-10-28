@@ -19,7 +19,6 @@
     "src/streamer/shared/ring.js",
     "src/streamer/stream/session/h264-stream.js",
     "src/streamer/stream/session/h264-sps.js",
-    "src/streamer/stream/scheduler/surface-check.js",
     "src/renderer/moonlight/build.js",
     "src/streamer/stream/session/bitrate.js",
     "src/streamer/stream/native/bridge-counter.js",

@@ -269,7 +269,7 @@ function activeGateFlags({trimBacklogMs, gateOnReceive, gateQueue, outputLag}) {
  */
 function buildSummary(
   options,
-  {rows, staggeredLive, tail, socketAudioReport, inputPushStop, stopReason, lagEnd, stream}
+  {rows, staggeredLive, tail, socketAudioReport, inputPushStop, stopReason, stream}
 ) {
   const {presentHz, skipBacklog, skipRule, decodeWait, receiveWait, avoidWindow} = options;
   const {queue, inputHz, audioFrames, audio, socketAudio, input, inputPush, warmup, expect} =
@@ -299,7 +299,6 @@ function buildSummary(
     ...scoring.summarize(rows, {warmup}),
     expect,
     stopReason,
-    ...(lagEnd && {lagEnd}),
     ...(stream.sps && {sps: stream.sps}),
     ...(stream.bSlices && {bSlices: stream.bSlices})
   };
@@ -314,12 +313,6 @@ function score(summary, {expect, duration, socketAudioReport, inputPushStop, sto
   if (inputPushStop?.error || inputPushStop?.retained)
     result.failures.push('input push: ' + (inputPushStop.error ?? 'worker retained'));
   if (stopReason === 'console-stalled') result.failures.push('console stopped answering');
-  if (stopReason === 'lag0-timeout')
-    result.failures.push('lag 0 decoder wait timed out; rerun with --output-lag 1');
-  if (stopReason === 'lag0-reorder')
-    result.failures.push('lag 0 refused, the stream can reorder; rerun with --output-lag 1');
-  const torn = summary.staggered?.surfaceCheck?.torn;
-  if (torn) result.failures.push(`surface check: ${torn} surfaces changed before reuse`);
   if (duration !== null && stopReason !== 'duration')
     result.failures.push('ended before duration: ' + stopReason);
   result.pass = result.failures.length === 0;

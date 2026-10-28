@@ -591,7 +591,7 @@ function decoderObject({
 
   /**
    * Stops the workers and the decoder and destroys what create() built, collecting every
-   * failure. Workers are finalized only after a clean shutdown (Invariant 8).
+   * failure. Workers are finalized only after a clean shutdown (Invariant 7).
    */
   async function close() {
     if (closed) return;

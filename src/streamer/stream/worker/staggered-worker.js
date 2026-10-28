@@ -377,7 +377,7 @@ async function initializeControl(rpc, sync, control, gateOnReceive) {
   const at = offset => control + offset;
   await rpc.write(control, initialControl(control));
 
-  // Invariant 6: the ack starts signalled for AU 1; so does the length gate.
+  // Invariant 5: the ack starts signalled for AU 1; so does the length gate.
   const lightEvents = [
     [inputPlan.CONTROL.decodeGate, 0],
     [inputPlan.CONTROL.ignoredFetchGate, 0],
@@ -607,7 +607,7 @@ async function create({
     if (!worker.thread || worker.joined) return;
 
     try {
-      // Invariant 7: dispatches lead to the exit before any wake.
+      // Invariant 6: dispatches lead to the exit before any wake.
       const offsets =
         worker === inputWorker
           ? [...inputPlan.CONTROL.sendDispatch, ...inputPlan.CONTROL.receiveDispatch]
@@ -778,7 +778,7 @@ async function create({
         frame,
         publication
       });
-      // Invariant 12.
+      // Invariant 11.
       const bytes = drainDescriptors(sequence, descriptor);
 
       try {

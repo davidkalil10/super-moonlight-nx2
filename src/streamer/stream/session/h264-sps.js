@@ -1,6 +1,6 @@
 /**
- * Reads whether an H.264 stream can reorder its output, for --output-lag 0: the decoder has no
- * reorder queue (lag0-re.md Q2). A truncated SPS throws rather than pass as reorder-free.
+ * Reads whether an H.264 stream can reorder its output, for the h264-sps log line and the run
+ * summary. A truncated SPS throws rather than pass as reorder-free.
  */
 
 const NAL_TYPE_MASK = 0x1f;

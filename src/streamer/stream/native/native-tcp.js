@@ -1,6 +1,6 @@
 /**
  * A TCP connection from the console back to the host, for streaming data straight into
- * console memory with nn::socket calls instead of bridge writes. Invariant 15.
+ * console memory with nn::socket calls instead of bridge writes. Invariant 14.
  */
 import net from 'node:net';
 import crypto from 'node:crypto';

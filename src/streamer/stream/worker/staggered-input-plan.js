@@ -1,6 +1,6 @@
 /**
  * Input worker frames for the staggered lag-2 path: receive N, wait on the decode gate, open
- * the fetch gate, wait for N-1's acquire ack, then SendInput N (Invariants 5-7).
+ * the fetch gate, wait for N-1's acquire ack, then SendInput N (Invariants 4-6).
  */
 import {build, CALL4_X19} from '../../../../../hbl-platform/smilebasic/engine/shared/frames.js';
 import {CODE, IPC_COPY} from '../../../../../hbl-platform/sdk/native/thread.js';
@@ -169,10 +169,9 @@ function putDescriptor(descriptors, slot, unit, address, index, fetchGate) {
 
 /**
  * Both input descriptors for the gate that submits `current`: its own, naming the checked
- * input slot and the fetch gate (the ignored one until an output is acquired, unless
- * `fetchCurrent` fetches the output of `current` itself), and the next unit's, which stays on
- * the ignored gate until its own gate write. A null `next` leaves the next descriptor a zero
- * placeholder for its prime.
+ * input slot and the fetch gate (the ignored one until an output is acquired), and the next
+ * unit's, which stays on the ignored gate until its own gate write. A null `next` leaves the
+ * next descriptor a zero placeholder for its prime.
  * @param {object} options
  * @param {import('./staggered-status.js').Snapshot} options.snapshot
  * @param {import('./staggered-status.js').Expected} options.expected
@@ -181,19 +180,9 @@ function putDescriptor(descriptors, slot, unit, address, index, fetchGate) {
  * @param {AccessUnit} options.next
  * @param {number} options.fetchGate
  * @param {number} options.ignoredFetchGate
- * @param {boolean} [options.fetchCurrent]
  * @returns {Buffer}
  */
-function gateWrite({
-  snapshot,
-  expected,
-  input,
-  current,
-  next,
-  fetchGate,
-  ignoredFetchGate,
-  fetchCurrent = false
-}) {
+function gateWrite({snapshot, expected, input, current, next, fetchGate, ignoredFetchGate}) {
   const checked = status.check(snapshot, expected);
   if (isUncheckedSlot(input, expected, checked.inputIndex))
     throw Error('Staggered input slot is not the checked decoder buffer');
@@ -202,8 +191,7 @@ function gateWrite({
 
   const descriptors = Buffer.alloc(SLOTS * DESCRIPTOR.bytes);
   const currentSlot = (current.sequence - 1) % SLOTS;
-  const fetches = fetchCurrent || expected.acquire;
-  const currentFetchGate = fetches ? fetchGate : ignoredFetchGate;
+  const currentFetchGate = expected.acquire ? fetchGate : ignoredFetchGate;
   putDescriptor(descriptors, currentSlot, current, input.address, input.index, currentFetchGate);
 
   const nextUnit = next ?? {sequence: 0, length: 0, pts: 0n};

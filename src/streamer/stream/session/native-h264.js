@@ -42,7 +42,7 @@ import {
 
 /** Shortest gap between two keyframe requests to Sunshine. */
 const IDR_COOLDOWN_MS = 100;
-// Invariant 16.
+// Invariant 15.
 const IDR_QUIET_MS = 1000;
 const CONSOLE_STALL_MS = 5000;
 /** Default stats row interval. */
@@ -146,7 +146,7 @@ async function run({
 }) {
   const options = parseOptions(args, rpc, width, height, fps);
   const {audio, socketTone, socketAudio, duration, inputPush, inputPushPad, audioFrames} = options;
-  const {presentHz, skipRule, trimBacklogMs, gateOnReceive, outputLag, surfaceCheck} = options;
+  const {presentHz, skipRule, trimBacklogMs, gateOnReceive, outputLag} = options;
   const {decodeWait, receiveWait, avoidWindow, skipBacklog, gateQueue, stageTicks, drainGates} =
     options;
   if (!rpc.host) throw Error('Native TCP requires a fresh launcher session from this branch');
@@ -175,8 +175,6 @@ async function run({
   let ending = null;
   let stopped = false;
   let stopReason = null;
-  /** Set when a lag 0 decoder wait timed out (staggered-live.js lagEnd). */
-  let lagEnd = null;
   const rows = [];
   let inputBridge = {exchanges: 0, bridgeMs: 0};
   /** @type {import('../../input/pad-age.js').PadRow[]} */
@@ -195,10 +193,10 @@ async function run({
   let generation = 0;
   let sps;
   let pps;
-  /** The last SPS as h264-sps.js reads it and the B slices seen, for the log and summary. */
-  const stream = {sps: null, bSlices: 0};
   let configured = false;
   let workerStarted = false;
+  /** The last SPS as h264-sps.js reads it and the B slices seen, for the log and summary. */
+  const stream = {sps: null, bSlices: 0};
   let firstFrame = null;
   let outstanding = 0;
   // What the next stats row counts from.
@@ -267,56 +265,24 @@ async function run({
     soundSource?.halt();
   }
 
-  /**
-   * Ends a lag 0 run; invariants 4 and 17.
-   * @param {{at: number, reason: string, recommendedLag: number}} fallback
-   * @param {string} [reason]
-   */
-  function endLagZero(fallback, reason = 'lag0-timeout') {
-    lagEnd = fallback;
-    log({event: 'lag-end', lagEnd: fallback});
-    stop(reason);
-  }
-
-  /**
-   * The lag 0 refusal for a stream that can reorder; invariant 17.
-   * @param {any} unit
-   * @param {string} reorder
-   */
-  function reorderRefusal(unit, reorder) {
-    const fallback = {at: unit.seq, reason: reorder, recommendedLag: 1};
-    return Object.assign(Error('--output-lag 0 refused: ' + reorder), {
-      lagEnd: fallback,
-      stopReason: 'lag0-reorder'
-    });
-  }
-
-  /**
-   * Reads and logs the SPS reorder before it is configured; invariant 17.
-   * @param {any} unit
-   */
-  function checkSps(unit) {
-    let reorder;
+  /** Logs the SPS reorder fields before it is configured. */
+  function logSps() {
     try {
       const parsed = parseSps(sps);
-      reorder = reorderOf(parsed);
-      stream.sps = {...parsed, reorder};
+      stream.sps = {...parsed, reorder: reorderOf(parsed)};
     } catch (error) {
-      reorder = 'unreadable SPS: ' + error.message;
-      stream.sps = {error: error.message, reorder};
+      stream.sps = {error: error.message, reorder: 'unreadable SPS: ' + error.message};
     }
     log({event: 'h264-sps', ...stream.sps});
-    if (outputLag === 0 && reorder) throw reorderRefusal(unit, reorder);
   }
 
   /**
-   * Counts B slices and logs the first; lag 0 ends on one.
+   * Counts B slices and logs the first.
    * @param {any} unit
    */
-  function checkSlices(unit) {
+  function countBSlice(unit) {
     if (stream.bSlices === 0) log({event: 'h264-b-slice', seq: unit.seq});
     stream.bSlices++;
-    if (outputLag === 0) throw reorderRefusal(unit, 'B slice in unit ' + unit.seq);
   }
 
   const onInterrupt = () => stop('SIGINT');
@@ -340,8 +306,7 @@ async function run({
       ...(drainGates !== null && {drainGates}),
       ...(gateOnReceive && {gateOnReceive}),
       ...(gateQueue && {gateQueue}),
-      ...(outputLag !== null && {lag: /** @type {0 | 1 | 2} */ (outputLag)}),
-      ...(surfaceCheck && {surfaceCheck}),
+      ...(outputLag !== null && {lag: /** @type {1 | 2} */ (outputLag)}),
       ...(stageTicks && {stageTicks}),
       decodeWait,
       receiveWait,
@@ -439,7 +404,6 @@ async function run({
     row.link = linkQuality(inputBridge);
     if (inputPush)
       row.inputPush = inputPushPad ? {...pushCounts, ...padAge.mergePushPad(pushPad)} : pushCounts;
-    if (surfaceCheck) row.surfaces = staggeredLive?.takeSurfaces() ?? [];
     if (soundSource) row.audio = audioCounters(soundSource.report());
 
     row.at = stage + '/' + (decoder?.step ?? '-');
@@ -563,7 +527,7 @@ async function run({
     } while (outstanding > 0);
   }
 
-  /** Stops the workers, then closes the decoder and the sink; invariant 8. */
+  /** Stops the workers, then closes the decoder and the sink; invariant 7. */
   async function releaseNative(errors) {
     let retained = Boolean(rpc.bridgeLost);
     if (staggeredLive && !retained) {
@@ -635,14 +599,14 @@ async function run({
    */
   async function readyToDecode(unit) {
     const sets = scanUnit(unit.data);
-    if (sets.bSlice) checkSlices(unit);
+    if (sets.bSlice) countBSlice(unit);
     if (configured && setsChanged(sets)) await resync(Error('H.264 parameter sets changed'));
     sps = sets.sps || sps;
     pps = sets.pps || pps;
     if (configured) return true;
 
     if (!unit.keyframe || !sps || !pps) return false;
-    checkSps(unit);
+    logSps();
     await decoder.configure(sps, pps, fps);
     configured = true;
     return true;
@@ -778,7 +742,6 @@ async function run({
       socketAudioReport: procs.socketAudioReport,
       inputPushStop: procs.inputPushStop,
       stopReason,
-      lagEnd,
       stream
     });
     const result = score(summary, {
@@ -816,7 +779,6 @@ async function run({
   } catch (error) {
     failed = error;
     await logFailure(error);
-    if (error.lagEnd && !stopping) endLagZero(error.lagEnd, error.stopReason);
     if (!stopping) throw error;
   } finally {
     await shutdown();

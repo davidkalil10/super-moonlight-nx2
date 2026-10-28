@@ -27,7 +27,7 @@ const {spsNal, sliceNal} = require('../../../test-support/test-helpers.cjs');
 const accessUnit = Buffer.from('0000016742001eab00000168ce0100000165abcd', 'hex');
 const annexB = (...nals) => Buffer.concat(nals.flatMap(nal => [Buffer.from([0, 0, 0, 1]), nal]));
 const pps = Buffer.from('68ce01', 'hex');
-/** A keyframe whose SPS rules out reordering, for lag 0, and one whose SPS allows it. */
+/** A keyframe whose SPS rules out reordering, one whose SPS allows it, and an unreadable one. */
 const noReorderUnit = annexB(spsNal(), pps, sliceNal(7));
 const reorderUnit = annexB(spsNal({reorder: 2}), pps, sliceNal(7));
 const truncatedSpsUnit = annexB(Buffer.from('6742001eab', 'hex'), pps, sliceNal(7));
@@ -719,14 +719,10 @@ const pairedUnits = (count, unit = accessUnit) =>
     pts: (index + 1) * 1000
   }));
 
-function staggeredFake(
-  events,
-  {pushFails = null, stopFails = false, lagEnd = null, surfaces = null} = {}
-) {
-  return (/** @type {any} */ options) => {
+function staggeredFake(events, {pushFails = null, stopFails = false} = {}) {
+  return () => {
     let pending = false;
     events.push({type: 'staggered-create'});
-    if (surfaces) surfaces.options = options;
     return {
       async factory() {},
       start({frame}) {
@@ -734,9 +730,6 @@ function staggeredFake(
       },
       async push(unit, {sink, onDecoded, onPresented}) {
         events.push({type: 'staggered-push', pts: unit.pts});
-        if (surfaces) await new Promise(resolve => setTimeout(resolve, 15));
-        if (unit.pts === pushFails && lagEnd)
-          throw Object.assign(Error('Staggered checked status timed out'), {lagEnd});
         if (unit.pts === pushFails) throw Error('Short receive 10/20');
         if (pending) {
           await sink.workerDestination({current: 0, applied: 0});
@@ -765,77 +758,11 @@ function staggeredFake(
         return pending;
       },
       get counts() {
-        return {
-          submitted: 5,
-          decoded: 5,
-          presented: 5,
-          tailDrained: 2,
-          waiting: {},
-          ...(surfaces && {surfaceCheck: surfaces.counts})
-        };
-      },
-      takeSurfaces: () => surfaces?.samples.splice(0) ?? []
+        return {submitted: 5, decoded: 5, presented: 5, tailDrained: 2, waiting: {}};
+      }
     };
   };
 }
-
-test('--surface-check needs a unit count, 0 for off', {timeout: 5000}, async () => {
-  for (const value of ['--duration', '-1', '1.5']) {
-    const f = await fixture({units: pairedUnits(2)});
-    f.options.createStaggered = staggeredFake(f.events);
-    f.options.args.push('--staggered', '--surface-check', value);
-    await exercise(f, async () => {
-      await assert.rejects(() => run(f.options), /--surface-check takes a unit count, 0 for off/);
-    });
-  }
-});
-
-test(
-  '--surface-check writes its samples to the rows and fails on a torn surface',
-  {timeout: 5000},
-  async () => {
-    const sample = {seq: 2, surface: 1, hash: '0000000a', reread: '0000000b', torn: true};
-    for (const torn of [0, 1]) {
-      const surfaces = {
-        counts: {every: 2, sampled: 1, rereads: 1, torn, pending: 0},
-        samples: [{...sample, torn: Boolean(torn)}]
-      };
-      const f = await fixture({units: pairedUnits(4)});
-      f.options.createStaggered = staggeredFake(f.events, {surfaces});
-      f.options.statsMs = 10;
-      f.options.args.push('--staggered', '--surface-check', '2');
-      await exercise(f, async () => {
-        const summary = await run(f.options);
-        assert.equal(surfaces.options.surfaceCheck, 2);
-        assert.deepEqual(summary.staggered.surfaceCheck, surfaces.counts);
-        const text = await fs.readFile(path.join(f.directory, 'logs', 'stats.jsonl'), 'utf8');
-        const rows = text
-          .trim()
-          .split('\n')
-          .map(JSON.parse)
-          .filter(row => row.codec);
-        assert.deepEqual(
-          rows.flatMap(row => row.surfaces),
-          [{...sample, torn: Boolean(torn)}]
-        );
-        const failure = 'surface check: 1 surfaces changed before reuse';
-        assert.equal(summary.failures.includes(failure), Boolean(torn));
-      });
-    }
-    const f = await fixture({units: pairedUnits(4)});
-    const surfaces = {counts: {}, samples: []};
-    f.options.createStaggered = staggeredFake(f.events, {surfaces});
-    f.options.statsMs = 10;
-    f.options.args.push('--staggered');
-    await exercise(f, async () => {
-      const summary = await run(f.options);
-      assert.equal(surfaces.options.surfaceCheck, undefined);
-      const text = await fs.readFile(path.join(f.directory, 'logs', 'stats.jsonl'), 'utf8');
-      assert.ok(!text.includes('surfaces'));
-      assert.equal(summary.pass !== undefined, true);
-    });
-  }
-);
 
 test(
   '--staggered queues 8 units by default so a source burst is not dropped',
@@ -1680,37 +1607,22 @@ test('a gate error that already failed a push is logged once', {timeout: 5000}, 
   });
 });
 
-test('--output-lag reaches the staggered scheduler and takes 0 to 2', {timeout: 5000}, async () => {
-  for (const lag of [1, 0]) {
-    const f = await fixture({units: pairedUnits(4, lag ? accessUnit : noReorderUnit)});
-    const created = [];
-    const fake = staggeredFake(f.events);
-    f.options.createStaggered = options => {
-      created.push(options);
-      return fake();
-    };
-    f.options.args.push('--staggered', '--output-lag', String(lag));
-    await exercise(f, async () => {
-      const summary = await run(f.options);
-      assert.equal(created[0].lag, lag);
-      assert.equal(summary.outputLag, lag);
-      assert.notEqual(summary.stopReason, 'lag0-reorder');
-    });
-  }
+test('--output-lag reaches the staggered scheduler and takes 1 or 2', {timeout: 5000}, async () => {
+  const f = await fixture({units: pairedUnits(4)});
+  const created = [];
+  const fake = staggeredFake(f.events);
+  f.options.createStaggered = options => {
+    created.push(options);
+    return fake();
+  };
+  f.options.args.push('--staggered', '--output-lag', '1');
+  await exercise(f, async () => {
+    const summary = await run(f.options);
+    assert.equal(created[0].lag, 1);
+    assert.equal(summary.outputLag, 1);
+  });
   for (const [args, message] of [
-    [['--staggered', '--output-lag', '3'], /--output-lag takes 0, 1 or 2/],
-    [
-      ['--staggered', '--output-lag', '0', '--gate-on-receive'],
-      /--output-lag 0 is untested with --gate-on-receive/
-    ],
-    [
-      ['--staggered', '--output-lag', '0', '--gate-on-receive', '--gate-queue'],
-      /--output-lag 0 is untested with --gate-queue/
-    ],
-    [
-      ['--staggered', '--output-lag', '0', '--present-hz', '120'],
-      /--output-lag 0 is untested at --present-hz 120/
-    ]
+    [['--staggered', '--output-lag', '3'], /--output-lag takes 1 or 2/]
   ]) {
     const g = await fixture();
     await exercise(g, async () => {
@@ -1720,37 +1632,6 @@ test('--output-lag reaches the staggered scheduler and takes 0 to 2', {timeout: 
   }
 });
 
-test(
-  'a lag 0 decoder timeout stops the run and records the fallback',
-  {timeout: 5000},
-  async () => {
-    const f = await fixture({units: pairedUnits(4, noReorderUnit)});
-    const lagEnd = {
-      at: 3,
-      waitedFor: 2,
-      reason: 'acquire 2 timed out at lag 0',
-      recommendedLag: 1
-    };
-    f.options.createStaggered = staggeredFake(f.events, {pushFails: 3000, lagEnd});
-    f.options.args.push('--staggered', '--output-lag', '0');
-    await exercise(f, async () => {
-      const summary = await run(f.options);
-      assert.equal(summary.stopReason, 'lag0-timeout');
-      assert.deepEqual(summary.lagEnd, lagEnd);
-      assert.equal(summary.pass, false);
-      assert.ok(
-        summary.failures.includes('lag 0 decoder wait timed out; rerun with --output-lag 1')
-      );
-      const events = (await fs.readFile(path.join(f.directory, 'logs', 'events.jsonl'), 'utf8'))
-        .trim()
-        .split('\n')
-        .map(JSON.parse);
-      assert.deepEqual(events.find(entry => entry.event === 'lag-end').lagEnd, lagEnd);
-      assert.equal(events.find(entry => entry.event === 'native-stop').reason, 'lag0-timeout');
-    });
-  }
-);
-
 /** The events.jsonl records of a fixture's run. */
 async function loggedEvents(f) {
   const text = await fs.readFile(path.join(f.directory, 'logs', 'events.jsonl'), 'utf8');
@@ -1758,63 +1639,47 @@ async function loggedEvents(f) {
 }
 
 test(
-  'lag 0 refuses an SPS that allows reordering before it configures',
+  'the SPS reorder fields are logged and summarised before configure',
   {timeout: 5000},
   async () => {
-    for (const unit of [reorderUnit, truncatedSpsUnit]) {
+    const cases = [
+      [noReorderUnit, null],
+      [reorderUnit, 'max_num_reorder_frames 2'],
+      [truncatedSpsUnit, 'unreadable SPS: Truncated H.264 SPS']
+    ];
+    for (const [unit, reorder] of cases) {
       const f = await fixture({units: pairedUnits(4, unit)});
       f.options.createStaggered = staggeredFake(f.events);
-      f.options.args.push('--staggered', '--output-lag', '0');
+      f.options.args.push('--staggered');
       await exercise(f, async () => {
         const summary = await run(f.options);
-        const reason =
-          unit === reorderUnit ? 'max_num_reorder_frames 2' : 'unreadable SPS: Truncated H.264 SPS';
-        assert.equal(summary.stopReason, 'lag0-reorder');
-        assert.equal(summary.lagEnd.reason, reason);
-        assert.equal(summary.lagEnd.recommendedLag, 1);
-        assert.equal(summary.sps.reorder, reason);
-        assert.equal(summary.pass, false);
-        assert.ok(
-          summary.failures.includes(
-            'lag 0 refused, the stream can reorder; rerun with --output-lag 1'
-          )
-        );
-        assert.equal(f.events.filter(event => event.type === 'configure').length, 0);
         const events = await loggedEvents(f);
-        assert.equal(events.find(entry => entry.event === 'h264-sps').reorder, reason);
-        assert.equal(events.find(entry => entry.event === 'native-stop').reason, 'lag0-reorder');
+        assert.equal(summary.sps.reorder, reorder);
+        assert.equal(events.find(entry => entry.event === 'h264-sps').reorder, reorder);
+        assert.equal(f.events.filter(event => event.type === 'configure').length, 1);
       });
     }
   }
 );
 
-test('a B slice ends a lag 0 run and is only counted at lag 1', {timeout: 5000}, async () => {
-  const units = [annexB(sliceNal(0)), annexB(sliceNal(6)), annexB(sliceNal(0))];
-  for (const lag of [0, 1]) {
-    const f = await fixture({
-      units: [noReorderUnit, ...units].map((unit, index) => ({
-        hex: unit.toString('hex'),
-        keyframe: index === 0,
-        pts: (index + 1) * 1000
-      }))
-    });
-    f.options.createStaggered = staggeredFake(f.events);
-    f.options.args.push('--staggered', '--output-lag', String(lag));
-    await exercise(f, async () => {
-      const summary = await run(f.options);
-      const events = await loggedEvents(f);
-      assert.equal(summary.sps.reorder, null);
-      assert.equal(summary.bSlices, 1);
-      assert.ok(events.some(entry => entry.event === 'h264-b-slice'));
-      if (lag === 0) {
-        assert.equal(summary.stopReason, 'lag0-reorder');
-        assert.match(summary.lagEnd.reason, /^B slice in unit \d+$/);
-      } else {
-        assert.notEqual(summary.stopReason, 'lag0-reorder');
-        assert.equal(summary.lagEnd, undefined);
-      }
-    });
-  }
+test('B slices are counted and the first is logged', {timeout: 5000}, async () => {
+  const units = [noReorderUnit, annexB(sliceNal(0)), annexB(sliceNal(6)), annexB(sliceNal(0))];
+  const f = await fixture({
+    units: units.map((unit, index) => ({
+      hex: unit.toString('hex'),
+      keyframe: index === 0,
+      pts: (index + 1) * 1000
+    }))
+  });
+  f.options.createStaggered = staggeredFake(f.events);
+  f.options.args.push('--staggered');
+  await exercise(f, async () => {
+    const summary = await run(f.options);
+    const events = await loggedEvents(f);
+    assert.equal(summary.sps.reorder, null);
+    assert.equal(summary.bSlices, 1);
+    assert.equal(events.filter(entry => entry.event === 'h264-b-slice').length, 1);
+  });
 });
 
 test(
@@ -1847,12 +1712,10 @@ test(
     assert.equal(flagged.trimBacklogMs, 40);
     assert.equal(flagged.gateOnReceive, true);
     assert.equal(flagged.outputLag, 1);
-    assert.equal(flagged.sps.reorder, 'unreadable SPS: Truncated H.264 SPS');
-    const lagZero = await started(['--output-lag', '0'], noReorderUnit);
-    assert.equal(lagZero.outputLag, 0);
-    assert.equal(lagZero.sps.reorder, null);
-    assert.equal(lagZero.sps.maxNumReorderFrames, 0);
-    assert.equal(lagZero.sps.pocType, 0);
+    const withSps = await started([], noReorderUnit);
+    assert.equal(withSps.sps.reorder, null);
+    assert.equal(withSps.sps.maxNumReorderFrames, 0);
+    assert.equal(withSps.sps.pocType, 0);
     const plain = await started([]);
     assert.equal(plain.started, true);
     assert.equal(plain.outputLag, 1);

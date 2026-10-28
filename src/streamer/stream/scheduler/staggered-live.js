@@ -6,7 +6,6 @@
 import * as presentPacer from './present-pacer.js';
 import * as decodeWaits from './decode-wait.js';
 import * as receiveWaits from './receive-wait.js';
-import * as surfaceChecks from './surface-check.js';
 import * as exchangeTiming from './exchange-timing.js';
 import * as gates from '../worker/staggered-gate.js';
 import {create as createGateQueue} from './gate-queue.js';
@@ -61,10 +60,9 @@ const DEFAULT_PRESENT_HZ = 60;
  *   before one output is skipped to drain them
  * @param {boolean} [options.gateOnReceive] gate each unit as soon as it is sent
  * @param {boolean} [options.gateQueue] run those gates off push() (gate on receive only)
- * @param {0 | 1 | 2} [options.lag] fetch each output this many gates after its decode opened
+ * @param {1 | 2} [options.lag] fetch each output this many gates after its decode opened
  * @param {boolean} [options.decodeWait] sleep through a pending acquire (vsync rule only)
  * @param {boolean} [options.receiveWait] sleep through a pending receive
- * @param {number} [options.surfaceCheck] sample every this many published surfaces, 0 for off
  * @param {{beforeMs: number, afterMs: number} | null} [options.avoid] span around a predicted
  *   decode-done or receive-done no status read starts in
  * @param {boolean} [options.stageTicks] the workers stamp console ticks (HBL_STAGE_TICKS=1)
@@ -84,7 +82,6 @@ function create({
   lag = gates.OUTPUT_LAG,
   decodeWait = false,
   receiveWait = false,
-  surfaceCheck = 0,
   avoid = null,
   stageTicks = false,
   now = Date.now
@@ -95,8 +92,7 @@ function create({
   if (trimBacklogMs !== null && vsyncRule) throw Error('The backlog trim needs the backlog rule');
   if (trimBacklogMs !== null && skipBacklog < 1)
     throw Error('The backlog trim needs a skip backlog of at least 1');
-  if (lag !== 0 && lag !== 1 && lag !== gates.OUTPUT_LAG)
-    throw Error('The staggered output lag is 0, 1 or 2');
+  if (lag !== 1 && lag !== gates.OUTPUT_LAG) throw Error('The staggered output lag is 1 or 2');
   if (gateQueue && !gateOnReceive) throw Error('The gate queue needs gate on receive');
   if (drainGates !== null && vsyncRule) throw Error('The backlog drain needs the backlog rule');
   if (drainGates !== null && gateQueue) throw Error('The backlog drain is untested with the queue');
@@ -112,9 +108,9 @@ function create({
   let held = null;
   /** The held unit's gate queue, under gateQueue. */
   let queue = null;
-  /** The last unit primed, which a queued gate before it carries (invariant 11). */
+  /** The last unit primed, which a queued gate before it carries (invariant 10). */
   let primed = 0;
-  // The prime and gate writes, one at a time (invariant 10).
+  // The prime and gate writes, one at a time (invariant 9).
   /** @type {Promise<unknown>} */
   let writes = Promise.resolve();
   /** The error of a queued gate that stop() dropped, for the caller to log. */
@@ -136,15 +132,6 @@ function create({
   /** The publication before `published`, logged with a failed check. */
   let previous = null;
   let pending = null;
-  /** The lag 0 gate that timed out on the decoder, see lagEnd(). */
-  let fallback = null;
-  let sampleSink = null;
-  const surfaces = surfaceCheck
-    ? surfaceChecks.create({
-        every: surfaceCheck,
-        read: (index, offset, bytes) => sampleSink.sample(index, offset, bytes)
-      })
-    : null;
   let skips = 0;
   let stale = 0;
   let cooling = 0;
@@ -373,27 +360,6 @@ function create({
   }
 
   /**
-   * Ends a lag 0 run on a decoder timeout instead of switching lag (invariants 3 and 4).
-   * @param {any} error
-   * @param {number} sequence
-   * @param {Expected} expected
-   */
-  function lagEnd(error, sequence, expected) {
-    const waitedFor = expected[error.pending]?.sequence;
-    const decoderTimeout = error.timedOut && ['acquire', 'fetch'].includes(error.pending);
-    if (lag !== 0 || !decoderTimeout) return error;
-
-    fallback = {
-      at: sequence,
-      waitedFor,
-      reason: `${error.pending} ${waitedFor} timed out at lag 0`,
-      recommendedLag: 1
-    };
-    error.lagEnd = {...fallback};
-    return error;
-  }
-
-  /**
    * A failed check also logs the publication before the last one: a current on it points at a
    * stale status read rather than a wrong surface.
    * @param {any} error
@@ -576,7 +542,7 @@ function create({
     const watch = acquireWatch(expected);
     const link = receiveWatch(expected);
     let snapshot = await waitChecked(worker, expected, rereadsFor(expected, watch, link)).catch(
-      error => withPrevious(lagEnd(error, sequence, expected))
+      withPrevious
     );
     countRead(expected, snapshot, onDecoded, onPresented, onSkipped);
 
@@ -599,10 +565,6 @@ function create({
       ));
     }
 
-    // On the gate path, but only for a sampled surface: the re-read must beat the refill.
-    sampleSink = sink;
-    if (surfaces) await surfaces.reuse(destination);
-
     enter('staggered-gate');
     await inOrder(() => {
       if (primed > sequence) next = units.get(sequence + 1);
@@ -618,9 +580,6 @@ function create({
         destination
       });
     });
-
-    if (surfaces && expected.fetch)
-      await surfaces.first(expected.fetch.sequence, destinations.get(expected.fetch.sequence));
   }
 
   /**
@@ -659,7 +618,6 @@ function create({
       if (!frame) throw Error('Staggered worker needs the host IDR frame layout');
       firstInput = input;
       layout = frame;
-      surfaces?.start(frame);
       ready = true;
     },
 
@@ -717,8 +675,7 @@ function create({
 
     /**
      * Gates the last unit (already gated under gateOnReceive, once the queue drained under
-     * gateQueue), stops the input worker and drains the last `lag` outputs. With lag 0 the
-     * last gate already opened the last fetch, so the tail drains none and only waits for it.
+     * gateQueue), stops the input worker and drains the last `lag` outputs.
      * @param {any} [hooks]
      * @returns {Promise<{drained: number}>}
      */
@@ -766,10 +723,6 @@ function create({
         waits
       ).catch(withPrevious);
 
-      if (lag === 0) {
-        counts.decoded++;
-        onDecoded?.(1);
-      }
       counts.presented++;
       onPresented?.(1);
 
@@ -785,7 +738,7 @@ function create({
       if (retained) throw Error(RESTART);
       if (!worker) return;
       if (queue) {
-        // Units already primed and sent; dropping their gates is safe (invariant 7).
+        // Units already primed and sent; dropping their gates is safe (invariant 6).
         // The running one finishes.
         queue.clear();
         await queue.drain().catch(error => {
@@ -834,16 +787,9 @@ function create({
         ...(receive && {receive: {...receiveSlept, fixedMs: receive.fixedMs}}),
         acquireWaits: acquireWaits.counts,
         fetchWaits: fetchWaits.counts,
-        ...(fallback && {lagEnd: {...fallback}}),
-        ...(surfaces && {surfaceCheck: surfaces.counts}),
         ...(ticks && {ticks: ticks.summary}),
         ...(slots && {slots: slots.summary})
       };
-    },
-
-    /** The surface samples re-read since the last call. */
-    takeSurfaces() {
-      return surfaces?.take() ?? [];
     },
 
     get retained() {

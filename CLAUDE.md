@@ -220,9 +220,6 @@ under 8.3 ms, and the bridge feeds 120 slots per second. The first is out inside
 - `src/streamer/stream/session/protocol-binary.js` pins the default helper to
   `moonlight-helper-main-c33e545`; bump the pin with each helper build, `$HBMOONLIGHT`
   overrides it.
-- `--output-lag 0` (60 Hz only) is refused on a stream that can reorder and ends the run on a
-  decoder-wait timeout; `--surface-check K` re-reads sampled surfaces before reuse to catch a
-  late write. Both stay opt-in until the next slot decides them (src/streamer/stream/CLAUDE.md).
 - Validated on SmileBASIC 4.4.9 / Switch 2 23.0.1: a 128x96 test frame decoded and displayed,
   then a 1920x1080 Sunshine stream with sound. The first protocol-2 run presented 1-2 fps and
   dropped audio under the combined RPC load, which led to protocol 3 and the TCP data path.

@@ -41,37 +41,33 @@ staggered-output-plan.js). Their status words are read by staggered-status.js.
 2. A prime for N+1 before the console took N's length-gate wake merges both wakes, so
    `admit(N)` waits for N-1 received (gate-queue.js).
 3. The fetch gate is one auto-clear event: at most one fetch signal is outstanding.
-4. Lag 0: N-1 is acquired and fetched before gate N opens. A decoder-wait timeout stops the
-   run (`lag0-timeout`) instead of falling back to another lag mid-run.
-5. A descriptor the worker can reach before its checked gate write names the ignored fetch
+4. A descriptor the worker can reach before its checked gate write names the ignored fetch
    gate, so a stop wake cannot open a fetch.
-6. Submit N only after N-1's acquire ack. Release N-2 first. The ack starts signalled for N=1,
+5. Submit N only after N-1's acquire ack. Release N-2 first. The ack starts signalled for N=1,
    standing in for the host-decoded IDR.
-7. Stop rewrites the dispatches to the exit frame before it signals, so a stop wake never
+6. Stop rewrites the dispatches to the exit frame before it signals, so a stop wake never
    reaches SendInput.
-8. A worker or job that may still run is retained, never closed (contract above).
-9. Sequences restart per generation; the gate queue lives with the held unit.
-10. The bridge runs each rpc POST in arrival order, not call order, so prime and gate writes
-    go through one chain (`inOrder`). Reads stay outside it.
-11. A queued gate write covers both descriptors: it carries the primed unit, never zeroes it.
-12. A drain also stamps the next output's placeholder, so the last tail output acquires under
+7. A worker or job that may still run is retained, never closed (contract above).
+8. Sequences restart per generation; the gate queue lives with the held unit.
+9. The bridge runs each rpc POST in arrival order, not call order, so prime and gate writes
+   go through one chain (`inOrder`). Reads stay outside it.
+10. A queued gate write covers both descriptors: it carries the primed unit, never zeroes it.
+11. A drain also stamps the next output's placeholder, so the last tail output acquires under
     its own sequence, not the one its slot held two AUs earlier.
-13. The output worker acks only after its stamps, so the next SendInput can't race the
+12. The output worker acks only after its stamps, so the next SendInput can't race the
     host-visible acquire status.
-14. `current` is stored before `nativeApplied`: retry a torn status read once; a repeat means
+13. `current` is stored before `nativeApplied`: retry a torn status read once; a repeat means
     a wrong surface.
-15. Native TCP accepts only the connection that presents the token, and nothing closes while a
+14. Native TCP accepts only the connection that presents the token, and nothing closes while a
     console job may still use the socket.
-16. A backlog while the console is silent is the console's: past CONSOLE_STALL_MS the stream
+15. A backlog while the console is silent is the console's: past CONSOLE_STALL_MS the stream
     stops (`console-stalled`) instead of asking Sunshine for a keyframe.
-17. Lag 0 needs a stream that cannot reorder: the SPS (h264-sps.js, E.2.1) or a B slice
-    refuses it (`lag0-reorder`). An unreadable SPS refuses too.
 
 ## Flags (stream-options.js checkFlags; live.js passes them through)
 
 | flag                         | does                                                         | default                           |
 | ---------------------------- | ------------------------------------------------------------ | --------------------------------- |
-| `--output-lag 0\|1\|2`       | fetch each output 0/1/2 gates after its decode opened        | 1 at 60 Hz, else 2                |
+| `--output-lag 1\|2`          | fetch each output 1/2 gates after its decode opened          | 1 at 60 Hz, else 2                |
 | `--skip-backlog N\|off`      | skip an output once more than N units are queued             | 1 at 60 Hz or under vsync, else 2 |
 | `--skip-rule backlog\|vsync` | publish by backlog, or by the predicted vsync                | backlog                           |
 | `--trim-backlog-ms N`        | skip one output after 3 gates whose unit in hand is N ms old | off                               |
@@ -82,10 +78,8 @@ staggered-output-plan.js). Their status words are read by staggered-status.js.
 | `--receive-wait`             | sleep through a predicted receive (receive-wait.js)          | off                               |
 | `--avoid-window B-A`         | keep status reads out of a span around the predicted vsync   | off                               |
 | `--present-hz 60\|120`       | present rate                                                 | 60                                |
-| `--surface-check K`          | hash every Kth fetched surface; a torn re-read fails the run | 0 (off)                           |
 
-Refusals: lag 0 with `--gate-on-receive`, `--gate-queue` or 120 Hz; `--gate-queue` without
-`--gate-on-receive`; `--gate-on-receive` at 120 Hz.
+Refusals: `--gate-queue` without `--gate-on-receive`; `--gate-on-receive` at 120 Hz.
 
 ## session/
 
@@ -104,7 +98,7 @@ the child processes in stream-children.js.
 - `run()` spawns the helper with its H.264 and PCM pipes. The first frames take the host-driven
   decoder path, which is drained fully before the staggered workers take the rest.
 - The run stops on SIGINT/SIGTERM, `--duration`, Moonlight leaving the console, or a console that
-  stops answering (invariant 16).
+  stops answering (invariant 15).
 - Run record: manifest.json, events.jsonl, stats.jsonl (one row per statsMs) and summary.json.
 - Why the drain reads the reader at the gate: units step up during the status wait, so the
   push-time `backlog` the skip and trim rules read stays 0 at a standing step 2. A skipped
@@ -116,8 +110,6 @@ the child processes in stream-children.js.
   `--expect` limits, `verdict` checks them. Dropped frames and IDR requests fail a run unless
   `--expect` allows some. Backlog trims are intended skips: counted apart from drops, they fail a
   run only through an explicit `--expect trimmed=N`.
-- Why lag 0 refuses a reorderable stream (invariant 17): the decoder would hold an output the
-  next gate waits for.
 - h264-stream.js (`AccessUnits`) joins the helper's Annex-B pipe with its AU metadata channel
   (sequence, size, keyframe flag, timestamps) without blocking either pipe. It cuts the byte
   stream into AUs by the announced sizes. Buffering is bounded: by default it pauses the pipe
@@ -131,8 +123,8 @@ gate and when to read again. The predictors and pacer only time its reads; they 
 what is written.
 
 Steady state: the input worker receives each AU over native TCP; the output worker fetches the
-unit two behind (one behind at lag 1, the unit itself right after its decode at lag 0). A
-steady frame costs one checked status read and one combined gate write.
+unit two behind (one behind at lag 1). A steady frame costs one checked status read and one
+combined gate write.
 
 - **Skip (backlog rule):** with more than skipBacklog units queued on the host, an output is
   still decoded, fetched and released, but copied to a free surface behind a replay of the last
@@ -155,8 +147,8 @@ steady frame costs one checked status read and one combined gate write.
 - **Gate queue** (gate on receive only): push() primes and sends a unit, queues its gate on
   gate-queue.js and returns, so a gate rereading a late receive no longer holds up the next
   unit. Every gate status read reports the console's receive sequence to the queue. The queue
-  starts with unit 1 and goes at finish (invariant 9); queued gates carry the unit primed
-  behind them (invariant 11).
+  starts with unit 1 and goes at finish (invariant 8); queued gates carry the unit primed
+  behind them (invariant 10).
 - **Rereads:** a gate late on receive, input, acquire or fetch reads again at once, since a
   pause costs the frame its vsync slot (request-budget.cjs staggeredRetryWait). A gate waiting
   for the renderer to apply a publication sleeps to the vsync present-pacer.js predicts,
@@ -234,19 +226,18 @@ and the host's checked gate write.
 
 - staggered-gate.js: one checked write covers the input and output descriptors, which sit
   together in the control block. It opens decode of N and names the outputs to handle next:
-  N-2 (acquired, or a placeholder before it exists) and N-1. At lag 0 they are N and N+1.
+  N-2 (acquired, or a placeholder before it exists) and N-1.
 - Input plan, per AU N: the receive frame reads N over native TCP and parks on the decode gate.
   Once the gate write opens it, it signals the descriptor's fetch gate (held output N-2, or the
   ignored gate before N=3), waits for the acquire ack of N-1, then jumps through sendDispatch to
   the send frame that submits N. So the auto-clear decoder event never carries two unacquired
-  outputs (invariant 6). At lag 0 the fetch gate is N's own from N=1, so N's fetch follows its
-  acquire.
+  outputs (invariant 5).
 - With a length gate (gate on receive) the receive frame waits on it first: the host primes N's
   descriptor and signals the gate when N arrives, so gate N does not need N+1. Its next
   descriptor is a placeholder. The length gate starts signalled for AU 1.
 - Output plan: the fetch frame copies the held output into the descriptor's ring surface,
   releases it, publishes the descriptor's metadata (the native sequence last) and stamps the
-  fetch status. The output worker acks once per acquired output (invariant 13).
+  fetch status. The output worker acks once per acquired output (invariant 12).
 - staggered-status.js: the workers stamp results and a sequence into the ring's control block
   (src/streamer/shared/ring.js), just past the shader's words, so one read from
   `ring.CONTROL.current` to the fetch sequence covers one AU:
@@ -281,7 +272,7 @@ call counter.
     back empty.
   - Split mode: `configure()` also creates and registers the `splitWorkerFactory` workers,
     which take over after the host-driven first frame; `close()` stops and finalizes them
-    (invariant 8 still applies).
+    (invariant 7 still applies).
 - native-sink.js: the decoder writes each frame straight into a ring surface; the sink writes
   the publication metadata, then its sequence, into the control page.
   - Host publication: `destination()` alternates surfaces 0 and 1, `publish()` writes, `wait()`
@@ -291,12 +282,12 @@ call counter.
   - Destinations are checked to be writable mapped memory before the decoder may write them.
 - native-tcp.js: `create()` listens on the host, verifies the console's socket functions and
   writes a sockaddr_in plus a random token into a console allocation; the console connects and
-  sends the token with finite native jobs (invariant 15). `receive()` hands on what the console
+  sends the token with finite native jobs (invariant 14). `receive()` hands on what the console
   sends after the token.
 - bridge-counter.js: `instrument` books every call to the stage the caller is in when it starts;
   `take` returns the totals since the last take and resets them. Reads and writes count one
   exchange per chunk. `silentMs` is how long the console has kept a call waiting without
-  settling any (invariant 16).
+  settling any (invariant 15).
 
 ## Build and test
 
