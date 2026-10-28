@@ -330,6 +330,8 @@ function buildSummary(options, {rows, staggeredLive, tail, socketAudioReport, st
   };
 }
 
+/** @typedef {ReturnType<typeof buildSummary> & ReturnType<typeof scoring.verdict>} Scored */
+
 /** Scores the summary against --expect and the stop reason, and merges the verdict into it. */
 function score(summary, {expect, duration, socketAudioReport, stopReason}) {
   const result = scoring.verdict(summary, expect);
@@ -343,9 +345,32 @@ function score(summary, {expect, duration, socketAudioReport, stopReason}) {
 }
 
 /**
+ * @typedef {object} RunOptions
+ * @property {string[]} args The command line, flags as parsed by parseOptions.
+ * @property {string} directory The launcher run directory.
+ * @property {any} rpc The session rpc of that run.
+ * @property {any} storage The app's private storage (feed.js findPrivateStorage).
+ * @property {string} helperPath The hbmoonlight binary.
+ * @property {number} width
+ * @property {number} height
+ * @property {number} fps
+ * @property {string} [sourceRevision] Recorded in the manifest; defaults to the git head.
+ * @property {typeof createNativeDecoder} [createDecoder]
+ * @property {typeof createNativeTransport} [createTransport]
+ * @property {typeof createNativeSink} [createSink]
+ * @property {typeof createSocketAudioSource} [createSocketAudio]
+ * @property {typeof createStaggeredLive} [createStaggered]
+ * @property {typeof spawn} [spawnProcess]
+ * @property {number} [consoleStallMs]
+ * @property {number} [statsMs]
+ * @property {() => number} [now]
+ */
+
+/**
  * Streams HOST APP from the --moonlight flags until a stop, then writes and returns the scored
  * summary. Throws on bad flags, on a stream error that was not caused by a stop, and with an
  * AggregateError when the shutdown fails or native objects had to be retained.
+ * @param {RunOptions} options
  */
 async function run({
   args,
@@ -472,10 +497,10 @@ async function run({
     staggeredLive = createStaggered({
       presentHz,
       skipBacklog,
-      skipRule,
+      skipRule: /** @type {'backlog' | 'vsync'} */ (skipRule),
       ...(trimBacklogMs !== null && {trimBacklogMs}),
       ...(gateOnReceive && {gateOnReceive}),
-      ...(outputLag !== null && {lag: outputLag}),
+      ...(outputLag !== null && {lag: /** @type {1 | 2} */ (outputLag)}),
       decodeWait,
       receiveWait,
       avoid: avoidWindow,
@@ -516,11 +541,14 @@ async function run({
     helper = spawnProcess(helperPath, helperArgs(host, app, {width, height, fps, bitrate, audio}), {
       stdio: ['pipe', 'ignore', 'pipe', audio ? 'pipe' : 'ignore', 'pipe']
     });
-    reader = new AccessUnits(helper.stdio[H264_FD], {
-      maxQueuedUnits: queue,
-      onBacklog: requestIdr,
-      now
-    });
+    reader = new AccessUnits(
+      /** @type {import('node:stream').Readable} */ (helper.stdio[H264_FD]),
+      {
+        maxQueuedUnits: queue,
+        onBacklog: requestIdr,
+        now
+      }
+    );
     helper.stdin.on('error', error => {
       if (!stopping) reader.fail(error);
     });
@@ -561,7 +589,7 @@ async function run({
     );
     if (child.stdio?.[3])
       readline
-        .createInterface({input: child.stdio[3]})
+        .createInterface({input: /** @type {import('node:stream').Readable} */ (child.stdio[3])})
         .on('line', line => {
           try {
             const counts = JSON.parse(line);
@@ -614,7 +642,8 @@ async function run({
 
   async function checkRuntime() {
     try {
-      const runtime = JSON.parse(await fs.readFile(path.join(directory, 'app-runtime.json')));
+      const file = await fs.readFile(path.join(directory, 'app-runtime.json'));
+      const runtime = JSON.parse(/** @type {any} */ (file));
       if (runtime.active?.id !== 'moonlight') stop('app-exit');
     } catch (error) {
       reader.fail(error);
@@ -968,7 +997,7 @@ async function run({
       stopReason,
       record: output
     });
-    return summary;
+    return /** @type {Scored} */ (summary);
   }
 
   try {
