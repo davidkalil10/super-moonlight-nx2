@@ -143,11 +143,9 @@ test('the link verdict follows the input feeder ms per exchange', () => {
   assert.deepEqual(linkSeconds(rows), {ok: 2, weak: 0, bad: 1, verdict: 'bad'});
   const counted = (ok, weak, bad) =>
     linkSeconds(
-      [
-        ...Array(ok).fill('ok'),
-        ...Array(weak).fill('weak'),
-        ...Array(bad).fill('bad')
-      ].map(verdict => ({link: {verdict}}))
+      [...Array(ok).fill('ok'), ...Array(weak).fill('weak'), ...Array(bad).fill('bad')].map(
+        verdict => ({link: {verdict}})
+      )
     ).verdict;
   assert.equal(counted(9, 0, 1), 'ok', 'a tenth bad is not over the share');
   assert.equal(counted(8, 0, 2), 'bad');
