@@ -68,6 +68,8 @@ const PUSH_HZ = 120;
 const MAX_BACKLOG = 4;
 /** No record for this long releases everything held on the PC. */
 const STALL_MS = 250;
+/** No record for this long, counted from the attach, fails the push. */
+const SILENT_MS = 2000;
 /** How often push mode checks for a stall and, every SOURCE_CHECK_MS, the source. */
 const PUSH_CHECK_MS = 50;
 
@@ -170,8 +172,9 @@ function readStorage(directory) {
  * frameIndex is a launcher frame already seen (the push outruns the pad copy) and only feeds
  * the overlay gate; a frameIndex going back means a new launcher session. More than
  * MAX_BACKLOG records waiting at once keeps only the newest, after lifting open touches. With
- * no record for STALL_MS, check() lifts every touch and sends the pad back to neutral. A
- * record that is not framed throws, and the reader takes nothing more.
+ * no record for STALL_MS, check() lifts every touch and sends the pad back to neutral; with
+ * none for SILENT_MS since the attach or the last record, it throws once. A record that is
+ * not framed throws, and the reader takes nothing more.
  * @param {object} options
  * @param {'position' | 'labels'} options.layout
  * @param {(line: string) => void} options.write
@@ -192,6 +195,7 @@ function createPushReader({
   let paused = false;
   let lastFrame = null;
   let lastAt = null;
+  let heardAt = null;
   let stalled = false;
   let broken = false;
   let recordBytes = 0;
@@ -238,6 +242,7 @@ function createPushReader({
       recordBytes = bytes;
       pending = Buffer.alloc(0);
       lastFrame = null;
+      heardAt = now();
     },
     /** @param {Buffer} chunk */
     data(chunk) {
@@ -254,7 +259,7 @@ function createPushReader({
       }
       const at = now();
       if (lastAt !== null) counts.gapMaxMs = Math.max(counts.gapMaxMs, at - lastAt);
-      lastAt = at;
+      lastAt = heardAt = at;
       stalled = false;
       counts.pushed += count;
       let first = 0;
@@ -267,15 +272,20 @@ function createPushReader({
       pending = pending.subarray(count * recordBytes);
     },
     check() {
-      if (lastAt === null || stalled || now() - lastAt < STALL_MS) return;
-      stalled = true;
-      release();
-      log(`Input push stalled at frameIndex ${lastFrame}`);
+      const at = now();
+      if (lastAt !== null && !stalled && at - lastAt >= STALL_MS) {
+        stalled = true;
+        release();
+        log(`Input push stalled at frameIndex ${lastFrame}`);
+      }
+      if (heardAt === null || at - heardAt < SILENT_MS) return;
+      heardAt = null;
+      throw Error(`Input push heard nothing from the console for ${SILENT_MS} ms`);
     },
     /** Releases what is held and forgets the last arrival, so a stopped worker is no stall. */
     detach() {
       release();
-      lastAt = null;
+      lastAt = heardAt = null;
       stalled = false;
     },
     /** @returns {{pushed: number, dropped: number, gapMaxMs: number}} Since the last take. */
@@ -348,7 +358,14 @@ function runPush({
   }
 
   async function startWorker(state, ui) {
-    worker = await createWorker({rpc, state, ui, hz, onData});
+    worker = await createWorker({
+      rpc,
+      state,
+      ui,
+      hz,
+      onData,
+      onClose: () => worker && fail(Error('Input push socket closed by the console'))
+    });
     reader.attach(worker.recordBytes);
     await worker.start();
     running = `${state}/${ui}`;
@@ -377,7 +394,11 @@ function runPush({
   }
 
   const timer = setInterval(() => {
-    reader.check();
+    try {
+      reader.check();
+    } catch (error) {
+      if (worker) fail(error);
+    }
     const at = now();
     if (busy || failed || at - sourceChecked < SOURCE_CHECK_MS) return;
     sourceChecked = at;

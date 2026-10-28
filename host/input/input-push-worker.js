@@ -59,6 +59,7 @@ const SYNC_NAMES = ['sleepThread', 'atomicAddU32'];
  *   block alone.
  * @property {number} [hz] Records per second.
  * @property {(bytes: Buffer) => void} onData Gets every chunk the console sends.
+ * @property {() => void} [onClose] Called once if the connection ends before stop() closes it.
  * @property {string} [host] Host address the console connects back to; defaults to rpc.host.
  * @property {number} [timeoutMs] Bounds the wait for the worker to stop.
  * @property {(options: {rpc: any, host: string}) => Promise<any>} [createTransport]
@@ -144,6 +145,7 @@ async function create({
   ui = null,
   hz = DEFAULT_HZ,
   onData,
+  onClose = () => {},
   host = rpc?.host,
   timeoutMs = DEFAULT_TIMEOUT_MS,
   createTransport = createNativeTransport
@@ -154,7 +156,7 @@ async function create({
   const transport = await createTransport({rpc, host});
   let planned;
   try {
-    transport.receive(onData);
+    transport.receive(onData, onClose);
     planned = await planWorker(rpc, transport, {state, ui, hz});
   } catch (error) {
     await transport.close().catch(() => {});

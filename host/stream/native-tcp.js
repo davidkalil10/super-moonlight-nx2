@@ -217,8 +217,9 @@ async function connectWithToken({run, errno, addresses, fd, base, tokenBytes}) {
  * @property {number} recvFunction Address of nn::socket::Recv, for console workers.
  * @property {number} sendFunction Address of nn::socket::Send, for console workers.
  * @property {(bytes: Buffer) => Promise<void>} send Writes to the authenticated connection.
- * @property {(listener: (bytes: Buffer) => void) => void} receive Hands every chunk the
- *   console sends after the token to listener.
+ * @property {(listener: (bytes: Buffer) => void, onClose?: () => void) => void} receive Hands
+ *   every chunk the console sends after the token to listener, and calls onClose once if the
+ *   connection ends or closes before close() or abort().
  * @property {() => void} abort Drops the host side without touching the console.
  * @property {() => Promise<void>} close
  */
@@ -250,6 +251,7 @@ async function create({
   let fd = null;
   let safeToClose = true;
   let closed = false;
+  let aborted = false;
   let listening = false;
   const closeServer = () => {
     if (!listening) return;
@@ -319,12 +321,21 @@ async function create({
           socket.write(bytes, error => (error ? reject(error) : resolve()));
         });
       },
-      receive(listener) {
+      receive(listener, onClose = () => {}) {
         if (closed || !socket || socket.destroyed) throw Error('Native TCP data socket is closed');
+        let reported = false;
+        const ended = () => {
+          if (closed || aborted || reported) return;
+          reported = true;
+          onClose();
+        };
         socket.on('data', listener);
+        socket.on('end', ended);
+        socket.on('close', ended);
         socket.resume();
       },
       abort() {
+        aborted = true;
         socket?.destroy();
         closeServer();
       },

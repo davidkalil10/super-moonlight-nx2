@@ -703,6 +703,11 @@ test('the push reader skips repeated frames, follows the overlay and resets on a
   assert.equal(parsed(lines).at(-1).buttonFlags, 0x2000);
   clock = 40;
   assert.deepEqual(reader.take(), {pushed: 5, dropped: 0, gapMaxMs: 40});
+  clock = 1999;
+  reader.check();
+  clock = 2000;
+  assert.throws(() => reader.check(), /heard nothing from the console for 2000 ms/);
+  reader.check();
 });
 
 test('the push reader presses Start from its chord and logs only the pad + and -', () => {
@@ -748,7 +753,7 @@ test('a short send that shifts the push framing fails the reader before any shif
 function tcpPushWorker() {
   const consoles = [];
   const created = [];
-  async function createWorker({state, ui, hz, onData}) {
+  async function createWorker({state, ui, hz, onData, onClose}) {
     created.push({state, ui, hz});
     let block = null;
     let client = null;
@@ -786,7 +791,7 @@ function tcpPushWorker() {
         }
       })
     });
-    transport.receive(onData);
+    transport.receive(onData, onClose);
     return {
       recordBytes: 812,
       async start() {
@@ -858,4 +863,39 @@ test('push mode feeds records, drops a backlog burst and releases after a silenc
     await push.stop();
   }
   assert.match(logs.at(-1), /console counted 9 records/);
+});
+
+test('push mode fails when the console never sends or closes the socket', async () => {
+  for (const ending of ['silent', 'closed']) {
+    let clock = 0;
+    const failures = [];
+    const fake = tcpPushWorker();
+    const push = runPush({
+      rpc: {},
+      directory: 'unused',
+      hz: 120,
+      layout: 'position',
+      write() {},
+      log() {},
+      onFailure: error => failures.push(error.message),
+      createWorker: fake.createWorker,
+      readSource: () => ({package: {id: 'moonlight'}, mapped: STATE_AT}),
+      readAppStorage: () => ({mapped: 0x71000000}),
+      now: () => clock
+    });
+    try {
+      await until(() => fake.consoles.length === 1);
+      if (ending === 'silent') {
+        clock = 1999;
+        await pause(120);
+        assert.deepEqual(failures, [], 'no failure inside the bound');
+        clock = 2000;
+      } else fake.consoles[0].destroy();
+      await until(() => failures.length === 1);
+      assert.match(failures[0], ending === 'silent' ? /nothing .* for 2000 ms/ : /closed by/);
+    } finally {
+      await push.stop();
+    }
+    assert.equal(failures.length, 1, 'the stop is no second failure');
+  }
 });
