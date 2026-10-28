@@ -148,7 +148,7 @@ async function waitChecked(
       checked.check(snapshot, expected);
       return snapshot;
     } catch (error) {
-      if (!error.retryable) throw error;
+      if (!error.retryable) throw failedCheck(error, expected, snapshot);
       if (Date.now() >= nextInputRetry && isPendingInputSlot(snapshot, expected)) {
         await worker.retryInputSlot(expected.input.sequence);
         nextInputRetry = Date.now() + INPUT_RETRY_MS;
@@ -177,7 +177,7 @@ async function waitOutput(worker, expected, {timeoutMs = DEFAULT_TIMEOUT_MS, pau
       checked.checkOutput(snapshot, expected);
       return snapshot;
     } catch (error) {
-      if (!error.retryable) throw error;
+      if (!error.retryable) throw failedCheck(error, expected, snapshot);
     }
     await pause(POLL_MS);
   }
@@ -223,6 +223,16 @@ function tailExpected(sequence, units, destinations) {
     if (!prior.skip) expected.ack = {sequence: prior.sequence, index: prior.index};
   }
   return expected;
+}
+
+/**
+ * A failed status check with what it expected and the status it read, for the failure log.
+ * @param {Error} error
+ * @param {Expected} expected
+ * @param {Snapshot} snapshot
+ */
+function failedCheck(error, expected, snapshot) {
+  return Object.assign(error, {expected: jsonSafe(expected), checked: jsonSafe(snapshot)});
 }
 
 /**

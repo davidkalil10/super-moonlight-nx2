@@ -527,6 +527,18 @@ test('a short receive fails the check and never opens a gate', async () => {
   assert.deepEqual(events.slice(-1), ['worker-stop']);
 });
 
+test('a failed check carries what it expected and the status it read', async () => {
+  const live = await fakeLive([], {receive: bytes => bytes - 1});
+  const sink = {async workerDestination() {}};
+  await live.push(unitAt(1), {sink});
+  await assert.rejects(live.push(unitAt(2), {sink}), error => {
+    assert.deepEqual(error.expected, {receive: {sequence: 1, bytes: 101}});
+    assert.equal(error.checked.receive.count, '100');
+    assert.equal(error.checked.nativeApplied, 0);
+    return /Short receive/.test(error.message);
+  });
+});
+
 test('a retained or failed worker stop asks for a SmileBASIC restart once', async () => {
   for (const options of [{stopFails: true}, {retained: true}]) {
     const events = [];

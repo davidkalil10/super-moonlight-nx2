@@ -1021,7 +1021,8 @@ async function run({
         event: 'staggered-snapshot',
         snapshot: await staggeredLive
           .snapshot()
-          .catch(snapshotError => ({error: snapshotError.message}))
+          .catch(snapshotError => ({error: snapshotError.message})),
+        ...(error.expected && {expected: error.expected, checked: error.checked})
       });
     log({
       event: 'native-error',
