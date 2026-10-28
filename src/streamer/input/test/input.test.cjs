@@ -784,6 +784,7 @@ test('a short send that shifts the push framing fails the reader before any shif
 function tcpPushWorker({beforeStop = async () => {}} = {}) {
   const consoles = [];
   const created = [];
+  const closed = [];
   async function createWorker({state, ui, hz, onData, onClose}) {
     created.push({state, ui, hz});
     let block = null;
@@ -819,6 +820,11 @@ function tcpPushWorker({beforeStop = async () => {}} = {}) {
           const [, address, length] = call.args;
           client.write(block.subarray(address - ADDRESS.heap, address - ADDRESS.heap + length));
           return [BigInt(length)];
+        },
+        // As createFinite: true once the worker is freed, so the transport frees its block.
+        async close() {
+          closed.push(true);
+          return true;
         }
       })
     });
@@ -836,7 +842,7 @@ function tcpPushWorker({beforeStop = async () => {}} = {}) {
       }
     };
   }
-  return {createWorker, consoles, created};
+  return {createWorker, consoles, created, closed};
 }
 
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -895,6 +901,7 @@ test('push mode feeds records, drops a backlog burst and releases after a silenc
     await push.stop();
   }
   assert.match(logs.at(-1), /console counted 9 records/);
+  assert.equal(fake.closed.length, 1, 'stop closes the TCP worker');
 });
 
 test('a stopping push worker no longer feeds the PC', async () => {
