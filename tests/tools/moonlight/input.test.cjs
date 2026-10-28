@@ -735,16 +735,34 @@ test('once the UI magic was seen, a shifted idle record no longer passes as deta
   const reader = createPushReader({layout: 'position', write: line => lines.push(line), log() {}});
   reader.attach(812);
   reader.data(pushRecord(1, {buttons: BUTTON_A}));
-  // A new launcher session starts over before the service writes the magic again.
-  const restarted = pushRecord(1);
-  restarted.writeUInt32LE(0, 784);
-  reader.data(Buffer.concat([pushRecord(2), restarted]));
-  assert.equal(reader.take().pushed, 3, 'the restarted record with 0 is framed');
-  reader.data(pushRecord(2, {buttons: BUTTON_A}));
   // 784 bytes of an idle record shift a zero buttons word onto the next record's uiMagic.
-  const cut = pushRecord(3).subarray(0, 784);
-  assert.throws(() => reader.data(Buffer.concat([cut, pushRecord(4)])), /lost the record framing/);
+  const cut = pushRecord(2).subarray(0, 784);
+  assert.throws(() => reader.data(Buffer.concat([cut, pushRecord(3)])), /lost the record framing/);
   assert.equal(reader.take().pushed, 1);
+  assert.equal(lines.length, 1);
+});
+
+test('a short send of 40 or 800 bytes after the UI magic fails the reader', () => {
+  for (const bytes of [40, 800]) {
+    const reader = createPushReader({layout: 'position', write() {}, log() {}});
+    reader.attach(812);
+    reader.data(Buffer.concat([pushRecord(10), pushRecord(11)]));
+    const cut = pushRecord(12).subarray(0, bytes);
+    const later = [13, 14, 15].map(frameIndex => pushRecord(frameIndex));
+    assert.throws(() => reader.data(Buffer.concat([cut, ...later])), /lost the record framing/);
+  }
+});
+
+test('a new attach takes a 0 uiMagic again, as for a relaunched app', () => {
+  const lines = [];
+  const reader = createPushReader({layout: 'position', write: line => lines.push(line), log() {}});
+  reader.attach(812);
+  reader.data(pushRecord(1));
+  reader.attach(812);
+  const detached = pushRecord(1, {buttons: BUTTON_A});
+  detached.writeUInt32LE(0, 784);
+  reader.data(detached);
+  assert.equal(reader.take().pushed, 2);
 });
 
 test('a short send that shifts the push framing fails the reader before any shifted line', () => {

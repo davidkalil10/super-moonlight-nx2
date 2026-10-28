@@ -139,8 +139,8 @@ function gate(paused, block) {
 /**
  * Whether a record starts where the reader thinks: its UI words, when it has them, open with
  * uiMagic, which is the magic once a service attached and 0 before. Once the magic was seen, 0
- * no longer counts. A short send shifts every later record, and the word there is then pad or
- * touch bytes.
+ * no longer counts until the reader attaches again. A short send shifts every later record, and
+ * the word there is then pad or touch bytes.
  * @param {Buffer} record
  * @param {boolean} sawMagic
  * @returns {boolean}
@@ -203,7 +203,6 @@ function createPushReader({
   let stalled = false;
   let broken = false;
   let sawMagic = false;
-  let checkedFrame = null;
   let recordBytes = 0;
   let pending = Buffer.alloc(0);
   let counts = {pushed: 0, dropped: 0, gapMaxMs: 0};
@@ -248,7 +247,6 @@ function createPushReader({
       recordBytes = bytes;
       pending = Buffer.alloc(0);
       sawMagic = false;
-      checkedFrame = null;
       lastFrame = null;
       heardAt = now();
     },
@@ -260,9 +258,6 @@ function createPushReader({
       if (!count) return;
       const record = index => pending.subarray(index * recordBytes, (index + 1) * recordBytes);
       for (let index = 0; index < count; index++) {
-        const frameIndex = record(index).readUInt32LE(STATE.frameIndex);
-        if (checkedFrame !== null && frameIndex < checkedFrame) sawMagic = false;
-        checkedFrame = frameIndex;
         if (framed(record(index), sawMagic)) {
           sawMagic ||= recordBytes > STATE_BYTES && record(index).readUInt32LE(STATE_BYTES) !== 0;
           continue;
