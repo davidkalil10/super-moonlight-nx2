@@ -642,6 +642,8 @@ const symbols = require('../../../../../hbl-platform/sdk/native/audio-symbols.js
 
 const SDK = 0x40000000;
 const OUTPUT = 0x20000000;
+/** sdk-functions.json `free`; every other rpc.call is an allocation. */
+const FREE = 5616480;
 const FD = 12;
 const RECV = 0x30001234;
 const DESCRIPTOR_OFFSET = 0x400;
@@ -691,6 +693,8 @@ function fakeConsole({
   const log = [];
   const regions = [];
   const frames = [];
+  /** Each free, with the log length when it came, kept apart so the stop logs stay as they are. */
+  const freed = [];
   let finiteJobs = 0;
   let sends = 0;
   let recycleThread = null;
@@ -720,7 +724,11 @@ function fakeConsole({
     async request() {
       return {verified: true};
     },
-    async call(offset, [, , bytes]) {
+    async call(offset, [address, , bytes]) {
+      if (offset === FREE) {
+        freed.push({base: address, at: log.length});
+        return {result: 0n, output: Buffer.alloc(8)};
+      }
       const base = region(regions.length);
       regions.push({base, bytes: Buffer.alloc(bytes)});
       const output = Buffer.alloc(8);
@@ -779,7 +787,7 @@ function fakeConsole({
       on.send?.(bytes, sends);
     }
   };
-  return {rpc, transport, log, audio, frames};
+  return {rpc, transport, log, audio, frames, freed};
 }
 
 /** Creates and starts socket audio on a fake console; its options go to fakeConsole. */
@@ -826,6 +834,34 @@ test('socket audio opens with its event, primes both slots and recycles until st
   ]);
   assert.equal(socket.retained, false);
   await socket.stop();
+});
+
+const bases = freed => freed.map(free => free.base);
+const closedAt = log => log.findIndex(entry => entry.name === 'CloseAudioOut');
+
+test('stop frees the recycle worker, the job worker and AudioOut once, after closing', async () => {
+  const {socket, log, freed} = await started();
+  assert.deepEqual(freed, []);
+  await socket.stop();
+  await socket.stop();
+  assert.deepEqual(bases(freed), [region(2), region(1), region(0)]);
+  assert.ok(freed.every(free => free.at > closedAt(log)));
+});
+
+test('a worker that does not stop frees nothing', async () => {
+  const {socket, freed} = await started({hang: true});
+  await assert.rejects(socket.stop(), /did not stop/);
+  await assert.rejects(socket.stop(), /retained for safety/);
+  assert.deepEqual(freed, []);
+});
+
+test('a failed create frees the AudioOut region once it is closed', async () => {
+  const fake = fakeConsole({
+    on: {call: name => (name === 'GetAudioOutSampleFormat' ? 3n : undefined)}
+  });
+  await assert.rejects(createWorker({rpc: fake.rpc, transport: fake.transport}), /format/);
+  assert.deepEqual(bases(fake.freed), [region(0)]);
+  assert.ok(fake.freed[0].at > closedAt(fake.log));
 });
 
 test('stop points the worker at its exit before two silent chunks unblock it', async () => {

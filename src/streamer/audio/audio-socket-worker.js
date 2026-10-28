@@ -15,7 +15,7 @@
  * job or the worker may still hold the AudioOut or its buffers, the objects are retained:
  * nothing is closed and SmileBASIC has to be restarted.
  */
-import {allocate} from '../../../../hbl-platform/sdk/native/allocate.js';
+import {allocate, release} from '../../../../hbl-platform/sdk/native/allocate.js';
 import {sdkResolver, verify} from '../../../../hbl-platform/sdk/native/symbols.js';
 import {createFinite, prepareRepeating} from '../../../../hbl-platform/sdk/native/jobs.js';
 import {
@@ -452,6 +452,10 @@ async function create({
         await call('CloseAudioOut', [audio]);
         opened = false;
       }
+      // The worker is joined and AudioOut closed. A busy prime job may still receive into
+      // the slots, so the AudioOut region goes only with the finite worker.
+      await release(rpc, workerBase);
+      if (await finite.close()) await release(rpc, audio);
       if (cycleError) throw cycleError;
     }
 
@@ -467,7 +471,9 @@ async function create({
   } catch (error) {
     if (opened) {
       await call('FlushAudioOutBuffers', [audio]).catch(() => {});
-      await call('CloseAudioOut', [audio]).catch(() => {});
+      // Only a closed AudioOut no longer touches its region.
+      if (await call('CloseAudioOut', [audio]).then(() => true, () => false))
+        await release(rpc, audio).catch(() => {});
     }
     throw error;
   }
