@@ -11,7 +11,7 @@ const {
   checkedCycle
 } = require('../../../host/audio/audio-socket-plan.js');
 const {stream, ByteQueue} = require('../../../host/audio/audio-stream.js');
-const {mockRpc} = require('../../../../hbl-platform-dev/sdk/tests/audio-out-mock.cjs');
+const {mockRpc} = require('../../../../hbl-platform/tests/audio-out-mock.cjs');
 const {create} = require('../../../host/audio/socket-audio-source.js');
 
 // audio-socket-plan.js

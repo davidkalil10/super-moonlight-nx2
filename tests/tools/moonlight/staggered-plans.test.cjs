@@ -1,8 +1,8 @@
 // The staggered console workers: the barrier, the input and output plans and the worker.
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const {ADDRESS} = require('../../../../hbl-platform-dev/sdk/tests/recording-rpc.cjs');
-const {gateConsole, BLOCK} = require('../../../../hbl-platform-dev/sdk/tests/gate-worker-mock.cjs');
+const {ADDRESS} = require('../../../../hbl-platform/tests/recording-rpc.cjs');
+const {gateConsole, BLOCK} = require('../../../../hbl-platform/tests/gate-worker-mock.cjs');
 const definitions = require('../../../sdk/native/movie-functions.json');
 const registration = require('../../../sdk/native/movie-event-functions.json').registerClientEvents;
 const ring = require('../../../tools/moonlight/ring.js');
