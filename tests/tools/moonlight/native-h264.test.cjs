@@ -1041,6 +1041,47 @@ test('--input-hz 120 reaches the input feeder and the summary', {timeout: 5000},
 });
 
 test(
+  '--input-push runs the feeder in push mode at 120 Hz and rows carry its counts',
+  {timeout: 5000},
+  async () => {
+    const f = await fixture({units: pairedUnits(6)});
+    f.options.createStaggered = timedStaggeredFake(f.events, []);
+    f.options.now = () => 1000;
+    f.options.statsMs = 10;
+    const spawnProcess = f.options.spawnProcess;
+    const feeders = [];
+    f.options.spawnProcess = (command, args, spawnOptions) => {
+      const child = spawnProcess(command, args, spawnOptions);
+      if (path.basename(args[0] ?? '') === 'input-feeder.js') {
+        feeders.push(args);
+        child.stdio[3] = new PassThrough();
+        const counts = {exchanges: 0, bridgeMs: 0, pushed: 120, dropped: 1, gapMaxMs: 14};
+        child.stdio[3].write(JSON.stringify(counts) + '\n');
+      }
+      return child;
+    };
+    f.options.args.push('--staggered', '--queue', '16', '--warmup', '0', '--input-push');
+    await exercise(f, async () => {
+      const summary = await run(f.options);
+      assert.deepEqual(feeders[0].slice(-5), ['--hz', '120', '--counts-fd', '3', '--push']);
+      assert.equal(summary.inputPush, true);
+      const rows = (await fs.readFile(path.join(f.directory, 'logs', 'stats.jsonl'), 'utf8'))
+        .trim()
+        .split('\n')
+        .map(JSON.parse);
+      const pushed = rows.find(row => row.inputPush.pushed);
+      assert.deepEqual(pushed.inputPush, {pushed: 120, dropped: 1, gapMaxMs: 14});
+      assert.ok(rows.every(row => !row.bridgeByStage.input), 'a push run has no input stage');
+    });
+    const g = await fixture();
+    await exercise(g, async () => {
+      g.options.args.push('--input-push', '--no-input');
+      await assert.rejects(run(g.options), /--input-push cannot be combined with --no-input/);
+    });
+  }
+);
+
+test(
   '--trim-backlog-ms reaches the scheduler, logs each trim and counts it apart from drops',
   {timeout: 5000},
   async () => {

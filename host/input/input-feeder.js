@@ -18,8 +18,13 @@
  * second as {exchanges, bridgeMs, pad} lines, for the stream's stats rows (stage "input"); pad
  * is how fresh the pad state was at each read (pad-age.js).
  *
+ * With --push, a console worker sends each record (the 784 bytes, then the UI overlay words)
+ * on a native TCP socket at --hz instead (input-push-worker.js), so no input crosses the
+ * bridge once it runs; the lines out are the same. The counts lines add pushed, dropped and
+ * gapMaxMs: records received, records dropped as backlog and the longest arrival gap.
+ *
  * Usage: node host/input/input-feeder.js [runs/launcher-XXXX] [--hz 60] [--labels]
- *        [--counts-fd N]
+ *        [--counts-fd N] [--push]
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -31,6 +36,8 @@ import {TOUCH_BYTES, parseTouch, createTracker, step, flush, touchLine} from './
 import {UI, UI_MAGIC} from '../../tools/moonlight/ring.js';
 import {instrument} from '../stream/bridge-counter.js';
 import * as padAge from './pad-age.js';
+import {STATE_BYTES} from './input-push-plan.js';
+import {create as createPushWorker} from './input-push-worker.js';
 
 /** One read from the start of the state buffer to the end of the touch block. */
 const READ_BYTES = STATE.touch + TOUCH_BYTES;
@@ -43,6 +50,14 @@ const OVERLAY_CHECK_MS = 100;
 const COUNTS_MS = 1000;
 /** Console + and -, read off the pad itself: a chord may press Start with + up. */
 const KEYS = NPAD.plus | NPAD.minus;
+/** The push rate unless --hz says otherwise: twice the launcher's pad copy. */
+const PUSH_HZ = 120;
+/** More complete records than this waiting at once means the host stalled: keep the newest. */
+const MAX_BACKLOG = 4;
+/** No record for this long releases everything held on the PC. */
+const STALL_MS = 250;
+/** How often push mode checks for a stall and, every SOURCE_CHECK_MS, the source. */
+const PUSH_CHECK_MS = 50;
 
 /**
  * @param {object} controller toMoonlight fields
@@ -124,13 +139,251 @@ function readStorage(directory) {
   }
 }
 
+/**
+ * The push mode reader: records arrive whole or split and are applied in order. A repeated
+ * frameIndex is a launcher frame already seen (the push outruns the pad copy) and only feeds
+ * the overlay gate; a frameIndex going back means a new launcher session. More than
+ * MAX_BACKLOG records waiting at once keeps only the newest, after lifting open touches. With
+ * no record for STALL_MS, check() lifts every touch and sends the pad back to neutral.
+ * @param {object} options
+ * @param {'position' | 'labels'} options.layout
+ * @param {(line: string) => void} options.write
+ * @param {(message: string) => void} options.log
+ * @param {() => number} [options.now]
+ */
+function createPushReader({layout, write, log, now = () => performance.now()}) {
+  const tracker = createTracker();
+  let previous = null;
+  let paused = false;
+  let lastFrame = null;
+  let lastAt = null;
+  let stalled = false;
+  let recordBytes = 0;
+  let pending = Buffer.alloc(0);
+  let counts = {pushed: 0, dropped: 0, gapMaxMs: 0};
+
+  const liftTouches = () => {
+    const ups = flush(tracker);
+    if (ups.length) write(touchLine(ups));
+  };
+  const release = () => {
+    liftTouches();
+    const neutral = toMoonlight(NEUTRAL, layout);
+    if (previous && !same(previous, neutral)) write(controllerLine(neutral));
+    previous = null;
+  };
+
+  /** @param {Buffer} record */
+  function apply(record) {
+    if (record.length > STATE_BYTES) {
+      const next = gate(paused, record.subarray(STATE_BYTES));
+      paused = next.paused;
+      if (next.release) release();
+    }
+    const frameIndex = record.readUInt32LE(STATE.frameIndex);
+    if (frameIndex === lastFrame) return;
+    if (lastFrame !== null && frameIndex < lastFrame) {
+      log(`Input push frameIndex went back from ${lastFrame} to ${frameIndex}; new session`);
+      release();
+    }
+    lastFrame = frameIndex;
+    if (paused) return;
+    const result = frame(previous, record.subarray(0, STATE_BYTES), tracker, layout);
+    previous = result.controller;
+    for (const line of result.lines) write(line);
+  }
+
+  return {
+    /** @param {number} bytes Record size of the worker the next data comes from. */
+    attach(bytes) {
+      recordBytes = bytes;
+      pending = Buffer.alloc(0);
+      lastFrame = null;
+    },
+    /** @param {Buffer} chunk */
+    data(chunk) {
+      pending = pending.length ? Buffer.concat([pending, chunk]) : chunk;
+      const count = Math.floor(pending.length / recordBytes);
+      if (!count) return;
+      const at = now();
+      if (lastAt !== null) counts.gapMaxMs = Math.max(counts.gapMaxMs, at - lastAt);
+      lastAt = at;
+      stalled = false;
+      counts.pushed += count;
+      let first = 0;
+      if (count > MAX_BACKLOG) {
+        liftTouches();
+        counts.dropped += count - 1;
+        first = count - 1;
+      }
+      for (let index = first; index < count; index++)
+        apply(pending.subarray(index * recordBytes, (index + 1) * recordBytes));
+      pending = pending.subarray(count * recordBytes);
+    },
+    check() {
+      if (lastAt === null || stalled || now() - lastAt < STALL_MS) return;
+      stalled = true;
+      release();
+      log(`Input push stalled at frameIndex ${lastFrame}`);
+    },
+    /** Releases what is held and forgets the last arrival, so a stopped worker is no stall. */
+    detach() {
+      release();
+      lastAt = null;
+      stalled = false;
+    },
+    /** @returns {{pushed: number, dropped: number, gapMaxMs: number}} Since the last take. */
+    take() {
+      const open = lastAt === null ? 0 : now() - lastAt;
+      const result = {...counts, gapMaxMs: Math.round(Math.max(counts.gapMaxMs, open))};
+      counts = {pushed: 0, dropped: 0, gapMaxMs: 0};
+      return result;
+    }
+  };
+}
+
+/**
+ * Push mode: a console worker sends the records instead of the feeder reading them. It runs
+ * only while the Moonlight app does, since the UI words it sends live in the app's private
+ * storage, and is restarted when the state or storage address changes.
+ * @param {object} options
+ * @param {any} options.rpc The session rpc.
+ * @param {string} options.directory The session directory.
+ * @param {number} options.hz
+ * @param {'position' | 'labels'} options.layout
+ * @param {(line: string) => void} options.write
+ * @param {(message: string) => void} options.log
+ * @param {(error: Error) => void} [options.onFailure] Called once when the worker fails.
+ * @param {typeof createPushWorker} [options.createWorker]
+ * @param {typeof session.readSource} [options.readSource]
+ * @param {typeof readStorage} [options.readAppStorage]
+ * @param {() => number} [options.now]
+ * @returns {{take: () => {pushed: number, dropped: number, gapMaxMs: number},
+ *   stop: () => Promise<void>}}
+ */
+function runPush({
+  rpc,
+  directory,
+  hz,
+  layout,
+  write,
+  log,
+  onFailure = () => {},
+  createWorker = createPushWorker,
+  readSource = session.readSource,
+  readAppStorage = readStorage,
+  now = () => performance.now()
+}) {
+  const reader = createPushReader({layout, write, log, now});
+  /** @type {Awaited<ReturnType<typeof createPushWorker>> | null} */
+  let worker = null;
+  let running = null;
+  let busy = null;
+  let failed = false;
+  let sourceChecked = -Infinity;
+
+  async function startWorker(state, ui) {
+    worker = await createWorker({rpc, state, ui, hz, onData: bytes => reader.data(bytes)});
+    reader.attach(worker.recordBytes);
+    await worker.start();
+    running = `${state}/${ui}`;
+  }
+
+  async function stopWorker() {
+    const stopping = worker;
+    worker = null;
+    running = null;
+    try {
+      const {pushed} = await stopping.stop();
+      log(`Input push stopped; the console counted ${pushed} records`);
+    } finally {
+      reader.detach();
+    }
+  }
+
+  async function check() {
+    const source = readSource(directory);
+    const storage = readAppStorage(directory);
+    const moonlight = source?.package?.id === 'moonlight' && storage;
+    const ui = moonlight ? storage.mapped + OVERLAY_READ.offset : null;
+    const wanted = moonlight ? `${source.mapped}/${ui}` : null;
+    if (worker && wanted !== running) await stopWorker();
+    if (!worker && moonlight) await startWorker(source.mapped, ui);
+  }
+
+  const timer = setInterval(() => {
+    reader.check();
+    const at = now();
+    if (busy || failed || at - sourceChecked < SOURCE_CHECK_MS) return;
+    sourceChecked = at;
+    busy = check()
+      .catch(error => {
+        failed = true;
+        log('Input push failed: ' + error.message);
+        onFailure(error);
+      })
+      .finally(() => (busy = null));
+  }, PUSH_CHECK_MS);
+
+  return {
+    take: () => reader.take(),
+    async stop() {
+      clearInterval(timer);
+      await busy;
+      if (worker) await stopWorker();
+      else reader.detach();
+    }
+  };
+}
+
+/**
+ * Runs push mode until SIGINT or SIGTERM, or until the worker fails.
+ * @param {ReturnType<typeof instrument>} bridge
+ * @param {{directory: string, hz: number, layout: 'position' | 'labels',
+ *   countsFd: number | null}} options
+ */
+async function mainPush(bridge, {directory, hz, layout, countsFd}) {
+  let finish;
+  const finished = new Promise(resolve => (finish = resolve));
+  let closed = false;
+  // A gone helper must not skip the worker stop, so its pipe error only ends the run.
+  process.stdout.on('error', () => {
+    closed = true;
+    finish();
+  });
+  process.on('SIGINT', () => finish());
+  process.on('SIGTERM', () => finish());
+  const push = runPush({
+    rpc: bridge.rpc,
+    directory,
+    hz,
+    layout,
+    write: line => closed || process.stdout.write(line + '\n'),
+    log: message => process.stderr.write(message + '\n'),
+    onFailure: () => {
+      process.exitCode = 1;
+      finish();
+    }
+  });
+  if (countsFd !== null)
+    setInterval(() => {
+      const {exchanges, bridgeMs} = bridge.take();
+      const line = JSON.stringify({exchanges, bridgeMs, ...push.take()});
+      fs.write(countsFd, line + '\n', () => {});
+    }, COUNTS_MS).unref();
+  await finished;
+  await push.stop();
+}
+
 async function main() {
   const args = process.argv.slice(2);
-  const hz = cli.number(args, '--hz', DEFAULT_HZ);
+  const push = args.includes('--push');
+  const hz = cli.number(args, '--hz', push ? PUSH_HZ : DEFAULT_HZ);
   const layout = args.includes('--labels') ? 'labels' : 'position';
   const directory = session.resolve(args[0]);
   const countsFd = cli.number(args, '--counts-fd', null);
   const bridge = instrument(session.rpc(directory), () => 'input');
+  if (push) return mainPush(bridge, {directory, hz, layout, countsFd});
   const rpc = bridge.rpc;
   const pad = countsFd === null ? null : padAge.create();
   if (countsFd !== null)
@@ -198,7 +451,7 @@ async function main() {
   release();
 }
 
-export {frame, keysWatch, gate, readStorage, OVERLAY_READ, READ_BYTES};
+export {frame, keysWatch, gate, readStorage, OVERLAY_READ, READ_BYTES, createPushReader, runPush};
 
 if (cli.isMain(import.meta))
   main().catch(error => {

@@ -625,3 +625,177 @@ test('a push setup that fails after the connection closes it', async () => {
   assert.deepEqual(closed, [1]);
   await assert.rejects(createPushWorker({rpc: fake.rpc, state: STATE_AT}), /data callback/);
 });
+
+// input-feeder.js --push: the record reader's rules, then end to end through the real native
+// TCP listener with a TCP client playing the console.
+const net = require('node:net');
+const {UI_MAGIC} = require('../../../tools/moonlight/ring.js');
+const {create: createTcp} = require('../../../host/stream/native-tcp.js');
+const {createPushReader, runPush} = require('../../../host/input/input-feeder.js');
+
+const BUTTON_A = 0b0001;
+
+/** One pushed record: the state block with its frameIndex, then the UI words. */
+function pushRecord(frameIndex, {buttons = 0, touch = [], overlay = false} = {}) {
+  const state = stateBytes({buttons, touch});
+  state.writeUInt32LE(frameIndex, 52);
+  const ui = Buffer.alloc(pushPlan.UI_BYTES);
+  ui.writeUInt32LE(UI_MAGIC, 0);
+  ui.writeUInt32LE(overlay ? 1 : 0, 24);
+  return Buffer.concat([state, ui]);
+}
+
+const parsed = lines => lines.map(line => JSON.parse(line));
+const touchActions = lines =>
+  parsed(lines)
+    .filter(line => line.type === 'touch')
+    .flatMap(line => line.events.map(event => `${event.action} ${event.id}`));
+
+test('the push reader skips repeated frames, follows the overlay and resets on a step back', () => {
+  const lines = [];
+  const logs = [];
+  let clock = 0;
+  const reader = createPushReader({
+    layout: 'position',
+    write: line => lines.push(line),
+    log: message => logs.push(message),
+    now: () => clock
+  });
+  reader.attach(812);
+  const held = pushRecord(5, {buttons: BUTTON_A, touch: [{id: 1, x: 10, y: 10}]});
+  reader.data(Buffer.concat([held, held]).subarray(0, 1000));
+  reader.data(Buffer.concat([held, held]).subarray(1000));
+  assert.deepEqual(touchActions(lines), ['down 1']);
+  assert.equal(parsed(lines).filter(line => line.type === 'controller').length, 1);
+  reader.data(pushRecord(6, {buttons: BUTTON_A, touch: [{id: 1, x: 10, y: 10}], overlay: true}));
+  assert.deepEqual(touchActions(lines), ['down 1', 'up 1']);
+  assert.equal(parsed(lines).at(-1).buttonFlags, 0, 'the overlay releases the pad');
+  const before = lines.length;
+  reader.data(pushRecord(7, {buttons: BUTTON_A, overlay: true}));
+  assert.equal(lines.length, before, 'nothing reaches the PC under the overlay');
+  reader.data(pushRecord(2, {buttons: BUTTON_A}));
+  assert.match(logs[0], /went back from 7 to 2/);
+  assert.equal(parsed(lines).at(-1).buttonFlags, 0x2000);
+  clock = 40;
+  assert.deepEqual(reader.take(), {pushed: 5, dropped: 0, gapMaxMs: 40});
+});
+
+/**
+ * A push worker double that opens the real native TCP listener: its connect and token jobs
+ * start a TCP client playing the console, which the test then writes records on.
+ */
+function tcpPushWorker() {
+  const consoles = [];
+  const created = [];
+  async function createWorker({state, ui, hz, onData}) {
+    created.push({state, ui, hz});
+    let block = null;
+    let client = null;
+    const rpc = {
+      a: {sdk: ADDRESS.sdk},
+      output: 0x20000000,
+      request: async () => ({verified: true}),
+      async call() {
+        const output = Buffer.alloc(8);
+        output.writeBigUInt64LE(BigInt(ADDRESS.heap));
+        return {result: 0n, output};
+      },
+      async callAddress(address) {
+        if (address === ADDRESS.sdk + socketFunctions.socketInitialized.offset)
+          return {result: 1n};
+        if (address === ADDRESS.sdk + socketFunctions.socket.offset) return {result: 7n};
+        return {result: 0n};
+      },
+      async write(address, bytes) {
+        block = Buffer.from(bytes);
+      }
+    };
+    const transport = await createTcp({
+      rpc,
+      host: '127.0.0.1',
+      createWorker: async () => ({
+        async run([call]) {
+          if (call.function === ADDRESS.sdk + socketFunctions.connect.offset) {
+            client = net.connect(block.readUInt16BE(2), '127.0.0.1');
+            client.on('error', () => {});
+            return [0n];
+          }
+          const [, address, length] = call.args;
+          client.write(block.subarray(address - ADDRESS.heap, address - ADDRESS.heap + length));
+          return [BigInt(length)];
+        }
+      })
+    });
+    transport.receive(onData);
+    return {
+      recordBytes: 812,
+      async start() {
+        consoles.push(client);
+      },
+      async stop() {
+        await transport.close();
+        client.destroy();
+        return {pushed: 9};
+      }
+    };
+  }
+  return {createWorker, consoles, created};
+}
+
+const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
+async function until(condition, timeoutMs = 2000) {
+  for (const end = Date.now() + timeoutMs; !condition(); await pause(5))
+    if (Date.now() > end) throw Error('Timed out waiting for the push feed');
+}
+
+test('push mode feeds records, drops a backlog burst and releases after a silence', async () => {
+  const lines = [];
+  const logs = [];
+  const fake = tcpPushWorker();
+  const push = runPush({
+    rpc: {},
+    directory: 'unused',
+    hz: 120,
+    layout: 'position',
+    write: line => lines.push(line),
+    log: message => logs.push(message),
+    createWorker: fake.createWorker,
+    readSource: () => ({package: {id: 'moonlight'}, mapped: STATE_AT}),
+    readAppStorage: () => ({mapped: 0x71000000})
+  });
+  try {
+    await until(() => fake.consoles.length === 1);
+    assert.deepEqual(fake.created, [{state: STATE_AT, ui: 0x71000000 + 0xc000, hz: 120}]);
+    const client = fake.consoles[0];
+    const pressed = ({index, points}) => pushRecord(index, {buttons: BUTTON_A, touch: points});
+    client.write(
+      Buffer.concat([
+        pressed({index: 1, points: [{id: 1, x: 10, y: 10}]}),
+        pressed({index: 1, points: [{id: 1, x: 10, y: 10}]}),
+        pressed({index: 2, points: [{id: 1, x: 10, y: 10}]})
+      ])
+    );
+    await until(() => lines.length === 2);
+    assert.equal(parsed(lines)[0].buttonFlags, 0x2000);
+    assert.deepEqual(touchActions(lines), ['down 1']);
+
+    const burst = [3, 4, 5, 6, 7].map(index => pressed({index, points: [{id: 1, x: 10, y: 10}]}));
+    burst.push(pressed({index: 8, points: [{id: 2, x: 600, y: 300}]}));
+    client.write(Buffer.concat(burst));
+    await until(() => touchActions(lines).length === 3);
+    assert.deepEqual(touchActions(lines), ['down 1', 'up 1', 'down 2']);
+    assert.equal(lines.length, 4, 'the held pad sends no new controller line');
+
+    await until(() => logs.length === 1);
+    assert.deepEqual(touchActions(lines), ['down 1', 'up 1', 'down 2', 'up 2']);
+    assert.equal(parsed(lines).at(-1).buttonFlags, 0, 'a silence sends the pad back to neutral');
+    assert.deepEqual(logs, ['Input push stalled at frameIndex 8']);
+    const counts = push.take();
+    assert.equal(counts.pushed, 9);
+    assert.equal(counts.dropped, 5);
+    assert.ok(counts.gapMaxMs >= 250, String(counts.gapMaxMs));
+  } finally {
+    await push.stop();
+  }
+  assert.match(logs.at(-1), /console counted 9 records/);
+});

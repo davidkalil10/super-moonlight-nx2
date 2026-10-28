@@ -137,7 +137,8 @@ node host/ui/service.js [RUN_DIR]
 | `--receive-wait` | off | sleep to the predicted receive |
 | `--avoid-window B-A` | off | keep status reads out of B ms before to A ms after a predicted event (needs a wait flag) |
 | `--queue N` | `8` | host access-unit queue, 1 to 16 |
-| `--input-hz N` | `60` | input feeder rate, 10 to 120 |
+| `--input-hz N` | `60`, `120` with push | input feeder rate, 10 to 120 |
+| `--input-push` | off | a console worker pushes the pad, touch and overlay words over native TCP instead of the feeder reading them (`input-feeder.js --push`); rows gain `inputPush` {pushed, dropped, gapMaxMs} |
 | `--audio-frames N` | `960` on protocol 3, else `1920` | AudioOut buffer, multiple of 240 (up to 3840 with socket audio) |
 | `--socket-audio` / `--socket-audio-tone` | off | PCM, or a 500 Hz tone, over native TCP to a console audio worker |
 | `--duration S` / `--warmup S` | none / `3` | run length; rows skipped before scoring |
@@ -323,7 +324,10 @@ helper's error line and `stage`), `stream-event`, `stream-exit`, `quit`, `app-go
 ## Input and audio
 
 `input-feeder.js [RUN_DIR] [--hz 60]` reads the pad (bytes 0..40) and touch (128..784) of the
-mapped state in one 784-byte read per frame and writes compact JSON lines for the helper's stdin:
+mapped state in one 784-byte read per frame and writes compact JSON lines for the helper's stdin.
+With `--push` (default 120 Hz) a console worker sends the same 784 bytes and the overlay words
+over native TCP instead: backlogs over 4 records keep the newest, and 250 ms without a record
+releases everything and logs `Input push stalled`:
 
 ```
 {"type":"controller","connected":true,"buttonFlags":4096,"leftTrigger":0,...}

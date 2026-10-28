@@ -303,6 +303,9 @@ function parseOptions(args, rpc, width, height, fps) {
   const socketTone = args.includes('--socket-audio-tone');
   const socketAudio = socketTone || args.includes('--socket-audio');
   if (socketAudio && !audio) throw Error('--socket-audio cannot be combined with --no-audio');
+  const inputPush = args.includes('--input-push');
+  if (inputPush && args.includes('--no-input'))
+    throw Error('--input-push cannot be combined with --no-input');
   const skipRule = cli.option(args, '--skip-rule') ?? 'backlog';
   const flags = {
     host,
@@ -313,7 +316,8 @@ function parseOptions(args, rpc, width, height, fps) {
     duration: cli.number(args, '--duration', null),
     warmup: cli.number(args, '--warmup', 3),
     queue: cli.number(args, '--queue', QUEUE),
-    inputHz: cli.number(args, '--input-hz', 60),
+    inputHz: cli.number(args, '--input-hz', inputPush ? 120 : 60),
+    inputPush,
     presentHz: cli.number(args, '--present-hz', 60),
     skipRule,
     trimBacklogMs: cli.number(args, '--trim-backlog-ms', null),
@@ -420,7 +424,7 @@ function helperArgs(host, app, {width, height, fps, bitrate, audio}) {
 function buildSummary(options, {rows, staggeredLive, tail, socketAudioReport, stopReason}) {
   const {presentHz, skipBacklog, skipRule, trimBacklogMs, gateOnReceive, outputLag} = options;
   const {decodeWait, receiveWait, avoidWindow, queue, inputHz, audioFrames, audio} = options;
-  const {socketAudio, input, warmup, expect} = options;
+  const {socketAudio, input, inputPush, warmup, expect} = options;
   const steadyRows = rows.slice(warmup);
   return {
     workerMode: 'staggered',
@@ -437,6 +441,7 @@ function buildSummary(options, {rows, staggeredLive, tail, socketAudioReport, st
     staggered: {...(staggeredLive?.counts ?? {}), tail},
     queue,
     inputHz,
+    ...(inputPush && {inputPush}),
     audioFrames,
     audio,
     ...(socketAudio ? {socketAudio: socketAudioReport} : {}),
@@ -511,7 +516,7 @@ async function run({
   now = () => performance.now()
 }) {
   const options = parseOptions(args, rpc, width, height, fps);
-  const {host, app, audio, socketTone, socketAudio, duration, queue, inputHz} = options;
+  const {host, app, audio, socketTone, socketAudio, duration, queue, inputHz, inputPush} = options;
   const {presentHz, skipRule, trimBacklogMs, gateOnReceive, outputLag} = options;
   const {decodeWait, receiveWait, avoidWindow, skipBacklog, audioFrames, bitrate} = options;
   if (!rpc.host) throw Error('Native TCP requires a fresh launcher session from this branch');
@@ -546,6 +551,7 @@ async function run({
   let inputBridge = {exchanges: 0, bridgeMs: 0};
   /** @type {import('../input/pad-age.js').PadRow[]} */
   let inputPad = [];
+  let pushCounts = {pushed: 0, dropped: 0, gapMaxMs: 0};
   let trimmed = 0;
   let auSamples = [];
   const stats = freshStats();
@@ -695,7 +701,10 @@ async function run({
     children.push(child);
   }
 
-  /** The input feeder writes to the helper's stdin and its bridge counts to fd 3. */
+  /**
+   * The input feeder writes to the helper's stdin and its bridge counts to fd 3, plus its
+   * record counts with --input-push.
+   */
   function spawnInputFeeder() {
     const child = spawnProcess(
       process.execPath,
@@ -705,7 +714,8 @@ async function run({
         '--hz',
         String(inputHz),
         '--counts-fd',
-        '3'
+        '3',
+        ...(inputPush ? ['--push'] : [])
       ],
       {
         stdio: ['ignore', helper.stdin, 'inherit', 'pipe']
@@ -720,6 +730,10 @@ async function run({
             inputBridge.exchanges += counts.exchanges;
             inputBridge.bridgeMs += counts.bridgeMs;
             if (counts.pad) inputPad.push(counts.pad);
+            if (counts.pushed === undefined) return;
+            pushCounts.pushed += counts.pushed;
+            pushCounts.dropped += counts.dropped;
+            pushCounts.gapMaxMs = Math.max(pushCounts.gapMaxMs, counts.gapMaxMs);
           } catch {}
         })
         .on('error', error => log({event: 'input-counts-error', message: error.message}));
@@ -799,6 +813,7 @@ async function run({
       ...withInputStage(bridge.take(), inputBridge),
       ...(inputPad.length ? {inputPad: padAge.merge(inputPad)} : {}),
       link: linkQuality(inputBridge),
+      ...(inputPush ? {inputPush: pushCounts} : {}),
       at: stage + '/' + (decoder?.step ?? '-'),
       ms: Object.fromEntries(Object.entries(stageMs).map(([k, v]) => [k, Math.round(v)]))
     };
@@ -808,6 +823,7 @@ async function run({
     stageMs = {};
     inputBridge = {exchanges: 0, bridgeMs: 0};
     inputPad = [];
+    pushCounts = {pushed: 0, dropped: 0, gapMaxMs: 0};
     auSamples = [];
     trimmed = 0;
     dropped = reader.dropped;
