@@ -27,6 +27,7 @@ import {create as createNativeSink} from './native-sink.js';
 import {create as createSocketAudioSource} from '../audio/socket-audio-source.js';
 import {create as createStaggeredLive} from './staggered-live.js';
 import * as exchangeTiming from './exchange-timing.js';
+import * as padAge from '../input/pad-age.js';
 
 /** Shortest gap between two keyframe requests to Sunshine. */
 const IDR_COOLDOWN_MS = 100;
@@ -488,6 +489,8 @@ async function run({
   const rows = [];
   const children = [];
   let inputBridge = {exchanges: 0, bridgeMs: 0};
+  /** @type {import('../input/pad-age.js').PadRow[]} */
+  let inputPad = [];
   let trimmed = 0;
   let auSamples = [];
   const stats = freshStats();
@@ -661,6 +664,7 @@ async function run({
             const counts = JSON.parse(line);
             inputBridge.exchanges += counts.exchanges;
             inputBridge.bridgeMs += counts.bridgeMs;
+            if (counts.pad) inputPad.push(counts.pad);
           } catch {}
         })
         .on('error', error => log({event: 'input-counts-error', message: error.message}));
@@ -738,6 +742,7 @@ async function run({
       ...withHidden(hiddenTiming(auSamples)),
       ...(trimBacklogMs !== null ? {trimmed} : {}),
       ...withInputStage(bridge.take(), inputBridge),
+      ...(inputPad.length ? {inputPad: padAge.merge(inputPad)} : {}),
       at: stage + '/' + (decoder?.step ?? '-'),
       ms: Object.fromEntries(Object.entries(stageMs).map(([k, v]) => [k, Math.round(v)]))
     };
@@ -746,6 +751,7 @@ async function run({
   function startRow() {
     stageMs = {};
     inputBridge = {exchanges: 0, bridgeMs: 0};
+    inputPad = [];
     auSamples = [];
     trimmed = 0;
     dropped = reader.dropped;

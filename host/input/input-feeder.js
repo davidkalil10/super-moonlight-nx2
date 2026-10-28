@@ -12,7 +12,8 @@
  * that window.
  *
  * With --counts-fd N, the reads' bridge exchanges and time go out on that descriptor once a
- * second as {exchanges, bridgeMs} lines, for the stream's stats rows (stage "input").
+ * second as {exchanges, bridgeMs, pad} lines, for the stream's stats rows (stage "input"); pad
+ * is how fresh the pad state was at each read (pad-age.js).
  *
  * Usage: node host/input/input-feeder.js [runs/launcher-XXXX] [--hz 60] [--labels]
  *        [--counts-fd N]
@@ -26,6 +27,7 @@ import {NEUTRAL, decode, toMoonlight, same, NPAD_BYTES} from './controller.js';
 import {TOUCH_BYTES, parseTouch, createTracker, step, flush, touchLine} from './touch.js';
 import {UI, UI_MAGIC} from '../../tools/moonlight/ring.js';
 import {instrument} from '../stream/bridge-counter.js';
+import * as padAge from './pad-age.js';
 
 /** One read from the start of the state buffer to the end of the touch block. */
 const READ_BYTES = STATE.touch + TOUCH_BYTES;
@@ -109,10 +111,11 @@ async function main() {
   const countsFd = cli.number(args, '--counts-fd', null);
   const bridge = instrument(session.rpc(directory), () => 'input');
   const rpc = bridge.rpc;
+  const pad = countsFd === null ? null : padAge.create();
   if (countsFd !== null)
     setInterval(() => {
       const {exchanges, bridgeMs} = bridge.take();
-      fs.write(countsFd, JSON.stringify({exchanges, bridgeMs}) + '\n', () => {});
+      fs.write(countsFd, JSON.stringify({exchanges, bridgeMs, pad: pad?.take()}) + '\n', () => {});
     }, COUNTS_MS).unref();
 
   const tracker = createTracker();
@@ -152,7 +155,9 @@ async function main() {
           if (next.release) release();
         }
         if (!paused) {
+          const readAt = performance.now();
           const bytes = await rpc.read(source.mapped, READ_BYTES);
+          pad?.sample(bytes, readAt, performance.now());
           const result = frame(previous, bytes, tracker, layout);
           previous = result.controller;
           for (const line of result.lines) write(line);

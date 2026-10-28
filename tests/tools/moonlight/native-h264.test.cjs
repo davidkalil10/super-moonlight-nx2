@@ -899,12 +899,13 @@ test(
     f.options.statsMs = 10;
     const spawnProcess = f.options.spawnProcess;
     const feeders = [];
+    const pad = {reads: 2, readMeanMs: 3, readMaxMs: 4, stepMax: 2, stalls: 0, gaps: 1, ageMeanMs: 1, ageMaxMs: 2};
     f.options.spawnProcess = (command, args, spawnOptions) => {
       const child = spawnProcess(command, args, spawnOptions);
       if (path.basename(args[0] ?? '') === 'input-feeder.js') {
         feeders.push({args, stdio: spawnOptions.stdio});
         child.stdio[3] = new PassThrough();
-        child.stdio[3].write(JSON.stringify({exchanges: 4, bridgeMs: 7}) + '\n');
+        child.stdio[3].write(JSON.stringify({exchanges: 4, bridgeMs: 7, pad}) + '\n');
       }
       return child;
     };
@@ -933,6 +934,7 @@ test(
         .map(JSON.parse);
       const fed = rows.find(row => row.bridgeByStage.input);
       assert.deepEqual(fed.bridgeByStage.input, {exchanges: 4, bridgeMs: 7});
+      assert.deepEqual(fed.inputPad, pad, 'the pad ages ride along in the same row');
       assert.equal(fed.exchanges, 0, 'the feeder reads stay out of the video exchange total');
       assert.equal(summary.trimmed, undefined);
       assert.ok(rows.every(row => !('trimmed' in row)));

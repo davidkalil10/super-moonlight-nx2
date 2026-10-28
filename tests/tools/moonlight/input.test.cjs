@@ -17,6 +17,7 @@ const {
   touchLine
 } = require('../../../host/input/touch.js');
 const {frame} = require('../../../host/input/input-feeder.js');
+const padAge = require('../../../host/input/pad-age.js');
 
 // controller.js
 function npad({buttons = 0, lx = 0, ly = 0, rx = 0, ry = 0, connected = true} = {}) {
@@ -275,4 +276,74 @@ test('frame tags controller and touch lines and remembers the pad', () => {
     tracker
   );
   assert.deepEqual(second.lines, []);
+});
+
+/** A state block whose app frame counter reads `frames`. */
+const block = frames => {
+  const bytes = Buffer.alloc(784);
+  bytes.writeUInt32LE(frames >>> 0, 88);
+  return bytes;
+};
+
+test('pad age counts stalls and gaps and ages each read against the freshest', () => {
+  const pad = padAge.create({periodMs: 10});
+  pad.sample(block(100), 0, 2);
+  pad.sample(block(101), 10, 13);
+  pad.sample(block(101), 20, 22);
+  pad.sample(block(104), 30, 36);
+  assert.deepEqual(pad.take(), {
+    reads: 4,
+    readMeanMs: 3.3,
+    readMaxMs: 6,
+    stepMax: 3,
+    stalls: 1,
+    gaps: 1,
+    ageMeanMs: 7.3,
+    ageMaxMs: 16
+  });
+  assert.deepEqual(pad.take(), {reads: 0}, 'a take starts the next window');
+  pad.sample(block(0), 0, 1);
+  pad.sample(block(1), 10, 11);
+  assert.equal(pad.take().stepMax, 1);
+});
+
+test('the frame step survives the counter wrapping', () => {
+  const pad = padAge.create();
+  pad.sample(block(0xffffffff), 0, 1);
+  pad.sample(block(0), 17, 18);
+  assert.deepEqual([pad.take().stepMax, pad.take().reads], [1, 0]);
+});
+
+test('pad rows from one stats row merge with means weighted by reads', () => {
+  const a = {
+    reads: 3,
+    readMeanMs: 2,
+    readMaxMs: 5,
+    stepMax: 1,
+    stalls: 1,
+    gaps: 0,
+    ageMeanMs: 1,
+    ageMaxMs: 4
+  };
+  const b = {
+    reads: 1,
+    readMeanMs: 6,
+    readMaxMs: 6,
+    stepMax: 3,
+    stalls: 0,
+    gaps: 1,
+    ageMeanMs: 9,
+    ageMaxMs: 9
+  };
+  assert.deepEqual(padAge.merge([a, {reads: 0}, b]), {
+    reads: 4,
+    readMeanMs: 3,
+    readMaxMs: 6,
+    stepMax: 3,
+    stalls: 1,
+    gaps: 1,
+    ageMeanMs: 3,
+    ageMaxMs: 9
+  });
+  assert.deepEqual(padAge.merge([{reads: 0}]), {reads: 0});
 });
