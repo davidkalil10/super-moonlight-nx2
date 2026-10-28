@@ -76,6 +76,135 @@ function addressBlock(host, port, token) {
 }
 
 /**
+ * Checks the endpoint and setup timeout, then makes and checks the token.
+ * @param {string} host
+ * @param {number} port
+ * @param {number} timeoutMs
+ * @param {() => Buffer} makeToken
+ * @returns {Buffer}
+ */
+function checkSetup(host, port, timeoutMs, makeToken) {
+  endpoint(host, port);
+  if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > MAX_TIMEOUT_MS)
+    throw Error('Invalid native TCP setup timeout');
+  const token = makeToken();
+  if (!Buffer.isBuffer(token) || token.length !== TOKEN_BYTES)
+    throw Error('Invalid native TCP token');
+  return token;
+}
+
+/**
+ * Collects a candidate connection's first bytes and hands it to accept() once they match
+ * the token. A candidate that sends more or other bytes is destroyed.
+ * @param {net.Socket} candidate
+ * @param {Buffer} token
+ * @param {(candidate: net.Socket) => void} accept
+ */
+function authenticate(candidate, token, accept) {
+  const received = Buffer.alloc(token.length);
+  let used = 0;
+  candidate.on('error', () => {});
+  candidate.on('data', chunk => {
+    if (used + chunk.length > token.length) {
+      candidate.destroy();
+      return;
+    }
+    chunk.copy(received, used);
+    used += chunk.length;
+    if (used < token.length) return;
+    candidate.pause();
+    if (!crypto.timingSafeEqual(received, token)) {
+      candidate.destroy();
+      return;
+    }
+    accept(candidate);
+  });
+}
+
+/**
+ * Starts the host listener. Rejects if the server reports an error first.
+ * @param {net.Server} server
+ * @param {number} port
+ * @param {string} host
+ * @returns {Promise<void>}
+ */
+function listen(server, port, host) {
+  return new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(port, host, () => resolve());
+  });
+}
+
+/**
+ * Verifies every console socket function, in definition order.
+ * @param {import('../../../hbl-platform/sdk/native/allocate.js').Rpc} rpc
+ * @returns {Promise<Record<string, number>>} The function addresses by name.
+ */
+async function verifySocketFunctions(rpc) {
+  /** @type {Record<string, number>} */
+  const addresses = {};
+  for (const [name, definition] of Object.entries(definitions)) {
+    const address = rpc.a.sdk + definition.offset;
+    await verify(rpc, address, definition.hex);
+    addresses[name] = address;
+  }
+  return addresses;
+}
+
+/**
+ * Allocates the console scratch block and writes the listener's address and the token into
+ * it.
+ * @param {import('../../../hbl-platform/sdk/native/allocate.js').Rpc} rpc
+ * @param {net.Server} server
+ * @param {string} host
+ * @param {Buffer} token
+ * @returns {Promise<{base: number, listeningPort: number}>}
+ */
+async function writeAddressBlock(rpc, server, host, token) {
+  const base = await allocate(rpc, SCRATCH_BYTES, {
+    failed: 'Native TCP address allocation failed',
+    invalid: 'Invalid native TCP address allocation'
+  });
+  const listeningPort = /** @type {net.AddressInfo} */ (server.address()).port;
+  if (
+    !Number.isInteger(listeningPort) ||
+    listeningPort < MIN_LISTENING_PORT ||
+    listeningPort > MAX_PORT
+  )
+    throw Error('Native TCP listener has no usable port');
+  await rpc.write(base, addressBlock(host, listeningPort, token));
+  return {base, listeningPort};
+}
+
+/**
+ * Connects the console socket to the address in the scratch block, then sends the token
+ * after it. Each step is one finite job.
+ * @param {object} options
+ * @param {(job: {function: number, args: number[]}) => Promise<bigint>} options.run
+ * @param {() => Promise<number>} options.errno
+ * @param {Record<string, number>} options.addresses
+ * @param {number} options.fd
+ * @param {number} options.base The scratch block.
+ * @param {number} options.tokenBytes
+ */
+async function connectWithToken({run, errno, addresses, fd, base, tokenBytes}) {
+  const connected = await run({function: addresses.connect, args: [fd, base, SOCKADDR_BYTES, 0]});
+  if (signed(connected) !== 0)
+    throw Error('Console TCP connect failed (errno ' + (await errno()) + ')');
+  let sent = 0;
+  while (sent < tokenBytes) {
+    const result = await run({
+      function: addresses.send,
+      args: [fd, base + TOKEN_OFFSET + sent, tokenBytes - sent, 0]
+    });
+    const count = signed(result);
+    if (count <= 0 || count > tokenBytes - sent)
+      throw Error('Console TCP token send failed (errno ' + (await errno()) + ')');
+    sent += count;
+  }
+}
+
+/**
  * @typedef {object} NativeTcp
  * @property {number} fd The console socket descriptor.
  * @property {number} port The host listening port.
@@ -106,12 +235,7 @@ async function create({
   makeToken = () => crypto.randomBytes(TOKEN_BYTES),
   createWorker = createFinite
 }) {
-  endpoint(host, port);
-  if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > MAX_TIMEOUT_MS)
-    throw Error('Invalid native TCP setup timeout');
-  const token = makeToken();
-  if (!Buffer.isBuffer(token) || token.length !== TOKEN_BYTES)
-    throw Error('Invalid native TCP token');
+  const token = checkSetup(host, port, timeoutMs, makeToken);
   const server = createServer();
   /** @type {net.Socket | null} */
   let socket = null;
@@ -133,90 +257,45 @@ async function create({
   });
   accepted.catch(() => {});
   const timer = setTimeout(() => acceptReject(Error('Native TCP connection timed out')), timeoutMs);
+  /** @param {net.Socket} candidate */
+  const accept = candidate => {
+    if (socket) {
+      candidate.destroy();
+      return;
+    }
+    socket = candidate;
+    socket.setNoDelay(true);
+    clearTimeout(timer);
+    acceptResolve(socket);
+    closeServer();
+  };
   server.on('error', acceptReject);
-  server.on('connection', candidate => {
-    const received = Buffer.alloc(token.length);
-    let used = 0;
-    candidate.on('error', () => {});
-    candidate.on('data', chunk => {
-      if (used + chunk.length > token.length) {
-        candidate.destroy();
-        return;
-      }
-      chunk.copy(received, used);
-      used += chunk.length;
-      if (used < token.length) return;
-      candidate.pause();
-      if (!crypto.timingSafeEqual(received, token) || socket) {
-        candidate.destroy();
-        return;
-      }
-      socket = candidate;
-      socket.setNoDelay(true);
-      clearTimeout(timer);
-      acceptResolve(socket);
-      closeServer();
-    });
-  });
+  server.on('connection', candidate => authenticate(candidate, token, accept));
 
   /** @type {Record<string, number>} */
-  const addresses = {};
+  let addresses = {};
+  /** @type {(name: string, args?: number[]) => Promise<bigint>} */
   const call = async (name, args = []) =>
     (await rpc.callAddress(addresses[name], args, SHORT_RESPONSE_BYTES)).result;
   const errno = async () => Number(BigInt.asUintN(32, await call('errno')));
-  let base = null;
   try {
-    await new Promise((resolve, reject) => {
-      server.once('error', reject);
-      server.listen(port, host, () => {
-        listening = true;
-        resolve();
-      });
-    });
-    for (const [name, definition] of Object.entries(definitions)) {
-      const address = rpc.a.sdk + definition.offset;
-      await verify(rpc, address, definition.hex);
-      addresses[name] = address;
-    }
+    await listen(server, port, host);
+    listening = true;
+    addresses = await verifySocketFunctions(rpc);
     if (signed(await call('socketInitialized')) !== 1)
       throw Error('Console sockets are not initialized');
-    base = await allocate(rpc, SCRATCH_BYTES, {
-      failed: 'Native TCP address allocation failed',
-      invalid: 'Invalid native TCP address allocation'
-    });
-    const listeningPort = /** @type {net.AddressInfo} */ (server.address()).port;
-    if (
-      !Number.isInteger(listeningPort) ||
-      listeningPort < MIN_LISTENING_PORT ||
-      listeningPort > MAX_PORT
-    )
-      throw Error('Native TCP listener has no usable port');
-    await rpc.write(base, addressBlock(host, listeningPort, token));
+    const {base, listeningPort} = await writeAddressBlock(rpc, server, host, token);
     fd = signed(await call('socket', [AF_INET, SOCK_STREAM, IPPROTO_TCP]));
     if (fd < 0) throw Error('Console TCP socket failed (errno ' + (await errno()) + ')');
     const worker = await createWorker(rpc);
-    safeToClose = false;
-    const [connected] = await worker.run([
-      {function: addresses.connect, args: [fd, base, SOCKADDR_BYTES, 0]}
-    ]);
-    safeToClose = true;
-    if (signed(connected) !== 0)
-      throw Error('Console TCP connect failed (errno ' + (await errno()) + ')');
-    let sent = 0;
-    while (sent < token.length) {
+    /** @param {{function: number, args: number[]}} job */
+    const run = async job => {
       safeToClose = false;
-      const [result] = await worker.run([
-        {
-          function: addresses.send,
-          args: [fd, base + TOKEN_OFFSET + sent, token.length - sent, 0]
-        }
-      ]);
+      const [result] = await worker.run([job]);
       safeToClose = true;
-      const count = signed(result);
-      if (count <= 0 || count > token.length - sent)
-        throw Error('Console TCP token send failed (errno ' + (await errno()) + ')');
-      sent += count;
-    }
+      return result;
+    };
+    await connectWithToken({run, errno, addresses, fd, base, tokenBytes: token.length});
     await accepted;
     return {
       fd,
