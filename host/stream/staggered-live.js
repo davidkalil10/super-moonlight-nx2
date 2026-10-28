@@ -434,6 +434,8 @@ function create({
    */
   /** @type {Promise<unknown>} */
   let writes = Promise.resolve();
+  /** The error of a queued gate that stop() dropped, for the caller to log. */
+  let gateError = null;
   const units = new Map();
   const destinations = new Map();
   const counts = {
@@ -586,7 +588,7 @@ function create({
    */
   function remember(sequence, unit) {
     units.set(sequence, unit);
-    units.delete(sequence - 4);
+    units.delete(sequence - 5);
     destinations.delete(sequence - 5);
   }
 
@@ -987,7 +989,9 @@ function create({
         // Queued gates are of units already primed and sent. Dropping them is safe because
         // worker.stop() rewrites the exit dispatch before it signals; the running one finishes.
         queue.clear();
-        await queue.drain().catch(() => {});
+        await queue.drain().catch(error => {
+          gateError = error;
+        });
       }
       try {
         await worker.stop();
@@ -1004,6 +1008,11 @@ function create({
 
     get exists() {
       return worker !== null;
+    },
+
+    /** The error of the last queued gate when stop() ran, or null. */
+    get gateError() {
+      return gateError;
     },
 
     get pending() {

@@ -927,6 +927,8 @@ async function run({
       onGate: at => {
         sample.gatedAt = at;
         sample.inHand = 1 + reader.ready.length;
+        if (sample.queued) auSamples.push(sample);
+        sample.queued = false;
       },
       onSent: at => {
         sample.sentAt = at;
@@ -1021,6 +1023,13 @@ async function run({
         errors.push(error);
         retained = true;
       }
+      const dropped = staggeredLive.gateError;
+      if (dropped)
+        log({
+          event: 'staggered-gate-dropped-error',
+          error: dropped.message,
+          ...(dropped.expected && {expected: dropped.expected, checked: dropped.checked})
+        });
     }
     if (retained) {
       transport?.abort?.();
@@ -1099,7 +1108,9 @@ async function run({
     } finally {
       pairing = false;
     }
-    auSamples.push(sample);
+    // A queued gate times its unit later, into whichever row is open then.
+    if (gateQueue && sample.gatedAt === null) sample.queued = true;
+    else auSamples.push(sample);
     stats.submitted++;
     enter('read');
   }

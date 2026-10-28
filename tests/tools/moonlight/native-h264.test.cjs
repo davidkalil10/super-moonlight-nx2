@@ -1308,6 +1308,33 @@ test('a stop cancels nothing while a queued gate still runs', {timeout: 5000}, a
   assert.deepEqual(seen, [false, true]);
 });
 
+test('a gate error that stop dropped is logged', {timeout: 5000}, async () => {
+  const f = await fixture({units: pairedUnits(4)});
+  const fake = staggeredFake(f.events);
+  const dropped = Object.assign(Error('Staggered receive is pending'), {
+    expected: {receive: {sequence: 4}},
+    checked: {receive: {sequence: 3}}
+  });
+  f.options.createStaggered = () => Object.create(fake(), {gateError: {get: () => dropped}});
+  f.options.args.push('--staggered', '--gate-on-receive', '--gate-queue');
+  await exercise(f, async () => {
+    await run(f.options);
+    const events = (await fs.readFile(path.join(f.directory, 'logs', 'events.jsonl'), 'utf8'))
+      .trim()
+      .split('\n')
+      .map(JSON.parse);
+    const logged = events.find(entry => entry.event === 'staggered-gate-dropped-error');
+    assert.deepEqual(
+      {error: logged.error, expected: logged.expected, checked: logged.checked},
+      {
+        error: 'Staggered receive is pending',
+        expected: {receive: {sequence: 4}},
+        checked: {receive: {sequence: 3}}
+      }
+    );
+  });
+});
+
 test('--output-lag reaches the staggered scheduler and takes 0 to 2', {timeout: 5000}, async () => {
   for (const lag of [1, 0]) {
     const f = await fixture({units: pairedUnits(4)});
