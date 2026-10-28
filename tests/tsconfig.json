@@ -52,6 +52,14 @@
     "../hbl-moonlight/host/stream/exchange-timing.js",
     "../hbl-moonlight/host/stream/receive-wait.js",
     "../hbl-moonlight/host/stream/native-h264.js",
-    "../hbl-moonlight/host/stream/live.js"
+    "../hbl-moonlight/host/stream/live.js",
+    "../hbl-moonlight/host/ui/discover.js",
+    "../hbl-moonlight/host/ui/hosts.js",
+    "../hbl-moonlight/host/ui/model.js",
+    "../hbl-moonlight/host/ui/page.js",
+    "../hbl-moonlight/host/ui/pages.js",
+    "../hbl-moonlight/host/ui/raster.js",
+    "../hbl-moonlight/host/ui/service.js",
+    "../hbl-moonlight/host/ui/settings.js"
   ]
 }
