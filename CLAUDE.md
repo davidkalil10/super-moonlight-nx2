@@ -55,11 +55,11 @@ them). Package `exports` replace the relative paths later in Phase 2.
 
 ## Pacing results (2026-10-26, session DjIU1L, 60 Hz panel, m5 quiet)
 
-| Run | Presented fps | Requests/frame | Bridge ms/frame |
-| --- | ---: | ---: | ---: |
-| Control, 1080p60 | 59.4 | 2.1 | 4.2 |
-| `--present-hz 120 --receive-wait` | 28.9 | 9.3 | 23.6 |
-| Applied pacing: vsync rule, skip-backlog 1, decode and receive wait | 30.3 | 3.5 | 24.4 |
+| Run                                                                 | Presented fps | Requests/frame | Bridge ms/frame |
+| ------------------------------------------------------------------- | ------------: | -------------: | --------------: |
+| Control, 1080p60                                                    |          59.4 |            2.1 |             4.2 |
+| `--present-hz 120 --receive-wait`                                   |          28.9 |            9.3 |            23.6 |
+| Applied pacing: vsync rule, skip-backlog 1, decode and receive wait |          30.3 |            3.5 |            24.4 |
 
 Requests per frame fell by about two thirds, but bridge ms/frame stayed flat; decoded units
 never cross the bridge. Status and gate exchanges became 2.7x slower (2.5 to 7 ms) as they grew

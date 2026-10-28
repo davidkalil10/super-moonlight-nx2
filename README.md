@@ -113,38 +113,38 @@ node host/ui/service.js [RUN_DIR]
 
 ### live.js flags
 
-| Flag | Default | Meaning |
-| --- | --- | --- |
-| `--moonlight HOST APP` | | stream from Sunshine through `hbmoonlight`; APP is a name (case-insensitive) or an id from `list` |
-| `--codec h264` | `h264` | the only route left: the console decoder |
-| `--size WxH` | `1920x1080` | stream and frame size |
-| `--fps N` | `60` | requested frame rate |
-| `--bitrate KBPS\|auto` | `auto` | Moonlight's table: interpolated by pixels, linear in fps to 60, square root above; 500 to 150000 |
-| `--no-input` / `--no-audio` | on | skip `input-feeder.js` / the audio path |
+| Flag                        | Default     | Meaning                                                                                           |
+| --------------------------- | ----------- | ------------------------------------------------------------------------------------------------- |
+| `--moonlight HOST APP`      |             | stream from Sunshine through `hbmoonlight`; APP is a name (case-insensitive) or an id from `list` |
+| `--codec h264`              | `h264`      | the only route left: the console decoder                                                          |
+| `--size WxH`                | `1920x1080` | stream and frame size                                                                             |
+| `--fps N`                   | `60`        | requested frame rate                                                                              |
+| `--bitrate KBPS\|auto`      | `auto`      | Moonlight's table: interpolated by pixels, linear in fps to 60, square root above; 500 to 150000  |
+| `--no-input` / `--no-audio` | on          | skip `input-feeder.js` / the audio path                                                           |
 
 ### h264 flags (`native-h264.js`)
 
-| Flag | Default | Meaning |
-| --- | --- | --- |
-| `--staggered` | always | lag-2 input and output workers, one status read and one gate write per frame; the only route, so the flag is a no-op |
-| `--present-hz 60\|120` | `60` | staggered: display refresh the pacer starts from |
-| `--skip-backlog N\|off` | `2`, `1` with vsync | staggered: units queued before outputs go off screen |
-| `--skip-rule backlog\|vsync` | `backlog` | staggered: skip by backlog, or keep one publication pending per vsync |
-| `--decode-wait` | off | sleep to the predicted acquire (needs `--skip-rule vsync`) |
-| `--trim-backlog-ms N` | off | staggered, backlog rule, `--skip-backlog` 1 or more: skip one output once the unit in hand is N ms old with a unit queued, at 3 gates in a row, at most once per 6 gates; counted as `trimmed`. Pick N above the default run's `au.gateAgeMs` plus a margin |
-| `--gate-on-receive` | off | staggered, 60 Hz only: open decode N when unit N arrives instead of on N+1 |
-| `--gate-queue` | off | with `--gate-on-receive`: queue each gate behind its send instead of awaiting it, at most one unit primed ahead of the console's receive |
-| `--output-lag 0\|1\|2` | `2` | staggered: fetch each output 0, 1 or 2 gates after its decode; 0 is 60 Hz only, without `--gate-on-receive` or `--gate-queue` |
-| `--surface-check K` | off | hash a 512 B luma sample of every Kth published surface and re-read it before reuse; a change fails the run |
-| `--receive-wait` | off | sleep to the predicted receive |
-| `--avoid-window B-A` | off | keep status reads out of B ms before to A ms after a predicted event (needs a wait flag) |
-| `--queue N` | `8` | host access-unit queue, 1 to 16 |
-| `--input-hz N` | `60`, `120` with push | input feeder rate, 10 to 120 |
-| `--input-push` | off | a console worker pushes the pad, touch and overlay words over native TCP instead of the feeder reading them (`input-feeder.js --push`); rows gain `inputPush` {pushed, dropped, gapMaxMs} |
-| `--audio-frames N` | `960` on protocol 3, else `1920` | AudioOut buffer, multiple of 240 (up to 3840 with socket audio) |
-| `--socket-audio` / `--socket-audio-tone` | off | PCM, or a 500 Hz tone, over native TCP to a console audio worker |
-| `--duration S` / `--warmup S` | none / `3` | run length; rows skipped before scoring |
-| `--expect fps=30,dropped=0,idr=0,trimmed=0` | dropped and IDR fail | limits for the PASS/FAIL verdict |
+| Flag                                        | Default                          | Meaning                                                                                                                                                                                                                                                     |
+| ------------------------------------------- | -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--staggered`                               | always                           | lag-2 input and output workers, one status read and one gate write per frame; the only route, so the flag is a no-op                                                                                                                                        |
+| `--present-hz 60\|120`                      | `60`                             | staggered: display refresh the pacer starts from                                                                                                                                                                                                            |
+| `--skip-backlog N\|off`                     | `2`, `1` with vsync              | staggered: units queued before outputs go off screen                                                                                                                                                                                                        |
+| `--skip-rule backlog\|vsync`                | `backlog`                        | staggered: skip by backlog, or keep one publication pending per vsync                                                                                                                                                                                       |
+| `--decode-wait`                             | off                              | sleep to the predicted acquire (needs `--skip-rule vsync`)                                                                                                                                                                                                  |
+| `--trim-backlog-ms N`                       | off                              | staggered, backlog rule, `--skip-backlog` 1 or more: skip one output once the unit in hand is N ms old with a unit queued, at 3 gates in a row, at most once per 6 gates; counted as `trimmed`. Pick N above the default run's `au.gateAgeMs` plus a margin |
+| `--gate-on-receive`                         | off                              | staggered, 60 Hz only: open decode N when unit N arrives instead of on N+1                                                                                                                                                                                  |
+| `--gate-queue`                              | off                              | with `--gate-on-receive`: queue each gate behind its send instead of awaiting it, at most one unit primed ahead of the console's receive                                                                                                                    |
+| `--output-lag 0\|1\|2`                      | `2`                              | staggered: fetch each output 0, 1 or 2 gates after its decode; 0 is 60 Hz only, without `--gate-on-receive` or `--gate-queue`                                                                                                                               |
+| `--surface-check K`                         | off                              | hash a 512 B luma sample of every Kth published surface and re-read it before reuse; a change fails the run                                                                                                                                                 |
+| `--receive-wait`                            | off                              | sleep to the predicted receive                                                                                                                                                                                                                              |
+| `--avoid-window B-A`                        | off                              | keep status reads out of B ms before to A ms after a predicted event (needs a wait flag)                                                                                                                                                                    |
+| `--queue N`                                 | `8`                              | host access-unit queue, 1 to 16                                                                                                                                                                                                                             |
+| `--input-hz N`                              | `60`, `120` with push            | input feeder rate, 10 to 120                                                                                                                                                                                                                                |
+| `--input-push`                              | off                              | a console worker pushes the pad, touch and overlay words over native TCP instead of the feeder reading them (`input-feeder.js --push`); rows gain `inputPush` {pushed, dropped, gapMaxMs}                                                                   |
+| `--audio-frames N`                          | `960` on protocol 3, else `1920` | AudioOut buffer, multiple of 240 (up to 3840 with socket audio)                                                                                                                                                                                             |
+| `--socket-audio` / `--socket-audio-tone`    | off                              | PCM, or a 500 Hz tone, over native TCP to a console audio worker                                                                                                                                                                                            |
+| `--duration S` / `--warmup S`               | none / `3`                       | run length; rows skipped before scoring                                                                                                                                                                                                                     |
+| `--expect fps=30,dropped=0,idr=0,trimmed=0` | dropped and IDR fail             | limits for the PASS/FAIL verdict                                                                                                                                                                                                                            |
 
 The native route needs `--moonlight` and a launcher session from the current revision (the
 session records the host address for the TCP connection). Each run writes a source/build
@@ -163,13 +163,13 @@ command except raw write chunks.
 
 Status and errors are one JSON object per line on stderr.
 
-| Command | Output |
-| --- | --- |
-| `pair HOST [--timeout 120]` | `{"event":"pin","pin":"NNNN","url":...}`, then `{"event":"paired"}` once the PIN is entered in Sunshine's web UI |
-| `list HOST [--covers DIR]` | `{"currentGame":N,"apps":[{"id":..,"name":..}]}`; with `--covers`, box art from `/appasset` |
-| `quit HOST` | quits the running app (`/cancel`) |
-| `stream HOST APP [--size 1920x1080] [--fps 60] [--bitrate 20000] [--codec h264\|hevc] [--software] [--audio-fd FD] [--quit]` | raw RGB24 frames of exactly WxH on stdout |
-| `stream ... --raw-h264-fd FD \| --raw-hevc-fd FD [--rgb]` | every access unit in order as Annex B on FD; no RGB unless `--rgb` |
+| Command                                                                                                                      | Output                                                                                                           |
+| ---------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `pair HOST [--timeout 120]`                                                                                                  | `{"event":"pin","pin":"NNNN","url":...}`, then `{"event":"paired"}` once the PIN is entered in Sunshine's web UI |
+| `list HOST [--covers DIR]`                                                                                                   | `{"currentGame":N,"apps":[{"id":..,"name":..}]}`; with `--covers`, box art from `/appasset`                      |
+| `quit HOST`                                                                                                                  | quits the running app (`/cancel`)                                                                                |
+| `stream HOST APP [--size 1920x1080] [--fps 60] [--bitrate 20000] [--codec h264\|hevc] [--software] [--audio-fd FD] [--quit]` | raw RGB24 frames of exactly WxH on stdout                                                                        |
+| `stream ... --raw-h264-fd FD \| --raw-hevc-fd FD [--rgb]`                                                                    | every access unit in order as Annex B on FD; no RGB unless `--rgb`                                               |
 
 - Keys and the unique id live in `$XDG_CONFIG_HOME/hblauncher/moonlight` (mode 0700). Never
   commit them.
@@ -229,25 +229,25 @@ of them.
 
 ### Console UI block (0xC000, one u32 each)
 
-| Offset | Word | Owner | Meaning |
-| --- | --- | --- | --- |
-| +0 | `uiMagic` | host | `0x49554248` ('HBUI') once attached; 0 shows the static splash |
-| +4 | `uiEpoch` | host | nonzero service epoch (start time in s); a new one resets `uiApplied`, cursor and overlay |
-| +8 | `uiSequence` | host | newest published page, nonzero, +1 per publish, written last |
-| +12 | `uiPage` | host | page buffer (0/1) holding `uiSequence` |
-| +16 | `uiApplied` | compute | sequence the shader validated and draws; 0 none |
-| +20 | `uiCursor` | compute | index into the applied page's items |
-| +24 | `uiOverlay` | compute | 1 while the overlay is raised over video (L+R hold); game input stops |
-| +28 | `uiTouchItem` | compute | last item a tap selected |
-| +32 | `cmdSequence` | compute | nonzero, +1 per command, wraps past 0 |
-| +36 | `cmdOp` | compute | 1 A, 2 B, 3 X, 4 Y, 5 ADJUST, 6 CHORD (L+R held 60 frames) |
-| +40 | `cmdItem` | compute | cursor item `id` for A/X/Y/ADJUST; 0 for B and CHORD |
-| +44 | `cmdValue` | compute | ADJUST: 1 right, 0xffffffff left; else 0 |
-| +48 | `cmdPage` | compute | `uiApplied` at the press |
-| +52 | `cmdEpoch` | compute | `uiEpoch` at the press |
-| +56 | `uiShown` | compute | buffer the shader draws from; the host does not read it |
-| +64 | `hostAck` | host | last `cmdSequence` taken; the cursor pulses while it differs |
-| +68 | `hostBusy` | host | nonzero during a helper call; the shader draws a spinner |
+| Offset | Word          | Owner   | Meaning                                                                                   |
+| ------ | ------------- | ------- | ----------------------------------------------------------------------------------------- |
+| +0     | `uiMagic`     | host    | `0x49554248` ('HBUI') once attached; 0 shows the static splash                            |
+| +4     | `uiEpoch`     | host    | nonzero service epoch (start time in s); a new one resets `uiApplied`, cursor and overlay |
+| +8     | `uiSequence`  | host    | newest published page, nonzero, +1 per publish, written last                              |
+| +12    | `uiPage`      | host    | page buffer (0/1) holding `uiSequence`                                                    |
+| +16    | `uiApplied`   | compute | sequence the shader validated and draws; 0 none                                           |
+| +20    | `uiCursor`    | compute | index into the applied page's items                                                       |
+| +24    | `uiOverlay`   | compute | 1 while the overlay is raised over video (L+R hold); game input stops                     |
+| +28    | `uiTouchItem` | compute | last item a tap selected                                                                  |
+| +32    | `cmdSequence` | compute | nonzero, +1 per command, wraps past 0                                                     |
+| +36    | `cmdOp`       | compute | 1 A, 2 B, 3 X, 4 Y, 5 ADJUST, 6 CHORD (L+R held 60 frames)                                |
+| +40    | `cmdItem`     | compute | cursor item `id` for A/X/Y/ADJUST; 0 for B and CHORD                                      |
+| +44    | `cmdValue`    | compute | ADJUST: 1 right, 0xffffffff left; else 0                                                  |
+| +48    | `cmdPage`     | compute | `uiApplied` at the press                                                                  |
+| +52    | `cmdEpoch`    | compute | `uiEpoch` at the press                                                                    |
+| +56    | `uiShown`     | compute | buffer the shader draws from; the host does not read it                                   |
+| +64    | `hostAck`     | host    | last `cmdSequence` taken; the cursor pulses while it differs                              |
+| +68    | `hostBusy`    | host    | nonzero during a helper call; the shader draws a spinner                                  |
 
 The shader is the only console writer of +16..+63 and never writes host words; the host reads
 +16..+55 in one 40-byte read and writes +0..+15 and +64..+71. The shader writes
@@ -257,13 +257,13 @@ one command; the host's state machine gives it meaning.
 
 ### Page format (`UI_OFFSET + page * 4 MiB`, `host/ui/page.js`)
 
-| Offset | Content |
-| --- | --- |
-| 0x000 | header, 16 u32: magic `0x47504248` ('HBPG'), epoch, sequence, flags, itemCount <= 32, textCount <= 48, imageCount <= 24, bodyBytes <= 4 MiB - 0x1000, background RGBA8, cursorHome, checksum, 5 zero |
-| 0x040 | items, 32 x 8 u32: `id` (nonzero), x, y, w, h, flags, 2 zero |
-| 0x440 | texts, 48 x 8 u32: x, y, w, h, body offset, color RGBA8, 2 zero |
-| 0xA40 | images, 24 x 8 u32: x, y, w, h, body offset, format (1 RGBA8), 2 zero |
-| 0x1000 | body: alpha-8 strips (4-aligned, w <= 1920, h <= 96) and RGBA8 images (w <= 320, h <= 180) |
+| Offset | Content                                                                                                                                                                                              |
+| ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 0x000  | header, 16 u32: magic `0x47504248` ('HBPG'), epoch, sequence, flags, itemCount <= 32, textCount <= 48, imageCount <= 24, bodyBytes <= 4 MiB - 0x1000, background RGBA8, cursorHome, checksum, 5 zero |
+| 0x040  | items, 32 x 8 u32: `id` (nonzero), x, y, w, h, flags, 2 zero                                                                                                                                         |
+| 0x440  | texts, 48 x 8 u32: x, y, w, h, body offset, color RGBA8, 2 zero                                                                                                                                      |
+| 0xA40  | images, 24 x 8 u32: x, y, w, h, body offset, format (1 RGBA8), 2 zero                                                                                                                                |
+| 0x1000 | body: alpha-8 strips (4-aligned, w <= 1920, h <= 96) and RGBA8 images (w <= 320, h <= 180)                                                                                                           |
 
 Page flags: bit0 overlay (drawn over video only while `uiOverlay` is 1; otherwise the page
 replaces the video whenever no native or HBV frame is current), bit1 hide cursor. Item flags:
@@ -341,7 +341,7 @@ whitespace. Controller fields go to `LiSendMultiControllerEvent` as gamepad 0 (a
 analog triggers; missing fields keep their value). + alone stops SmileBASIC 4, so PC Start also
 comes from `--start-chord`: while all its buttons are held (L3+R3 by default, `none` to turn it
 off), the PC sees Start in place of them. Touch is a verbatim
-`nn::hid::TouchScreenState<16>` (count at word 2, entry i at word 4 + i*10: attributes, fingerId,
+`nn::hid::TouchScreenState<16>` (count at word 2, entry i at word 4 + i\*10: attributes, fingerId,
 x, y); the panel reports 1280x720, normalized to 0..1 and rounded to 4 decimals. `fingerId` is
 the pointer id: new id down, moved id move, End bit or absent id up; pressure 0 (unknown), no
 hover; every live id gets an up on exit. The helper checks `LI_FF_PEN_TOUCH_EVENTS` on the first
