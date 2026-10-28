@@ -311,6 +311,8 @@ function create({
     ...(trimBacklogMs !== null && {trimmed: 0})
   };
   let published = null;
+  /** The publication before `published`, logged with a failed check. */
+  let previous = null;
   let pending = null;
   let skips = 0;
   let stale = 0;
@@ -477,6 +479,25 @@ function create({
     return stale >= TRIM_FRAMES;
   }
 
+  /** Reserves the next publication and keeps the one before it. */
+  async function nextPublication(sink, presentation) {
+    const next = await sink.workerDestination(presentation);
+    previous = published;
+    published = next;
+    return next;
+  }
+
+  /**
+   * A failed check also logs the publication before the last one: a current on it points at a
+   * stale status read rather than a wrong surface.
+   * @param {any} error
+   */
+  function withPrevious(error) {
+    if (error.expected)
+      error.previous = previous && {sequence: previous.sequence, index: previous.index};
+    throw error;
+  }
+
   /**
    * Picks the surface the next output is fetched into: a discard surface while the backlog
    * or a due trim calls for a skip and the skip run is short enough, else a published one.
@@ -486,7 +507,7 @@ function create({
     const presentation = {current: snapshot.current, applied: snapshot.nativeApplied};
     if (vsyncRule) {
       if (pending) return sink.discardDestination(presentation);
-      published = await sink.workerDestination(presentation);
+      await nextPublication(sink, presentation);
       pending = {sequence: published.sequence, index: published.index, openedAt: null};
       return published;
     }
@@ -505,7 +526,7 @@ function create({
       }
     }
     skips = 0;
-    published = await sink.workerDestination(presentation);
+    await nextPublication(sink, presentation);
     return published;
   }
 
@@ -544,7 +565,9 @@ function create({
         openedAt: pending.openedAt
       };
       await pacer.beforeRead(pending.openedAt);
-      snapshot = await waitChecked(worker, expected, rereadsFor(expected, watch, link));
+      snapshot = await waitChecked(worker, expected, rereadsFor(expected, watch, link)).catch(
+        withPrevious
+      );
       confirm(snapshot, onPresented);
       destination = await target(sink, snapshot, backlog);
     }
@@ -609,7 +632,9 @@ function create({
       await pacer.beforeRead(vsyncRule ? pending.openedAt : fetchOpened);
     const watch = acquireWatch(expected);
     const link = receiveWatch(expected);
-    let snapshot = await waitChecked(worker, expected, rereadsFor(expected, watch, link));
+    let snapshot = await waitChecked(worker, expected, rereadsFor(expected, watch, link)).catch(
+      withPrevious
+    );
     countRead(expected, snapshot, onDecoded, onPresented, onSkipped);
     enter('staggered-input');
     const inputSlot = await worker.inputSlot(
@@ -731,7 +756,7 @@ function create({
       await worker.stopInput();
       for (let sequence = Math.max(1, last - lag + 1); sequence <= last; sequence++) {
         const expected = tailExpected(sequence, units, destinations);
-        const snapshot = await waitOutput(worker, expected, waits);
+        const snapshot = await waitOutput(worker, expected, waits).catch(withPrevious);
         counts.decoded++;
         onDecoded?.(1);
         shown(expected, onPresented, onSkipped);
@@ -752,7 +777,7 @@ function create({
           ack: {sequence: final.sequence, index: final.index}
         },
         waits
-      );
+      ).catch(withPrevious);
       counts.presented++;
       onPresented?.(1);
       await worker.stopOutput();
