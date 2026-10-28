@@ -50,8 +50,16 @@ const HELPER_TIMEOUT_MS = 20000;
 const STOP_GRACE_MS = 10000;
 /** How often the poll loop checks app-runtime.json for the active app. */
 const RUNTIME_CHECK_MS = 500;
+/** Socket error codes that mean the bridge is closed, as when the launcher stops first. */
+const BRIDGE_GONE = ['ECONNREFUSED', 'ECONNRESET', 'EPIPE'];
+/** What the operator has to do once the bridge went away under a stream. */
+const RESET_HINT =
+  'the launcher closed the bridge; restart SmileBASIC 4 to Direct before relaunching';
 /** Every child gets its stdout and stderr piped, nothing on stdin. */
 const PIPED = /** @type {const} */ (['ignore', 'pipe', 'pipe']);
+
+/** @param {any} error @returns {boolean} */
+const isBridgeGone = error => BRIDGE_GONE.includes(error?.code);
 
 /** One little-endian 32-bit word. */
 function u32(value) {
@@ -167,6 +175,8 @@ function createService({
   let applied = 0;
   let stalled = false;
   let stopped = false;
+  /** Set once a transfer found the bridge closed; nothing is written after that. */
+  let lost = false;
   /** @type {Promise<void> | undefined} */
   let detaching;
   /** Bumped on cancel and detach; a result from an older generation is dropped. */
@@ -253,6 +263,22 @@ function createService({
     }
   }
 
+  /**
+   * Logs a failure of work nothing waits for. A closed bridge means the launcher is gone, so
+   * the service stops publishing and detaches.
+   * @param {string} name @param {Error} error @param {object} [fields]
+   */
+  function failed(name, error, fields = {}) {
+    log({event: name, ...fields, message: error.message});
+    if (lost || !isBridgeGone(error)) return;
+    lost = true;
+    log({event: 'bridge-gone', message: error.message, hint: RESET_HINT});
+    detach();
+  }
+
+  /** Dispatches from a callback that cannot wait for it. */
+  const background = event => dispatch(event).catch(error => failed('dispatch-failed', error));
+
   /** Everything that publishes runs through one queue, in order. */
   function enqueue(work) {
     queue = queue.then(work, work);
@@ -273,9 +299,7 @@ function createService({
       log({event: 'model', type: event.type, screen: model.screen});
 
       for (const intent of result.intents)
-        run(intent).catch(error =>
-          log({event: 'intent-failed', type: intent.type, message: error.message})
-        );
+        run(intent).catch(error => failed('intent-failed', error, {type: intent.type}));
       if (changed) await publish();
     });
   }
@@ -371,7 +395,7 @@ function createService({
       } catch {
         return;
       }
-      if (event.event === 'pin') dispatch({type: 'pin', pin: event.pin, url: event.url});
+      if (event.event === 'pin') background({type: 'pin', pin: event.pin, url: event.url});
       if (event.event === 'error') {
         pairError = event.message;
         log({event: 'pair-error', message: event.message, detail: event.detail});
@@ -405,15 +429,15 @@ function createService({
     }
     log({...event, event: 'stream-event', name: event.event});
 
-    if (event.event === 'connected') dispatch({type: 'streamStarted'});
+    if (event.event === 'connected') background({type: 'streamStarted'});
     else if (event.event === 'console-stalled')
-      dispatch({
+      background({
         type: 'failed',
         message: 'The console stopped answering, so the stream was stopped',
         back: 'apps'
       });
     else if (event.event === 'log' && event.message)
-      dispatch({type: 'stage', message: event.message});
+      background({type: 'stage', message: event.message});
   }
 
   function launch(host, app, streamSettings, token) {
@@ -421,19 +445,21 @@ function createService({
     const child = children.stream(directory, host, app, args, onStreamLine);
     stream = child;
 
-    child.exited.then(async result => {
-      if (stream === child) stream = null;
-      log({event: 'stream-exit', code: result.code, signal: result.signal});
-      if (token !== generation) return;
+    child.exited
+      .then(async result => {
+        if (stream === child) stream = null;
+        log({event: 'stream-exit', code: result.code, signal: result.signal});
+        if (token !== generation) return;
 
-      if (model.screen === 'launching' && result.code !== 0 && !result.signal)
-        await dispatch({
-          type: 'failed',
-          message: 'The stream did not start (exit ' + result.code + ')',
-          back: 'apps'
-        });
-      else await dispatch({type: 'streamEnded'});
-    });
+        if (model.screen === 'launching' && result.code !== 0 && !result.signal)
+          await dispatch({
+            type: 'failed',
+            message: 'The stream did not start (exit ' + result.code + ')',
+            back: 'apps'
+          });
+        else await dispatch({type: 'streamEnded'});
+      })
+      .catch(error => failed('stream-exit-failed', error));
   }
 
   /** Stops live.js once, however many callers ask: SIGINT, then SIGKILL after the grace. */
@@ -589,7 +615,8 @@ function createService({
     current?.cancel('SIGINT');
     await queue.catch(() => {});
     await stopStream();
-    await transfer(() => memory.write(mapped + UI.uiMagic, splashHeader())).catch(() => {});
+    if (!lost)
+      await transfer(() => memory.write(mapped + UI.uiMagic, splashHeader())).catch(() => {});
     log({event: 'detach'});
   }
 
@@ -610,7 +637,13 @@ function createService({
         }
       }
 
-      await poll();
+      try {
+        await poll();
+      } catch (error) {
+        if (!isBridgeGone(error)) throw error;
+        failed('poll-failed', error);
+        break;
+      }
       await sleep(model.screen === 'streaming' ? POLL_MS.streaming : POLL_MS.idle);
     }
 
@@ -624,7 +657,8 @@ function createService({
     poll,
     dispatch: event => dispatch(event),
     model: () => model,
-    state: () => ({epoch, sequence, seen})
+    state: () => ({epoch, sequence, seen}),
+    lost: () => lost
   };
 }
 
@@ -725,6 +759,10 @@ async function main() {
     await service.start();
   } finally {
     raster.close();
+  }
+  if (service.lost()) {
+    console.error('ui-service: ' + RESET_HINT);
+    process.exitCode = 1;
   }
 }
 

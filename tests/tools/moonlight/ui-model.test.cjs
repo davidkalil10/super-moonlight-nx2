@@ -374,6 +374,10 @@ function fakeRaster() {
   };
 }
 
+/** What the rpc throws once the launcher has closed the bridge. */
+const refused = () =>
+  Object.assign(Error('connect ECONNREFUSED 127.0.0.1:43355'), {code: 'ECONNREFUSED'});
+
 async function fakeConsole() {
   const {validate, parse} = await uiPage();
   const bytes = Buffer.alloc(MEMORY_BYTES);
@@ -388,7 +392,9 @@ async function fakeConsole() {
     loseHeader: 0,
     revertAfterReads: 0,
     reverting: null,
+    gone: false,
     async read(address, length) {
+      if (console.gone) throw refused();
       if (console.reverting && --console.reverting.reads < 0) {
         console.reverting.words.copy(bytes, UI.uiMagic);
         console.reverting = null;
@@ -396,6 +402,7 @@ async function fakeConsole() {
       return Buffer.from(bytes.subarray(address - MAPPED, address - MAPPED + length));
     },
     async write(address, data) {
+      if (console.gone) throw refused();
       const offset = address - MAPPED;
       const before = Buffer.from(bytes.subarray(UI.uiMagic, UI.uiMagic + 16));
       data.copy(bytes, offset);
@@ -911,6 +918,97 @@ test('nothing is published after the service detaches', async () => {
   await Promise.all([stopping, late]);
   assert.equal(console.word(UI.uiMagic), 0);
   assert.equal(console.writes.at(-1), UI.uiMagic, 'magic 0 is the last write');
+});
+
+/** Runs `body` and returns the rejections nothing handled while it ran. */
+async function unhandled(body) {
+  const seen = [];
+  const spy = reason => seen.push(reason);
+  process.on('unhandledRejection', spy);
+  try {
+    await body();
+    await new Promise(resolve => setTimeout(resolve, 20));
+  } finally {
+    process.off('unhandledRejection', spy);
+  }
+  return seen;
+}
+
+/** A fixture with a stream up on the streaming screen. */
+async function streaming() {
+  const fixture = await setup();
+  const {console, children, service} = fixture;
+  await service.attach();
+  await openHost(fixture);
+  console.press('a', ITEM.app);
+  await service.poll();
+  const stream = children.last('stream');
+  stream.line('stderr', '{"event":"connected"}');
+  await until(() => service.model().screen === 'streaming', 'streaming');
+  return {...fixture, stream};
+}
+
+const named = (events, name) => events.filter(event => event.event === name);
+
+test('a stream ending after the bridge closed detaches instead of crashing', async () => {
+  const fixture = await streaming();
+  const {console, events, service, stream} = fixture;
+  const seen = await unhandled(async () => {
+    console.gone = true;
+    const writes = console.writes.length;
+    stream.finish({code: 1});
+    await until(() => named(events, 'detach').length, 'detach');
+    assert.equal(console.writes.length, writes, 'nothing is written to the closed bridge');
+  });
+  assert.deepEqual(seen, []);
+  assert.equal(named(events, 'stream-exit-failed').length, 1);
+  assert.match(named(events, 'bridge-gone')[0].hint, /restart SmileBASIC 4/);
+  assert.equal(service.lost(), true);
+  await service.stop();
+  assert.equal(named(events, 'detach').length, 1, 'a later stop does not detach again');
+});
+
+test('a stream line after the bridge closed is caught and detaches once', async () => {
+  const fixture = await streaming();
+  const {console, events, service, stream} = fixture;
+  const seen = await unhandled(async () => {
+    console.gone = true;
+    stream.line('stderr', '{"event":"console-stalled","silentMs":5000}');
+    stream.line('stderr', '{"event":"log","message":"late"}');
+    await until(() => named(events, 'detach').length, 'detach');
+  });
+  assert.deepEqual(seen, []);
+  assert.ok(named(events, 'dispatch-failed').length >= 1);
+  assert.equal(named(events, 'bridge-gone').length, 1);
+  assert.equal(service.lost(), true);
+});
+
+test('the poll loop ends on a closed bridge and stop still resolves', async () => {
+  const fixture = await setup();
+  const {console, events, service} = fixture;
+  const finished = service.start();
+  await until(() => service.model().screen === 'hosts', 'attach');
+  console.gone = true;
+  await finished;
+  assert.equal(named(events, 'poll-failed').length, 1);
+  assert.equal(named(events, 'bridge-gone').length, 1);
+  await service.stop();
+  assert.equal(named(events, 'detach').length, 1);
+  assert.equal(service.lost(), true);
+});
+
+test('other failures leave the bridge alone', async () => {
+  const fixture = await setup();
+  const {console, events, service} = fixture;
+  await service.attach();
+  const read = console.read;
+  console.read = async () => {
+    throw Error('Invalid response');
+  };
+  await assert.rejects(service.poll(), /Invalid response/);
+  console.read = read;
+  assert.equal(service.lost(), false);
+  assert.equal(named(events, 'bridge-gone').length, 0);
 });
 
 test('mDNS hosts join the list after the manual ones and are saved once', async () => {
