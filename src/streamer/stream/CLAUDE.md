@@ -89,7 +89,8 @@ Refusals: lag 0 with `--gate-on-receive`, `--gate-queue` or 120 Hz; `--gate-queu
 ## session/
 
 Starts a run, feeds the AU stream in and scores it. Entry points are live.js (CLI) and
-native-h264.js (`run()`); options in stream-options.js, the run record in stream-report.js.
+native-h264.js (`run()`); options in stream-options.js, the run record in stream-report.js,
+the child processes in stream-children.js.
 
 - Invocation: `node src/streamer/stream/session/live.js [runs/launcher-XXXX] --moonlight HOST APP [flags]`.
   Session flags: `--bitrate KBPS|auto`, `--codec h264`, `--size 1920x1080`, `--fps 60`,
