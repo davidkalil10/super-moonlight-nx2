@@ -525,6 +525,7 @@ test('a mid-stream send failure reports once and stops pacing', async () => {
 const {create: createWorker} = require('../../../host/audio/audio-socket-worker.js');
 const {CODE} = require('../../../../hbl-platform/sdk/native/thread.js');
 const {repeatingFrame} = require('../../../../hbl-platform/sdk/native/jobs.js');
+const {build} = require('../../../../hbl-platform/smilebasic/engine/shared/frames.js');
 const symbols = require('../../../../hbl-platform/sdk/native/audio-symbols.json');
 
 const SDK = 0x40000000;
@@ -556,18 +557,28 @@ for (const [name, code] of Object.entries(CODE)) NAMES.set(SDK + code.offset, 't
 const region = index => 0x60000000 + index * 0x1000000;
 /** The recycle worker's join, which stores its exit value at base + 8; the prime jobs join too. */
 const workerJoin = (name, args) => name === 'thread.join' && args[1] === region(2) + 8;
+const primeJoin = (name, args) => name === 'thread.join' && args[1] === region(1) + 8;
 const chunk = value => Buffer.alloc(CHUNK, value);
 const named = (log, name) => log.filter(entry => entry.name === name);
+const primeJobs = log => named(log, 'thread.create').filter(entry => entry.args[0] === region(1));
 
 /**
  * A console that runs the socket audio worker's native calls against plain memory: the
  * allocations, in order, are AudioOut, the finite job worker and the recycle worker.
  * `on.call(name, args)` may return a result to replace the default, `on.send(bytes, count)`
- * and `on.read(address)` may throw; `hang` keeps the recycle thread running.
+ * and `on.read(address)` may throw; `hang` keeps the recycle thread running. `finite(job)` is
+ * every result of finite job 1 (the prime receive) or 2 (the prime append); `frames` keeps
+ * what is written to the finite job worker.
  */
-function fakeConsole({on = {}, hang = false, cycle = 'whole'} = {}) {
+function fakeConsole({
+  on = {},
+  hang = false,
+  cycle = 'whole',
+  finite = job => (job === 1 ? BigInt(CHUNK) : 1n)
+} = {}) {
   const log = [];
   const regions = [];
+  const frames = [];
   let finiteJobs = 0;
   let sends = 0;
   let recycleThread = null;
@@ -634,11 +645,12 @@ function fakeConsole({on = {}, hang = false, cycle = 'whole'} = {}) {
       // Finite job results: receive counts for the first job, append results for the second.
       if (owner === regions[1] && address !== owner.base)
         for (let at = 0; at + 8 <= bytes.length; at += 8)
-          bytes.writeBigUInt64LE(finiteJobs === 1 ? BigInt(CHUNK) : 1n, at);
+          bytes.writeBigUInt64LE(finite(finiteJobs), at);
       return bytes;
     },
     async write(address, bytes) {
       const owner = regionAt(address);
+      if (owner === regions[1]) frames.push(Buffer.from(bytes));
       if (regions[2] && address === frame().selector)
         log.push({
           name: bytes.readBigUInt64LE() === BigInt(frame().exit) ? 'select exit' : 'select live'
@@ -655,10 +667,10 @@ function fakeConsole({on = {}, hang = false, cycle = 'whole'} = {}) {
       on.send?.(bytes, sends);
     }
   };
-  return {rpc, transport, log, audio};
+  return {rpc, transport, log, audio, frames};
 }
 
-/** Creates and starts socket audio on a fake console; `on`, `hang` and `cycle` go to it. */
+/** Creates and starts socket audio on a fake console; its options go to fakeConsole. */
 async function started(options = {}) {
   const fake = fakeConsole(options);
   const socket = await createWorker({rpc: fake.rpc, transport: fake.transport, timeoutMs: 1000});
@@ -675,17 +687,18 @@ test('socket audio opens with its event, primes both slots and recycles until st
   assert.deepEqual(named(log, 'InitializeAudioOutParameter')[0].args, [base + 0x300]);
   assert.deepEqual(named(log, 'OpenDefaultAudioOut')[0].args, [base, base + 0x100, base + 0x300]);
   assert.deepEqual(
-    named(log, 'SetAudioOutBufferInfo').map(entry => entry.args.slice(0, 2)),
+    named(log, 'SetAudioOutBufferInfo').map(entry => entry.args),
     [
-      [base + 0x400, base + 0x10000],
-      [base + 0x440, base + 0x14000]
+      [base + 0x400, base + 0x10000, 0x4000, CHUNK],
+      [base + 0x440, base + 0x14000, 0x4000, CHUNK]
     ]
   );
   await socket.send(chunk(3));
   const health = await socket.health();
   assert.equal(health.sent, 3);
   assert.equal(health.running, true);
-  assert.equal(health.results.length, 8);
+  const slot = descriptor => ['0', String(descriptor), String(CHUNK), '1'];
+  assert.deepEqual(health.results, [...slot(base + 0x400), ...slot(base + 0x440)]);
   const from = log.length;
   await socket.stop();
   assert.deepEqual(afterStop(log, from), [
@@ -831,4 +844,58 @@ test('an AudioOut that is not 48 kHz stereo s16 is closed again', async () => {
   );
   assert.equal(named(fake.log, 'FlushAudioOutBuffers').length, 1);
   assert.equal(named(fake.log, 'CloseAudioOut').length, 1);
+});
+
+test('the prime receives each slot whole with MSG_WAITALL', async () => {
+  const {frames, audio} = await started();
+  const recv = data => ({function: RECV, args: [FD, data, CHUNK, 0x40]});
+  const calls = [recv(audio() + 0x10000), recv(audio() + 0x14000)];
+  const {frame} = build(region(1) + 0x10000, SDK, calls, CODE, false, new Set([RECV]));
+  assert.ok(frames[0].equals(frame));
+});
+
+test('a failed prime job retains the objects and leaves AudioOut open', async () => {
+  let joins = 0;
+  const fake = fakeConsole({
+    on: {call: (name, args) => (primeJoin(name, args) && ++joins === 2 ? 1n : undefined)}
+  });
+  const socket = await createWorker({rpc: fake.rpc, transport: fake.transport});
+  await assert.rejects(socket.start(chunk(1), chunk(2)), /Native job join failed/);
+  assert.equal(socket.retained, true);
+  assert.equal(primeJobs(fake.log).length, 2);
+  const from = fake.log.length;
+  await assert.rejects(socket.stop(), /retained for safety/);
+  assert.deepEqual(afterStop(fake.log, from), []);
+});
+
+test('a short prime receive appends nothing and closes AudioOut', async () => {
+  const fake = fakeConsole({finite: job => (job === 1 ? BigInt(CHUNK - 4) : 1n)});
+  const socket = await createWorker({rpc: fake.rpc, transport: fake.transport});
+  await assert.rejects(socket.start(chunk(1), chunk(2)), /prime receive was short/);
+  assert.equal(primeJobs(fake.log).length, 1);
+  assert.equal(socket.retained, false);
+  const from = fake.log.length;
+  await socket.stop();
+  assert.deepEqual(afterStop(fake.log, from), ['FlushAudioOutBuffers', 'CloseAudioOut']);
+});
+
+test('a rejected prime append closes AudioOut without starting it', async () => {
+  const fake = fakeConsole({finite: job => (job === 1 ? BigInt(CHUNK) : 0n)});
+  const socket = await createWorker({rpc: fake.rpc, transport: fake.transport});
+  await assert.rejects(socket.start(chunk(1), chunk(2)), /rejected prime buffer/);
+  assert.equal(named(fake.log, 'StartAudioOut').length, 0);
+  assert.equal(socket.retained, false);
+  const from = fake.log.length;
+  await socket.stop();
+  assert.deepEqual(afterStop(fake.log, from), ['FlushAudioOutBuffers', 'CloseAudioOut']);
+});
+
+test('start is refused once started and after stop', async () => {
+  const {socket, log} = await started();
+  const sends = named(log, 'send').length;
+  await assert.rejects(socket.start(chunk(1), chunk(2)), /start is not available/);
+  await socket.stop();
+  await assert.rejects(socket.start(chunk(1), chunk(2)), /start is not available/);
+  assert.equal(named(log, 'send').length, sends + 2);
+  assert.equal(primeJobs(log).length, 2);
 });
