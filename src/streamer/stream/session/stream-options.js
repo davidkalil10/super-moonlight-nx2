@@ -151,7 +151,8 @@ function parseOptions(args, rpc, width, height, fps, env = process.env) {
         ? Infinity
         : cli.number(args, '--skip-backlog', skipDefault),
     audioFrames: cli.number(args, '--audio-frames', defaultAudioFrames(socketAudio, rpc)),
-    input: !args.includes('--no-input')
+    input: !args.includes('--no-input'),
+    plusGuard: !args.includes('--no-plus-guard')
   };
   checkFlags(args, flags);
   return {

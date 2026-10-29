@@ -269,7 +269,16 @@ function activeGateFlags({trimBacklogMs, gateOnReceive, gateQueue, outputLag}) {
  */
 function buildSummary(
   options,
-  {rows, staggeredLive, tail, socketAudioReport, inputPushStop, stopReason, stream}
+  {
+    rows,
+    staggeredLive,
+    tail,
+    socketAudioReport,
+    inputPushStop,
+    stopReason,
+    stream,
+    plusGuard = null
+  }
 ) {
   const {presentHz, skipBacklog, skipRule, decodeWait, receiveWait, avoidWindow} = options;
   const {queue, inputHz, audioFrames, audio, socketAudio, input, inputPush, warmup, expect} =
@@ -300,7 +309,11 @@ function buildSummary(
     expect,
     stopReason,
     ...(stream.sps && {sps: stream.sps}),
-    ...(stream.bSlices && {bSlices: stream.bSlices})
+    ...(stream.bSlices && {bSlices: stream.bSlices}),
+    ...(plusGuard && {plusGuard}),
+    ...(plusGuard?.restored === false && {
+      warnings: [`+ guard not restored (${plusGuard.reason}): restart SmileBASIC before using +`]
+    })
   };
 }
 

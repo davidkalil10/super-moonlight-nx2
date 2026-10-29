@@ -250,8 +250,16 @@ async function fixture({
     args: ['--moonlight', 'host', 'Desktop'],
     directory,
     rpc: {
-      a: {session: 'test-session', protocol: 3},
+      a: {session: 'test-session', protocol: 3, main: 0x30000000},
       host: '192.0.2.10',
+      // Zeroed memory: the + guard's build check fails, so it never writes.
+      async read(address, length) {
+        events.push({type: 'rpc-read', address, length});
+        return Buffer.alloc(length);
+      },
+      async write(address) {
+        events.push({type: 'rpc-write', address});
+      },
       request: () =>
         new Promise((resolve, reject) =>
           slowSubmit
@@ -594,6 +602,85 @@ test(
       assert.equal(seen.destroyedAtSignal, false, 'the helper is signalled before the pipe closes');
       await new Promise(resolve => setImmediate(resolve));
       assert.equal(seen.writeError, undefined, 'late helper output is drained, not cut off');
+    });
+  }
+);
+
+/** A stand-in + guard that books when it arms and disarms among the fixture events. */
+function fakeGuard(events, report = {armed: true, restored: null}) {
+  return async () => {
+    events.push({type: 'guard-arm'});
+    return {
+      report,
+      async disarm() {
+        events.push({type: 'guard-disarm'});
+        report.restored = true;
+      }
+    };
+  };
+}
+
+test(
+  'the + guard arms before the stream opens and disarms after it is released',
+  {timeout: 5000},
+  async () => {
+    const f = await fixture();
+    await exercise(f, async () => {
+      f.options.armGuard = fakeGuard(f.events);
+      const summary = await run(f.options);
+      const types = f.events.map(event => event.type);
+      assert.equal(types[0], 'guard-arm');
+      assert.equal(types.at(-1), 'guard-disarm');
+      assert.ok(types.includes('sink-close') && types.includes('close-transport'));
+      assert.deepEqual(summary.plusGuard, {armed: true, restored: true});
+      assert.equal(summary.warnings, undefined);
+    });
+
+    const g = await fixture();
+    await exercise(g, async () => {
+      g.options.armGuard = fakeGuard(g.events);
+      g.options.args.push('--no-plus-guard');
+      const summary = await run(g.options);
+      assert.ok(!g.events.some(event => event.type.startsWith('guard-')));
+      assert.equal(summary.plusGuard, undefined);
+    });
+  }
+);
+
+test(
+  'a + guard that cannot arm leaves the stream running and says why',
+  {timeout: 5000},
+  async () => {
+    const f = await fixture();
+    await exercise(f, async () => {
+      f.options.args.push('--expect', 'idr=0');
+      const summary = await run(f.options);
+      assert.equal(summary.plusGuard.armed, false);
+      assert.equal(summary.plusGuard.reason, 'sb4-build');
+      assert.ok(f.events.some(event => event.type === 'rpc-read'));
+      assert.ok(!f.events.some(event => event.type === 'rpc-write'));
+      assert.ok(
+        f.events.some(event => event.type === 'publish' || event.type === 'worker-destination')
+      );
+      assert.ok(!summary.failures.some(failure => /guard/.test(failure)));
+      const events = (await fs.readFile(path.join(f.directory, 'logs', 'events.jsonl'), 'utf8'))
+        .trim()
+        .split('\n')
+        .map(JSON.parse);
+      const guard = events.filter(event => event.event === 'plus-guard');
+      assert.equal(guard.length, 1);
+      assert.equal(guard[0].armed, false);
+      assert.match(guard[0].error, /SmileBASIC 4\.4\.9/);
+    });
+
+    const g = await fixture();
+    await exercise(g, async () => {
+      g.options.armGuard = async () => ({
+        report: {armed: true, restored: false, reason: 'restore-failed'},
+        async disarm() {}
+      });
+      const summary = await run(g.options);
+      assert.match(summary.warnings[0], /\+ guard not restored \(restore-failed\)/);
     });
   }
 );

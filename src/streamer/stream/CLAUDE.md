@@ -81,6 +81,14 @@ staggered-output-plan.js). Their status words are read by staggered-status.js.
 
 Refusals: `--gate-queue` without `--gate-on-receive`; `--gate-on-receive` at 120 Hz.
 
+`--no-plus-guard` turns off the + guard (stream-plus-guard.js on platform sdk/host/plus-guard.js).
+It is on by default: zeroes SB4's VM context before the first unit, restores it after the
+native objects are released. It never fails the run; the `plus-guard` event and summary say why
+it did not arm. The saved pointer sits in `<run dir>/plus-guard.json` until restored, so the
+next stream adopts it after a crash. `restored: false` adds a summary warning: restart SB4.
+A new run dir without an SB4 restart finds ctx 0 and no saved pointer: `armed: inherited`, + stays
+guarded until SB4 restarts. The build check reads SB4's GNU build-id before anything else.
+
 ## session/
 
 Starts a run, feeds the AU stream in and scores it. Entry points are live.js (CLI) and

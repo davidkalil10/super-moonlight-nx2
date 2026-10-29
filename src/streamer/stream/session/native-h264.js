@@ -17,6 +17,7 @@ import * as padAge from '../../input/pad-age.js';
 import {checkHandheld} from '../../input/input-feeder.js';
 import {parseOptions, AUDIO_FD} from './stream-options.js';
 import {createChildren} from './stream-children.js';
+import {armPlusGuard} from './stream-plus-guard.js';
 import {
   countsSince,
   tenths,
@@ -110,6 +111,7 @@ function createIdrRequester(
  * @property {typeof createNativeSink} [createSink]
  * @property {typeof createSocketAudioSource} [createSocketAudio]
  * @property {typeof createStaggeredLive} [createStaggered]
+ * @property {typeof armPlusGuard} [armGuard]
  * @property {typeof spawn} [spawnProcess]
  * @property {number} [consoleStallMs]
  * @property {number} [statsMs]
@@ -138,6 +140,7 @@ async function run({
   createSink = createNativeSink,
   createSocketAudio = createSocketAudioSource,
   createStaggered = createStaggeredLive,
+  armGuard = armPlusGuard,
   spawnProcess = spawn,
   consoleStallMs = CONSOLE_STALL_MS,
   statsMs = STATS_MS,
@@ -157,6 +160,8 @@ async function run({
   const output = recordDirectory(revision);
   await writeManifest(output, rpc.a.session, revision);
 
+  // The guard's reads stay out of the stream's bridge counts.
+  const guardRpc = watchBridge(rpc);
   let stage = 'setup';
   const bridge = instrument(rpc, () => stage);
   rpc = watchBridge(bridge.rpc);
@@ -734,7 +739,8 @@ async function run({
   }
 
   /** Scores the run, writes summary.json and logs the verdict. */
-  async function writeSummary() {
+  /** @param {import('./stream-plus-guard.js').PlusGuardReport | null} plusGuard */
+  async function writeSummary(plusGuard) {
     const summary = buildSummary(options, {
       rows,
       staggeredLive,
@@ -742,7 +748,8 @@ async function run({
       socketAudioReport: procs.socketAudioReport,
       inputPushStop: procs.inputPushStop,
       stopReason,
-      stream
+      stream,
+      plusGuard
     });
     const result = score(summary, {
       expect: options.expect,
@@ -767,12 +774,19 @@ async function run({
       idr: summary.idr,
       requestsPerFrame: summary.requestsPerFrame,
       bridgeMsPerFrame: summary.bridgeMsPerFrame,
+      ...(summary.plusGuard && {plusGuard: summary.plusGuard}),
+      ...(summary.warnings && {warnings: summary.warnings}),
       stopReason,
       record: output
     });
     return /** @type {Scored} */ (summary);
   }
 
+  // Armed before the first unit and off after the native objects are released: a + in
+  // between would stop the program with them still mapped.
+  const guard = options.plusGuard
+    ? await armGuard(guardRpc, directory, log, {lost: () => rpc.bridgeLost})
+    : null;
   try {
     await openStream();
     await streamUnits();
@@ -781,9 +795,13 @@ async function run({
     await logFailure(error);
     if (!stopping) throw error;
   } finally {
-    await shutdown();
+    try {
+      await shutdown();
+    } finally {
+      await guard?.disarm();
+    }
   }
-  return writeSummary();
+  return writeSummary(guard?.report ?? null);
 }
 
 export {
