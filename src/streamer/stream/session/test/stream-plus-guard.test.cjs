@@ -129,6 +129,12 @@ test('a failed arm drops its saved pointer unless the zero could not be undone',
   assert.equal(stream.report.armed, false);
   assert.ok(fs.existsSync(file), 'the next stream adopts it');
 
+  fs.rmSync(file);
+  const gone = Error('Console connection closed');
+  const lost = await armPlusGuard({}, directory, () => {}, {guard: fakeGuard({failure: gone})});
+  assert.equal(lost.report.reason, 'error');
+  assert.ok(fs.existsSync(file), 'a raw error after the save may have left the zero landed');
+
   const build = Object.assign(Error('Plus guard needs SmileBASIC 4.4.9'), {reason: 'sb4-build'});
   await armPlusGuard({}, directory, () => {}, {guard: fakeGuard({failure: build})});
   assert.ok(fs.existsSync(file), 'a check that wrote nothing leaves an older pointer alone');

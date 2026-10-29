@@ -53,8 +53,9 @@ async function armPlusGuard(rpc, directory, log, {guard = plusGuard, lost = () =
     report.armed = held.saved === null ? 'inherited' : true;
   } catch (error) {
     report.reason = error.reason ?? 'error';
-    // Kept only when a landed zero could not be undone, for the next stream to adopt.
-    if (saved && error.undone !== false) fs.rmSync(state, {force: true});
+    // Dropped only when the guard says the zero was undone; a raw error (the bridge went
+    // mid-arm) may have left it landed, so the next stream adopts the pointer.
+    if (saved && error.undone === true) fs.rmSync(state, {force: true});
     log({event: 'plus-guard', armed: false, reason: report.reason, error: error.message});
     return {report, disarm: async () => {}};
   }
