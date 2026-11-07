@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Rasteriser for the console UI pages (src/streamer/ui/raster.js).
+"""The reference painter for the console UI pages, used at build time only: glyphs.py builds the
+glyph atlas and the raster test reference from it; the runtime paints with glyph-raster.js.
 
-Reads one JSON request per line on stdin and answers each with an 8-byte header (width,
+Run alone it reads one JSON request per line on stdin and answers each with an 8-byte header (width,
 height as little-endian u32) followed by the pixels: alpha-8 for a text strip, RGBA8 for a
 tile. Layout stays in pages.js; this process only paints. Text is Sora (fonts/, OFL) at
 the asked weight; a character Sora lacks falls back to DejaVu, then to a CJK font when the PC
@@ -99,10 +100,10 @@ def face_for(faces, text):
 def has_glyph(face, char):
     """Whether the face draws the character itself rather than its missing-glyph box."""
     known = glyphs.setdefault(id(face), {})
+    if None not in known:
+        known[None] = bytes(face.getmask(UNMAPPED))
     if char not in known:
-        if UNMAPPED not in known:
-            known[UNMAPPED] = bytes(face.getmask(UNMAPPED))
-        known[char] = char.isspace() or bytes(face.getmask(char)) != known[UNMAPPED]
+        known[char] = char.isspace() or bytes(face.getmask(char)) != known[None]
     return known[char]
 
 
