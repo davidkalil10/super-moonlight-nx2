@@ -2,8 +2,9 @@ import {createInput} from './input.js';
 import {createPresenter} from './presentation.js';
 import {streamVideo} from './stream.js';
 import fs from 'node:fs';
+import path from 'node:path';
 import {createService, createChildren} from '../ui/service.js';
-import {hostsFile, loadHosts, loadRemoved, saveHosts} from '../ui/hosts.js';
+import {configDirectory, hostsFile, loadHosts, loadRemoved, saveHosts} from '../ui/hosts.js';
 import {createPages} from '../ui/pages.js';
 import {createRaster} from '../ui/raster.js';
 import * as settings from '../ui/settings.js';
@@ -312,7 +313,8 @@ export async function runApplication({rpc, directory, menu, gpu, hostAddress, he
     const menuService = service = createService({memory: rpc, mapped: gpu.privateStorage.mapped,
       pages: createPages(ui.raster), children, directory, readHosts: savedHosts.read,
       writeHosts: savedHosts.write, readRemoved: savedHosts.readRemoved,
-      writeRemoved: savedHosts.writeRemoved, saveSettings: () => {}, machine: remote, log: firstPage.log});
+      writeRemoved: savedHosts.writeRemoved, coversDir: path.join(configDirectory(), 'covers'),
+      saveSettings: () => {}, machine: remote, log: firstPage.log});
     dockTimer = setInterval(() => { void monitor.poll(); }, 500);
     signal?.addEventListener('abort', stop, {once: true});
     renderLoop = (async () => {

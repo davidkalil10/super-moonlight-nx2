@@ -43,8 +43,16 @@ node bundle/launch.mjs CONSOLE_IP   # starts serve.mjs in the background, sends 
 
 Everything after that happens on the Switch: host, app and settings in the Moonlight UI.
 L+R+Minus+Plus stops the stream; SIGINT on the helper stops it in order, a second signal
-exits at once. Bitrate defaults to Auto (`bitrate.js` from size and fps). Steady 1080p60 is
-measured; 120 fps and end-to-end latency are open.
+exits at once. Bitrate defaults to Auto (`bitrate.js` from size and fps). User runs confirmed
+native AV1 at 1440p120 and 4K60; end-to-end latency remains unmeasured.
+
+4K locks 60 fps and remembers the previous rate for smaller resolutions. Dock changes
+reconnect the stream at 1080p handheld and restore the saved docked resolution and rate.
+After changing the saved resolution between 1440p and 4K, fully close and reopen the console
+title once. Automatic dock transitions still need a device check.
+
+App cards fetch and cache Sunshine artwork, fitting portrait covers and wide banners
+without stretching them.
 
 ## Build
 

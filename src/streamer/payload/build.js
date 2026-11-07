@@ -139,7 +139,7 @@ launch(import.meta.dirname, process.argv[2]).then(result => console.log(JSON.str
   if (image) {
     if (!/^[a-zA-Z0-9_./:@-]+$/.test(image)) throw Error('Invalid helper image name');
     wrapper += `config="\${XDG_CONFIG_HOME:-$HOME/.config}/moonlight-nx2"
-mkdir -p "$config"
+mkdir -p "$config/covers"
 if [ "$1" = stream ]; then
   set -- --preserve-fds=2 ${image} hbmoonlight "$@"
 else
@@ -147,6 +147,7 @@ else
 fi
 exec podman run -i --rm --network host --userns=keep-id --security-opt label=disable \\
   -e XDG_CONFIG_HOME=/config -v "$config:/config/moonlight-nx2" \\
+  -v "$config/covers:$config/covers" \\
   -v "$root/bin/hbmoonlight:/usr/local/bin/hbmoonlight:ro" "$@"
 `;
   } else wrapper += 'exec "$root/bin/hbmoonlight" "$@"\n';

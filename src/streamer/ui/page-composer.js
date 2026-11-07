@@ -623,8 +623,7 @@ function createPageComposer(painter, options) {
       chips: [[model.host?.name, COLOR.ink, 300], ['Settings', COLOR.muted, 180]],
       note: model.settingsError ? 'Settings could not be saved: ' + model.settingsError
         : 'Applies to the next launch',
-      keys,
-      footer: '1080p60 is the reference shape'
+      keys
     });
     rows.forEach((row, i) => settingCard(page, row, i, row.id === model.editing));
     return page.build();
