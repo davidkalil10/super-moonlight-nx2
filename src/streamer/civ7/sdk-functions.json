@@ -202,5 +202,17 @@
     "offset": 1366160,
     "size": 4,
     "hex": "0c7a1214"
+  },
+  "operationMode": {
+    "symbol": "_ZN2nn2oe16GetOperationModeEv",
+    "offset": 3955824,
+    "size": 64,
+    "hex": "ff8300d1fd7b01a9fd43009115a50894080040f9a11300d1082540f900013fd6"
+  },
+  "commonStateGetter": {
+    "symbol": "_ZN2nn2am20GetCommonStateGetterEv",
+    "offset": 1825456,
+    "size": 72,
+    "hex": "fd7bbea9f30b00f9fd030091e84b009013b146f9330100b4680240f9e00313aa"
   }
 }
