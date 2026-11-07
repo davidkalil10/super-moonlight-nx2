@@ -62,6 +62,8 @@ export function videoStream(native, request) {
   let receiveBuffer = null;
   let lastAudio = 0;
   let lastControl = 0;
+  let lastVideo = 0;
+  let pumpingVideo = false;
   const now = native.now || (() => Date.now());
   const timingMagic = 0x314d4954;
   const timingNone = 0xffffffff;
@@ -88,6 +90,12 @@ export function videoStream(native, request) {
     const now = Date.now();
     if (audio && now - lastAudio >= 2) { audio.pump(); lastAudio = now; }
     if (now - lastControl >= 8) { native.serviceControl?.(); lastControl = now; }
+    if (stream.overlapOutput === true && datagrams && !pumpingVideo && now - lastVideo >= 2) {
+      lastVideo = now;
+      pumpingVideo = true;
+      try { datagrams.pump(); }
+      finally { lastVideo = Date.now(); pumpingVideo = false; }
+    }
     if (audio && Date.now() - lastAudio >= 2) { audio.pump(); lastAudio = Date.now(); }
   }
 

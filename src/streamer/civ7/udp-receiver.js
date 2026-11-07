@@ -465,10 +465,11 @@ export function createUdpReceiver(native, config, hooks) {
    * Datagrams waiting now, by RecvMMsg over the entry ring; a short batch ends the drain. Only
    * a drain the Poll asked for (`confirmed`) reads the errno of an empty one.
    * @param {boolean} confirmed
+   * @param {number} [batches] bounds background work while the decoder runs
    */
-  function drain(confirmed) {
+  function drain(confirmed, batches = Infinity) {
     let total = 0;
-    for (;;) {
+    for (let batchIndex = 0; batchIndex < batches; batchIndex++) {
       const startedAt = now();
       const first = ring;
       const batch = Math.min(slotCount - first, batchLimit, expected(startedAt));
@@ -623,6 +624,7 @@ export function createUdpReceiver(native, config, hooks) {
   }
 
   return {
+    pump() { return drain(false, 1); },
     /** The next whole unit in order, or null once the stream ended; never waits past a deadline. */
     next() {
       let readable = true;
