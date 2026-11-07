@@ -21,7 +21,10 @@ const MAX_RECORDS = 64;
 const MAX_JUMPS = 16;
 const HEADER_BYTES = 12;
 
-/** A dotted name as DNS labels: a length byte before each label, a zero byte at the end. */
+/**
+ * A dotted name as DNS labels: a length byte before each label, a zero byte at the end.
+ * @param {string} name
+ */
 function encodeName(name) {
   const labels = name.split('.').filter(Boolean);
   const encoded = labels.map(label =>
@@ -45,6 +48,7 @@ function query() {
 /**
  * A DNS name at `offset`, following compression pointers, as {name, next} where next is the
  * offset after the name in the packet (not after the pointer target).
+ * @param {Buffer} packet @param {number} offset
  */
 function readName(packet, offset) {
   const labels = [];
@@ -80,7 +84,9 @@ function readName(packet, offset) {
 }
 
 /**
- * @typedef {{name: string, type: number, ttl: number, data: any}} Record
+ * @typedef {{target?: string, port?: number, address?: string, strings?: string[],
+ *   bytes?: Buffer}} RecordData
+ * @typedef {{name: string, type: number, ttl: number, data: RecordData}} Record
  * data: PTR and SRV targets are names; SRV adds port; A/AAAA give the address text; TXT gives
  * the strings. Unknown types keep the raw bytes.
  */
@@ -123,7 +129,11 @@ function parsePacket(packet) {
   return records;
 }
 
-/** The data of one record, laid out as the Record typedef describes. */
+/**
+ * The data of one record, laid out as the Record typedef describes.
+ * @param {Buffer} packet @param {number} type @param {number} start @param {number} end
+ * @returns {RecordData}
+ */
 function readData(packet, type, start, end) {
   switch (type) {
     case TYPE.ptr:
@@ -160,7 +170,7 @@ function readData(packet, type, start, end) {
   }
 }
 
-/** DNS names compare without regard to case. */
+/** DNS names compare without regard to case. @param {string} a @param {string} b */
 function same(a, b) {
   return a.toLowerCase() === b.toLowerCase();
 }
@@ -172,6 +182,7 @@ function same(a, b) {
  * @returns {{name: string, address: string, port: number}[]}
  */
 function candidates(records) {
+  /** @type {{name: string, address: string, port: number}[]} */
   const hosts = [];
   const seen = new Set();
 
@@ -179,21 +190,18 @@ function candidates(records) {
     if (pointer.type !== TYPE.ptr || !same(pointer.name, SERVICE)) continue;
 
     const instance = pointer.data.target;
-    const service = records.find(record => record.type === TYPE.srv && same(record.name, instance));
-    if (!service) continue;
+    if (instance === undefined) continue;
 
-    const address = records.find(
-      record => record.type === TYPE.a && same(record.name, service.data.target)
-    );
-    if (!address || seen.has(address.data.address)) continue;
-    seen.add(address.data.address);
+    const service = records.find(record => record.type === TYPE.srv && same(record.name, instance));
+    const {target, port} = service?.data ?? {};
+    if (target === undefined || port === undefined) continue;
+
+    const address = records.find(record => record.type === TYPE.a && same(record.name, target))?.data.address;
+    if (address === undefined || seen.has(address)) continue;
+    seen.add(address);
 
     const name = instance.slice(0, instance.length - SERVICE.length).replace(/\.$/, '');
-    hosts.push({
-      name: name || service.data.target,
-      address: address.data.address,
-      port: service.data.port
-    });
+    hosts.push({name: name || target, address, port});
   }
 
   return hosts;
@@ -231,6 +239,7 @@ function merge(existing, discovered, removed = []) {
  */
 function discover({windowMs = 1500, createSocket = dgram.createSocket} = {}) {
   return new Promise(resolve => {
+    /** @type {Record[]} */
     const records = [];
     const socket = createSocket({type: 'udp4', reuseAddr: true});
     let done = false;

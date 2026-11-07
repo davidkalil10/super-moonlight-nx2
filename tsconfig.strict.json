@@ -1,0 +1,18 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "strict": true,
+    "noImplicitAny": true,
+    "strictNullChecks": true
+  },
+  "include": [
+    "src/streamer/payload/*.js",
+    "src/streamer/civ7/*.js",
+    "src/streamer/session/*.js",
+    "src/streamer/ui/*.js",
+    "src/streamer/shared/*.js",
+    "src/streamer/input/controller.js",
+    "src/streamer/input/input-record.js",
+    "src/streamer/input/touch.js"
+  ]
+}
