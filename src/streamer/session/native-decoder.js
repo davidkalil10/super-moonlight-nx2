@@ -4,11 +4,11 @@
  */
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import definitions from '../../console-api/movie-functions.json' with {type: 'json'};
-import modeDefinitions from '../../console-api/movie-mode-functions.json' with {type: 'json'};
-import {create as createModule} from '../../../../../hbl-platform/sdk/native/module.js';
-import {createFinite} from '../../../../../hbl-platform/sdk/native/jobs.js';
-import {builds} from '../../../../../hbl-platform/sdk/build.js';
+import definitions from '../console-api/movie-functions.json' with {type: 'json'};
+import modeDefinitions from '../console-api/movie-mode-functions.json' with {type: 'json'};
+import {create as createModule} from '../../../../hbl-platform/sdk/native/module.js';
+import {createFinite} from '../../../../hbl-platform/sdk/native/jobs.js';
+import {builds} from '../../../../hbl-platform/sdk/build.js';
 
 /** The movie module's description, in the directory create() is given. */
 const MODULE_FILE = 'compatibility-module.json';

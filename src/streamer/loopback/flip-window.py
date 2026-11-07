@@ -3,9 +3,9 @@
 black/white on each D-pad Up press of Sunshine's virtual pad.
 
 Runs on the Sunshine PC while the Desktop app streams. Each flip logs one JSON line on stdout:
-the press's kernel evdev time and the time the flipped frame was swapped, in microseconds, for
-src/streamer/loopback/join.py. The swap time is CLOCK_REALTIME; the evdev time can be on a clock
-of the pad's own (Sunshine's pad was, in loop1), so join.py pairs by the swap time.
+the press's kernel evdev time and the time the flipped frame was swapped, in microseconds. The
+swap time is CLOCK_REALTIME; the evdev time can be on a clock of the pad's own (Sunshine's pad
+was, in loop1), so pair presses with flips by the swap time.
 
     python3 flip-window.py [--device /dev/input/eventN] [--patch PX]
 
