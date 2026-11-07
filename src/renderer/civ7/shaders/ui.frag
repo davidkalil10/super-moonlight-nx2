@@ -10,10 +10,34 @@ vec4 rgba(uint value) {
               value >> 24u) /
          255.0;
 }
-// The pixel of a `rect` bitmap under UI point p, clamped where a scaled edge rounds outside it.
-uvec2 texel(vec2 p, uvec4 rect) {
-  ivec2 q = ivec2(p) - ivec2(rect.xy);
-  return uvec2(clamp(q, ivec2(0), ivec2(rect.zw) - 1));
+vec4 bitmapAt(ivec2 point) {
+  uvec2 q = uvec2(clamp(point, ivec2(0), ivec2(rect.zw) - 1));
+  uint pixel = q.y * rect.z + q.x;
+  if (info.x == 5u)
+    return rgba(word(BADGE_PIXELS + pixel));
+  if (info.x == 1u)
+    return rgba(word(pageBase() + 1024u + info.y / 4u + pixel));
+  uint offset = info.y + pixel;
+  uint packed = word(pageBase() + 1024u + offset / 4u);
+  return vec4(1, 1, 1, float((packed >> ((offset & 3u) * 8u)) & 255u) / 255.0);
+}
+vec4 premultiplied(vec4 value) {
+  return vec4(value.rgb * value.a, value.a);
+}
+vec4 bitmapSample(vec2 p) {
+  if (all(equal(targetSize(), DISPLAY_SIZE)))
+    return bitmapAt(ivec2(p) - ivec2(rect.xy));
+  vec2 q = p - vec2(rect.xy) - 0.5;
+  ivec2 low = ivec2(floor(q));
+  vec2 f = fract(q);
+  vec4 top = mix(premultiplied(bitmapAt(low)),
+                 premultiplied(bitmapAt(low + ivec2(1, 0))), f.x);
+  vec4 bottom = mix(premultiplied(bitmapAt(low + ivec2(0, 1))),
+                    premultiplied(bitmapAt(low + ivec2(1, 1))), f.x);
+  vec4 value = mix(top, bottom, f.y);
+  if (value.a > 0.0)
+    value.rgb /= value.a;
+  return value;
 }
 float roundedBox(vec2 p, vec2 halfSize, float radius) {
   vec2 q = abs(p) - halfSize + radius;
@@ -29,13 +53,8 @@ void main() {
       color = vec4(color.rgb * color.a / alpha, alpha);
     }
   } else if (info.x == 1u || info.x == 2u) {
-    uvec2 q = texel(p, rect);
-    uint pixel = q.y * rect.z + q.x;
-    uint offset = info.y + pixel * (info.x == 1u ? 4u : 1u);
-    uint packed = word(base + 1024u + offset / 4u);
-    color = info.x == 1u ? rgba(packed) : rgba(info.z);
-    if (info.x == 2u)
-      color.a *= float((packed >> ((offset & 3u) * 8u)) & 255u) / 255.0;
+    vec4 sampled = bitmapSample(p);
+    color = info.x == 1u ? sampled : vec4(rgba(info.z).rgb, rgba(info.z).a * sampled.a);
   } else if (info.x == 3u) {
     vec2 center = vec2(rect.xy) + vec2(rect.zw) * 0.5;
     color = vec4(0);
@@ -58,8 +77,7 @@ void main() {
         color.rgb /= color.a;
     }
   } else if (info.x == 5u) {
-    uvec2 q = texel(p, rect);
-    color = rgba(word(BADGE_PIXELS + q.y * rect.z + q.x));
+    color = bitmapSample(p);
   } else {
     vec2 d = p - (vec2(rect.xy) + vec2(rect.zw) * 0.5);
     float angle =
