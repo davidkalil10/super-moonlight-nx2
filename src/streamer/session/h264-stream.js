@@ -31,11 +31,12 @@ function startCodeLength(bytes, at) {
 }
 
 /**
- * Splits an Annex-B byte stream into NAL units.
+ * The NAL unit payloads of an Annex-B byte stream, start codes removed; codec neutral.
  * @param {Uint8Array} bytes
- * @returns {{type: number, data: Uint8Array}[]}
+ * @returns {Uint8Array[]}
  */
-function nals(bytes) {
+function annexBPayloads(bytes) {
+  /** @type {{start: number, data: number}[]} */
   const starts = [];
   for (let at = 0; at + 2 < bytes.length; at++) {
     const prefix = startCodeLength(bytes, at);
@@ -45,7 +46,17 @@ function nals(bytes) {
   }
   return starts.map((start, index) => {
     const end = starts[index + 1]?.start ?? bytes.length;
-    const data = bytes.subarray(start.data, end);
+    return bytes.subarray(start.data, end);
+  });
+}
+
+/**
+ * Splits an Annex-B byte stream into NAL units.
+ * @param {Uint8Array} bytes
+ * @returns {{type: number, data: Uint8Array}[]}
+ */
+function nals(bytes) {
+  return annexBPayloads(bytes).map(data => {
     if (!data.length || data[0] & NAL_FORBIDDEN_BIT) throw Error('Invalid H.264 NAL header');
     return {type: data[0] & NAL_TYPE_MASK, data};
   });
@@ -58,6 +69,7 @@ function nals(bytes) {
  * @returns {{sps?: Buffer, pps?: Buffer, bSlice: boolean}}
  */
 function scanUnit(bytes) {
+  /** @type {{sps?: Buffer, pps?: Buffer, bSlice: boolean}} */
   const result = {bSlice: false};
   for (const nal of nals(bytes)) {
     if (nal.type === NAL_SPS) result.sps = Buffer.from(nal.data);
@@ -77,17 +89,39 @@ function parameterSets(bytes) {
   return sets;
 }
 
+/**
+ * The helper's metadata for one access unit, a JSON line on its stderr.
+ * @typedef {{type: 'au', seq: number, frame: number, bytes: number, keyframe: boolean, pts: number}} UnitRecord
+ * @typedef {UnitRecord & {data: Buffer, arrivedAt?: number}} AccessUnit
+ */
+
+/**
+ * @param {unknown} value
+ * @returns {value is number}
+ */
 function isNonNegativeSafeInteger(value) {
-  return Number.isSafeInteger(value) && value >= 0;
+  return Number.isSafeInteger(value) && /** @type {number} */ (value) >= 0;
 }
 
-/** Whether an 'au' metadata record is well formed for units of at most maxUnitBytes. */
+/**
+ * @param {unknown} value
+ * @returns {value is Record<string, unknown>}
+ */
+function isObject(value) {
+  return typeof value === 'object' && value !== null;
+}
+
+/**
+ * Whether an 'au' metadata record is well formed for units of at most maxUnitBytes.
+ * @param {Record<string, unknown>} record
+ * @param {number} maxUnitBytes
+ * @returns {record is UnitRecord}
+ */
 function isValidRecord(record, maxUnitBytes) {
   if (!isNonNegativeSafeInteger(record.seq) || !isNonNegativeSafeInteger(record.frame))
     return false;
 
-  const sized =
-    Number.isSafeInteger(record.bytes) && record.bytes >= 1 && record.bytes <= maxUnitBytes;
+  const sized = isNonNegativeSafeInteger(record.bytes) && record.bytes >= 1 && record.bytes <= maxUnitBytes;
   if (!sized) return false;
 
   return typeof record.keyframe === 'boolean' && isNonNegativeSafeInteger(record.pts);
@@ -136,18 +170,25 @@ class AccessUnits {
     this.now = now;
     this.dropping = false;
     this.dropped = 0;
+    /** @type {Buffer[]} */
     this.chunks = [];
     this.head = 0;
     this.bytes = 0;
+    /** @type {UnitRecord[]} */
     this.metadata = [];
+    /** @type {AccessUnit[]} */
     this.ready = [];
+    /** @type {number | null} */
     this.sequence = null;
     this.ended = false;
     this.metadataEnded = false;
+    /** @type {unknown} */
     this.error = null;
+    /** @type {(() => void) | null} */
     this.waiter = null;
     this.closed = false;
 
+    /** @param {unknown} chunk */
     this.onData = chunk => {
       if (this.error || this.closed) return;
       if (!Buffer.isBuffer(chunk)) return this.fail(Error('H.264 output must be a binary pipe'));
@@ -161,7 +202,7 @@ class AccessUnits {
       this.ended = true;
       this.pump();
     };
-    this.onError = error => this.fail(error);
+    this.onError = (/** @type {Error} */ error) => this.fail(error);
     this.onClose = () => {
       if (!this.ended && !this.closed) this.fail(Error('H.264 output closed before EOF'));
     };
@@ -174,11 +215,11 @@ class AccessUnits {
   /**
    * Queues one metadata record. Returns false for non-'au' records and for invalid ones, which
    * also fail the reader.
-   * @param {any} record
+   * @param {unknown} record
    * @returns {boolean}
    */
   announce(record) {
-    if (record?.type !== 'au') return false;
+    if (!isObject(record) || record.type !== 'au') return false;
     try {
       if (!isValidRecord(record, this.maxUnitBytes))
         throw Error('Invalid H.264 access-unit metadata');
@@ -203,7 +244,10 @@ class AccessUnits {
     this.pump();
   }
 
-  /** Removes size bytes from the front of the chunk queue into one buffer. */
+  /**
+   * Removes size bytes from the front of the chunk queue into one buffer.
+   * @param {number} size
+   */
   take(size) {
     const result = Buffer.allocUnsafe(size);
     let at = 0;
@@ -233,7 +277,8 @@ class AccessUnits {
       this.metadata.length &&
       this.bytes >= this.metadata[0].bytes
     ) {
-      const record = this.metadata.shift();
+      const record = /** @type {UnitRecord} */ (this.metadata.shift());
+      /** @type {AccessUnit} */
       const unit = {...record, data: this.take(record.bytes)};
       if (this.now) unit.arrivedAt = this.now();
       if (this.onBacklog && this.ready.length >= this.maxQueuedUnits) {
@@ -245,7 +290,7 @@ class AccessUnits {
       if (this.dropping) {
         if (!record.keyframe) {
           this.dropped++;
-          this.onBacklog();
+          this.onBacklog?.();
           continue;
         }
         this.dropping = false;
@@ -268,6 +313,7 @@ class AccessUnits {
     this.waiter = null;
   }
 
+  /** @param {unknown} error */
   fail(error) {
     if (this.error || this.closed) return;
     this.error = error;
@@ -275,17 +321,18 @@ class AccessUnits {
     this.wake();
   }
 
+  /** @returns {Promise<{value: AccessUnit, done: false} | {value?: undefined, done: true}>} */
   async next() {
     for (;;) {
       if (this.error) throw this.error;
-      if (this.ready.length) {
-        const value = this.ready.shift();
+      const value = this.ready.shift();
+      if (value) {
         this.pump();
         return {value, done: false};
       }
       if (this.closed || (this.ended && this.metadataEnded)) return {done: true};
       await new Promise(resolve => {
-        this.waiter = resolve;
+        this.waiter = () => resolve(undefined);
       });
     }
   }
@@ -305,6 +352,7 @@ class AccessUnits {
     this.wake();
   }
 
+  /** @returns {Promise<{value?: undefined, done: true}>} */
   async return() {
     this.close();
     return {done: true};
@@ -315,4 +363,4 @@ class AccessUnits {
   }
 }
 
-export {AccessUnits, nals, parameterSets, scanUnit};
+export {AccessUnits, annexBPayloads, nals, parameterSets, scanUnit};
