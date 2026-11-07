@@ -575,8 +575,8 @@ function createPageComposer(painter, options) {
   }
 
   /**
-   * One setting card: its label, then its value between ‹ › when it can change, each arrow only
-   * where a step changes the value.
+   * One setting card: its label, then its value. The card being edited puts ‹ › around it, each
+   * arrow only where a step changes the value; the others clear both, so the value stays put.
    * @param {PageBuilder} page @param {SettingRow} row @param {number} i
    * @param {boolean} editing The row A opened for left and right to step.
    */
@@ -601,21 +601,31 @@ function createPageComposer(painter, options) {
       return;
     }
 
-    if (row.adjustable) page.stepper(left, y + 40, row.value, 40, inner, row.canLeft, row.canRight);
-    else page.text(left, y + 40, row.value, 40, inner, COLOR.ink, 'center', {weight: 700});
+    if (!row.adjustable) {
+      page.text(left, y + 40, row.value, 40, inner, COLOR.ink, 'center', {weight: 700});
+      return;
+    }
+
+    const canLeft = editing && row.canLeft;
+    const canRight = editing && row.canRight;
+    page.stepper(left, y + 40, row.value, 40, inner, canLeft, canRight);
   }
 
   /** @param {Model} model */
   function settings(model) {
+    const rows = settingRows(model.settings, model.docked);
+    const editing = rows.some(row => row.adjustable && row.id === model.editing);
+    /** @type {[string, string][]} */
+    const keys = editing ? [['◂▸', 'Change'], ['A', 'Done'], ['B', 'Done']]
+      : [['A', 'Edit'], ['B', 'Back'], ['Y', 'Reset']];
     const page = horizon({
       chips: [[model.host?.name, COLOR.ink, 300], ['Settings', COLOR.muted, 180]],
       note: model.settingsError ? 'Settings could not be saved: ' + model.settingsError
         : 'Applies to the next launch',
-      keys: [['◂▸', 'Change'], ['B', 'Back'], ['Y', 'Reset']],
+      keys,
       footer: '1080p60 is the reference shape'
     });
-    settingRows(model.settings, model.docked)
-      .forEach((row, i) => settingCard(page, row, i, row.id === model.editing));
+    rows.forEach((row, i) => settingCard(page, row, i, row.id === model.editing));
     return page.build();
   }
 
