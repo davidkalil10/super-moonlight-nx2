@@ -1,0 +1,416 @@
+{
+  "sdkHash": "76bdb395",
+  "compatHash": "cf649bbd",
+  "getInfo": {
+    "offset": 1477796,
+    "size": 24,
+    "hex": "e00f1ff8210500d4e20340f9410000f9ff430091c0035fd6"
+  },
+  "queries": [
+    {
+      "id": 0,
+      "name": "CoreMask",
+      "handle": "0xffff8001",
+      "subtype": "0x0"
+    },
+    {
+      "id": 1,
+      "name": "PriorityMask",
+      "handle": "0xffff8001",
+      "subtype": "0x0"
+    },
+    {
+      "id": 2,
+      "name": "AliasRegionAddress",
+      "handle": "0xffff8001",
+      "subtype": "0x0"
+    },
+    {
+      "id": 3,
+      "name": "AliasRegionSize",
+      "handle": "0xffff8001",
+      "subtype": "0x0"
+    },
+    {
+      "id": 4,
+      "name": "HeapRegionAddress",
+      "handle": "0xffff8001",
+      "subtype": "0x0"
+    },
+    {
+      "id": 5,
+      "name": "HeapRegionSize",
+      "handle": "0xffff8001",
+      "subtype": "0x0"
+    },
+    {
+      "id": 6,
+      "name": "TotalMemorySize",
+      "handle": "0xffff8001",
+      "subtype": "0x0"
+    },
+    {
+      "id": 7,
+      "name": "UsedMemorySize",
+      "handle": "0xffff8001",
+      "subtype": "0x0"
+    },
+    {
+      "id": 12,
+      "name": "AslrRegionAddress",
+      "handle": "0xffff8001",
+      "subtype": "0x0"
+    },
+    {
+      "id": 13,
+      "name": "AslrRegionSize",
+      "handle": "0xffff8001",
+      "subtype": "0x0"
+    },
+    {
+      "id": 14,
+      "name": "StackRegionAddress",
+      "handle": "0xffff8001",
+      "subtype": "0x0"
+    },
+    {
+      "id": 15,
+      "name": "StackRegionSize",
+      "handle": "0xffff8001",
+      "subtype": "0x0"
+    },
+    {
+      "id": 16,
+      "name": "SystemResourceSizeTotal",
+      "handle": "0xffff8001",
+      "subtype": "0x0"
+    },
+    {
+      "id": 17,
+      "name": "SystemResourceSizeUsed",
+      "handle": "0xffff8001",
+      "subtype": "0x0"
+    },
+    {
+      "id": 18,
+      "name": "ProgramId",
+      "handle": "0xffff8001",
+      "subtype": "0x0"
+    },
+    {
+      "id": 20,
+      "name": "UserExceptionContextAddress",
+      "handle": "0xffff8001",
+      "subtype": "0x0"
+    },
+    {
+      "id": 21,
+      "name": "TotalNonSystemMemorySize",
+      "handle": "0xffff8001",
+      "subtype": "0x0"
+    },
+    {
+      "id": 22,
+      "name": "UsedNonSystemMemorySize",
+      "handle": "0xffff8001",
+      "subtype": "0x0"
+    },
+    {
+      "id": 23,
+      "name": "IsApplication",
+      "handle": "0xffff8001",
+      "subtype": "0x0"
+    },
+    {
+      "id": 24,
+      "name": "FreeThreadCount",
+      "handle": "0xffff8001",
+      "subtype": "0x0"
+    },
+    {
+      "id": 28,
+      "name": "AliasRegionExtraSize",
+      "handle": "0xffff8001",
+      "subtype": "0x0"
+    },
+    {
+      "id": 29,
+      "name": "RemoteRegionAddress",
+      "handle": "0xffff8001",
+      "subtype": "0x0"
+    },
+    {
+      "id": 30,
+      "name": "RemoteRegionSize",
+      "handle": "0xffff8001",
+      "subtype": "0x0"
+    },
+    {
+      "id": 31,
+      "name": "rawInfo31",
+      "handle": "0xffff8001",
+      "subtype": "0x0"
+    },
+    {
+      "id": 32,
+      "name": "rawInfo32",
+      "handle": "0xffff8001",
+      "subtype": "0x0"
+    },
+    {
+      "id": 33,
+      "name": "ProcessPageSize",
+      "handle": "0xffff8001",
+      "subtype": "0x0"
+    },
+    {
+      "id": 36,
+      "name": "AddressSpaceSize",
+      "handle": "0xffff8001",
+      "subtype": "0x0"
+    },
+    {
+      "id": 37,
+      "name": "ShadowStackRegionAddress",
+      "handle": "0xffff8001",
+      "subtype": "0x0"
+    },
+    {
+      "id": 38,
+      "name": "ShadowStackRegionSize",
+      "handle": "0xffff8001",
+      "subtype": "0x0"
+    },
+    {
+      "id": 8,
+      "name": "DebuggerAttached",
+      "handle": "0x0",
+      "subtype": "0x0"
+    },
+    {
+      "id": 26,
+      "name": "IsSynchronizePreemptionStateSvcPermitted",
+      "handle": "0x0",
+      "subtype": "0x36"
+    }
+  ],
+  "state": [
+    {
+      "module": "compat",
+      "offset": "0x4143020",
+      "type": "u32",
+      "name": "graphicsStartupState",
+      "meaning": "Native initialized state1"
+    },
+    {
+      "module": "compat",
+      "offset": "0x414903c",
+      "type": "u32 borrowed handle",
+      "name": "gsvRootSession",
+      "meaning": "GSV root kernel session; initialized graphics state required; never close"
+    },
+    {
+      "module": "compat",
+      "offset": "0x4149040",
+      "type": "u64 ID",
+      "name": "gsvRootAruid",
+      "meaning": "Application resource user ID used by root, not process handle"
+    },
+    {
+      "module": "compat",
+      "offset": "0x4154518",
+      "type": "u64 pointer",
+      "name": "graphicsRoot",
+      "meaning": "Existing root object pointer; do not initialize if zero"
+    },
+    {
+      "module": "compat",
+      "offset": "0x41401d0",
+      "type": "u64 function pointer",
+      "name": "rootErrorCallback",
+      "meaning": "Nonzero may add fatal behavior to native wrappers"
+    },
+    {
+      "module": "compat",
+      "offset": "0x41401e0",
+      "type": "u64 pointer",
+      "name": "decoderCreatorHandlePointer",
+      "meaning": "Expect compatBase+0x41401f4 with flag set; legitimate4alignment"
+    },
+    {
+      "module": "compat",
+      "offset": "0x41401f0",
+      "type": "u8 flag",
+      "name": "decoderCreatorInitialized",
+      "meaning": "Bit0 native handle storage in use"
+    },
+    {
+      "module": "compat",
+      "offset": "0x41401f4",
+      "type": "u32 borrowed handle",
+      "name": "decoderCreatorHandle",
+      "meaning": "Require initialized flag; never close"
+    },
+    {
+      "module": "compat",
+      "offset": "0x41401e8",
+      "type": "u64 pointer",
+      "name": "encoderCreatorHandlePointer",
+      "meaning": "Expect compatBase+0x4140200 with flag set"
+    },
+    {
+      "module": "compat",
+      "offset": "0x41401fc",
+      "type": "u8 flag",
+      "name": "encoderCreatorInitialized",
+      "meaning": "Bit0 native handle storage in use"
+    },
+    {
+      "module": "compat",
+      "offset": "0x4140200",
+      "type": "u32 borrowed handle",
+      "name": "encoderCreatorHandle",
+      "meaning": "Require initialized flag; not a second decoder context"
+    },
+    {
+      "module": "compat",
+      "offset": "0x4140208",
+      "type": "u8 guard",
+      "name": "mediaSingletonConstructed",
+      "meaning": "C++ once guard bit0"
+    },
+    {
+      "module": "compat",
+      "offset": "0x41402d0",
+      "type": "u64 count",
+      "name": "mediaContextReferenceCount",
+      "meaning": "Context+192; positive means native media context referenced, not capability count"
+    },
+    {
+      "module": "compat",
+      "offset": "0x41402d8",
+      "type": "u8 selector",
+      "name": "mediaContextFlag",
+      "meaning": "Context+200; default0 supplied to GSV906; not capability mask"
+    },
+    {
+      "module": "compat",
+      "offset": "0x5ca2748",
+      "type": "u32 guard",
+      "name": "nvDrvSetup",
+      "meaning": "Interpret alongside nonnull proxy pointers"
+    },
+    {
+      "module": "compat",
+      "offset": "0x5ca2750",
+      "type": "u64 pointer",
+      "name": "nvDrvPrimaryProxy",
+      "meaning": "Nonzero mapped pointer; firstu64 expected compatBase+0x3ca1b60"
+    },
+    {
+      "module": "compat",
+      "offset": "0x5ca2758",
+      "type": "u64 pointer",
+      "name": "nvDrvDuplicateProxy",
+      "meaning": "Duplicated session, not independent privilege evidence"
+    },
+    {
+      "module": "compat",
+      "offset": "0x413fbb0",
+      "type": "u64 function pointer",
+      "name": "hipcClientErrorHandler",
+      "meaning": "Nonzero adds unknown error behavior"
+    },
+    {
+      "module": "compat",
+      "offset": "0x5ca2744",
+      "type": "u32 selector",
+      "name": "nvDrvConfigurationSelector",
+      "meaning": "Local configuration selector, not allowlist"
+    },
+    {
+      "module": "compat",
+      "offset": "0x5ca2740",
+      "type": "u8 selector",
+      "name": "nvDrvTracing",
+      "meaning": "Local startup flag; read only"
+    },
+    {
+      "module": "compat",
+      "offset": "0x5ca2741",
+      "type": "u8 selector",
+      "name": "nvDrvConfigFlag4",
+      "meaning": "Unknown startup flag meaning; read only"
+    },
+    {
+      "module": "compat",
+      "offset": "0x5ca2742",
+      "type": "u8 selector",
+      "name": "nvDrvConfigFlag32",
+      "meaning": "Unknown startup flag meaning; read only"
+    },
+    {
+      "module": "compat",
+      "offset": "0x404e698",
+      "type": "s32 borrowed fd",
+      "name": "cachedNvhostCtrlFd",
+      "meaning": "-1 means no cached native success; fd is not kernel handle; never close"
+    },
+    {
+      "module": "sdk",
+      "offset": "0xb54598",
+      "type": "u32 count",
+      "name": "smReferences",
+      "meaning": "Positive indicates cached SM ownership"
+    },
+    {
+      "module": "sdk",
+      "offset": "0xb5459c",
+      "type": "u32 borrowed handle",
+      "name": "smSession",
+      "meaning": "Kernel session handle, not pointer; never close"
+    },
+    {
+      "module": "sdk",
+      "offset": "0xb545a0",
+      "type": "u8 guard",
+      "name": "smConstructed",
+      "meaning": "Once guard bit0"
+    },
+    {
+      "module": "sdk",
+      "offset": "0xb60d60",
+      "type": "u64 ID",
+      "name": "appletResourceUserId",
+      "meaning": "Pure SDK AM cache; can0 if SDK AM unused despite live compat root"
+    },
+    {
+      "module": "compat",
+      "offset": "0xd9570b8",
+      "type": "u64 pointer",
+      "name": "vulkanInstanceList",
+      "meaning": "Existing loader list; null is not hardware-negative proof"
+    },
+    {
+      "module": "compat",
+      "offset": "0x5f0bd18",
+      "type": "u8 flag",
+      "name": "vulkanIcdInitialized",
+      "meaning": "Cold GPA can initialize graphics; inspect only"
+    },
+    {
+      "module": "compat",
+      "offset": "0x5f0bd28",
+      "type": "u64 function pointer",
+      "name": "vulkanIcdInstanceGpa",
+      "meaning": "Cached callback; function presence is not video support"
+    }
+  ],
+  "unavailable": [
+    "Event/session/transfer-memory resource limit maxima, current or peak counts",
+    "Complete permitted-SVC bitmask",
+    "SAC service list",
+    "Force-debug or allow-debug capability bits",
+    "Cross-process memory permission"
+  ]
+}

@@ -1,0 +1,55 @@
+{
+  "moduleName": "nnSdk",
+  "moduleHash": "76bdb395",
+  "source": "20261106T131437Z-891fd6e-civ7-libnx2/civ7-sdk-text.elf",
+  "sourceSha256": "3cf39d12d74447f07a75868e7453898fe22e8d5ee62b916f666b02100ee6af8f",
+  "memoryBlockUnit": 2097152,
+  "functions": {
+    "heapSize": {
+      "symbol": "_ZN2nn2os17GetMemoryHeapSizeEv",
+      "offset": 1285776,
+      "size": 16,
+      "hex": "484f00b0084141f9000142f9c0035fd6"
+    },
+    "allocateBlock": {
+      "symbol": "_ZN2nn2os19AllocateMemoryBlockEPmm",
+      "offset": 1285792,
+      "size": 24,
+      "hex": "484f00b0e20301aa084141f9e10300aa00e10f915bc51214"
+    },
+    "freeBlock": {
+      "symbol": "_ZN2nn2os15FreeMemoryBlockEmm",
+      "offset": 1285824,
+      "size": 64,
+      "hex": "484f00b02900008b084141f9e20301aa0afd41f90b0142f96b010a8b5f0100eb"
+    },
+    "sha256": {
+      "symbol": "_ZN2nn6crypto18GenerateSha256HashEPvmPKvm",
+      "offset": 19776,
+      "size": 108,
+      "hex": "ffc302d1fd7b08a9f65709a9f44f0aa9fd030291f60300aae0230091ff7b00b9"
+    },
+    "allocateFromHeap": {
+      "symbol": "_ZN2nn2os6detail17MemoryHeapManager16AllocateFromHeapEPmm",
+      "offset": 1291792,
+      "size": 312,
+      "hex": "fd7bbca9f85f01a9f65702a9f44f03a9fd030091f60302aaf50301aaf70300aa"
+    },
+    "releaseToHeap": {
+      "symbol": "_ZN2nn2os6detail17MemoryHeapManager13ReleaseToHeapEmm",
+      "offset": 1292112,
+      "size": 432,
+      "hex": "fd7bbba9f90b00f9f85f02a9f65703a9f44f04a9fd030091f30302aaf70301aa"
+    }
+  },
+  "imports": {
+    "allocateBlock": {
+      "slot": 11701480,
+      "target": "allocateFromHeap"
+    },
+    "freeBlock": {
+      "slot": 11701488,
+      "target": "releaseToHeap"
+    }
+  }
+}
