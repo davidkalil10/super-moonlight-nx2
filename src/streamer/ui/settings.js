@@ -1,20 +1,52 @@
 /**
- * Stream settings the console UI offers, persisted next to hosts.json and turned into the
- * arguments of the next launch. Catalog rules: CLAUDE.md.
+ * Stream settings the console UI offers, their pure rules (shipped to the console), the PC file
+ * store and the arguments of the next launch. Catalog rules: CLAUDE.md.
  */
 import fs from 'node:fs';
 import path from 'node:path';
 import {hostsFile} from './hosts.js';
+import {defaultBitrate} from '../session/bitrate.js';
 
 /** Mbps steps the bitrate row walks through: 5 to 40 in steps of 2.5. */
 const BITRATES = Array.from({length: 15}, (_, i) => 5 + i * 2.5);
 
-/** Value text of the on/off toggles. */
+/** Bitrate value that leaves the choice to bitrate.js for the chosen size and rate. */
+const AUTO = 'auto';
+
+/**
+ * Value text of the on/off toggles.
+ * @param {boolean} value
+ */
 const onOff = value => (value ? 'On' : 'Off');
 
 /**
+ * Value text of the bitrate row; Auto shows what it resolves to with the current settings.
+ * @param {number | string} value
+ * @param {Record<string, any>} settings
+ */
+function bitrateText(value, settings) {
+  if (value !== AUTO) return value + ' Mbps';
+
+  const [width, height] = settings.size.split('x').map(Number);
+  return `Auto (${defaultBitrate(width, height, settings.fps, settings.codec) / 1000} Mbps)`;
+}
+
+/** Value text of the codec row. */
+const CODECS = {h264: 'H.264', av1: 'AV1'};
+
+/** Value text of the transport row. */
+const TRANSPORTS = {udp: 'UDP', tcp: 'TCP'};
+
+/** Value text of the button layout row (input/CLAUDE.md, "Controller"). */
+const BUTTONS = {position: 'By position', labels: 'By letter'};
+
+/**
+ * A catalog row. `formerDefaults` are fallbacks of the unversioned format: a save from before
+ * version 2 holding one of them gets today's fallback instead. A save older than `resetBefore`
+ * takes today's fallback for the row whatever it holds.
  * @typedef {{id: string, label: string, values: any[], fallback: any,
- *   text: (value: any) => string, locked?: boolean, unbacked?: boolean}} Setting
+ *   text: (value: any, settings: Record<string, any>) => string, locked?: boolean,
+ *   unbacked?: boolean, formerDefaults?: any[], resetBefore?: number}} Setting
  */
 
 /** @type {Setting[]} */
@@ -26,21 +58,36 @@ const CATALOG = [
     fallback: '1920x1080',
     text: value => value.replace('x', ' × ')
   },
-  {id: 'fps', label: 'Frame rate', values: [30, 60], fallback: 60, text: value => value + ' fps'},
+  {
+    id: 'fps',
+    label: 'Frame rate',
+    values: [60, 120],
+    fallback: 60,
+    text: value => value + ' fps'
+  },
   {
     id: 'bitrate',
     label: 'Bitrate',
-    values: BITRATES,
-    fallback: 20,
-    text: value => value + ' Mbps'
+    values: [AUTO, ...BITRATES],
+    fallback: AUTO,
+    text: bitrateText,
+    formerDefaults: [20]
   },
   {
     id: 'codec',
     label: 'Codec',
-    values: ['h264'],
-    fallback: 'h264',
-    text: () => 'H.264',
-    locked: true
+    values: ['h264', 'av1'],
+    fallback: 'av1',
+    text: (/** @type {keyof typeof CODECS} */ value) => CODECS[value],
+    resetBefore: 4
+  },
+  {
+    id: 'transport',
+    label: 'Transport',
+    values: ['udp', 'tcp'],
+    fallback: 'udp',
+    text: (/** @type {keyof typeof TRANSPORTS} */ value) => TRANSPORTS[value],
+    resetBefore: 4
   },
   {
     id: 'audio',
@@ -51,67 +98,141 @@ const CATALOG = [
     locked: true
   },
   {
-    id: 'quitOnReturn',
-    label: 'Quit host app on return',
+    id: 'hostAudio',
+    label: 'Play audio on the PC',
     values: [false, true],
     fallback: false,
-    text: onOff,
-    unbacked: true
+    text: onOff
   },
   {
     id: 'optimise',
     label: 'Optimise game settings',
     values: [false, true],
     fallback: false,
-    text: onOff,
-    unbacked: true
+    text: onOff
   },
   {
-    id: 'presentHz',
-    label: 'Present rate',
-    values: [60, 120],
-    fallback: 60,
-    text: value => (value === 120 ? '120 Hz (experimental)' : '60 Hz')
+    id: 'quitOnReturn',
+    label: 'Quit host app on return',
+    values: [false, true],
+    fallback: false,
+    text: onOff
+  },
+  {
+    id: 'buttons',
+    label: 'Button layout',
+    values: ['position', 'labels'],
+    fallback: 'position',
+    text: (/** @type {keyof typeof BUTTONS} */ value) => BUTTONS[value]
+  },
+  {
+    id: 'streamInfo',
+    label: 'Stream info badge',
+    values: [false, true],
+    fallback: false,
+    text: onOff
   }
 ];
+
+/** What the reducer needs of each row: the catalog without its labels and value text. */
+const VALUES = CATALOG.map(setting => ({
+  id: setting.id,
+  values: setting.values,
+  fallback: setting.fallback,
+  locked: Boolean(setting.locked),
+  unbacked: Boolean(setting.unbacked),
+  formerDefaults: setting.formerDefaults ?? [],
+  resetBefore: setting.resetBefore ?? 0
+}));
+
+/**
+ * Defaults, sanitising and stepping over the catalog values. Self-contained: payload.js ships it
+ * with toString() so the console model uses the same rules.
+ * @param {{id: string, values: any[], fallback: any, locked: boolean, unbacked: boolean,
+ *   formerDefaults: any[], resetBefore: number}[]} rows
+ */
+function createSettingsCore(rows) {
+  /**
+   * Saved format; version 2 made Auto the bitrate default and dropped the present rate, version
+   * 3 added AV1 to the codec row, version 4 added the transport row and moved every save to AV1
+   * over UDP once, version 5 dropped 30 fps and added the host audio, SOPS, quit on return,
+   * button layout and stream info rows, keeping every other value.
+   */
+  const version = 5;
+  /** The first version whose saves hold today's defaults rather than the former ones. */
+  const currentDefaults = 2;
+
+  /** Every setting at its catalog fallback. */
+  function defaults() {
+    /** @type {Record<string, any>} */
+    const settings = {version};
+    for (const row of rows) settings[row.id] = row.fallback;
+    return settings;
+  }
+
+  /**
+   * A settings object built from `saved`, each value checked against its row; anything missing,
+   * unknown or out of range falls back to the default, and so does a former default in a save
+   * older than version 2 and any value of a row reset since the save's version.
+   * @param {unknown} saved
+   */
+  function sanitize(saved) {
+    const settings = defaults();
+    if (!saved || typeof saved !== 'object' || Array.isArray(saved)) return settings;
+
+    const fields = /** @type {Record<string, unknown>} */ (saved);
+    const savedVersion = Number(fields.version);
+    const versioned = Number.isInteger(savedVersion);
+    const oldDefaults = !versioned || savedVersion < currentDefaults;
+    for (const row of rows) {
+      const value = fields[row.id];
+      const known = row.values.includes(value);
+      const former = oldDefaults && row.formerDefaults.includes(value);
+      const reset = row.resetBefore > 0 && (!versioned || savedVersion < row.resetBefore);
+      if (known && !former && !reset) settings[row.id] = value;
+    }
+    return settings;
+  }
+
+  /**
+   * One step up or down the row's values, without wrapping; locked and unbacked rows do not
+   * move.
+   * @param {Record<string, any>} settings
+   * @param {string} id
+   * @param {number} direction 1 right, -1 left.
+   */
+  function adjust(settings, id, direction) {
+    const row = rows.find(entry => entry.id === id);
+    if (!row || row.locked || row.unbacked) return settings;
+
+    const index = row.values.indexOf(settings[id]);
+    const next = Math.min(row.values.length - 1, Math.max(0, index + Math.sign(direction)));
+    if (row.values[next] === settings[id]) return settings;
+
+    return {...settings, [id]: row.values[next]};
+  }
+
+  return {version, defaults, sanitize, adjust};
+}
+
+const core = createSettingsCore(VALUES);
+const {defaults, sanitize, adjust} = core;
 
 /** settings.json beside hosts.json. */
 function settingsFile() {
   return path.join(path.dirname(hostsFile()), 'settings.json');
 }
 
-/** Every setting at its catalog fallback. */
-function defaults() {
-  return Object.fromEntries(CATALOG.map(setting => [setting.id, setting.fallback]));
-}
-
 /**
- * The saved settings, each value checked against its catalog row; anything missing, unknown
- * or out of range falls back to the default.
+ * The saved settings, cleaned against the catalog; a missing or corrupt file gives the defaults.
  * @param {string} file
  */
 function load(file) {
-  let parsed = {};
   try {
-    const read = JSON.parse(fs.readFileSync(file, 'utf8'));
-    if (isPlainObject(read)) parsed = read;
-  } catch {}
-
-  const settings = defaults();
-  for (const setting of CATALOG) {
-    const saved = parsed[setting.id];
-    if (setting.values.includes(saved)) settings[setting.id] = saved;
+    return sanitize(JSON.parse(fs.readFileSync(file, 'utf8')));
+  } catch {
+    return defaults();
   }
-
-  return settings;
-}
-
-/**
- * Whether the parsed JSON is an object rather than null, a scalar or an array.
- * @param {unknown} value
- */
-function isPlainObject(value) {
-  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
 /**
@@ -125,20 +246,16 @@ function save(file, settings) {
 }
 
 /**
- * One step up or down the row's values, without wrapping; locked and unbacked rows do not move.
- * @param {Record<string, any>} settings
- * @param {string} id
- * @param {number} direction 1 right, -1 left.
+ * The PC settings file behind the narrow store the UI uses, until the console keeps its own
+ * (ui/CLAUDE.md, "Settings storage"). `load` is also the one-time migration source.
+ * @param {string} [file]
+ * @returns {{load: () => Record<string, any>, save: (settings: Record<string, any>) => void}}
  */
-function adjust(settings, id, direction) {
-  const setting = CATALOG.find(entry => entry.id === id);
-  if (!setting || setting.locked || setting.unbacked) return settings;
-
-  const index = setting.values.indexOf(settings[id]);
-  const next = Math.min(setting.values.length - 1, Math.max(0, index + Math.sign(direction)));
-  if (setting.values[next] === settings[id]) return settings;
-
-  return {...settings, [id]: setting.values[next]};
+function createFileStore(file = settingsFile()) {
+  return {
+    load: () => load(file),
+    save: settings => save(file, sanitize(settings))
+  };
 }
 
 /**
@@ -149,33 +266,63 @@ function rows(settings) {
   return CATALOG.map(setting => ({
     id: setting.id,
     label: setting.label,
-    value: setting.text(settings[setting.id]),
+    value: setting.text(settings[setting.id], settings),
     adjustable: !setting.locked && !setting.unbacked,
     greyed: Boolean(setting.unbacked)
   }));
 }
 
 /**
- * The live.js arguments of a launch with these settings: the proven control shape, with the
- * present rate added only in the staggered form that supports it.
+ * The `--bitrate` value in kbps, or `auto` for the launcher to resolve with bitrate.js.
+ * @param {number | string} value
+ */
+function bitrateArg(value) {
+  if (value === AUTO) return AUTO;
+  return String(Math.round(Number(value) * 1000));
+}
+
+/**
+ * The stream arguments of a launch with these settings: the proven control shape, then the
+ * opt-in rows. The frame rate is also the display rate; there is no separate present rate.
+ * `--transport` wins over host.json's transport (civ7/README.md, "UDP transport"). Quit on
+ * return is the model's, not an argument.
  * @param {Record<string, any>} settings
  */
 function streamArgs(settings) {
   const args = [
     '--codec',
-    'h264',
+    settings.codec,
+    '--transport',
+    settings.transport,
     '--size',
     settings.size,
     '--fps',
     String(settings.fps),
     '--bitrate',
-    String(Math.round(settings.bitrate * 1000)),
+    bitrateArg(settings.bitrate),
     '--staggered',
     '--socket-audio'
   ];
 
-  if (settings.presentHz === 120) args.push('--present-hz', '120');
+  if (settings.hostAudio) args.push('--local-audio');
+  if (settings.optimise) args.push('--sops');
+  if (settings.buttons === 'labels') args.push('--buttons', 'labels');
+  if (settings.streamInfo) args.push('--stream-info');
   return args;
 }
 
-export {CATALOG, settingsFile, defaults, load, save, adjust, rows, streamArgs};
+export {
+  CATALOG,
+  VALUES,
+  core,
+  createSettingsCore,
+  createFileStore,
+  settingsFile,
+  defaults,
+  sanitize,
+  load,
+  save,
+  adjust,
+  rows,
+  streamArgs
+};
