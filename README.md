@@ -197,8 +197,8 @@ one command; the host's state machine gives it meaning.
 
 Page flags: bit0 overlay (drawn over video only while `uiOverlay` is 1; otherwise the page
 replaces the video whenever no native or HBV frame is current), bit1 hide cursor. Item flags:
-bit0 greyed, bit1 current (running app), bit2 adjustable (left/right send ADJUST), bit3 pending
-(pulse even after the ack). `checksum` is FNV-1a (basis 2166136261, prime 16777619) over header
+bit0 greyed, bit1 current (running app), bit2 adjustable (A edits it), bit3 pending (pulse even
+after the ack), bit4 editing (the cursor stays on it, left/right send ADJUST). `checksum` is FNV-1a (basis 2166136261, prime 16777619) over header
 words 0..9 and the three tables. The cursor moves by geometry to the nearest non-greyed item in
 the pressed direction, no wrap, and stays on the same `id` across pages, else `cursorHome`. A
 tap inside an item moves the cursor there and sends A.

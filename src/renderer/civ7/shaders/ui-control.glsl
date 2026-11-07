@@ -9,7 +9,7 @@ const uint UI_MAX_ITEMS = 32u, UI_MAX_TEXTS = 48u, UI_MAX_IMAGES = 24u,
            UI_MAX_BODY = UI_PAGE_WORDS * 4u - 4096u;
 const uint UI_FLAG_OVERLAY = 1u, UI_FLAG_HIDE_CURSOR = 2u;
 const uint UI_ITEM_GREYED = 1u, UI_ITEM_CURRENT = 2u, UI_ITEM_ADJUSTABLE = 4u,
-           UI_ITEM_PENDING = 8u;
+           UI_ITEM_PENDING = 8u, UI_ITEM_EDITING = 16u;
 const uint UI_OP_A = 1u, UI_OP_B = 2u, UI_OP_X = 3u, UI_OP_Y = 4u,
            UI_OP_ADJUST = 5u, UI_OP_CHORD = 6u;
 const uint UI_CHORD_FRAMES = 60u, UI_STICK_REPEAT = 12u;
@@ -203,16 +203,17 @@ void uiInput() {
       inputState.stickRepeat--;
   } else
     inputState.stickRepeat = 0u;
+  // An item being edited holds the cursor: left and right step it, up and
+  // down do nothing until A or B ends the edit.
   if (items > 0u && move != vec2(0)) {
-    uint flags = uiItemFlags(base, cursor);
-    if (move.y == 0.0 && (flags & UI_ITEM_ADJUSTABLE) != 0u) {
-      if (!sent) {
-        uiCommand(UI_OP_ADJUST, uiItemId(base, cursor),
-                  move.x > 0.0 ? 1u : 0xffffffffu);
-        sent = true;
-      }
-    } else
+    bool editing = (uiItemFlags(base, cursor) & UI_ITEM_EDITING) != 0u;
+    if (!editing)
       cursor = uiNeighbour(base, cursor, move);
+    else if (move.y == 0.0 && !sent) {
+      uiCommand(UI_OP_ADJUST, uiItemId(base, cursor),
+                move.x > 0.0 ? 1u : 0xffffffffu);
+      sent = true;
+    }
   }
   bool touching = inputState.touch[2] == 1u && (inputState.touch[6] & 2u) == 0u;
   if (touching && inputState.touchHeld == 0u) {

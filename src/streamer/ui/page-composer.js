@@ -578,13 +578,15 @@ function createPageComposer(painter, options) {
    * One setting card: its label, then its value between ‹ › when it can change, each arrow only
    * where a step changes the value.
    * @param {PageBuilder} page @param {SettingRow} row @param {number} i
+   * @param {boolean} editing The row A opened for left and right to step.
    */
-  function settingCard(page, row, i) {
+  function settingCard(page, row, i, editing) {
     const {x, y} = cardAt(i, SETTING_GRID.y, SETTING_GRID.gapY);
     const inner = CARDS.width - 2 * CARDS.pad;
     const left = x + CARDS.pad;
     let flags = 0;
     if (row.adjustable) flags |= ITEM_FLAG.adjustable;
+    if (row.adjustable && editing) flags |= ITEM_FLAG.editing;
     if (row.greyed) flags |= ITEM_FLAG.greyed;
 
     page.item({id: ITEM.setting + i, x, y, w: CARDS.width, h: CARDS.height, flags});
@@ -612,7 +614,8 @@ function createPageComposer(painter, options) {
       keys: [['◂▸', 'Change'], ['B', 'Back'], ['Y', 'Reset']],
       footer: '1080p60 is the reference shape'
     });
-    settingRows(model.settings, model.docked).forEach((row, i) => settingCard(page, row, i));
+    settingRows(model.settings, model.docked)
+      .forEach((row, i) => settingCard(page, row, i, row.id === model.editing));
     return page.build();
   }
 

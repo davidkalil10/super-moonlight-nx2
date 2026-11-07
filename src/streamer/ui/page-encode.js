@@ -48,7 +48,7 @@ function createPageEncoder(pageBytes) {
     FORMAT_RGBA8: 1,
     CHECKSUM_WORDS,
     PAGE_FLAG: {overlay: 1, hideCursor: 2},
-    ITEM_FLAG: {greyed: 1, current: 2, adjustable: 4, pending: 8}
+    ITEM_FLAG: {greyed: 1, current: 2, adjustable: 4, pending: 8, editing: 16}
   };
 
   /** @param {boolean} condition @param {string} message */
