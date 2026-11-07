@@ -1,6 +1,7 @@
 // The codec and transport of one launch's sessions: a failed AV1 start runs again on H.264, a
-// failed UDP start on TCP, each once per launch (README.md, "Fallbacks").
-import {changeText} from './rate-badge.js';
+// failed UDP start on TCP, each once per launch; and the size and rate they run at (README.md,
+// "Fallbacks").
+import {changeText, rateChangeText} from './rate-badge.js';
 
 /** @typedef {{codec: 'h264' | 'av1', transport: 'tcp' | 'udp'}} StreamChoice */
 
@@ -9,6 +10,45 @@ export const FALLBACKS = {
   codec: {from: 'av1', to: 'h264', text: changeText('AV1', 'H.264')},
   transport: {from: 'udp', to: 'tcp', text: changeText('UDP', 'TCP')}
 };
+
+/** The largest size H.264 and a handheld console stream; above it needs AV1 docked. */
+export const BASE_SIZE = {width: 1920, height: 1080};
+/** Above this height the console decodes 60 fps at most (2160p). */
+const FAST_HEIGHT = 1440;
+
+/**
+ * The size one session runs at: the requested one, or 1080p above 1080p unless docked on AV1.
+ * @param {{width: number, height: number}} requested
+ * @param {{docked: boolean, codec: 'h264' | 'av1'}} session
+ */
+export function sessionSize({width, height}, {docked, codec}) {
+  const fits = height <= BASE_SIZE.height || (docked && codec === 'av1');
+  return fits ? {width, height} : {...BASE_SIZE};
+}
+
+/**
+ * The rate a launch asks for: 60 at most when it will stream 2160p.
+ * @param {{width: number, height: number, fps: number, codec: 'h264' | 'av1'}} requested
+ * @param {boolean} docked
+ */
+export function launchRate(requested, docked) {
+  const {height} = sessionSize(requested, {docked, codec: requested.codec});
+  if (height <= FAST_HEIGHT) return requested.fps;
+
+  return Math.min(requested.fps, 60);
+}
+
+/**
+ * The badge text of a session that runs below what was asked: "1440p ▸ 1080p",
+ * "2160p120 ▸ 2160p60".
+ * @param {{height: number, fps: number}} requested
+ * @param {{height: number, fps: number}} session
+ * @returns {string[]}
+ */
+export function shapeChanges(requested, session) {
+  const same = session.height === requested.height && session.fps === requested.fps;
+  return same ? [] : [rateChangeText(requested, session)];
+}
 
 /**
  * The fallback a failed start's error names (stream.js `withFallback`), or null.

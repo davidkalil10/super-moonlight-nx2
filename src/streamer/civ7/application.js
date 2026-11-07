@@ -12,7 +12,8 @@ import {createRemoteUi} from './console-ui.js';
 import {runFrameRateSession} from './frame-rate.js';
 import {createRefreshRate} from './refresh-rate.js';
 import {badgeText, createQuadBadge, rateChangeText} from './rate-badge.js';
-import {createStreamFallbacks} from './stream-fallback.js';
+import {createStreamFallbacks, launchRate, sessionSize, shapeChanges} from './stream-fallback.js';
+import {readOperationMode} from './operation-mode.js';
 
 /** @import {Civ7Rpc} from './transport.js' */
 /** @import {Host} from '../ui/model.js' */
@@ -60,9 +61,12 @@ export function streamShape(args) {
   let transport;
   if (launched) transport = launched === 'udp' ? 'udp' : 'tcp';
 
-  /** @param {number} sessionFps @param {'h264' | 'av1'} [sessionCodec] */
-  const bitrate = (sessionFps, sessionCodec = codec) =>
-    sessionBitrate(withCodec(args, sessionCodec), width, height, sessionFps);
+  /**
+   * @param {number} sessionFps @param {'h264' | 'av1'} [sessionCodec]
+   * @param {{width: number, height: number}} [size] the session's, when it falls back below the launch's
+   */
+  const bitrate = (sessionFps, sessionCodec = codec, size = {width, height}) =>
+    sessionBitrate(withCodec(args, sessionCodec), size.width, size.height, sessionFps);
   return {width, height, fps, codec, transport, bitrate, buttons, helperArgs, streamInfo};
 }
 
@@ -219,7 +223,17 @@ export async function runApplication({rpc, directory, menu, gpu, hostAddress, he
       return (await ui.presenter.run(3, ui.input.configuration)).frames;
     }});
     display.cleanup();
+    let docked = (await readOperationMode(rpc, {log})).docked;
+    if (docked) remote.initial = await remote.dispatch({type: 'operationMode', docked});
     if (connectionLost) remote.initial = await remote.dispatch({type: 'connectionLost'});
+    /** The mode at launch; the menu follows a change (README.md, "Operation mode"). */
+    const launchMode = async () => {
+      const now = (await readOperationMode(rpc, {log})).docked;
+      if (now !== docked) service?.dispatch({type: 'operationMode', docked: now})
+        .catch(error => log({event: 'dispatch-failed', message: errorText(error)}));
+      docked = now;
+      return now;
+    };
     children.stream = (runDirectory, host, app, args, onLine) => {
       streaming = true;
       const abort = new AbortController();
@@ -235,22 +249,31 @@ export async function runApplication({rpc, directory, menu, gpu, hostAddress, he
       const exited = (async () => {
         try {
           await rendering;
-          const result = await runFrameRateSession({fps: requestedFps,
+          const dockedAtLaunch = await launchMode();
+          const launchFps = launchRate({width, height, fps: requestedFps, codec}, dockedAtLaunch);
+          const result = await runFrameRateSession({fps: launchFps,
             measure: () => ui.presenter.run(24, ui.input.configuration),
             signal: abort.signal, log,
             display: {raise: async fps => (await display.set(fps)).ok, restore: display.restore,
               measured: display.measured},
-            run: (fps, change) => fallbacks.run((choice, notes) => streamVideo({rpc, directory,
-              hostAddress, host: host.address, app: String(app.id), helper, helperArgs, buttons, width, height,
-              codec: choice.codec, transport: choice.transport, fps, bitrate: bitrate(fps, choice.codec),
-              badge: badgeFor([
-                ...(change ? [rateChangeText({height, fps: change.from}, {height, fps: change.to})] : []),
-                ...notes,
-                ...(streamInfo ? [streamInfoText({height, fps, codec: choice.codec,
-                  transport: choice.transport, bitrate: bitrate(fps, choice.codec)})] : [])]),
-              duration: null, signal: abort.signal, controls: menu.controls.mapped,
-              presentation: {configuration: ui.presenter.configuration, storage: gpu.privateStorage},
-              log: event => forwardStreamEvent(event, log, onLine)}))});
+            run: (fps, change) => fallbacks.run((choice, notes) => {
+              const size = sessionSize({width, height}, {docked: dockedAtLaunch, codec: choice.codec});
+              const kbps = bitrate(fps, choice.codec, size);
+              const rate = change
+                ? [rateChangeText({height: size.height, fps: change.from}, {height: size.height, fps: change.to})] : [];
+              return streamVideo({rpc, directory, hostAddress, host: host.address, app: String(app.id), helper,
+                helperArgs, buttons, width: size.width, height: size.height, codec: choice.codec,
+                transport: choice.transport, fps, bitrate: kbps,
+                badge: badgeFor([
+                  ...shapeChanges({height, fps: requestedFps}, {height: size.height, fps: launchFps}),
+                  ...rate,
+                  ...notes,
+                  ...(streamInfo ? [streamInfoText({height: size.height, fps, codec: choice.codec,
+                    transport: choice.transport, bitrate: kbps})] : [])]),
+                duration: null, signal: abort.signal, controls: menu.controls.mapped,
+                presentation: {configuration: ui.presenter.configuration, storage: gpu.privateStorage},
+                log: event => forwardStreamEvent(event, log, onLine)});
+            })});
           log({event: 'stream-result', ...result});
           return {code: 0, signal: null, out: '', err: ''};
         } catch (error) {
