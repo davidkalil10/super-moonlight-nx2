@@ -167,3 +167,16 @@ hardware headers are MIT. Preserve the actual per-file notices when reusing code
 - Comments: the JSDoc types tsc needs, file headers of at most three lines, short why-notes.
   Design prose goes in the component's docs, and comments cite them instead of restating it.
 - No live console runs unless the user is at the console (`DEVICE-RULES.md` in hbl-notes).
+
+
+## Round 6 video
+
+AV1 above 1080p submits the next unit before untile, present and ack of the ready frame;
+its GPU wait is deferred per slot. Existing two frame slots and decoder surfaces suffice.
+LOP2 logs `overlapped` and mean `overlappedMs` alongside the existing per-unit stage timings.
+The replay reaches 60/s at 2160p and 120/s at 1440p; console throughput still needs a run.
+
+Startup selects a native layer from the console's saved size when docked on AV1, before
+opening graphics. The layer stays fixed for the process. A different size above 1080p streams
+at 1080p with a badge and restart notice. UI coordinates stay 1920x1080 and scale to the layer.
+Probe C verified the native layer calls; the combined streaming path still needs console checks.

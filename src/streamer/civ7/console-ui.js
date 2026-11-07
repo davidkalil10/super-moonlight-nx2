@@ -46,6 +46,19 @@ const hex = value => '0x' + BigInt(value).toString(16);
 const asStep = reply => /** @type {MachineStep} */ (/** @type {unknown} */ (reply));
 
 /**
+ * The verified filesystem functions the console's settings store calls, by store name.
+ * @param {Civ7Rpc} rpc
+ */
+export async function settingsFunctions(rpc) {
+  const resolve = sdkResolver(rpc);
+  /** @type {Record<string, string>} */
+  const functions = {};
+  for (const name of ['commit', 'open', 'read', 'write', 'size', 'create', 'close', 'resize', 'flush'])
+    functions[name] = '0x' + (await resolve('fs' + name[0].toUpperCase() + name.slice(1))).toString(16);
+  return functions;
+}
+
+/**
  * The host half of the console UI: forwards events, asks the console to show the pages the PC
  * wrote, and returns the console's snapshots.
  * @param {Civ7Rpc} rpc
@@ -55,11 +68,7 @@ const asStep = reply => /** @type {MachineStep} */ (/** @type {unknown} */ (repl
  * @param {{epoch?: number}} [options]
  */
 export async function createRemoteUi(rpc, mapped, hosts, migration, options = {}) {
-  const resolve = sdkResolver(rpc);
-  /** @type {Record<string, string>} */
-  const functions = {};
-  for (const name of ['commit', 'open', 'read', 'write', 'size', 'create', 'close', 'resize', 'flush'])
-    functions[name] = '0x' + (await resolve('fs' + name[0].toUpperCase() + name.slice(1))).toString(16);
+  const functions = await settingsFunctions(rpc);
   const memory = await rpc.allocate(0x2000);
   try {
     const epoch = options.epoch ?? Math.floor(Date.now() / 1000) >>> 0;

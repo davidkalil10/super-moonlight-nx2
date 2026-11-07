@@ -10,6 +10,8 @@ import {closeLeftAudioOut} from '../civ7/audio.js';
 import {createRaster} from '../ui/raster.js';
 import {createStartupTiming} from '../civ7/startup-timing.js';
 import {migrateConfig} from '../ui/hosts.js';
+import * as settings from '../ui/settings.js';
+import {pickLayerSize} from '../civ7/layer-size.js';
 
 /** @import {Civ7Rpc} from '../civ7/transport.js' */
 /** @import {Host} from '../ui/model.js' */
@@ -118,19 +120,21 @@ export async function serve(bundle, signal, log = (/** @type {object} */ event) 
         await session.initialize();
         timing.mark('initialized');
         session.resources = null;
+        const layerSize = await pickLayerSize(session, {log: record,
+          migration: () => settings.load(settings.settingsFile())});
         let prepared;
         try {
-          prepared = await prepareMoonlight({rpc: session, directory: run,
+          prepared = await prepareMoonlight({rpc: session, directory: run, layerSize,
             inspector: path.join(bundle, 'bin/nx2-modules'), log: record, mark: timing.mark,
             compatCache: path.join(bundle, 'compat-cache')});
         } finally {
           session.resources = resources;
         }
-        const {menu, gpu} = prepared;
+        const {menu, gpu, layer} = prepared;
         timing.mark('prepared');
         state = 'running';
         await runApplication({rpc: session, directory: run, menu, gpu, hostAddress: configuration.host,
-          helper: path.join(bundle, 'hbmoonlight'), hosts: configuration.hosts,
+          helper: path.join(bundle, 'hbmoonlight'), hosts: configuration.hosts, layer,
           signal: controller.signal, log: record, mark: timing.mark, raster, connectionLost,
           transport: configuration.transport === 'tcp' ? 'tcp' : 'udp'});
         connectionLost = false;

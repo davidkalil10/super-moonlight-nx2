@@ -14,6 +14,8 @@ import {createRefreshRate} from './refresh-rate.js';
 import {badgeText, createQuadBadge, rateChangeText} from './rate-badge.js';
 import {createStreamFallbacks, launchRate, sessionSize, shapeChanges} from './stream-fallback.js';
 import {readOperationMode} from './operation-mode.js';
+import {fitLayer} from './layer-size.js';
+import {DEFAULT_SIZE} from './display.js';
 
 /** @import {Civ7Rpc} from './transport.js' */
 /** @import {Host} from '../ui/model.js' */
@@ -165,14 +167,15 @@ export function forwardStreamEvent(event, log, onLine) {
  * The Moonlight menu and its streams on one attached console, until the service stops.
  * @param {{rpc: Civ7Rpc, directory: string, menu: Menu, gpu: Gpu, hostAddress: string, helper: string,
  *   hosts: Host[], signal?: AbortSignal, raster?: ReturnType<typeof createRaster>,
- *   connectionLost?: boolean, transport?: 'tcp' | 'udp', log?: (event: object) => void,
- *   mark?: (name: string) => void}} options
+ *   connectionLost?: boolean, transport?: 'tcp' | 'udp', layer?: {width: number, height: number},
+ *   log?: (event: object) => void, mark?: (name: string) => void}} options
  *   `transport` is the bundle's video transport; a launch's `--transport` (the Settings row)
- *   overrides it; `mark` takes startup-timing.js marks
+ *   overrides it; `layer` is the open layer's size, which no stream exceeds; `mark` takes
+ *   startup-timing.js marks
  */
 export async function runApplication({rpc, directory, menu, gpu, hostAddress, helper,
   hosts, signal = undefined, raster: sharedRaster = undefined, connectionLost = false,
-  transport = 'udp', log = event => {}, mark = name => {}}) {
+  transport = 'udp', layer = DEFAULT_SIZE, log = event => {}, mark = name => {}}) {
   /** @type {Awaited<ReturnType<typeof createPresenter>> | undefined} */
   let presenter;
   /** @type {Awaited<ReturnType<typeof createInput>> | undefined} */
@@ -250,14 +253,19 @@ export async function runApplication({rpc, directory, menu, gpu, hostAddress, he
         try {
           await rendering;
           const dockedAtLaunch = await launchMode();
-          const launchFps = launchRate({width, height, fps: requestedFps, codec}, dockedAtLaunch);
+          /** @param {'h264' | 'av1'} sessionCodec */
+          const shown = sessionCodec => fitLayer(sessionSize({width, height}, {docked: dockedAtLaunch,
+            codec: sessionCodec}), layer);
+          const launchSize = shown(codec);
+          if (launchSize.fallback) forwardStreamEvent(launchSize.fallback, log, onLine);
+          const launchFps = launchRate({...launchSize.size, fps: requestedFps, codec}, dockedAtLaunch);
           const result = await runFrameRateSession({fps: launchFps,
             measure: () => ui.presenter.run(24, ui.input.configuration),
             signal: abort.signal, log,
             display: {raise: async fps => (await display.set(fps)).ok, restore: display.restore,
               measured: display.measured},
             run: (fps, change) => fallbacks.run((choice, notes) => {
-              const size = sessionSize({width, height}, {docked: dockedAtLaunch, codec: choice.codec});
+              const {size} = shown(choice.codec);
               const kbps = bitrate(fps, choice.codec, size);
               const rate = change
                 ? [rateChangeText({height: size.height, fps: change.from}, {height: size.height, fps: change.to})] : [];

@@ -150,6 +150,7 @@ export const DESTROY = {
  * @property {number | bigint | string} swapchain
  * @property {number} queueFamily
  * @property {number} imageCount Swapchain images the display stage created.
+ * @property {{width: number, height: number}} [size] The layer's extent; 1920x1080 when absent.
  */
 
 const hex = (/** @type {number | bigint | string} */ value) => '0x' + BigInt(value).toString(16);

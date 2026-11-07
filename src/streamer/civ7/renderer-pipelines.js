@@ -8,6 +8,7 @@ import {TYPE, DESTROY, SCOPE, TRANSITIONS, CLEAR_COLOR, PRIVATE_MEMORY_PREFERENC
   createShaderModule, shaderStage, openCache, cacheSeed, saveCache, releaseCache, cleanupOrder} from './pipelines.js';
 import {INPUT_BYTES, STORAGE_BYTES, UI_INSTANCES, BADGE_INSTANCE, WIDTH, HEIGHT, FRAMES_OFFSET, FRAME_BYTES,
   VIDEO_SLOTS} from '../../renderer/civ7/layout.js';
+import {displaySize} from './display.js';
 
 /** @import {Civ7Rpc} from './transport.js' */
 /** @import {Created, Display, PlanRecorder} from './pipelines.js' */
@@ -314,16 +315,17 @@ function createSet(plan, table, display, texel) {
 
 /**
  * The state both graphics pipelines share: no vertex input, triangle lists, no culling, one
- * RGBA8 dynamic-rendering attachment.
+ * RGBA8 dynamic-rendering attachment, the viewport over the whole layer.
  * @param {PlanRecorder} plan
+ * @param {{width: number, height: number}} size
  */
-function graphicsState(plan) {
+function graphicsState(plan, size) {
   const vertexInput = plan.struct(struct(48, TYPE.pipelineVertexInputStateCreateInfo));
   const assembly = plan.struct(struct(32, TYPE.pipelineInputAssemblyStateCreateInfo, {20: TOPOLOGY_TRIANGLE_LIST}));
   const viewportBytes = Buffer.alloc(24);
-  [0, 0, WIDTH, HEIGHT, 0, 1].forEach((value, index) => viewportBytes.writeFloatLE(value, index * 4));
+  [0, 0, size.width, size.height, 0, 1].forEach((value, index) => viewportBytes.writeFloatLE(value, index * 4));
   const viewport = plan.struct(viewportBytes);
-  const scissor = plan.struct(u32s(0, 0, WIDTH, HEIGHT));
+  const scissor = plan.struct(u32s(0, 0, size.width, size.height));
   const viewportState = plan.struct(struct(48, TYPE.pipelineViewportStateCreateInfo, {20: 1, 32: 1}, {24: viewport, 40: scissor}));
   const rasterBytes = struct(64, TYPE.pipelineRasterizationStateCreateInfo);
   rasterBytes.writeFloatLE(1, 56);
@@ -389,8 +391,9 @@ function createComputePipeline(plan, table, display, entry, cache) {
  * The create-infos every recording shares; only the image and view change per frame.
  * @param {PlanRecorder} plan
  * @param {ReturnType<typeof handleTable>} table
+ * @param {{width: number, height: number}} size
  */
-function recordingInfos(plan, table) {
+function recordingInfos(plan, table, size) {
   const allocate = plan.struct(struct(32, TYPE.commandBufferAllocateInfo, {24: COMMAND_BUFFER_PRIMARY, 28: 1}));
   plan.copy(plan.slot(table.pool), allocate + 16);
   const begin = plan.struct(struct(32, TYPE.commandBufferBeginInfo));
@@ -421,7 +424,7 @@ function recordingInfos(plan, table) {
   const attachmentBytes = struct(72, TYPE.renderingAttachmentInfo, {24: LAYOUT_COLOR_ATTACHMENT, 44: LOAD_OP_CLEAR});
   CLEAR_COLOR.forEach((value, channel) => attachmentBytes.writeFloatLE(value, 52 + channel * 4));
   const attachment = plan.struct(attachmentBytes);
-  const area = {28: WIDTH, 32: HEIGHT, 36: 1, 44: 1};
+  const area = {28: size.width, 32: size.height, 36: 1, 44: 1};
   const rendering = plan.struct(struct(72, TYPE.renderingInfo, area, {48: attachment}));
 
   return {allocate, begin, bind, barriers, images, attachment, rendering};
@@ -554,7 +557,7 @@ function rendererPlan(area, table, display, memory, code, cache, path) {
   const entry = plan.struct(Buffer.from(SHADER_ENTRY));
   SHADERS.forEach((stage, index) => createShaderModule(plan, display, stage, code[stage], table.shaders[index]));
   createComputePipeline(plan, table, display, entry, pipelineCache);
-  const shared = {entry, cache: pipelineCache, state: graphicsState(plan)};
+  const shared = {entry, cache: pipelineCache, state: graphicsState(plan, displaySize(display))};
   const videoFragment = texel ? 'videoFragment' : 'videoStorageFragment';
   createGraphicsPipeline(plan, table, display, shared, {name: 'video', blended: false,
     vertex: SHADERS.indexOf('videoVertex'), fragment: SHADERS.indexOf(videoFragment), out: table.video});
@@ -572,7 +575,7 @@ function rendererPlan(area, table, display, memory, code, cache, path) {
  */
 function recordingPlan(area, table, display, record) {
   const plan = planRecorder(area);
-  const infos = recordingInfos(plan, table);
+  const infos = recordingInfos(plan, table, displaySize(display));
   for (let slot = 0; slot < VIDEO_SLOTS; slot++)
     for (let image = 0; image < display.imageCount; image++) record(plan, table, display, infos, slot, image);
   return plan;
@@ -594,13 +597,16 @@ function stagingLayout(renderer) {
 }
 
 /**
- * What a saved cache must have been made from: this module's pipeline state, the renderer's
- * contract and every shader. The driver is checked by cacheSeed (pipelineCacheUUID).
+ * What a saved cache must have been made from: this module's pipeline state (with the viewport,
+ * when the layer is not 1080p), the renderer's contract and every shader. The driver is checked by
+ * cacheSeed (pipelineCacheUUID).
  * @param {LoadedRenderer} renderer
+ * @param {{width: number, height: number}} [size] the layer's
  */
-export function rendererCacheKey(renderer) {
+export function rendererCacheKey(renderer, size = {width: WIDTH, height: HEIGHT}) {
   const hash = crypto.createHash('sha256').update(CACHE_KEY_VERSION)
     .update(JSON.stringify(renderer.manifest.contract));
+  if (size.width !== WIDTH || size.height !== HEIGHT) hash.update('layer:' + size.width + 'x' + size.height);
   for (const stage of SHADERS) {
     const code = renderer.shaders[stage];
     hash.update(stage + ':' + code.length + ':').update(code);
@@ -626,7 +632,7 @@ export async function createRendererPipelines(rpc, {display, renderer, resolve, 
   const functions = {};
   /** @type {object[]} */
   const requests = [];
-  const opened = cache ? await openCache(rpc, rendererCacheKey(renderer), resolve) : null;
+  const opened = cache ? await openCache(rpc, rendererCacheKey(renderer, displaySize(display)), resolve) : null;
   const session = opened?.session || null;
 
   try {

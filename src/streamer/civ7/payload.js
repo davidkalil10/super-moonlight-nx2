@@ -340,6 +340,14 @@ export async function runBridge(runtime, configuration) {
           createSettingsStore: runtime.createSettingsStore, uiLayout: runtime.uiLayout, readBuffer, now}, request);
         if (retained.connectionLost) ui.dispatch({type: 'connectionLost'});
         return ui.snapshot();
+      case 'settings-load': {
+        if (depth) throw Error('Settings cannot be loaded in a batch');
+        const rules = runtime.createSettingsCore(runtime.settingValues);
+        const store = runtime.createSettingsStore({address, checkMemory, verified, call, read64, write32,
+          writeBuffer, readMemory, encode, decode}, /** @type {{memory: unknown, functions: Record<string, unknown>}} */ (
+          request.store), rules);
+        return {settings: store.load()};
+      }
       case 'ui-event':
         if (!ui) throw Error('Console UI is not initialized');
         ui.dispatch(/** @type {Parameters<typeof ui.dispatch>[0]} */ (request.event));

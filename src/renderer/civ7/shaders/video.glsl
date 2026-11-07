@@ -39,8 +39,9 @@ vec3 toRgb(float luma, vec2 chroma) {
 void main() {
   uvec2 size = uvec2(slotWord(SLOT_WIDTH), slotWord(SLOT_HEIGHT));
   uint stride = slotWord(SLOT_STRIDE);
-  float scale = min(DISPLAY_SIZE.x / float(size.x), DISPLAY_SIZE.y / float(size.y));
-  vec2 s = (gl_FragCoord.xy - (DISPLAY_SIZE - vec2(size) * scale) * 0.5) / scale;
+  vec2 target = targetSize();
+  float scale = min(target.x / float(size.x), target.y / float(size.y));
+  vec2 s = (gl_FragCoord.xy - (target - vec2(size) * scale) * 0.5) / scale;
   if (any(lessThan(s, vec2(0))) || any(greaterThanEqual(s, vec2(size)))) {
     color = vec4(0, 0, 0, 1);
     return;

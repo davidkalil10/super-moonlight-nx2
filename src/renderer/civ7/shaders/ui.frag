@@ -10,13 +10,18 @@ vec4 rgba(uint value) {
               value >> 24u) /
          255.0;
 }
+// The pixel of a `rect` bitmap under UI point p, clamped where a scaled edge rounds outside it.
+uvec2 texel(vec2 p, uvec4 rect) {
+  ivec2 q = ivec2(p) - ivec2(rect.xy);
+  return uvec2(clamp(q, ivec2(0), ivec2(rect.zw) - 1));
+}
 float roundedBox(vec2 p, vec2 halfSize, float radius) {
   vec2 q = abs(p) - halfSize + radius;
   return min(max(q.x, q.y), 0.0) + length(max(q, 0.0)) - radius;
 }
 void main() {
   uint base = pageBase();
-  vec2 p = gl_FragCoord.xy;
+  vec2 p = gl_FragCoord.xy * (DISPLAY_SIZE / targetSize());
   if (info.x == 0u) {
     color = rgba(info.z);
     if ((info.w & 1u) != 0u) {
@@ -24,7 +29,7 @@ void main() {
       color = vec4(color.rgb * color.a / alpha, alpha);
     }
   } else if (info.x == 1u || info.x == 2u) {
-    uvec2 q = uvec2(p) - rect.xy;
+    uvec2 q = texel(p, rect);
     uint pixel = q.y * rect.z + q.x;
     uint offset = info.y + pixel * (info.x == 1u ? 4u : 1u);
     uint packed = word(base + 1024u + offset / 4u);
@@ -53,7 +58,7 @@ void main() {
         color.rgb /= color.a;
     }
   } else if (info.x == 5u) {
-    uvec2 q = uvec2(p) - rect.xy;
+    uvec2 q = texel(p, rect);
     color = rgba(word(BADGE_PIXELS + q.y * rect.z + q.x));
   } else {
     vec2 d = p - (vec2(rect.xy) + vec2(rect.zw) * 0.5);

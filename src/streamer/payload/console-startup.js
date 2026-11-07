@@ -4,7 +4,8 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import {resolveCompatibility, functionResolver} from '../civ7/modules.js';
-import {createDisplay, ledgerDestroy} from '../civ7/display.js';
+import {createDisplay, displaySize, ledgerDestroy, DEFAULT_SIZE} from '../civ7/display.js';
+import {TARGET} from '../../renderer/civ7/layout.js';
 import {createRendererPipelines} from '../civ7/renderer-pipelines.js';
 import {loadRenderer} from '../../renderer/civ7/bundle.js';
 import {fillConsoleStorage} from './asset-upload.js';
@@ -30,6 +31,8 @@ const sha256 = (/** @type {Buffer} */ bytes) => crypto.createHash('sha256').upda
  * @property {CompatTable} [table] The compat table, for tests.
  * @property {boolean} [destroyDisplay] Allows tearing down a display stage the ledger cannot
  *   reuse; off by default, since destroying a swapchain once crashed the console.
+ * @property {{width: number, height: number}} [layerSize] The size a new display opens at; a
+ *   retained one keeps its own (civ7/README.md, "Layer size").
  * @property {(event: object) => void} [log]
  * @property {(name: string) => void} [mark] startup-timing.js marks
  */
@@ -59,11 +62,39 @@ function ledgerStatus(reply) {
 }
 
 /**
+ * Tells the shaders the layer's size (layout.js TARGET); storage persists, so this runs on reuse too.
+ * @param {Pick<Civ7Rpc, 'write'>} rpc
+ * @param {PipelineGpu} gpu
+ * @param {{width: number, height: number}} layer
+ */
+async function writeTarget(rpc, gpu, layer) {
+  const words = Buffer.alloc(8);
+  words.writeUInt32LE(layer.width, 0);
+  words.writeUInt32LE(layer.height, 4);
+  if (TARGET.height !== TARGET.width + 4) throw Error('Target words are not adjacent');
+  await rpc.write(gpu.privateStorage.mapped + TARGET.width, words);
+}
+
+/**
+ * The retained display's size against the one this startup would open; the retained one wins.
+ * @param {DisplayResult} display
+ * @param {{width: number, height: number}} wanted
+ * @param {(event: object) => void} log
+ */
+function keptLayer(display, wanted, log) {
+  const layer = displaySize(display);
+  const same = layer.width === wanted.width && layer.height === wanted.height;
+  if (!same) log({event: 'layer-retained', size: layer, wanted});
+  return layer;
+}
+
+/**
  * @param {ConsoleStartupOptions} options
- * @returns {Promise<{menu: PipelineMenu, gpu: PipelineGpu, reused: 'all' | 'display' | 'none'}>}
+ * @returns {Promise<{menu: PipelineMenu, gpu: PipelineGpu, reused: 'all' | 'display' | 'none',
+ *   layer: {width: number, height: number}}>}
  */
 export async function prepareConsoleGraphics({rpc, directory, compatCache, inspector, table,
-  destroyDisplay = false, log = () => {}, mark = () => {}}) {
+  destroyDisplay = false, layerSize = DEFAULT_SIZE, log = () => {}, mark = () => {}}) {
   const assets = loadRenderer().then(loaded => {
     mark('assets');
     return loaded;
@@ -87,9 +118,11 @@ export async function prepareConsoleGraphics({rpc, directory, compatCache, inspe
     const session = rpc.a.session;
     const menu = {...status.app.menu, session};
     const gpu = {...status.app.gpu, session};
+    const layer = keptLayer(status.display, layerSize, log);
     logVideoPath(gpu, log);
+    await writeTarget(rpc, gpu, layer);
     await writeReports(directory, {display: status.display, menu});
-    return {menu, gpu, reused: 'all'};
+    return {menu, gpu, reused: 'all', layer};
   }
 
   /** @param {'display' | 'app'} stage @param {LedgerObject[]} objects */
@@ -108,7 +141,8 @@ export async function prepareConsoleGraphics({rpc, directory, compatCache, inspe
     if (!destroyDisplay) throw Error('The console holds graphics this startup cannot reuse; restart Civ7');
     await reap(ledger, true);
   }
-  const display = reusable || await buildDisplay(rpc, {resolve, tableHash, ledger, record, log});
+  const display = reusable || await buildDisplay(rpc, {resolve, tableHash, ledger, record, log, size: layerSize});
+  const layer = keptLayer(display, layerSize, log);
 
   log({event: 'startup', stage: 'interface'});
   await ledger('begin', {stage: 'app', tableHash, blobHash});
@@ -128,10 +162,11 @@ export async function prepareConsoleGraphics({rpc, directory, compatCache, inspe
     input: controls,
     storage: {address: gpu.privateStorage.mapped, bytes: gpu.privateStorage.bytes}});
   log({event: 'startup', stage: 'storage', ...filled});
+  await writeTarget(rpc, gpu, layer);
   await ledger('commit', {stage: 'app', result: {menu, gpu}});
 
   await writeReports(directory, {display, menu});
-  return {menu, gpu, reused: status.reuse};
+  return {menu, gpu, reused: status.reuse, layer};
 }
 
 /**
@@ -147,13 +182,13 @@ function logVideoPath(gpu, log) {
  * @param {Civ7Rpc} rpc
  * @param {{resolve: (name: string) => Promise<number>, tableHash: string,
  *   ledger: Ledger, record: (stage: 'display', objects: LedgerObject[]) => Promise<void>,
- *   log: (event: object) => void}} options
+ *   log: (event: object) => void, size: {width: number, height: number}}} options
  */
-async function buildDisplay(rpc, {resolve, tableHash, ledger, record, log}) {
+async function buildDisplay(rpc, {resolve, tableHash, ledger, record, log, size}) {
   await ledger('begin', {stage: 'display', tableHash});
   let built;
   try {
-    built = await createDisplay(rpc, {resolve});
+    built = await createDisplay(rpc, {resolve, size});
   } catch (error) {
     const objects = /** @type {{objects?: DisplayObject[]}} */ (error).objects;
     if (objects?.length) await record('display', objects);
@@ -162,7 +197,8 @@ async function buildDisplay(rpc, {resolve, tableHash, ledger, record, log}) {
 
   await record('display', built.objects);
   await ledger('commit', {stage: 'display', result: built.display});
-  log({event: 'startup', stage: 'display', requests: built.requests, cleared: built.display.frames.cleared});
+  log({event: 'startup', stage: 'display', requests: built.requests, cleared: built.display.frames.cleared,
+    size});
   return built.display;
 }
 

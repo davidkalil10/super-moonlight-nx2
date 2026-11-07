@@ -108,19 +108,19 @@
   },
   "blob": {
     "path": "shaders.bin",
-    "bytes": 54336,
-    "sha256": "adf4c8867f87d033afb3669bdbbc17260b679704be8e5b3f64960b14e756375c"
+    "bytes": 55984,
+    "sha256": "d04513edee87965dd12ccef1edcee37369e9fd2fe7559779c03aa424df72db38"
   },
   "sources": {
     "publish.comp": "229bde753bc835c376e0fa0f1d0b7b9cb271ccdac9887d22a972f9db97df24ef",
-    "storage.glsl": "2e9a8ea342d096211b06237c174ac759c46d4e135924b396dc685b6854060441",
+    "storage.glsl": "658498c8dc65f563d8c32e679158df5401bd2be57be03590f7834f45bc774bf5",
     "ui-control.glsl": "ed2c330c815fa4d03aec697205edc62c855ce2065f17838a1795f435c80fc2f7",
-    "ui.frag": "bafbbacc7a82daa9b5d32f672cd467cd0ea07be34a442c70b946afd328c1f64d",
+    "ui.frag": "9b7a31dbbfaa77a997021d889b9bfc3a2f5e861be25d3490ad5955754f7f0547",
     "ui.vert": "72c54ef4b2adab42b5ad2ec1ce49b27222931d946a12a732f67ab129d37e1ac6",
     "video-storage.frag": "bd7c0b6877d11fafa3d691d01498d5039651f434d6dcba9fdcf7ed66d0b5fdb9",
     "video.frag": "eb48b715e2c0bbfa9591cf40c0757dbd65b166ca1e8effed1b4cd53cb0f880d5",
-    "video.glsl": "4b01864c1c238099af0587d4dc16e82eb18741f523df2858a1c254ba3ef5bd9b",
+    "video.glsl": "f7ae24c9af7e54344f301fb6d043f79d40edad4d5f3bfdf1ecae3f1c9ac28d90",
     "video.vert": "42ad90b7b67d11b2472c65f366a14565b304db527a56274da5b099703be18d52",
-    "layout.glsl": "dd3de9e9bcef7cce9a85014a61ad863b9e058c00c8ca97599f82e66e277e2c7f"
+    "layout.glsl": "de384977a606f4ce88b6981437b34ae1841c5f74ed03d885b44f0deff8df3826"
   }
 }
