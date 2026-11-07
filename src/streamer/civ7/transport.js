@@ -2,7 +2,7 @@ import net from 'node:net';
 import crypto from 'node:crypto';
 import {FrameReader, encodeFrame, isReply, replyArray, replyInteger, replyString, MEMORY_CHUNK_BYTES,
   UPLOAD_CHUNK_BYTES} from './protocol.js';
-import {buildPayload} from './payload.js';
+import {buildPayload, ALLOCATION_LIMITS} from './payload.js';
 
 /** @import {Civ7Frame, Civ7Reply} from './protocol.js' */
 
@@ -22,7 +22,7 @@ import {buildPayload} from './payload.js';
 /**
  * The part of the resource ledger the transport drives (resources.js createResourceLedger).
  * @typedef {object} AllocationJournal
- * @property {(size: number, alignment: number) => Promise<string>} prepareAllocation
+ * @property {(size: number, alignment: number, purpose?: 'av1-workspace') => Promise<string>} prepareAllocation
  * @property {(key: string, pointer: number | bigint, bytes: number) => Promise<void>} allocated
  * @property {(pointer: NativeValue) => string | undefined} releaseKey
  * @property {(pointer: NativeValue) => Promise<void>} released
@@ -181,16 +181,20 @@ export class Civ7Rpc {
   }
 
   /**
+   * `purpose: 'av1-workspace'` lifts the 128 MiB cap to the AV1 level table's largest workspace.
    * @param {number} size
+   * @param {{align?: number, purpose?: 'av1-workspace'}} [options]
    * @returns {Promise<number>}
    */
-  async allocate(size, {align = 0x1000} = {}) {
-    if (!Number.isInteger(size) || size < 1 || size > 128 * 1024 * 1024 ||
-        !Number.isInteger(align) || align < 8 || align > 2 * 1024 * 1024 || (align & (align - 1)))
-      throw Error('Invalid console allocation size or alignment');
-    const cleanupKey = await this.resources?.prepareAllocation(size, align);
+  async allocate(size, {align = 0x1000, purpose = undefined} = {}) {
+    const limit = purpose === 'av1-workspace' ? ALLOCATION_LIMITS.av1Workspace : ALLOCATION_LIMITS.default;
+    const sizeOk = Number.isInteger(size) && size >= 1 && size <= limit;
+    const alignOk = Number.isInteger(align) && align >= 8 && align <= 2 * 1024 * 1024 && !(align & (align - 1));
+    if (!sizeOk || !alignOk) throw Error('Invalid console allocation size or alignment');
+
+    const cleanupKey = await this.resources?.prepareAllocation(size, align, purpose);
     const reply = await this.request({command: 'allocate', size, alignment: align,
-      ...(cleanupKey ? {cleanupKey} : {})});
+      ...(purpose ? {purpose} : {}), ...(cleanupKey ? {cleanupKey} : {})});
     const pointer = Number(replyInteger(reply, 'address'));
     if (cleanupKey) await this.resources?.allocated(cleanupKey, pointer, size);
     return pointer;

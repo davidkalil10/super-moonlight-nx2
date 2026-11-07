@@ -60,6 +60,14 @@ export function workspaceBytes(width, height) {
   return mebibytes * MIB;
 }
 
+/** The largest workspace the level table names; the bridge lets only the AV1 workspace go above 128 MiB. */
+export function workspaceLimit() {
+  const table = Buffer.from(streamTable.workspace.table.hex, 'hex');
+  const levels = Array.from({length: streamTable.workspace.levels}, (_, index) =>
+    Number(table.readBigUInt64LE(0x28 + index * 8)));
+  return Math.max(...levels) * MIB;
+}
+
 /** The transfer memory a stream registers: the native size, never below the proven 64 MiB. */
 export function transferBytes(/** @type {number} */ width, /** @type {number} */ height) {
   return Math.max(workspaceBytes(width, height), PROVEN_TRANSFER_BYTES);
@@ -154,9 +162,9 @@ export async function createAv1Decoder({rpc, directory, width, height, display =
     return result;
   }
 
-  /** @param {number} bytes @param {number} [alignment] */
-  async function allocate(bytes, alignment = 0x1000) {
-    const pointer = await rpc.allocate(bytes, {align: alignment});
+  /** @param {number} bytes @param {number} [alignment] @param {'av1-workspace'} [purpose] */
+  async function allocate(bytes, alignment = 0x1000, purpose = undefined) {
+    const pointer = await rpc.allocate(bytes, {align: alignment, ...(purpose ? {purpose} : {})});
     owned.push(pointer);
     return pointer;
   }
@@ -244,7 +252,7 @@ export async function createAv1Decoder({rpc, directory, width, height, display =
     if (!state.session || state.session === manager) throw Error('Invalid AV1 decoder session');
     await rpc.resources?.register(state.control, functions.close, [state.session], 0);
 
-    state.memory = await allocate(workspace);
+    state.memory = await allocate(workspace, 0x1000, 'av1-workspace');
     const transfer = await native('transfer', [state.control + CONTROL.transferHandle, state.memory, workspace]);
     if (transfer) throw Error('Cannot create the AV1 transfer memory: ' + hex(transfer));
     state.transfer = (await rpc.read(state.control + CONTROL.transferHandle, 4)).readUInt32LE();

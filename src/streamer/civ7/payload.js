@@ -29,6 +29,7 @@ import {udpProbe} from './udp-probe.js';
 import {createUdpReceiver} from './udp-receiver.js';
 import {createOverlay} from './rate-badge.js';
 import {runtimeCapabilities, mediaCapabilities} from './runtime-capabilities.js';
+import {workspaceLimit} from './av1-decoder.js';
 
 /** @import {ConsoleRequest, LoaderRuntime} from './console-runtime.js' */
 /** @import {GraphicsRecord} from './graphics-ledger.js' */
@@ -36,6 +37,9 @@ import {runtimeCapabilities, mediaCapabilities} from './runtime-capabilities.js'
 /** @import {AudioOutRecord} from './audio-out-record.js' */
 
 /** @typedef {{host: string, port: number, token: string, nativeStackBytes?: number}} PayloadConfiguration */
+
+/** Bridge allocations stay under 128 MiB; only the AV1 workspace may take the level table's largest. */
+export const ALLOCATION_LIMITS = {default: 128 * 1024 * 1024, av1Workspace: workspaceLimit()};
 
 /**
  * What survives in window.__moonlightState between payload sends in one app process.
@@ -72,7 +76,8 @@ import {runtimeCapabilities, mediaCapabilities} from './runtime-capabilities.js'
  *   createUdpReceiver: typeof createUdpReceiver,
  *   runtimeCapabilities: typeof runtimeCapabilities,
  *   mediaCapabilities: typeof mediaCapabilities,
- *   publicationLayout: Parameters<typeof videoStream>[0]['publicationLayout']
+ *   publicationLayout: Parameters<typeof videoStream>[0]['publicationLayout'],
+ *   allocationLimits: typeof ALLOCATION_LIMITS
  * }} BridgeRuntime
  */
 
@@ -430,7 +435,9 @@ export async function runBridge(runtime, configuration) {
         }
       }
       case 'allocate': {
-        const size = integer(request.size, 1, 128 * 1024 * 1024);
+        const workspace = request.purpose === 'av1-workspace';
+        const limits = runtime.allocationLimits;
+        const size = integer(request.size, 1, workspace ? limits.av1Workspace : limits.default);
         const alignment = integer(request.alignment, 8, 2 * 1024 * 1024);
         if ((alignment & (alignment - 1)) !== 0) throw Error('Alignment must be a power of two');
         const raw = allocate(size + alignment - 1);
@@ -675,7 +682,8 @@ export function buildPayload(configuration) {
     createUdpReceiver: ${createUdpReceiver.toString()},
     createOverlay: ${createOverlay.toString()},
     publicationLayout: ${JSON.stringify({control: ring.CONTROL, frameBytes: ring.FRAME_BYTES,
-      framesOffset: ring.FRAMES_OFFSET, nativeABI: ring.NATIVE_ABI})}
+      framesOffset: ring.FRAMES_OFFSET, nativeABI: ring.NATIVE_ABI})},
+    allocationLimits: ${JSON.stringify(ALLOCATION_LIMITS)}
   }, ${JSON.stringify(configuration)})`;
   const execution = !configuration.nativeStackBytes ? bridge : `(${withNativeStack.toString()})({
     sdk: sdk_base, allocate: malloc, release: free, call: call_rop, read64, read32,

@@ -8,7 +8,10 @@ import {replyInteger} from './protocol.js';
 
 /** @import {Civ7Rpc, NativeValue} from './transport.js' */
 
-/** @typedef {{key: string, size: number, alignment: number, reapFailures?: number}} PendingAllocation */
+/**
+ * @typedef {{key: string, size: number, alignment: number, purpose?: 'av1-workspace', reapFailures?: number}}
+ *   PendingAllocation
+ */
 
 /**
  * A cleanup call replayed on the next attach; `terminal` drops every call on the same object.
@@ -174,9 +177,10 @@ export async function createResourceLedger(rpc, file, log = () => {}) {
     /**
      * @param {number} size
      * @param {number} alignment
+     * @param {'av1-workspace'} [purpose]
      */
-    async prepareAllocation(size, alignment) {
-      const pending = {key: crypto.randomUUID(), size, alignment};
+    async prepareAllocation(size, alignment, purpose = undefined) {
+      const pending = {key: crypto.randomUUID(), size, alignment, ...(purpose ? {purpose} : {})};
       state.pendingAllocations.push(pending);
       await save();
       return pending.key;
@@ -309,7 +313,8 @@ export async function createResourceLedger(rpc, file, log = () => {}) {
       for (const pending of [...state.pendingAllocations]) {
         try {
           const reply = await rpc.request({command: 'allocate', size: pending.size,
-            alignment: pending.alignment, cleanupKey: pending.key});
+            alignment: pending.alignment, ...(pending.purpose ? {purpose: pending.purpose} : {}),
+            cleanupKey: pending.key});
           await ledger.allocated(pending.key, replyInteger(reply, 'address'), pending.size);
         } catch (error) {
           failed(asError(error));
