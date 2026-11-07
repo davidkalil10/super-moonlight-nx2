@@ -14,8 +14,10 @@
  *   style?: TextStyle) => Bitmap,
  *   legend: (keys: [string, string][], size: number, width: number) => Bitmap,
  *   letters: (text: string, width: number, height: number) => Bitmap}} Painter
+ * @typedef {{handheld: Record<string, [boolean, boolean]>, docked: Record<string, [boolean, boolean]>}} SettingEnds
+ *   Per JSON value, whether a step left and right changes it, in each operation mode.
  * @typedef {{id: string, label: string, adjustable: boolean, greyed: boolean,
- *   texts: Record<string, string>}} SettingText
+ *   texts: Record<string, string>, ends: SettingEnds}} SettingText
  * @typedef {{rows: SettingText[], auto: Record<string, string>}} SettingTexts
  * @typedef {{item: Record<string, number>, keys: string, isAddress: (entry: string) => boolean,
  *   appsPerPage: number, hostsPerPage: number, settingTexts: SettingTexts, layout: {PAGE_FLAG: Record<string, number>,
@@ -26,13 +28,16 @@
  * @typedef {{
  *   text: (x: number, y: number, label: string, size: number, width: number, color?: number,
  *     align?: Align, style?: TextStyle) => PageBuilder,
+ *   stepper: (x: number, y: number, value: string, size: number, width: number, canLeft: boolean,
+ *     canRight: boolean) => PageBuilder,
  *   solid: (x: number, y: number, w: number, h: number, color: number) => PageBuilder,
  *   legend: (x: number, y: number, keys: [string, string][], color?: number) => PageBuilder,
  *   image: (x: number, y: number, tile: Bitmap) => PageBuilder,
  *   item: (item: Item) => PageBuilder,
  *   build: () => ComposedPage
  * }} PageBuilder
- * @typedef {{id: string, label: string, value: string, adjustable: boolean, greyed: boolean}} SettingRow
+ * @typedef {{id: string, label: string, value: string, adjustable: boolean, greyed: boolean,
+ *   canLeft: boolean, canRight: boolean}} SettingRow
  * @typedef {[string | undefined, number, number]} Chip
  * @typedef {{y?: number, size?: number, color?: number, tracking?: number}} HeadingStyle
  */
@@ -150,6 +155,55 @@ function createPageComposer(painter, options) {
     return painted;
   }
 
+  /**
+   * `‹   value   ›` centred in the width, painted whole so the value keeps its place, with the
+   * arrow that cannot step cleared: the first or last run of inked columns.
+   * @param {string} value @param {number} size @param {number} width
+   * @param {boolean} canLeft @param {boolean} canRight
+   * @returns {Bitmap}
+   */
+  function stepperStrip(value, size, width, canLeft, canRight) {
+    const whole = usePainter().text(`‹   ${value}   ›`, size, width, 'center', {weight: 700});
+    if (canLeft && canRight) return whole;
+
+    const bytes = Uint8Array.from(whole.bytes);
+    const stepper = {width: whole.width, height: whole.height, bytes};
+    if (!canLeft) clearColumns(stepper, inkRun(stepper, 0, 1));
+    if (!canRight) clearColumns(stepper, inkRun(stepper, stepper.width - 1, -1));
+    return stepper;
+  }
+
+  /** @param {Bitmap} bitmap @param {number} column */
+  function inked(bitmap, column) {
+    for (let row = 0; row < bitmap.height; row++)
+      if (bitmap.bytes[row * bitmap.width + column]) return true;
+    return false;
+  }
+
+  /**
+   * The columns of the first run of ink met walking from `from` in `step`.
+   * @param {Bitmap} bitmap @param {number} from @param {number} step
+   * @returns {number[]}
+   */
+  function inkRun(bitmap, from, step) {
+    const inside = (/** @type {number} */ column) => column >= 0 && column < bitmap.width;
+    let column = from;
+    while (inside(column) && !inked(bitmap, column)) column += step;
+
+    const run = [];
+    while (inside(column) && inked(bitmap, column)) {
+      run.push(column);
+      column += step;
+    }
+    return run;
+  }
+
+  /** @param {Bitmap} bitmap @param {number[]} columns */
+  function clearColumns(bitmap, columns) {
+    for (const column of columns)
+      for (let row = 0; row < bitmap.height; row++) bitmap.bytes[row * bitmap.width + column] = 0;
+  }
+
   /** @param {number} n @param {string} one @param {string} many */
   function count(n, one, many) {
     return `${n} ${n === 1 ? one : many}`;
@@ -183,17 +237,22 @@ function createPageComposer(painter, options) {
   }
 
   /**
-   * The settings page rows from the PC-made text table (pages.js `settingTexts`).
+   * The settings page rows from the PC-made text table (pages.js `settingTexts`), with the ways
+   * each value steps in the operation mode.
    * @param {Model['settings']} settings
+   * @param {boolean} [docked]
    * @returns {SettingRow[]}
    */
-  function settingRows(settings) {
+  function settingRows(settings, docked = false) {
     return SETTING_TEXTS.rows.map(row => {
       const value = settings[row.id];
       const text = value === 'auto'
         ? SETTING_TEXTS.auto[settings.size + '@' + settings.fps + '@' + settings.codec] ?? 'Auto'
         : row.texts[JSON.stringify(value)] ?? String(value);
-      return {id: row.id, label: row.label, value: text, adjustable: row.adjustable, greyed: row.greyed};
+      const ends = docked ? row.ends.docked : row.ends.handheld;
+      const [canLeft, canRight] = ends[JSON.stringify(value)] ?? [false, false];
+      return {id: row.id, label: row.label, value: text, adjustable: row.adjustable, greyed: row.greyed,
+        canLeft, canRight};
     });
   }
 
@@ -221,6 +280,12 @@ function createPageComposer(painter, options) {
         const {weight = 600, tracking = 0} = style;
         const key = ['t', label, size, width, align, weight, tracking].join('\u0000');
         return strip(x, y, color, remember(key, () => usePainter().text(label, size, width, align, {weight, tracking})));
+      },
+
+      /** A value between ‹ ›, an arrow cleared where it cannot step. */
+      stepper(x, y, value, size, width, canLeft, canRight) {
+        const key = ['v', value, size, width, canLeft, canRight].join('\u0000');
+        return strip(x, y, COLOR.ink, remember(key, () => stepperStrip(value, size, width, canLeft, canRight)));
       },
 
       /** A filled rectangle under the strips added after it. */
@@ -510,15 +575,18 @@ function createPageComposer(painter, options) {
   }
 
   /**
-   * One setting card: its label, then its value between ‹ › when it can change.
+   * One setting card: its label, then its value. The card being edited puts ‹ › around it, each
+   * arrow only where a step changes the value; the others clear both, so the value stays put.
    * @param {PageBuilder} page @param {SettingRow} row @param {number} i
+   * @param {boolean} editing The row A opened for left and right to step.
    */
-  function settingCard(page, row, i) {
+  function settingCard(page, row, i, editing) {
     const {x, y} = cardAt(i, SETTING_GRID.y, SETTING_GRID.gapY);
     const inner = CARDS.width - 2 * CARDS.pad;
     const left = x + CARDS.pad;
     let flags = 0;
     if (row.adjustable) flags |= ITEM_FLAG.adjustable;
+    if (row.adjustable && editing) flags |= ITEM_FLAG.editing;
     if (row.greyed) flags |= ITEM_FLAG.greyed;
 
     page.item({id: ITEM.setting + i, x, y, w: CARDS.width, h: CARDS.height, flags});
@@ -533,20 +601,31 @@ function createPageComposer(painter, options) {
       return;
     }
 
-    const value = row.adjustable ? `‹   ${row.value}   ›` : row.value;
-    page.text(left, y + 40, value, 40, inner, COLOR.ink, 'center', {weight: 700});
+    if (!row.adjustable) {
+      page.text(left, y + 40, row.value, 40, inner, COLOR.ink, 'center', {weight: 700});
+      return;
+    }
+
+    const canLeft = editing && row.canLeft;
+    const canRight = editing && row.canRight;
+    page.stepper(left, y + 40, row.value, 40, inner, canLeft, canRight);
   }
 
   /** @param {Model} model */
   function settings(model) {
+    const rows = settingRows(model.settings, model.docked);
+    const editing = rows.some(row => row.adjustable && row.id === model.editing);
+    /** @type {[string, string][]} */
+    const keys = editing ? [['◂▸', 'Change'], ['A', 'Done'], ['B', 'Done']]
+      : [['A', 'Edit'], ['B', 'Back'], ['Y', 'Reset']];
     const page = horizon({
       chips: [[model.host?.name, COLOR.ink, 300], ['Settings', COLOR.muted, 180]],
       note: model.settingsError ? 'Settings could not be saved: ' + model.settingsError
         : 'Applies to the next launch',
-      keys: [['◂▸', 'Change'], ['B', 'Back'], ['Y', 'Reset']],
+      keys,
       footer: '1080p60 is the reference shape'
     });
-    settingRows(model.settings).forEach((row, i) => settingCard(page, row, i));
+    rows.forEach((row, i) => settingCard(page, row, i, row.id === model.editing));
     return page.build();
   }
 

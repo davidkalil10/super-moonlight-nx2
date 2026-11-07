@@ -16,8 +16,26 @@ import * as uiSettings from './settings.js';
  */
 
 /**
+ * Which ways each value of a row steps, handheld and docked, as settings.js adjust() steps it.
+ * @param {import('./settings.js').Setting} setting
+ * @returns {import('./page-composer.js').SettingEnds}
+ */
+function settingEnds(setting) {
+  /** @type {import('./page-composer.js').SettingEnds} */
+  const ends = {handheld: {}, docked: {}};
+  for (const value of setting.values) {
+    const settings = {...uiSettings.defaults(), [setting.id]: value};
+    const [handheld] = uiSettings.rows(settings, false).filter(entry => entry.id === setting.id);
+    const [docked] = uiSettings.rows(settings, true).filter(entry => entry.id === setting.id);
+    ends.handheld[JSON.stringify(value)] = [handheld.canLeft, handheld.canRight];
+    ends.docked[JSON.stringify(value)] = [docked.canLeft, docked.canRight];
+  }
+  return ends;
+}
+
+/**
  * Every value text of the settings page, so the composer needs no catalog code: one text per row
- * value, and the Auto bitrate text per size and rate.
+ * value, the Auto bitrate text per size and rate, and the ends of every row.
  * @returns {import('./page-composer.js').SettingTexts}
  */
 function settingTexts() {
@@ -29,7 +47,8 @@ function settingTexts() {
       if (value === 'auto') continue;
       texts[JSON.stringify(value)] = setting.text(value, uiSettings.defaults());
     }
-    return {id: setting.id, label: setting.label, adjustable: row.adjustable, greyed: row.greyed, texts};
+    return {id: setting.id, label: setting.label, adjustable: row.adjustable, greyed: row.greyed, texts,
+      ends: settingEnds(setting)};
   });
 
   /** @type {Record<string, string>} */

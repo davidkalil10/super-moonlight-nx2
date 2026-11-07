@@ -25,6 +25,12 @@ at. Tests: `src/streamer/ui/test/` in moonlight-nx2-dev.
   only after the console reported docked (`operationMode` event); a save holding one stays when
   handheld and the launch falls back to 1080p with a badge (civ7/README.md, "Fallbacks"). They
   are not yet proven end to end on the console.
+  Settings are edited with A (user decision, Round 6): the D-pad moves across both columns, A on
+  an adjustable card sets `editing`, left/right then step it, A or B ends the edit. A dock change
+  keeps the edit; adjust() steps by the new mode. Locked and unbacked rows never edit.
+  Only the edited value shows arrows, `‹` and `›` only where adjust() would change it in the
+  current mode, so a handheld 1080p has no `›`. The composer paints the whole `‹   value   ›`
+  and clears the arrows not shown, so the value stays where it is in and out of an edit.
   Saves carry `version`; a save without the current version has its `formerDefaults` (the old
   20 Mbps bitrate default) replaced by today's fallback, so it gets Auto. Bump the version
   whenever a default changes. The frame rate is also the display rate; there is no present-rate row.

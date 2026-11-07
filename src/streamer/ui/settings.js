@@ -280,16 +280,23 @@ function createFileStore(file = settingsFile()) {
 }
 
 /**
- * The settings page rows: label, value text, and whether the row takes left/right.
+ * The settings page rows: label, value text, whether the row takes left/right, and which way a
+ * step would change the value, as adjust() steps it in this operation mode.
  * @param {Record<string, any>} settings
+ * @param {boolean} [docked]
  */
-function rows(settings) {
+function rows(settings, docked = false) {
+  /** @param {string} id @param {number} direction */
+  const moves = (id, direction) => adjust(settings, id, direction, docked)[id] !== settings[id];
+
   return CATALOG.map(setting => ({
     id: setting.id,
     label: setting.label,
     value: setting.text(settings[setting.id], settings),
     adjustable: !setting.locked && !setting.unbacked,
-    greyed: Boolean(setting.unbacked)
+    greyed: Boolean(setting.unbacked),
+    canLeft: moves(setting.id, -1),
+    canRight: moves(setting.id, 1)
   }));
 }
 

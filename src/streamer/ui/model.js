@@ -14,7 +14,8 @@ import * as settingsRules from './settings.js';
  *   app: App | null, appPage: number, appIndex: number, hostPage: number, hostIndex: number,
  *   pin: string | null, url: string | null, entry: string,
  *   message: string | null, back: string, from: string, overlay: boolean,
- *   settings: Record<string, any>, settingsError?: string | null, docked: boolean
+ *   settings: Record<string, any>, settingsError?: string | null, docked: boolean,
+ *   editing: string | null
  * }} Model
  * @typedef {{op: string, item: number, value: number}} Command
  * @typedef {{apps: App[], currentGame: number, message?: string | null}} Listed
@@ -29,7 +30,7 @@ import * as settingsRules from './settings.js';
  *   | {type: 'operationMode', docked: boolean}
  *   | {type: 'failed', message: string, back?: string}} Event
  * @typedef {Record<string, any>} Settings
- * @typedef {{rows: {id: string}[], defaults: () => Settings,
+ * @typedef {{rows: {id: string, locked: boolean, unbacked: boolean}[], defaults: () => Settings,
  *   adjust: (settings: Settings, id: string, direction: number, docked?: boolean) => Settings}} Rules
  */
 
@@ -96,7 +97,8 @@ function createMachine(rules) {
       from: 'hosts',
       overlay: false,
       settings,
-      docked: false
+      docked: false,
+      editing: null
     };
   }
 
@@ -289,15 +291,32 @@ function createMachine(rules) {
   }
 
   /**
-   * ADJUST on a setting changes and saves it; Y resets all of them; B goes back.
+   * A on a setting that can change edits it; Y resets all of them; B goes back.
    * @param {Model} model @param {Command} command @returns {Step}
    */
-  function onSettingsCommand(model, {op, item, value}) {
+  function onSettingsCommand(model, command) {
+    if (model.editing) return onEditCommand(model, command);
+
+    const {op, item} = command;
     if (op === 'b') return next(model, {screen: model.from});
     if (op === 'y') return next(model, {settings: rules.defaults()}, [{type: 'saveSettings'}]);
 
     const setting = rules.rows[item - ITEM.setting];
-    if (op !== 'adjust' || !setting) return same(model);
+    const editable = setting && !setting.locked && !setting.unbacked;
+    if (op === 'a' && editable) return next(model, {editing: setting.id});
+    return same(model);
+  }
+
+  /**
+   * While a setting is edited, ADJUST on it steps, changes and saves it; A or B ends the edit and
+   * the rest waits for it. The edit outlives a dock change: adjust() steps by the new mode.
+   * @param {Model} model @param {Command} command @returns {Step}
+   */
+  function onEditCommand(model, {op, item, value}) {
+    if (op === 'a' || op === 'b') return next(model, {editing: null});
+
+    const setting = rules.rows[item - ITEM.setting];
+    if (op !== 'adjust' || setting?.id !== model.editing) return same(model);
 
     const settings = rules.adjust(model.settings, setting.id, value, model.docked);
     if (settings === model.settings) return same(model);
@@ -333,7 +352,7 @@ function createMachine(rules) {
   function onCommand(model, command) {
     const {op} = command;
     if (op === 'x' && ['hosts', 'apps'].includes(model.screen))
-      return next(model, {screen: 'settings', from: model.screen});
+      return next(model, {screen: 'settings', from: model.screen, editing: null});
 
     switch (model.screen) {
       case 'hosts':
