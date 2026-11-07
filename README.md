@@ -3,22 +3,35 @@
 Stream PC games from Sunshine to Nintendo Switch 2, with controller, touch and stereo audio.
 Runs through the CivSwitch loader in Civilization VII.
 
+## Build
+
+On Linux, install Node.js 22.12+, Git, CMake, a C compiler, Make and Podman.
+GitHub and GitLab SSH access is needed to fetch the source.
+
+```sh
+git clone git@gitlab.com:Azkali/moonlight-nx2.git
+cd moonlight-nx2
+npm ci
+npm run bundle -- --host HOST_IP
+```
+
+Replace `HOST_IP` with this computer's LAN IP. The build creates a complete bundle under
+`dist/` and prints its path and launch command. [Build options](BUILDING.md).
+
 ## Run
 
 You need Sunshine on your gaming PC, Node.js 22.12+ on the computer running the bundle,
 and the CivSwitch loader open on your Switch. Container bundles also need Podman.
 
-[Build a bundle](BUILDING.md), then run this on your computer:
+From the generated bundle directory, run:
 
 ```sh
-cd bundle
 node launch.mjs SWITCH_IP
 ```
 
 Replace `SWITCH_IP` with your Switch's IP address. Choose your PC in Moonlight, pair it
 using the PIN in Sunshine, then select a game.
 
-- **A**: select or edit a setting. **B**: go back.
 - **Hold L+R**: open the stream menu.
 - **L+R+Minus+Plus**: stop streaming.
 

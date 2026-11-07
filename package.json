@@ -6,6 +6,7 @@
     "node": ">=22.12"
   },
   "scripts": {
+    "bundle": "node build-bundle.mjs",
     "test": "MOONLIGHT_APP=$PWD npm --prefix ../moonlight-nx2-dev test",
     "typecheck": "tsc -p tsconfig.json",
     "typecheck:strict": "node typecheck-strict.mjs"

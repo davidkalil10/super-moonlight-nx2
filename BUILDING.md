@@ -1,78 +1,29 @@
-# Build a bundle
+# Build options
 
-These instructions build a Linux host bundle. You need Node.js 22.12+, npm, Git and
-rootless Podman. The image supplies the C toolchain. GitLab and GitHub SSH access must work.
-The committed shaders are included; you do not need shader tools for a normal build.
+The copy-paste build steps are in the [README](README.md#build).
+`npm run bundle` builds the helper and inspector, then packages the payload and shaders.
+No previous bundle or separate libnx2 checkout is required.
 
-You also need the `nx2-modules` inspector. Reuse `bin/nx2-modules` from a working bundle.
-Building it from source requires a libnx2 development checkout with the `nx2-modules`
-CMake target; the current public libnx2 release does not include that tool.
-
-## Get the source
-
-```sh
-git clone git@gitlab.com:Azkali/moonlight-nx2.git
-cd moonlight-nx2
-npm ci
-```
-
-Create a fresh output directory. Keep using this shell for the following commands:
+| Option | Default | Purpose |
+| --- | --- | --- |
+| `--host HOST_IP` | Required | LAN address of the computer running the bundle |
+| `--directory PATH` | `dist/<timestamp>-<revision>` | New build directory; contains the finished `bundle/` |
+| `--port NUMBER` | `39380` | Payload connection port on that computer |
+| `--transport udp` or `tcp` | `udp` | Initial video transport; the console setting can override it |
 
 ```sh
-build="/media/storage2/builds/moonlight/$(date -u +%Y%m%dT%H%M%SZ)-$(git rev-parse --short HEAD)-bundle"
-mkdir -p "$build"
+npm run bundle -- --host HOST_IP --directory /path/to/new-build
 ```
 
-## Build the helper
+The build directory keeps `build.log`, `BUILD-INFO.json`, intermediate builds and the final
+bundle. The bundle manifest records source revision and file hashes. Keep the Podman image
+`localhost/hbmoonlight-build:latest` available when running it. Moving the bundle to another
+computer requires that image and a matching CPU architecture.
 
-The helper is compiled in the same container image that will run it:
-
-```sh
-src/streamer/protocol/fetch.sh "$build/upstream"
-
-podman build -t localhost/hbmoonlight-build:latest \
-  -f src/streamer/protocol/Containerfile src/streamer/protocol
-
-podman run --rm --userns=keep-id --security-opt label=disable \
-  -v "$PWD:/src:ro" -v "$build:/work" \
-  localhost/hbmoonlight-build:latest bash -e -c '
-    cmake -S /src/src/streamer/protocol -B /work/helper \
-      -DUPSTREAM_DIR=/work/upstream -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF
-    cmake --build /work/helper --parallel
-  '
-
-```
-
-## Create the bundle
-
-Replace `HOST_IP` with the LAN IP of the computer that will run the bundle. The Switch
-must be able to reach it. Sunshine can run on that computer or another PC.
-Replace `/path/to/nx2-modules` with the inspector from your working bundle.
-
-```sh
-node src/streamer/payload/build.js \
-  --directory "$build/bundle" \
-  --host HOST_IP \
-  --helper "$build/helper/hbmoonlight" \
-  --inspector /path/to/nx2-modules \
-  --image localhost/hbmoonlight-build:latest
-```
-
-The result is `$build/bundle`. Its manifest records the source revision, builder, command
-and file hashes. Run it with:
-
-```sh
-node "$build/bundle/launch.mjs" SWITCH_IP
-```
-
-Replace `SWITCH_IP` with the Switch's IP address. The runtime needs Node.js and the Podman
-image above. If you move the bundle to another computer, build the same image there.
-The helper binary must match that computer's architecture.
-
-If you already have a compatible `hbmoonlight` and `nx2-modules`, skip compiling them and
-pass their absolute paths to `--helper` and `--inspector`. Omit `--image` only when the
-helper's shared libraries are installed on the runtime computer. Always pass `--helper`;
-the current default points to a development-machine build.
+The inspector is built from the ISC-licensed libnx2 module-inspection subset under
+`src/inspector/libnx2/`; `SOURCE.json` records the source file hashes. Shaders are already
+compiled in the repository. If changing them, install `glslc` and `spirv-val`, then run
+`node src/renderer/civ7/build.js --directory NEW_BUILD_DIR --install` before building a bundle.
 
 ## Host resolution matching
 
