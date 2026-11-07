@@ -8,6 +8,8 @@ import {planReply} from './call-plan.js';
 
 const DISPLAY_WIDTH = 1920;
 const DISPLAY_HEIGHT = 1080;
+const LAYER_MAX_WIDTH = 0xf00;
+const LAYER_MAX_HEIGHT = 0x870;
 const LAYER_BYTES = 0x2000;
 const LAYER_SETTINGS_OFFSET = 0x1000;
 const LAYER_NAME_OFFSET = 0x1100;
@@ -227,9 +229,28 @@ export const DISPLAY_FUNCTIONS = [...new Set([...Object.values(VI), 'vkCreateIns
  * @property {string} pool
  * @property {string} command
  * @property {{index: number, cleared: number[]}} frames The first image and every one cleared.
+ * @property {Size} [size] The layer, surface and swapchain extent; 1920x1080 when absent (a display
+ *   an older payload retained).
  */
 
 const hex = (/** @type {number | bigint | string} */ value) => '0x' + BigInt(value).toString(16);
+
+/** The layer size unless a docked stream above 1080p asks for its own. */
+export const DEFAULT_SIZE = Object.freeze({width: DISPLAY_WIDTH, height: DISPLAY_HEIGHT});
+
+/**
+ * The extent a display stage opened at, as its result records it.
+ * @param {{size?: unknown}} display
+ * @returns {Size}
+ */
+export function displaySize(display) {
+  const size = /** @type {Partial<Size> | undefined} */ (display.size);
+  const widthOk = Number.isInteger(size?.width) && Number(size?.width) >= 1;
+  const heightOk = Number.isInteger(size?.height) && Number(size?.height) >= 1;
+  if (!size || !widthOk || !heightOk) return {...DEFAULT_SIZE};
+
+  return {width: Number(size.width), height: Number(size.height)};
+}
 
 /**
  * @param {number} size
@@ -263,9 +284,11 @@ const semaphoreInfo = () => struct(24, TYPE.semaphoreCreateInfo);
 const beginInfo = () => struct(32, TYPE.commandBufferBeginInfo, {16: COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT});
 const surfaceInfo = () => struct(32, TYPE.viSurfaceCreateInfoNN);
 
-/** @param {{images: number, presentMode: number}} fields */
-const swapchainInfo = ({images, presentMode}) => struct(104, TYPE.swapchainCreateInfoKHR, {
-  [FIELD.swapchainImages]: images, 36: FORMAT_R8G8B8A8_UNORM, 44: DISPLAY_WIDTH, 48: DISPLAY_HEIGHT, 52: 1,
+/** @typedef {{width: number, height: number}} Size */
+
+/** @param {{images: number, presentMode: number, size: Size}} fields */
+const swapchainInfo = ({images, presentMode, size}) => struct(104, TYPE.swapchainCreateInfoKHR, {
+  [FIELD.swapchainImages]: images, 36: FORMAT_R8G8B8A8_UNORM, 44: size.width, 48: size.height, 52: 1,
   56: IMAGE_USAGE_RENDER_AND_READ, 84: COMPOSITE_ALPHA_OPAQUE, 88: presentMode, 92: VK_TRUE
 });
 
@@ -290,9 +313,9 @@ function attachmentInfo() {
   return attachment;
 }
 
-/** @param {number} p */
-const renderingInfo = p => struct(72, TYPE.renderingInfo,
-  {28: DISPLAY_WIDTH, 32: DISPLAY_HEIGHT, 36: 1, 44: 1}, {48: p + AT.attachment});
+/** @param {number} p @param {Size} size */
+const renderingInfo = (p, size) => struct(72, TYPE.renderingInfo,
+  {28: size.width, 32: size.height, 36: 1, 44: 1}, {48: p + AT.attachment});
 
 /** @param {number} p */
 const dependencyInfo = p => struct(64, TYPE.dependencyInfo, {48: 1}, {56: p + AT.imageBarrier});
@@ -424,8 +447,9 @@ function deviceSteps(plan, p) {
  * @param {Plan} plan
  * @param {number} p
  * @param {number} layer
+ * @param {Size} size
  */
-function swapchainSteps(plan, p, layer) {
+function swapchainSteps(plan, p, layer, size) {
   const {slot, word} = plan;
   const capability = (/** @type {number} */ offset) => word(AT.surfaceCapabilities + offset);
 
@@ -433,7 +457,7 @@ function swapchainSteps(plan, p, layer) {
   plan.created('display', 'default', OUT.display);
   plan.handle(OUT.display);
   plan.call(VI.layer, [layer]);
-  plan.call(VI.layerCreationSettings, [layer + LAYER_SETTINGS_OFFSET, DISPLAY_WIDTH, DISPLAY_HEIGHT]);
+  plan.call(VI.layerCreationSettings, [layer + LAYER_SETTINGS_OFFSET, size.width, size.height]);
   plan.write(layer + LAYER_NAME_OFFSET, Buffer.from(LAYER_NAME));
   plan.call(VI.openLayer, [layer, layer + LAYER_SETTINGS_OFFSET, slot(OUT.display), layer + LAYER_NAME_OFFSET],
     {expect: 'zero', message: 'Independent layer failed'});
@@ -445,9 +469,9 @@ function swapchainSteps(plan, p, layer) {
   plan.created('surface', 'vi', OUT.surface);
   plan.handle(OUT.surface);
   plan.ok('vkGetPhysicalDeviceSurfaceCapabilitiesKHR', [slot(OUT.physical), slot(OUT.surface), p + AT.surfaceCapabilities]);
-  const notFullHd = 'Independent surface is not 1080p';
-  plan.check(capability(CAPABILITY.width), {equals: DISPLAY_WIDTH}, notFullHd);
-  plan.check(capability(CAPABILITY.height), {equals: DISPLAY_HEIGHT}, notFullHd);
+  const wrongSize = 'Independent surface is not ' + size.width + 'x' + size.height;
+  plan.check(capability(CAPABILITY.width), {equals: size.width}, wrongSize);
+  plan.check(capability(CAPABILITY.height), {equals: size.height}, wrongSize);
   plan.check(capability(CAPABILITY.usage), {mask: IMAGE_USAGE_RENDER_AND_READ}, 'Surface cannot render and read back');
 
   const formats = 'vkGetPhysicalDeviceSurfaceFormatsKHR';
@@ -461,7 +485,7 @@ function swapchainSteps(plan, p, layer) {
 
   plan.ok('vkGetPhysicalDeviceSurfaceSupportKHR', [slot(OUT.physical), QUEUE_FAMILY, slot(OUT.surface), p + OUT.count]);
   plan.check(word(OUT.count), {equals: VK_TRUE}, 'Queue cannot present');
-  plan.put(AT.swapchainInfo, swapchainInfo({images: 0, presentMode: PRESENT_MODE_FIFO}));
+  plan.put(AT.swapchainInfo, swapchainInfo({images: 0, presentMode: PRESENT_MODE_FIFO, size}));
   plan.copy(capability(CAPABILITY.minImages), AT.swapchainInfo + FIELD.swapchainImages, 4);
   plan.copy(capability(CAPABILITY.transform), AT.swapchainInfo + FIELD.swapchainTransform, 4);
   plan.copy(slot(OUT.surface), AT.swapchainInfo + FIELD.swapchainSurface, 8);
@@ -488,9 +512,9 @@ function swapchainSteps(plan, p, layer) {
  * which also lists the swapchain images; later ones keep their index and view in `frame`.
  * @param {Plan} plan
  * @param {number} p
- * @param {{first: boolean, frame?: number}} options
+ * @param {{first: boolean, frame?: number, size: Size}} options
  */
-function blackFrame(plan, p, {first, frame = 0}) {
+function blackFrame(plan, p, {first, frame = 0, size}) {
   const {slot, word} = plan;
   const device = slot(OUT.device);
   const command = slot(OUT.command);
@@ -528,7 +552,7 @@ function blackFrame(plan, p, {first, frame = 0}) {
   barrier(TRANSITION.render);
   plan.put(AT.attachment, attachmentInfo());
   plan.copy(slot(view), AT.attachment + FIELD.attachmentView, 8);
-  plan.put(AT.renderingInfo, renderingInfo(p));
+  plan.put(AT.renderingInfo, renderingInfo(p, size));
   plan.call('vkCmdBeginRendering', [command, p + AT.renderingInfo]);
   plan.call('vkCmdEndRendering', [command]);
   barrier(TRANSITION.present);
@@ -553,9 +577,10 @@ function blackFrame(plan, p, {first, frame = 0}) {
  * @param {number} p
  * @param {number} from
  * @param {number} count
+ * @param {Size} size
  */
-function laterFrames(plan, p, from, count) {
-  for (let frame = from; frame < from + count; frame++) blackFrame(plan, p, {first: false, frame});
+function laterFrames(plan, p, from, count, size) {
+  for (let frame = from; frame < from + count; frame++) blackFrame(plan, p, {first: false, frame, size});
 }
 
 /**
@@ -564,14 +589,19 @@ function laterFrames(plan, p, from, count) {
  * pipelines and the graphics ledger need; on failure the error carries `objects`, the display
  * objects that exist.
  * @param {Pick<Civ7Rpc, 'allocate' | 'callPlan'>} rpc
- * @param {{resolve: (name: string) => Promise<number>, imageCount?: number}} options `imageCount`
- *   is the count the swapchain is expected to have; another count costs one more plan.
+ * @param {{resolve: (name: string) => Promise<number>, imageCount?: number, size?: Size}} options
+ *   `imageCount` is the count the swapchain is expected to have; another count costs one more plan.
+ *   `size` is the layer, surface and swapchain extent, 1920x1080 unless given; a layer keeps its
+ *   size for the process (README.md, "Layer size").
  * @returns {Promise<{display: DisplayResult, objects: DisplayObject[], requests: object[]}>}
  */
-export async function createDisplay(rpc, {resolve, imageCount}) {
+export async function createDisplay(rpc, {resolve, imageCount, size = DEFAULT_SIZE}) {
   const expected = imageCount ?? FIFO_IMAGES;
   if (!Number.isInteger(expected) || expected < MIN_SWAPCHAIN_IMAGES || expected > MAX_SWAPCHAIN_IMAGES)
     throw Error('Invalid expected swapchain image count');
+  const widthOk = Number.isInteger(size.width) && size.width >= 1 && size.width <= LAYER_MAX_WIDTH;
+  const heightOk = Number.isInteger(size.height) && size.height >= 1 && size.height <= LAYER_MAX_HEIGHT;
+  if (!widthOk || !heightOk) throw Error('Layer size outside Layer::Open bounds');
 
   /** @type {DisplayObject[]} */
   const objects = [];
@@ -628,11 +658,11 @@ export async function createDisplay(rpc, {resolve, imageCount}) {
     first.write(layer, Buffer.alloc(LAYER_BYTES));
     first.put(0, Buffer.alloc(OUT_BYTES));
     deviceSteps(first, p);
-    swapchainSteps(first, p, layer);
-    blackFrame(first, p, {first: true});
+    swapchainSteps(first, p, layer, size);
+    blackFrame(first, p, {first: true, size});
     const changed = first.steps.length;
     first.check(first.word(OUT.count), {equals: expected}, 'Swapchain image count changed');
-    laterFrames(first, p, 1, expected - 1);
+    laterFrames(first, p, 1, expected - 1, size);
 
     const frameIndex = (/** @type {number} */ frame) => values.frames.readUInt32LE(frame * FRAME_BYTES);
     const reply = await run(first);
@@ -642,7 +672,7 @@ export async function createDisplay(rpc, {resolve, imageCount}) {
     const count = values.out.readUInt32LE(OUT.count);
     if (reply.error) {
       const retry = planRecorder(p);
-      laterFrames(retry, p, 1, count - 1);
+      laterFrames(retry, p, 1, count - 1, size);
       const second = await run(retry);
       if (second.error) throw Error('Display step ' + second.error.step + ': ' + second.error.message);
     }
@@ -651,7 +681,7 @@ export async function createDisplay(rpc, {resolve, imageCount}) {
     const missing = Array.from({length: count}, (_, image) => image).filter(image => !cleared.includes(image));
     if (missing.length) {
       const extra = planRecorder(p);
-      laterFrames(extra, p, 1, missing.length);
+      laterFrames(extra, p, 1, missing.length, size);
       const third = await run(extra);
       if (third.error) throw Error('Display step ' + third.error.step + ': ' + third.error.message);
       cleared.push(...missing.map((_, frame) => frameIndex(frame + 1)));
@@ -666,7 +696,8 @@ export async function createDisplay(rpc, {resolve, imageCount}) {
       images: Array.from({length: count}, (_, image) => values.images.readBigUInt64LE(image * POINTER_BYTES).toString()),
       semaphores: {acquire: text(OUT.acquireSemaphore), present: text(OUT.presentSemaphore)},
       display: text(OUT.display), layer, surface: text(OUT.surface), pool: text(OUT.pool), command: text(OUT.command),
-      frames: {index, cleared: [...new Set(cleared)].sort((a, b) => a - b)}
+      frames: {index, cleared: [...new Set(cleared)].sort((a, b) => a - b)},
+      size: {width: size.width, height: size.height}
     };
     return {display, objects, requests};
   } catch (error) {
