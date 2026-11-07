@@ -1,113 +1,51 @@
 # src/streamer/input
 
-Controller and touch from the PC to the console. input-feeder.js feeds hbmoonlight's stdin;
-controller.js maps buttons and touch.js maps the panel. Root CLAUDE.md ("Input and audio") has
-the panel and read-size facts.
+Controller and touch on the console, forwarded to the helper as input records. controller.js
+maps buttons, touch.js maps the panel and input-record.js holds the record format. Root
+CLAUDE.md ("Input and audio") has the panel facts.
 
-## Two paths
+## Console input records (civ7)
 
-- **Pull (default):** the host reads one 784-byte pad+touch window per frame over the bridge.
-- **Push (`--input-push`):** a console worker (input-push-worker.js, frames in
-  input-push-plan.js) sends pad, touch and UI words over native TCP, so input costs no bridge
-  exchange. The feeder reads them with `--push`, and `--input-hz` defaults to 120 under push.
-  pad-age.js measures record age and stalls.
-- **Push pad (`--input-push-pad`, feeder `--push-pad`):** see "Push pad read" below.
-
-## Rules
-
-1. The worker sends state and UI words in one send and sleeps last. A short send shifts every
-   later record, so the reader checks `uiMagic` once a record carried it, and keeps that latch
-   until the next attach.
-2. More than 4 records queued: keep the newest, after lifting any touches. 250 ms of silence
-   sends the pad back to neutral.
-3. The + button alone stops SmileBASIC, so Start reaches the PC only from the chord
-   (`--start-chord`, default `stickL+stickR`).
-4. No record for 2 s after the attach (SILENT_MS) fails the push. At the end the feeder writes
-   {stopped, retained, error}; like every native worker, one that may still run is retained,
-   never closed (src/streamer/stream/CLAUDE.md).
-
-## Feeder
-
-`node src/streamer/input/input-feeder.js [runs/launcher-XXXX] [--hz 60] [--labels]
-[--counts-fd N] [--push [--push-pad]] [--start-chord stickL+stickR]`
-
-- Attaches to the newest (or named) runs/launcher-\* session. Lines out:
-  `{"type":"controller",...}` on change and `{"type":"touch","events":[...]}` when touch changes.
-- Pad (bytes 0..40) and touch (128..784) are contiguous, so one 784-byte read covers both and
-  halves the exchanges competing with video. `--sources` is unsupported: those pads sit outside
-  that window.
-- Each change of console + or - goes to stderr with the wall time, to match a hang to a press.
-- `HBL_PROBE_PRESS_MS=N` (src/streamer/loopback/): the pad is not read. D-pad Up is pressed
-  every N ms (plus up to 16 ms of jitter) and held 100 ms, and each change logs a `probe-press`
-  line with its wall time on stderr. Pull mode only; unset or empty leaves the feeder as is.
-- `--counts-fd N`: once a second `{exchanges, bridgeMs, pad}` (stats stage "input"); under push
-  `{exchanges, bridgeMs, pushed, dropped, gapMaxMs, applied, changes}`, then the final report of
-  rule 4. `applied` is records that stepped the app frame count outside the overlay (about 60 a
-  second), `changes` the controller and touch lines they sent: a moving pad keeps it above 0.
+- `controllerMapping(NPAD)`, `touchMapping()` and `createInputRecorder(mapping)` are
+  self-contained; civ7/payload.js ships them by `toString()` and the PC exports are built from
+  the same functions. `civ7/test/payload-scope.test.cjs` fails on any outside name.
+- The recorder maps the pad with `toMoonlight(state, 'position', [])` (no start chord, Plus is
+  Start), steps the touch tracker and returns only changes. On `STOP_CHORD` (L+R+Minus+Plus) it
+  sends one released pad, lifts the touches, sets `stop` and returns nothing after that.
+- Wire: each video acknowledgement is the 16-byte unit header, a u32 length, then that many
+  bytes of JSON `{v: 1, pad?, touch?, stop?: true}` (0 when nothing changed, at most
+  `INPUT_RECORD.limit`). `pad` holds the eight LiSendMultiControllerEvent fields, `touch` 1 to
+  32 `{id, action, x, y, pressure}`. `readInputRecord` refuses any other shape, version, key or
+  range, and the channel fails the stream on one.
+- `civ7/console-ui.js` owns `allowInput()`. The video loop consumes the shader command before
+  recording input, so an overlay releases the pad and forwarded fingers on that frame. A
+  raised overlay word counts as the chord when its command was overwritten. The recorder
+  ignores fingers and buttons held across the overlay until they lift, so the B that closes
+  it never reaches the game. The PC validates and
+  forwards those records. A stop request always stops, overlay open or not.
 
 ## Controller (controller.js)
 
-- The launcher writes the selected NpadState to binding 0 each frame, plus five pad sources at
-  0x7f0000 + 640 (HBLauncher/sdk/host/hardware.js). Output is Limelight.h `*_FLAG` bits,
-  triggers 0 or 255 (ZL/ZR are digital) and int16 sticks with Y up.
+- `civ7/input.js` reads the NpadState (`NPAD_BYTES`, 40) from the console each sample; the
+  `NPAD` bit table is copied from hbl-platform `sdk/host/npad.js`. Output is Limelight.h
+  `*_FLAG` bits, triggers 0 or 255 (ZL/ZR are digital) and int16 sticks with Y up.
 - Layout `position` (default) maps by place (Nintendo B to A_FLAG, A to B, Y to X, X to Y);
-  `labels` maps by printed letter. HOME and Capture are not in NpadState, so SPECIAL_FLAG is
+  `labels` maps by printed letter. The console recorder takes the layout from the request's
+  `stream.buttons` (the Button layout setting). HOME and Capture are not in NpadState, so SPECIAL_FLAG is
   never set.
-- While every button of the start chord is held (`none` disables it), the PC sees Start
-  instead of those buttons.
+- `toMoonlight` takes an optional start chord: while all of it is held, the PC sees Start
+  instead of those buttons. The console recorder passes none, so Plus is Start.
 
 ## Touch (touch.js)
 
 - The block at STATE.touch (byte 128) is nn::hid::TouchScreenState<16>: u64 sampling number,
   u32 count, u32 pad, then sixteen 40-byte entries {deltaTime u64, attributes, fingerId, x, y,
-  diameterX, diameterY, rotationAngle, reserved}. Coordinates are 1280x720; the launcher shader
-  (HBLauncher/homebrew-launcher/shaders/launcher.comp) scales point 0 by 1.5 onto 1920x1080.
-  Attributes bit 1 means the finger lifted this frame: ATTR_END, the bit the shader tests as
+  diameterX, diameterY, rotationAngle, reserved}. Coordinates are 1280x720 and map straight
+  onto the video rect. Attributes bit 1 means the finger lifted this frame: ATTR_END, the bit the shader tests as
   `touch[6]&2u`.
 - fingerId is the pointer id, since slots compact when a finger lifts. The panel has no
   pressure, so down/move send 0.0 ("pressure unknown").
 
-## Pad age (pad-age.js)
-
-The logic shader bumps STATE.frames once per launcher frame right after the pad copy: no step
-between reads is a stall, more than one is missed frames. The time service words (clockMs,
-frameIndex) stay zero under service version 1, which Moonlight uses. Age is the read's end minus
-frames x period, relative to the freshest read since the last take. It assumes the launcher runs at
-the period, so take once per stats row to keep a stall to one row.
-
-## Push worker (input-push-plan.js, input-push-worker.js)
-
-- Each pass copies state and UI blocks side by side and sends them as one record (the console
-  socket has no TCP_NODELAY), counts it in a console word read back at stop, then sleeps. Sleep
-  is last because a repeating frame reads its selector only after its calls: a stop written
-  during the sleep ends the thread at the loop tail, so a stop wake never reaches send.
-  Without a UI address the state buffer is sent directly.
-- The frame cannot branch, so checkedPush checks the last pass's send count at stop, like the
-  audio recycle check.
-- create() verifies code, copy and sync functions, opens the TCP link (console to host here),
-  allocates counter and worker; start() spawns. stop() points the worker at its exit, and since it
-  only sleeps it leaves within one period; the host keeps reading until the join so a send
-  never blocks. If the worker may still hold the socket
-  it is retained: host end dropped, console descriptor open, SmileBASIC needs a restart.
-
-## Push pad read (`--input-push-pad`)
-
-- Why: the launcher copies the pad into STATE once per 60 Hz frame, so push v1 applies ~60
-  records a second whatever `--input-hz` is. With this flag each pass calls
-  `padHandheld(buffer, &id)` (id 0x20) after the STATE copy, over the record's pad bytes
-  0..40 (NpadState is 40 B: npad.js and the 0x28 stride in docked-input.md), so every record
-  carries a fresh sample. `--input-hz` may then go up to the plan's 240.
-- The record ends with 4 bytes, the u32 record count before the pass. The reader dedups on it,
-  not on STATE.frames: a repeat drops, a step back logs, releases and starts over (new worker).
-  The flag-off plan is pinned by a golden sha256 in the tests.
-- Handheld only: the read is the handheld overload, so the stream and feeder refuse a run whose
-  `auto-launch.json` does not say `dock: handheld` (none for manual or resident launches).
-  Docked would need the launcher's style choice (team docked-input.md).
-- Stats, flag on only: `inputPush.arrivalMs` {p50, p95, max} between applied records and
-  `samplingStep`, a histogram of the u64 at NpadState 0..8 between them. That word is
-  INFERRED to be HID's sampling number, unverified on the console: stats only, never logic.
-
 ## Test
 
-From the repo root: `node --test src/streamer/input/test/input.test.cjs`. The push tests run the real native
-TCP listener on port 0 against a fake console client.
+`src/streamer/input/test/input.test.cjs` in moonlight-nx2-dev; `npm test` from the app root runs it.
