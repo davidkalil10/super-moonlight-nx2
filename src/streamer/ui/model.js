@@ -14,7 +14,7 @@ import * as settingsRules from './settings.js';
  *   app: App | null, appPage: number, appIndex: number, hostPage: number, hostIndex: number,
  *   pin: string | null, url: string | null, entry: string,
  *   message: string | null, back: string, from: string, overlay: boolean,
- *   settings: Record<string, any>, settingsError?: string | null
+ *   settings: Record<string, any>, settingsError?: string | null, docked: boolean
  * }} Model
  * @typedef {{op: string, item: number, value: number}} Command
  * @typedef {{apps: App[], currentGame: number, message?: string | null}} Listed
@@ -26,10 +26,11 @@ import * as settingsRules from './settings.js';
  *   | ({type: 'listed'} & Listed)
  *   | {type: 'pin', pin: string | null, url: string | null}
  *   | {type: 'stage', message: string | null}
+ *   | {type: 'operationMode', docked: boolean}
  *   | {type: 'failed', message: string, back?: string}} Event
  * @typedef {Record<string, any>} Settings
  * @typedef {{rows: {id: string}[], defaults: () => Settings,
- *   adjust: (settings: Settings, id: string, direction: number) => Settings}} Rules
+ *   adjust: (settings: Settings, id: string, direction: number, docked?: boolean) => Settings}} Rules
  */
 
 /**
@@ -94,7 +95,8 @@ function createMachine(rules) {
       back: 'hosts',
       from: 'hosts',
       overlay: false,
-      settings
+      settings,
+      docked: false
     };
   }
 
@@ -297,7 +299,7 @@ function createMachine(rules) {
     const setting = rules.rows[item - ITEM.setting];
     if (op !== 'adjust' || !setting) return same(model);
 
-    const settings = rules.adjust(model.settings, setting.id, value);
+    const settings = rules.adjust(model.settings, setting.id, value, model.docked);
     if (settings === model.settings) return same(model);
     return next(model, {settings}, [{type: 'saveSettings'}]);
   }
@@ -451,6 +453,9 @@ function createMachine(rules) {
         return fail(model, event.message, event.back ?? (model.host ? 'apps' : 'hosts'));
       case 'appGone':
         return next(model, {screen: 'stopped'}, [{type: 'exit'}]);
+      case 'operationMode':
+        if (event.docked === model.docked) return same(model);
+        return next(model, {docked: event.docked});
       default:
         return same(model);
     }

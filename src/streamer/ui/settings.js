@@ -37,16 +37,31 @@ const CODECS = {h264: 'H.264', av1: 'AV1'};
 /** Value text of the transport row. */
 const TRANSPORTS = {udp: 'UDP', tcp: 'TCP'};
 
+/** Sizes above 1080p: AV1 only and docked only; 2160p runs at 60 fps (civ7/README.md, "Fallbacks"). */
+const DOCKED_SIZES = ['2560x1440', '3840x2160'];
+
+/**
+ * Value text of the resolution row.
+ * @param {string} value
+ */
+function sizeText(value) {
+  const text = value.replace('x', ' × ');
+  if (value === '3840x2160') return text + ' (docked, 60 fps)';
+  if (DOCKED_SIZES.includes(value)) return text + ' (docked)';
+  return text;
+}
+
 /** Value text of the button layout row (input/CLAUDE.md, "Controller"). */
 const BUTTONS = {position: 'By position', labels: 'By letter'};
 
 /**
  * A catalog row. `formerDefaults` are fallbacks of the unversioned format: a save from before
  * version 2 holding one of them gets today's fallback instead. A save older than `resetBefore`
- * takes today's fallback for the row whatever it holds.
+ * takes today's fallback for the row whatever it holds. `docked` values are only stepped onto
+ * while the console is docked.
  * @typedef {{id: string, label: string, values: any[], fallback: any,
  *   text: (value: any, settings: Record<string, any>) => string, locked?: boolean,
- *   unbacked?: boolean, formerDefaults?: any[], resetBefore?: number}} Setting
+ *   unbacked?: boolean, formerDefaults?: any[], resetBefore?: number, docked?: any[]}} Setting
  */
 
 /** @type {Setting[]} */
@@ -54,9 +69,10 @@ const CATALOG = [
   {
     id: 'size',
     label: 'Resolution',
-    values: ['1280x720', '1920x1080'],
+    values: ['1280x720', '1920x1080', ...DOCKED_SIZES],
     fallback: '1920x1080',
-    text: value => value.replace('x', ' × ')
+    text: sizeText,
+    docked: DOCKED_SIZES
   },
   {
     id: 'fps',
@@ -142,14 +158,15 @@ const VALUES = CATALOG.map(setting => ({
   locked: Boolean(setting.locked),
   unbacked: Boolean(setting.unbacked),
   formerDefaults: setting.formerDefaults ?? [],
-  resetBefore: setting.resetBefore ?? 0
+  resetBefore: setting.resetBefore ?? 0,
+  docked: setting.docked ?? []
 }));
 
 /**
  * Defaults, sanitising and stepping over the catalog values. Self-contained: payload.js ships it
  * with toString() so the console model uses the same rules.
  * @param {{id: string, values: any[], fallback: any, locked: boolean, unbacked: boolean,
- *   formerDefaults: any[], resetBefore: number}[]} rows
+ *   formerDefaults: any[], resetBefore: number, docked: any[]}[]} rows
  */
 function createSettingsCore(rows) {
   /**
@@ -195,21 +212,25 @@ function createSettingsCore(rows) {
   }
 
   /**
-   * One step up or down the row's values, without wrapping; locked and unbacked rows do not
-   * move.
+   * One step up or down the row's values, without wrapping, skipping the docked-only values
+   * while handheld; locked and unbacked rows do not move. A docked-only value saved while docked
+   * stays until stepped off.
    * @param {Record<string, any>} settings
    * @param {string} id
    * @param {number} direction 1 right, -1 left.
+   * @param {boolean} [docked]
    */
-  function adjust(settings, id, direction) {
+  function adjust(settings, id, direction, docked = false) {
     const row = rows.find(entry => entry.id === id);
     if (!row || row.locked || row.unbacked) return settings;
 
-    const index = row.values.indexOf(settings[id]);
-    const next = Math.min(row.values.length - 1, Math.max(0, index + Math.sign(direction)));
-    if (row.values[next] === settings[id]) return settings;
+    const step = Math.sign(direction);
+    const offered = (/** @type {any} */ value) => docked || !row.docked.includes(value);
+    let index = row.values.indexOf(settings[id]) + step;
+    while (index >= 0 && index < row.values.length && !offered(row.values[index])) index += step;
+    if (index < 0 || index >= row.values.length) return settings;
 
-    return {...settings, [id]: row.values[next]};
+    return {...settings, [id]: row.values[index]};
   }
 
   return {version, defaults, sanitize, adjust};

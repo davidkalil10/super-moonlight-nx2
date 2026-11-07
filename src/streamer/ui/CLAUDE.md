@@ -21,6 +21,10 @@ at. Tests: `src/streamer/ui/test/` in moonlight-nx2-dev.
 - Settings (settings.js): only values the console path has run are offered (team note
   `ui-settings-catalog.md`). A `locked` row has one value; an `unbacked` row has no host plumbing
   yet and stays greyed, so the page shows it without pretending it works.
+  Resolution's `docked` values (2560x1440, 3840x2160, added 2026-11-08 for G4) are stepped onto
+  only after the console reported docked (`operationMode` event); a save holding one stays when
+  handheld and the launch falls back to 1080p with a badge (civ7/README.md, "Fallbacks"). They
+  are not yet proven end to end on the console.
   Saves carry `version`; a save without the current version has its `formerDefaults` (the old
   20 Mbps bitrate default) replaced by today's fallback, so it gets Auto. Bump the version
   whenever a default changes. The frame rate is also the display rate; there is no present-rate row.
