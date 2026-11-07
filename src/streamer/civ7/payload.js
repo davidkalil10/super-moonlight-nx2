@@ -30,6 +30,7 @@ import {createUdpReceiver} from './udp-receiver.js';
 import {createOverlay} from './rate-badge.js';
 import {runtimeCapabilities, mediaCapabilities} from './runtime-capabilities.js';
 import {workspaceLimit} from './av1-decoder.js';
+import sdkFunctions from './sdk-functions.json' with {type: 'json'};
 
 /** @import {ConsoleRequest, LoaderRuntime} from './console-runtime.js' */
 /** @import {GraphicsRecord} from './graphics-ledger.js' */
@@ -77,7 +78,7 @@ export const ALLOCATION_LIMITS = {default: 128 * 1024 * 1024, av1Workspace: work
  *   runtimeCapabilities: typeof runtimeCapabilities,
  *   mediaCapabilities: typeof mediaCapabilities,
  *   publicationLayout: Parameters<typeof videoStream>[0]['publicationLayout'],
- *   allocationLimits: typeof ALLOCATION_LIMITS
+ *   allocationLimits: typeof ALLOCATION_LIMITS, operationMode: {offset: number, hex: string}
  * }} BridgeRuntime
  */
 
@@ -282,7 +283,7 @@ export async function runBridge(runtime, configuration) {
         integer(request.id, 1, Number.MAX_SAFE_INTEGER);
         const command = String(request.command);
         const playback = ['read', 'write', 'write-raw', 'ui-poll', 'ui-event', 'ui-show', 'time', 'overlay-show',
-          'overlay-hide'];
+          'overlay-hide', 'operation-mode'];
         if (!playback.includes(command))
           throw Error('Command unavailable during playback');
         writeFrame({id: request.id, ok: true, ...dispatch(request)});
@@ -332,6 +333,18 @@ export async function runBridge(runtime, configuration) {
         return runtime.mediaCapabilities(globalThis);
       case 'time':
         return {now: now()};
+      case 'operation-mode': {
+        if (depth) throw Error('Operation mode cannot be read in a batch');
+        const pointer = address(request.address);
+        const definition = runtime.operationMode;
+        if (pointer !== sdk + BigInt(definition.offset) || !verified.has(addressText(pointer)))
+          throw Error('Operation mode function was not verified');
+        const expected = fromHex(definition.hex);
+        checkMemory(pointer, expected.length, 5);
+        const actual = readMemory(pointer, expected.length);
+        if (actual.some((value, index) => value !== expected[index])) throw Error('Operation mode function changed');
+        return {raw: Number(call(pointer) & 0xffn)};
+      }
       case 'ui-init':
         if (depth || ui) throw Error('Console UI is already initialized');
         ui = runtime.createConsoleUi({address, checkMemory, verified, call, read32, read64,
@@ -691,7 +704,8 @@ export function buildPayload(configuration) {
     createOverlay: ${createOverlay.toString()},
     publicationLayout: ${JSON.stringify({control: ring.CONTROL, frameBytes: ring.FRAME_BYTES,
       framesOffset: ring.FRAMES_OFFSET, nativeABI: ring.NATIVE_ABI})},
-    allocationLimits: ${JSON.stringify(ALLOCATION_LIMITS)}
+    allocationLimits: ${JSON.stringify(ALLOCATION_LIMITS)},
+    operationMode: ${JSON.stringify(sdkFunctions.operationMode)}
   }, ${JSON.stringify(configuration)})`;
   const execution = !configuration.nativeStackBytes ? bridge : `(${withNativeStack.toString()})({
     sdk: sdk_base, allocate: malloc, release: free, call: call_rop, read64, read32,

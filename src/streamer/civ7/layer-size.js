@@ -1,5 +1,5 @@
-// The layer's size for one console app process, picked before the display first opens: the saved
-// stream size when it is above 1080p and the console is docked on AV1, else 1080p. An open layer is
+// The layer's size for one console app process, picked before the display first opens from the
+// saved AV1 stream size, reserving the docked target while handheld too. An open layer is
 // never resized, so a different size above 1080p needs a restart (README.md, "Layer size").
 import {readOperationMode} from './operation-mode.js';
 import {settingsFunctions} from './console-ui.js';
@@ -17,12 +17,11 @@ const sizeText = size => size.width + 'x' + size.height;
 /**
  * The layer saved settings ask for.
  * @param {{size?: unknown, codec?: unknown} | null | undefined} settings
- * @param {boolean} docked
  * @returns {Size}
  */
-export function layerSizeFor(settings, docked) {
+export function layerSizeFor(settings) {
   const saved = String(settings?.size ?? '');
-  if (!docked || settings?.codec !== 'av1' || !NATIVE_SIZES.includes(saved)) return {...DEFAULT_SIZE};
+  if (settings?.codec !== 'av1' || !NATIVE_SIZES.includes(saved)) return {...DEFAULT_SIZE};
 
   const [width, height] = saved.split('x').map(Number);
   return {width, height};
@@ -73,7 +72,7 @@ export async function pickLayerSize(rpc, {migration = () => ({}), log = () => {}
   try {
     const {docked} = await readOperationMode(rpc, {log});
     const settings = await consoleSettings(rpc) ?? migration();
-    const size = layerSizeFor(settings, docked);
+    const size = layerSizeFor(settings);
     log({event: 'layer-size', size, docked, saved: settings?.size ?? null, codec: settings?.codec ?? null});
     return size;
   } catch (error) {

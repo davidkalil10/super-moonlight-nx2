@@ -48,10 +48,11 @@ export async function stateGetterProblem(rpc, getter) {
 /**
  * The console's operation mode; `docked` is false unless oe answered console.
  * @param {Civ7Rpc} rpc
- * @param {{resolve?: (name: string) => Promise<number>, log?: (event: object) => void}} [options]
+ * @param {{resolve?: (name: string) => Promise<number>, log?: (event: object) => void,
+ *   playback?: boolean}} [options]
  * @returns {Promise<{docked: boolean, mode: string, reason?: string}>}
  */
-export async function readOperationMode(rpc, {resolve = sdkResolver(rpc), log = () => {}} = {}) {
+export async function readOperationMode(rpc, {resolve = sdkResolver(rpc), log = () => {}, playback = false} = {}) {
   /** @param {string} reason */
   const handheld = reason => {
     log({event: 'operation-mode-unknown', reason});
@@ -68,8 +69,28 @@ export async function readOperationMode(rpc, {resolve = sdkResolver(rpc), log = 
   }
   if (problem) return handheld(problem);
 
-  const raw = Number((await rpc.callAddress(operationMode)).result & 0xffn);
+  const raw = playback
+    ? Number((await rpc.request({command: 'operation-mode', address: operationMode})).raw)
+    : Number((await rpc.callAddress(operationMode)).result & 0xffn);
   const mode = MODES[raw] ?? 'unknown';
   log({event: 'operation-mode', mode, raw});
   return {docked: mode === 'console', mode};
+}
+
+/**
+ * Verifies the SDK functions before playback, then uses the scoped command while streaming.
+ * @param {Civ7Rpc} rpc
+ * @param {{log?: (event: object) => void}} [options]
+ */
+export async function createOperationModeReader(rpc, {log = () => {}} = {}) {
+  const resolve = sdkResolver(rpc);
+  try {
+    await resolve('operationMode');
+    await resolve('commonStateGetter');
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    log({event: 'operation-mode-unknown', reason});
+    return async () => ({docked: false, mode: 'unknown', reason});
+  }
+  return () => readOperationMode(rpc, {resolve, playback: true, log});
 }

@@ -13,7 +13,8 @@ import {runFrameRateSession} from './frame-rate.js';
 import {createRefreshRate} from './refresh-rate.js';
 import {badgeText, createQuadBadge, rateChangeText} from './rate-badge.js';
 import {createStreamFallbacks, launchRate, sessionSize, shapeChanges} from './stream-fallback.js';
-import {readOperationMode} from './operation-mode.js';
+import {createOperationModeReader} from './operation-mode.js';
+import {createDockMonitor, runDockSession} from './dock-switch.js';
 import {fitLayer} from './layer-size.js';
 import {DEFAULT_SIZE} from './display.js';
 
@@ -54,6 +55,7 @@ export function streamShape(args) {
   const option = (name, fallback) => args.includes(name) ? args[args.indexOf(name) + 1] : fallback;
   const [width, height] = option('--size', '1920x1080').split('x').map(Number);
   const fps = Number(option('--fps', '60'));
+  const undockedFps = Number(option('--undocked-fps', String(fps)));
   const codec = /** @type {'h264' | 'av1'} */ (option('--codec', 'h264') === 'av1' ? 'av1' : 'h264');
   const buttons = /** @type {'position' | 'labels'} */ (option('--buttons', '') === 'labels' ? 'labels' : 'position');
   const helperArgs = ['--local-audio', '--sops'].filter(flag => args.includes(flag));
@@ -69,7 +71,7 @@ export function streamShape(args) {
    */
   const bitrate = (sessionFps, sessionCodec = codec, size = {width, height}) =>
     sessionBitrate(withCodec(args, sessionCodec), size.width, size.height, sessionFps);
-  return {width, height, fps, codec, transport, bitrate, buttons, helperArgs, streamInfo};
+  return {width, height, fps, undockedFps, codec, transport, bitrate, buttons, helperArgs, streamInfo};
 }
 
 /**
@@ -200,6 +202,10 @@ export async function runApplication({rpc, directory, menu, gpu, hostAddress, he
   const firstPage = firstPageGate(log);
   /** @type {ReturnType<typeof createRefreshRate> | undefined} */
   let refreshRate;
+  /** @type {ReturnType<typeof createDockMonitor> | undefined} */
+  let dockMonitor;
+  /** @type {ReturnType<typeof setInterval> | undefined} */
+  let dockTimer;
   const stop = () => {
     running = false;
     firstPage.close();
@@ -226,24 +232,26 @@ export async function runApplication({rpc, directory, menu, gpu, hostAddress, he
       return (await ui.presenter.run(3, ui.input.configuration)).frames;
     }});
     display.cleanup();
-    let docked = (await readOperationMode(rpc, {log})).docked;
+    const readMode = await createOperationModeReader(rpc);
+    const docked = (await readMode()).docked;
     if (docked) remote.initial = await remote.dispatch({type: 'operationMode', docked});
     if (connectionLost) remote.initial = await remote.dispatch({type: 'connectionLost'});
-    /** The mode at launch; the menu follows a change (README.md, "Operation mode"). */
-    const launchMode = async () => {
-      const now = (await readOperationMode(rpc, {log})).docked;
-      if (now !== docked) service?.dispatch({type: 'operationMode', docked: now})
-        .catch(error => log({event: 'dispatch-failed', message: errorText(error)}));
-      docked = now;
-      return now;
-    };
+    const monitor = dockMonitor = createDockMonitor({initial: docked, read: readMode, log,
+      changed: docked => {
+        service?.dispatch({type: 'operationMode', docked})
+          .catch(error => log({event: 'dispatch-failed', message: errorText(error)}));
+      }});
     children.stream = (runDirectory, host, app, args, onLine) => {
       streaming = true;
       const abort = new AbortController();
-      const {width, height, fps: requestedFps, codec, bitrate, transport: launched, buttons, helperArgs,
+      const {width, height, fps: requestedFps, undockedFps, codec, bitrate, transport: launched, buttons, helperArgs,
         streamInfo} = streamShape(args);
-      const fallbacks = createStreamFallbacks({codec, transport: launched ?? transport},
-        {signal: abort.signal, log: event => forwardStreamEvent(event, log, onLine)});
+      let choice = {codec, transport: launched ?? transport};
+      /** @param {object} event */
+      const streamLog = event => {
+        forwardStreamEvent(event, log, onLine);
+        if ('type' in event && event.type === 'stop-chord') abort.abort(Error('Stream stopped'));
+      };
       /** @param {string[]} changes */
       const badgeFor = changes => {
         if (!changes.length) return undefined;
@@ -252,39 +260,48 @@ export async function runApplication({rpc, directory, menu, gpu, hostAddress, he
       const exited = (async () => {
         try {
           await rendering;
-          const dockedAtLaunch = await launchMode();
-          /** @param {'h264' | 'av1'} sessionCodec */
-          const shown = sessionCodec => fitLayer(sessionSize({width, height}, {docked: dockedAtLaunch,
-            codec: sessionCodec}), layer);
-          const launchSize = shown(codec);
-          if (launchSize.fallback) forwardStreamEvent(launchSize.fallback, log, onLine);
-          const launchFps = launchRate({...launchSize.size, fps: requestedFps, codec}, dockedAtLaunch);
-          const result = await runFrameRateSession({fps: launchFps,
-            measure: () => ui.presenter.run(24, ui.input.configuration),
-            signal: abort.signal, log,
-            display: {raise: async fps => (await display.set(fps)).ok, restore: display.restore,
-              measured: display.measured},
-            run: (fps, change) => fallbacks.run((choice, notes) => {
-              const {size} = shown(choice.codec);
-              const kbps = bitrate(fps, choice.codec, size);
-              const rate = change
-                ? [rateChangeText({height: size.height, fps: change.from}, {height: size.height, fps: change.to})] : [];
-              return streamVideo({rpc, directory, hostAddress, host: host.address, app: String(app.id), helper,
-                helperArgs, buttons, width: size.width, height: size.height, codec: choice.codec,
-                transport: choice.transport, fps, bitrate: kbps,
-                badge: badgeFor([
-                  ...shapeChanges({height, fps: requestedFps}, {height: size.height, fps: launchFps}),
-                  ...rate,
-                  ...notes,
-                  ...(streamInfo ? [streamInfoText({height: size.height, fps, codec: choice.codec,
-                    transport: choice.transport, bitrate: kbps})] : [])]),
-                duration: null, signal: abort.signal, controls: menu.controls.mapped,
-                presentation: {configuration: ui.presenter.configuration, storage: gpu.privateStorage},
-                log: event => forwardStreamEvent(event, log, onLine)});
-            })});
+          await monitor.poll();
+          const result = await runDockSession({monitor, signal: abort.signal, log,
+            run: async (dockedAtLaunch, signal) => {
+              const fallbacks = createStreamFallbacks(choice,
+                {signal, log: streamLog});
+              /** @param {'h264' | 'av1'} sessionCodec */
+              const shown = sessionCodec => fitLayer(sessionSize({width, height}, {docked: dockedAtLaunch,
+                codec: sessionCodec}), layer);
+              const launchSize = shown(choice.codec);
+              if (launchSize.fallback) forwardStreamEvent(launchSize.fallback, log, onLine);
+              const fps = dockedAtLaunch ? requestedFps : undockedFps;
+              const launchFps = launchRate({...launchSize.size, fps, codec: choice.codec}, dockedAtLaunch);
+              try {
+                return await runFrameRateSession({fps: launchFps,
+                  measure: () => ui.presenter.run(24, ui.input.configuration),
+                  signal, log,
+                  display: {raise: async fps => (await display.set(fps)).ok, restore: display.restore,
+                    measured: display.measured},
+                  run: (fps, change) => fallbacks.run((choice, notes) => {
+                    const {size} = shown(choice.codec);
+                    const kbps = bitrate(fps, choice.codec, size);
+                    const rate = change
+                      ? [rateChangeText({height: size.height, fps: change.from}, {height: size.height, fps: change.to})] : [];
+                    return streamVideo({rpc, directory, hostAddress, host: host.address, app: String(app.id), helper,
+                      helperArgs, buttons, width: size.width, height: size.height, codec: choice.codec,
+                      transport: choice.transport, fps, bitrate: kbps,
+                      badge: badgeFor([
+                        ...shapeChanges({height, fps: requestedFps}, {height: size.height, fps: launchFps}),
+                        ...rate,
+                        ...notes,
+                        ...(streamInfo ? [streamInfoText({height: size.height, fps, codec: choice.codec,
+                          transport: choice.transport, bitrate: kbps})] : [])]),
+                      duration: null, signal, controls: menu.controls.mapped,
+                      presentation: {configuration: ui.presenter.configuration, storage: gpu.privateStorage},
+                      log: streamLog});
+                  })});
+              } finally { choice = fallbacks.current(); }
+            }});
           log({event: 'stream-result', ...result});
           return {code: 0, signal: null, out: '', err: ''};
         } catch (error) {
+          if (abort.signal.aborted) return {code: 0, signal: null, out: '', err: ''};
           log({event: 'stream-failed', message: errorText(error)});
           return {code: 1, signal: null, out: '', err: errorText(error)};
         } finally { streaming = false; }
@@ -296,6 +313,7 @@ export async function runApplication({rpc, directory, menu, gpu, hostAddress, he
       pages: createPages(ui.raster), children, directory, readHosts: savedHosts.read,
       writeHosts: savedHosts.write, readRemoved: savedHosts.readRemoved,
       writeRemoved: savedHosts.writeRemoved, saveSettings: () => {}, machine: remote, log: firstPage.log});
+    dockTimer = setInterval(() => { void monitor.poll(); }, 500);
     signal?.addEventListener('abort', stop, {once: true});
     renderLoop = (async () => {
       await firstPage.opened;
@@ -317,7 +335,9 @@ export async function runApplication({rpc, directory, menu, gpu, hostAddress, he
     running = false;
     firstPage.close();
     signal?.removeEventListener('abort', stop);
+    clearInterval(dockTimer);
     await closeInOrder([
+      () => dockMonitor?.close(),
       () => service?.stop(),
       () => streamDone,
       () => {
