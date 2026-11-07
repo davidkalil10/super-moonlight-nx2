@@ -256,6 +256,7 @@ export function videoStream(native, request) {
   /** @type {import('./decode-batch.js').DecodePipeline} */
   const pipeline = {
     overlap: fps > 60,
+    overlapOutput: stream.overlapOutput === true,
     periodMs: 1000 / fps,
     ready() {
       peeked = peek();

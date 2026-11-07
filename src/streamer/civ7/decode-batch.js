@@ -1,7 +1,7 @@
 // Feeds access units through movie::Decoder, or the AV1 backend (av1-decode.js), into the
 // destination, publishing and presenting each frame when asked. Shipped by toString(); videoStream
 // reuses it with streamed units (README.md, "Pipelined decode" above 60 fps, "Latest wins" at 60,
-// "Deferred GPU wait").
+// "Overlapped output" above 1080p, "Deferred GPU wait").
 
 /** @import {ConsoleNative, ConsoleRequest} from './console-runtime.js' */
 
@@ -16,10 +16,11 @@
  * A streaming caller's view of each unit. `ready` says the next unit already waits whole. With
  * `overlap` the previous unit then presents while the decoder works on the next; without it a
  * present that would wait on the swapchain (under `periodMs` since the last) gives way to the
- * newer unit. `overlapped` gets the ms a unit's work ran while the next one decoded; README.md,
- * "Pipelined decode" and "Latest wins".
- * @typedef {{ready(): boolean, overlap?: boolean, periodMs?: number, decoded(unit: DecodeUnit): void,
- *   presented(unit: DecodeUnit): void, done(unit: DecodeUnit): void,
+ * newer unit. `overlapOutput` (AV1) submits the next unit as soon as a frame is ready, so the
+ * frame's output runs under the next decode too. `overlapped` gets the ms a unit's work ran while
+ * the next one decoded; README.md, "Pipelined decode", "Latest wins" and "Overlapped output".
+ * @typedef {{ready(): boolean, overlap?: boolean, overlapOutput?: boolean, periodMs?: number,
+ *   decoded(unit: DecodeUnit): void, presented(unit: DecodeUnit): void, done(unit: DecodeUnit): void,
  *   spent(stage: DecodeStage, ms: number): void, overlapped?(ms: number): void}} DecodePipeline
  */
 
@@ -151,6 +152,8 @@ export function decodeBatch(native, request) {
    */
   const spent = (stage, since) => pipeline?.spent(stage, clock() - since);
   const overlapping = Boolean(pipeline?.overlap);
+  const overlappingOutput = Boolean(pipeline?.overlapOutput);
+  if (overlappingOutput && !av1) throw Error('Overlapping the output needs the AV1 decoder');
   const periodMs = pipeline?.periodMs ?? 0;
   let shownAt = -Infinity;
   let draining = false;
@@ -202,21 +205,33 @@ export function decodeBatch(native, request) {
     }
   }
 
+  /** Waits until the AV1 decoder has filled the submitted unit's surface. */
+  function awaitAv1() {
+    const since = clock();
+    /** @type {NonNullable<typeof av1>} */ (av1).wait();
+    spent('decodeWait', since);
+  }
+
+  /**
+   * Untiles the ready AV1 surface into `frame` and hands the surface back.
+   * @param {bigint} frame
+   */
+  function outputAv1(frame) {
+    const backend = /** @type {NonNullable<typeof av1>} */ (av1);
+    const since = clock();
+    outputBytes = backend.frameBytes;
+    record(backend.output(frame), frame);
+    spent('output', since);
+    return frame;
+  }
+
   /**
    * The AV1 form of collect(), with the same stages.
    * @param {bigint} frame
    */
   function collectAv1(frame) {
-    const backend = /** @type {NonNullable<typeof av1>} */ (av1);
-    let since = clock();
-    backend.wait();
-    spent('decodeWait', since);
-
-    since = clock();
-    outputBytes = backend.frameBytes;
-    record(backend.output(frame), frame);
-    spent('output', since);
-    return frame;
+    awaitAv1();
+    return outputAv1(frame);
   }
 
   /** Waits for the submitted unit and copies it into a frame no present is reading; returns it. */
@@ -290,9 +305,54 @@ export function decodeBatch(native, request) {
   }
 
   const showing = Boolean(present && publication);
+
   /**
-   * A unit's output comes before the next submit; above 60 fps its present and ack wait for the
-   * next unit when one waits whole; README.md, "Pipelined decode".
+   * Takes the ready AV1 frame into a frame no present reads and presents it, or acknowledges it
+   * unshown when it was caught up. No latest-wins skip: the overlapped loop fits the period, so
+   * one unit behind is not a backlog; README.md, "Overlapped output".
+   * @param {DecodeUnit} unit
+   */
+  function finish(unit) {
+    const frame = fillFrame();
+    present?.release?.(slotOf(frame));
+    outputAv1(frame);
+    pipeline?.decoded(unit);
+    if (showing && unit.present !== false) {
+      show(unit, frame);
+      return;
+    }
+
+    if (showing) caughtUp++;
+    pipeline?.done(unit);
+  }
+
+  /**
+   * Above 1080p: once a unit's frame is ready and the next unit waits whole, the next one is
+   * submitted first, so this one's output, present and ack run while it decodes; README.md,
+   * "Overlapped output".
+   */
+  function overlapOutputs() {
+    /** @type {DecodeUnit | null} */
+    let held = null;
+    for (const unit of units) {
+      submit(unit);
+      if (held) {
+        const since = clock();
+        finish(held);
+        pipeline?.overlapped?.(clock() - since);
+        held = null;
+      }
+
+      awaitAv1();
+      if (pipeline?.ready()) held = unit;
+      else finish(unit);
+    }
+    if (held) finish(held);
+  }
+
+  /**
+   * Up to 1080p a unit's output comes before the next submit; above 60 fps its present and ack
+   * wait for the next unit when one waits whole; README.md, "Pipelined decode".
    */
   function presentUnits() {
     /** @type {DecodeUnit | null} */
@@ -334,7 +394,8 @@ export function decodeBatch(native, request) {
   }
 
   try {
-    presentUnits();
+    if (overlappingOutput) overlapOutputs();
+    else presentUnits();
   } finally {
     present?.finish?.();
   }

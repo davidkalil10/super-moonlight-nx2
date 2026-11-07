@@ -236,6 +236,18 @@ export function withFallback(error, fallback) {
 }
 
 /**
+ * How the console loop runs a stream (README.md, "Overlapped output"): above 1080p, AV1 only, the
+ * next unit is submitted before the ready frame's output; then and above 60 fps the GPU wait
+ * moves to the frame slot's next use.
+ * @param {{fps: number, codec: 'h264' | 'av1', height: number}} stream
+ */
+export function streamTuning({fps, codec, height}) {
+  const overlapOutput = codec === 'av1' && height > 1080;
+  const deferWait = fps > 60 || overlapOutput;
+  return {deferWait, overlapOutput};
+}
+
+/**
  * The UDP transport's sender, console area and the request's `stream.udp`; RecvMMsg, Poll and
  * GetLastErrno must verify, SetSockOpt is optional as on the TCP sockets.
  * @param {Civ7Rpc} rpc
@@ -287,8 +299,8 @@ export async function streamVideo({rpc, directory, presentation, hostAddress, ho
   const av1 = codec === 'av1';
   const forced = forcedFallbacks(process.env.MOONLIGHT_FORCE_FALLBACK);
   if (forced.size) log({type: 'stream-forced-fallback', kinds: [...forced]});
-  const deferWait = fps > 60;
-  if (deferWait) log({type: 'stream-tuning', deferWait});
+  const {deferWait, overlapOutput} = streamTuning({fps, codec, height});
+  if (deferWait) log({type: 'stream-tuning', deferWait, overlapOutput});
   const videoArgs = ['--codec', codec, '--raw-fd', '4'];
   const storage = presentation.storage;
   if (storage.bytes < ring.MEMORY_BYTES || !(storage.memoryFlags & 4))
@@ -438,6 +450,7 @@ export async function streamVideo({rpc, directory, presentation, hostAddress, ho
         ...(deferWait ? {alternate: 1} : {}), slots: {...VIDEO, mode: MODE.native}},
       stream: {host: hostAddress, port: videoOut.port, token: videoOut.token,
         header: address(header), buffer: address(source), capacity: CAPACITY, frames: 0x7fffffff, fps,
+        ...(overlapOutput ? {overlapOutput} : {}),
         ...(buttons === 'labels' ? {buttons} : {}),
         ...(receiveBuffer ? {receiveBuffer} : {}), ...(udp ? {udp: udp.request} : {})}}, undefined, 0);
     consoleRequest = watchConsoleRequest(request, {log,
