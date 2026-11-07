@@ -113,7 +113,8 @@ export async function build({directory, host, helper, inspector, image, port = 3
   await fs.mkdir(directory, {mode: 0o700});
   const runtime = path.join(directory, 'runtime');
   await copyModules(projectRoot, [path.join(import.meta.dirname, 'serve.js'), path.join(import.meta.dirname, 'launch.js')], runtime);
-  const extra = ['src/renderer/civ7/prebuilt', 'src/streamer/ui/fonts/glyphs.bin', 'src/streamer/ui/fonts/OFL.txt', 'LICENSE'];
+  const extra = ['src/renderer/civ7/prebuilt', 'src/streamer/ui/fonts/glyphs.bin', 'src/streamer/ui/fonts/OFL.txt',
+    'src/streamer/payload/host-display/kscreen.py', 'LICENSE'];
   for (const relative of extra) {
     const target = path.join(runtime, relative);
     await fs.mkdir(path.dirname(target), {recursive: true});

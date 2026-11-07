@@ -49,10 +49,15 @@ native AV1 at 1440p120 and 4K60; end-to-end latency remains unmeasured.
 4K locks 60 fps and remembers the previous rate for smaller resolutions. Dock changes
 reconnect the stream at 1080p handheld and restore the saved docked resolution and rate.
 After changing the saved resolution between 1440p and 4K, fully close and reopen the console
-title once. Automatic dock transitions still need a device check.
+title once. A user run confirmed 4K60/1080p120 stream reconnects across dock changes.
 
 App cards fetch and cache Sunshine artwork, fitting portrait covers and wide banners
 without stretching them.
+
+Enable **Optimise game settings** to request host resolution matching. Sunshine controls
+the host display; Linux and other custom setups can configure a per-host display hook
+(src/streamer/payload/README.md). Stream reconnects apply the effective resolution and rate,
+then restore the host's original display settings when streaming ends.
 
 ## Build
 

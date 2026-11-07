@@ -16,6 +16,7 @@ import {badgeText, createQuadBadge, rateChangeText} from './rate-badge.js';
 import {createStreamFallbacks, launchRate, sessionSize, shapeChanges} from './stream-fallback.js';
 import {createOperationModeReader} from './operation-mode.js';
 import {createDockMonitor, runDockSession} from './dock-switch.js';
+import {createHostDisplay} from './host-display.js';
 import {fitLayer} from './layer-size.js';
 import {DEFAULT_SIZE} from './display.js';
 
@@ -259,7 +260,10 @@ export async function runApplication({rpc, directory, menu, gpu, hostAddress, he
         return createQuadBadge(rpc, {text: badgeText(changes), raster: ui.raster, storage: gpu.privateStorage, log});
       };
       const exited = (async () => {
+        /** @type {ReturnType<typeof createHostDisplay>} */
+        let hostDisplay = null;
         try {
+          if (helperArgs.includes('--sops')) hostDisplay = createHostDisplay(host.address, {log});
           await rendering;
           await monitor.poll();
           const result = await runDockSession({monitor, signal: abort.signal, log,
@@ -279,9 +283,11 @@ export async function runApplication({rpc, directory, menu, gpu, hostAddress, he
                   signal, log,
                   display: {raise: async fps => (await display.set(fps)).ok, restore: display.restore,
                     measured: display.measured},
-                  run: (fps, change) => fallbacks.run((choice, notes) => {
+                  run: (fps, change) => fallbacks.run(async (choice, notes) => {
                     const {size} = shown(choice.codec);
                     const kbps = bitrate(fps, choice.codec, size);
+                    await hostDisplay?.apply({...size, fps});
+                    signal.throwIfAborted();
                     const rate = change
                       ? [rateChangeText({height: size.height, fps: change.from}, {height: size.height, fps: change.to})] : [];
                     return streamVideo({rpc, directory, hostAddress, host: host.address, app: String(app.id), helper,
@@ -305,7 +311,11 @@ export async function runApplication({rpc, directory, menu, gpu, hostAddress, he
           if (abort.signal.aborted) return {code: 0, signal: null, out: '', err: ''};
           log({event: 'stream-failed', message: errorText(error)});
           return {code: 1, signal: null, out: '', err: errorText(error)};
-        } finally { streaming = false; }
+        } finally {
+          try { await hostDisplay?.restore(); }
+          catch (error) { log({event: 'host-display-restore-failed', message: errorText(error)}); }
+          streaming = false;
+        }
       })();
       streamDone = exited.then(() => {});
       return {exited, cancel: () => { abort.abort(); return true; }};
