@@ -12,10 +12,13 @@ const TRANSFER_BYTES = 64 * 1024 * 1024;
 const REPLY_MASK = 0x800003ffffffffffn;
 const hex = (/** @type {number | bigint} */ value) => '0x' + BigInt(value).toString(16);
 
+/** Up to 3840x2160, the largest AV1 workspace level; H.264 keeps 1080p (native-decoder.js). */
+export const MAX_FRAME = {width: 3840, height: 2160};
+
 /** @param {number} width @param {number} height */
 export function frameDimensions(width, height) {
   const integers = Number.isInteger(width) && Number.isInteger(height);
-  const bounded = width >= 2 && width <= 1920 && height >= 2 && height <= 1088;
+  const bounded = width >= 2 && width <= MAX_FRAME.width && height >= 2 && height <= MAX_FRAME.height;
   if (!integers || !bounded || width % 2 || height % 2) throw Error('Invalid codec probe dimensions');
   return {width, height};
 }

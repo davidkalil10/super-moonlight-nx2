@@ -33,8 +33,8 @@ export function createAv1Backend(native, request, context) {
   }
 
   const session = BigInt(integer(request.session, 1, 0xffffffff));
-  const width = integer(request.width, 2, 1920);
-  const height = integer(request.height, 2, 1088);
+  const width = integer(request.width, 2, 3840);
+  const height = integer(request.height, 2, 2160);
   const displayWidth = integer(request.displayWidth ?? width, 2, width);
   const displayHeight = integer(request.displayHeight ?? height, 2, height);
   const frameBytes = width * height * 3 / 2;

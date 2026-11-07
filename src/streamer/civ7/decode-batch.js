@@ -73,7 +73,7 @@ export function decodeBatch(native, request) {
     checkMemory(slots.value, 4, 3);
   }
   const destination = address(target.address);
-  const destinationBytes = integer(target.bytes, 1, 8 * 1024 * 1024);
+  const destinationBytes = integer(target.bytes, 1, 16 * 1024 * 1024);
   checkMemory(destination, destinationBytes, 3);
   const alternate = target.alternate === undefined ? null : address(target.alternate);
   if (alternate !== null) checkMemory(alternate, destinationBytes, 3);

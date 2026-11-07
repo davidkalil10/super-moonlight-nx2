@@ -27,8 +27,8 @@ export function createFramePublication(native, request, context) {
   const memory = address(request.address);
   const index = integer(request.index, 0, 2);
   const color = integer(request.color, 1, 2);
-  const width = integer(request.width, 2, 1920);
-  const height = integer(request.height, 2, 1088);
+  const width = integer(request.width, 2, 3840);
+  const height = integer(request.height, 2, 2160);
   const alternate = context.alternate ? integer(request.alternate, 0, 2) : index;
   const frameAt = (/** @type {number} */ frame) => memory + BigInt(framesOffset + frame * frameBytes);
   checkMemory(memory, 0x10000, 3);
