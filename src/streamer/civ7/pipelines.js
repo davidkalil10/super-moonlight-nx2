@@ -6,7 +6,7 @@ import filesystem from './filesystem-functions.json' with {type: 'json'};
 /** @import {Civ7Rpc} from './transport.js' */
 /** @import {RecordedStep} from './call-plan.js' */
 
-const MAX_ALLOCATION_BYTES = 33554432n;
+const MAX_ALLOCATION_BYTES = 67108864n;
 export const MEMORY_PROPERTIES_BYTES = 520;
 export const MEMORY_REQUIREMENTS_BYTES = 24;
 const WORK_BYTES = 0x4000;

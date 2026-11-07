@@ -8,8 +8,9 @@ const SLOT_EXCHANGES = 9;
 const SLOT_BYTES = SLOT_EXCHANGES * EXCHANGE_BYTES;
 const CONTROL_BYTES = 0x10000;
 const RING_OFFSET = CONTROL_BYTES;
-const FRAME_STRIDE = 1920;
-const FRAME_HEIGHT = 1088;
+/** Every slot fits a 3840x2160 NV12 frame with 16-row padding; smaller streams use its start. */
+const FRAME_STRIDE = 3840;
+const FRAME_HEIGHT = 2176;
 const LUMA_BYTES = FRAME_STRIDE * FRAME_HEIGHT;
 const CHROMA_BYTES = (FRAME_STRIDE / 2) * (FRAME_HEIGHT / 2);
 const FRAME_BYTES = LUMA_BYTES + 2 * CHROMA_BYTES;

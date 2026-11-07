@@ -141,10 +141,14 @@ Status and errors are one JSON object per line on stderr.
 control 0x000000  64 KiB: shader words, native publication, written[8160] at 0x400 (ends 0x8380),
                   UI block at 0xC000
 ring    0x010000  8 x 294,912, unused since the HBV formats went; kept so the offsets hold
-frames  0x250000  3 x 3,133,440 (1920x1088 NV12 / 4:2:0); frames 0 and 1, badge pixels in 2
-spare   0xb47000  4 KiB
-ui      0xb48000  2 x 4 MiB page buffers        MEMORY_BYTES 20,217,856
+frames  0x250000  3 x 12,533,760 (3840x2176 NV12 / 4:2:0); frames 0 and 1, badge pixels in 2
+spare   0x262b000 4 KiB
+ui      0x262c000 2 x 4 MiB page buffers        MEMORY_BYTES 48,418,816
 ```
+
+Every frame area fits a 2160p frame, so a 1080p or 1440p stream uses the start of its area and
+the slot words carry the real size. The storage buffer is one Vulkan allocation; `pipelines.js`
+caps those at 64 MiB.
 
 Control words (`ring.CONTROL`): `applied` 0, `applyCount` 4, `mode` 8 (0 none, 3 native),
 `current` 12, `size` 16, `nativeReady` 24, `nativeApplied` 32,

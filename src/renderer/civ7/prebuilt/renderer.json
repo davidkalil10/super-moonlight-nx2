@@ -10,10 +10,10 @@
     },
     "buffers": {
       "input": 4096,
-      "storage": 20217856
+      "storage": 48418816
     },
     "video": {
-      "frameBytes": 3133440,
+      "frameBytes": 12533760,
       "frameCount": 3,
       "framesOffset": 2424832,
       "slots": 2,
@@ -33,7 +33,7 @@
       ]
     },
     "ui": {
-      "offset": 11829248,
+      "offset": 40030208,
       "pageBytes": 4194304,
       "pages": 2,
       "vertices": 6,
@@ -49,7 +49,7 @@
         "width": 45324,
         "height": 45328
       },
-      "offset": 8691712,
+      "offset": 27492352,
       "bytes": 245760
     },
     "bindings": {
@@ -109,7 +109,7 @@
   "blob": {
     "path": "shaders.bin",
     "bytes": 54336,
-    "sha256": "90152cbf5bab06ae46030b83cabc7c802a41dbf17a0dcc1b21d4ef471a2dd015"
+    "sha256": "adf4c8867f87d033afb3669bdbbc17260b679704be8e5b3f64960b14e756375c"
   },
   "sources": {
     "publish.comp": "229bde753bc835c376e0fa0f1d0b7b9cb271ccdac9887d22a972f9db97df24ef",
@@ -121,6 +121,6 @@
     "video.frag": "eb48b715e2c0bbfa9591cf40c0757dbd65b166ca1e8effed1b4cd53cb0f880d5",
     "video.glsl": "4b01864c1c238099af0587d4dc16e82eb18741f523df2858a1c254ba3ef5bd9b",
     "video.vert": "42ad90b7b67d11b2472c65f366a14565b304db527a56274da5b099703be18d52",
-    "layout.glsl": "fe7f7e9f377bfa6fc37b9bad1e79b01c759bfa09dc9d856ac26c65e9b4b6a99b"
+    "layout.glsl": "dd3de9e9bcef7cce9a85014a61ad863b9e058c00c8ca97599f82e66e277e2c7f"
   }
 }
