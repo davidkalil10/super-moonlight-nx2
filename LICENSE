@@ -1,4 +1,4 @@
-hbl-moonlight carries work under the GNU General Public License, version 3:
+moonlight-nx2 carries work under the GNU General Public License, version 3:
 
 - src/streamer/protocol/: the hbmoonlight protocol client, built against the pinned
   moonlight-stream sources fetch.sh checks out (moonlight-embedded, moonlight-common-c with
