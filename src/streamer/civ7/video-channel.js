@@ -213,6 +213,7 @@ export async function videoChannel({port = 0, timeoutMs = 15000, window = undefi
   });
   const endpoint = server.address();
   if (!endpoint || typeof endpoint === 'string') throw Error('Invalid video listener');
+  datagrams?.watch(() => pending.length > 0);
   const timer = setTimeout(() => fail(Error('Video receiver did not connect')), timeoutMs);
   connected.finally(() => clearTimeout(timer)).catch(() => {});
   connected.then(() => monitor?.start(), () => {});

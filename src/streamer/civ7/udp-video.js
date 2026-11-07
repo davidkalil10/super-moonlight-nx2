@@ -160,7 +160,8 @@ export function readConsoleStats(message) {
 /**
  * The sender without sockets or timers: `enqueue` schedules a unit's datagrams over its spread
  * in 1 ms ticks after the previous unit's, `flush` sends what is due, `nack` resends each listed
- * datagram once while its unit is inside the deadline.
+ * datagram once while its unit is inside the deadline, `probe` resends the newest unit's last
+ * datagram once it is overdue, so a console that lost the tail whole learns it exists.
  * @param {{timing: UdpTiming, transmit: (datagram: Buffer) => void, maxUnitBytes: number,
  *   now?: () => number}} options
  */
@@ -169,7 +170,10 @@ export function createUdpSendState({timing, transmit, maxUnitBytes, now = pcNow}
   const queue = [];
   /** @type {Map<number, {datagram: Buffer, deadlineAt: number, resent: boolean}>} */
   const retained = new Map();
-  const counters = {units: 0, datagrams: 0, resent: 0, nacks: 0, expired: 0, repeated: 0};
+  const counters = {units: 0, datagrams: 0, resent: 0, nacks: 0, expired: 0, repeated: 0, probes: 0};
+  /** @type {Buffer | null} */
+  let newest = null;
+  let probeAt = Infinity;
   let nextSeq = 0;
   let nextFrame = 0;
   let paceFree = -Infinity;
@@ -180,6 +184,13 @@ export function createUdpSendState({timing, transmit, maxUnitBytes, now = pcNow}
       if (entry.deadlineAt >= at) break;
       retained.delete(seq);
     }
+  }
+
+  /** @param {Buffer} datagram */
+  function resend(datagram) {
+    const copy = Buffer.from(datagram);
+    copy.writeUInt32LE((copy.readUInt32LE(4) | UDP_VIDEO.flags.resend << 24) >>> 0, 4);
+    stamp(copy);
   }
 
   /** @param {Buffer} datagram */
@@ -220,6 +231,8 @@ export function createUdpSendState({timing, transmit, maxUnitBytes, now = pcNow}
         queue.push({datagram, dueAt: start + Math.floor(index / perTick)});
         retained.set((nextSeq + index) >>> 0, {datagram, deadlineAt, resent: false});
       });
+      newest = datagrams[datagrams.length - 1];
+      probeAt = deadlineAt + timing.deadlineMs;
       nextSeq += datagrams.length;
       nextFrame++;
       counters.units++;
@@ -248,12 +261,27 @@ export function createUdpSendState({timing, transmit, maxUnitBytes, now = pcNow}
           }
 
           entry.resent = true;
-          const copy = Buffer.from(entry.datagram);
-          copy.writeUInt32LE((copy.readUInt32LE(4) | UDP_VIDEO.flags.resend << 24) >>> 0, 4);
-          stamp(copy);
+          resend(entry.datagram);
           counters.resent++;
         }
       }
+    },
+    /**
+     * Call while units are unacknowledged: resends the newest unit's last datagram once that
+     * unit is a base deadline past its own, then every base deadline. Returns ms until the next
+     * probe is due, or null before any unit.
+     */
+    probe() {
+      if (!newest) return null;
+
+      const at = now();
+      if (probeAt > at) return probeAt - at;
+      if (queue.length) return 1;
+
+      resend(newest);
+      counters.probes++;
+      probeAt = at + timing.deadlineMs;
+      return timing.deadlineMs;
     },
     end() { return endDatagram(nextFrame, nextSeq); }
   };
@@ -284,6 +312,9 @@ export async function createUdpVideoSender({fps, maxUnitBytes, helloTimeoutMs = 
   let helloTimer;
   /** @type {NodeJS.Timeout | undefined} */
   let paceTimer;
+  /** @type {NodeJS.Timeout | undefined} */
+  let probeTimer;
+  let outstanding = () => false;
   /** @type {Record<string, number>} */
   let consoleStats = {};
   /** @type {Record<string, number>} */
@@ -310,6 +341,17 @@ export async function createUdpVideoSender({fps, maxUnitBytes, helloTimeoutMs = 
       paceTimer = undefined;
       schedule();
     }, Math.max(1, Math.ceil(wait)));
+  }
+
+  /** Probes the tail while units are unacknowledged; idle once they settle. */
+  function guardTail() {
+    clearTimeout(probeTimer);
+    probeTimer = undefined;
+    if (closed || !outstanding()) return;
+
+    const wait = state.probe();
+    if (wait === null) return;
+    probeTimer = setTimeout(guardTail, Math.max(1, Math.ceil(wait)));
   }
 
   socket.on('message', (message, from) => {
@@ -352,10 +394,18 @@ export async function createUdpVideoSender({fps, maxUnitBytes, helloTimeoutMs = 
       })]).finally(() => clearTimeout(helloTimer));
       return /** @type {Promise<dgram.RemoteInfo>} */ (waiting);
     },
+    /**
+     * The channel's view of unacknowledged units, which gates the tail probe.
+     * @param {() => boolean} pending
+     */
+    watch(pending) {
+      outstanding = pending;
+    },
     /** @param {UdpUnit} unit */
     send(unit) {
       const frame = state.enqueue(unit);
       schedule();
+      guardTail();
       return frame;
     },
     /**
@@ -387,6 +437,7 @@ export async function createUdpVideoSender({fps, maxUnitBytes, helloTimeoutMs = 
       if (closed) return;
       closed = true;
       clearTimeout(paceTimer);
+      clearTimeout(probeTimer);
       clearTimeout(helloTimer);
       socket.close();
     }
