@@ -1,35 +1,33 @@
 /**
- * The UI page the host publishes into the Moonlight app's private memory and the command words
- * the shader writes back (CLAUDE.md; team note `moonlight-ui-design.md`, "Memory and words").
+ * The UI page the host writes into the Moonlight app's private memory, and its checks
+ * (CLAUDE.md; team note `moonlight-ui-design.md`, "Memory and words").
  * ui.glsl mirrors the layout below; changing a constant or offset changes the format.
  */
-import {UI, UI_OFFSET, UI_PAGE_BYTES, UI_OP} from '../shared/ring.js';
+import {UI_OFFSET, UI_PAGE_BYTES} from '../shared/ring.js';
+import {createPageEncoder} from './page-encode.js';
 
-/** "HBPG" read as a little-endian word. */
-const MAGIC = 0x47504248;
-const HEADER_WORDS = 16;
-const ITEM_WORDS = 8;
-const TEXT_WORDS = 8;
-const IMAGE_WORDS = 8;
-const MAX_ITEMS = 32;
-const MAX_TEXTS = 48;
-const MAX_IMAGES = 24;
-/** Byte offsets of the three fixed-size tables, which follow the header back to back. */
-const ITEMS_OFFSET = HEADER_WORDS * 4;
-const TEXTS_OFFSET = ITEMS_OFFSET + MAX_ITEMS * ITEM_WORDS * 4;
-const IMAGES_OFFSET = TEXTS_OFFSET + MAX_TEXTS * TEXT_WORDS * 4;
-/** Where the body starts: the strip and image bytes the tables point into. */
-const BODY_OFFSET = 0x1000;
-const MAX_BODY_BYTES = UI_PAGE_BYTES - BODY_OFFSET;
-const SCREEN = {width: 1920, height: 1080};
-const MAX_TEXT = {width: 1920, height: 96};
-const MAX_IMAGE = {width: 320, height: 180};
-/** The only image format the shader reads. */
-const FORMAT_RGBA8 = 1;
-/** Header words covered by the checksum, then the three tables. */
-const CHECKSUM_WORDS = 10;
-const FNV_OFFSET_BASIS = 2166136261;
-const FNV_PRIME = 16777619;
+const encoder = createPageEncoder(UI_PAGE_BYTES);
+const {
+  MAGIC,
+  ITEM_WORDS,
+  TEXT_WORDS,
+  IMAGE_WORDS,
+  MAX_ITEMS,
+  MAX_TEXTS,
+  MAX_IMAGES,
+  ITEMS_OFFSET,
+  TEXTS_OFFSET,
+  IMAGES_OFFSET,
+  BODY_OFFSET,
+  MAX_BODY_BYTES,
+  SCREEN,
+  MAX_TEXT,
+  MAX_IMAGE,
+  FORMAT_RGBA8,
+  CHECKSUM_WORDS,
+  PAGE_FLAG,
+  ITEM_FLAG
+} = encoder.LAYOUT;
 
 /** Byte offsets of the header words that validate() and parse() read back. */
 const HEADER = {
@@ -45,11 +43,6 @@ const HEADER = {
   cursorHome: 36
 };
 
-const PAGE_FLAG = {overlay: 1, hideCursor: 2};
-const ITEM_FLAG = {greyed: 1, current: 2, adjustable: 4, pending: 8};
-/** The command block the host reads in one go, uiApplied through cmdEpoch. */
-const COMMAND_READ = {offset: UI.uiApplied, bytes: UI.cmdEpoch + 4 - UI.uiApplied};
-
 /**
  * @typedef {{id: number, x: number, y: number, w: number, h: number, flags?: number}} Item
  * @typedef {{x: number, y: number, w: number, h: number, alpha: Uint8Array | Buffer,
@@ -59,17 +52,21 @@ const COMMAND_READ = {offset: UI.uiApplied, bytes: UI.cmdEpoch + 4 - UI.uiApplie
  *   cursorHome?: number, items?: Item[], texts?: Text[], images?: Image[]}} Page
  */
 
-/** Throws `message` unless `condition` holds. */
+/** Throws `message` unless `condition` holds. @param {boolean} condition @param {string} message */
 function check(condition, message) {
   if (!condition) throw Error(message);
 }
 
-/** Whether `value` fits an unsigned 32-bit word. */
+/** Whether `value` fits an unsigned 32-bit word. @param {number} value */
 function isU32(value) {
   return Number.isInteger(value) && value >= 0 && value <= 0xffffffff;
 }
 
-/** Whether the rect is non-empty and lies wholly on the screen. */
+/**
+ * @typedef {{x: number, y: number, w: number, h: number}} Rect
+ */
+
+/** Whether the rect is non-empty and lies wholly on the screen. @param {Rect} rect */
 function inScreen(rect) {
   const placed = isU32(rect.x) && isU32(rect.y);
   if (!placed) return false;
@@ -79,144 +76,43 @@ function inScreen(rect) {
   return sized && fits;
 }
 
-/** Whether a text rect is on screen and within the strip size limit. */
+/** Whether a text rect is on screen and within the strip size limit. @param {Rect} rect */
 function textFits(rect) {
   return inScreen(rect) && rect.w <= MAX_TEXT.width && rect.h <= MAX_TEXT.height;
 }
 
-/** Whether an image rect is on screen and within the image size limit. */
+/** Whether an image rect is on screen and within the image size limit. @param {Rect} rect */
 function imageFits(rect) {
   return inScreen(rect) && rect.w <= MAX_IMAGE.width && rect.h <= MAX_IMAGE.height;
 }
 
-/** Writes `words` as consecutive little-endian u32s from byte `at`. */
-function writeWords(buffer, at, words) {
-  words.forEach((word, k) => buffer.writeUInt32LE(word, at + k * 4));
-}
-
-/** Reads `count` consecutive little-endian u32s from byte `at`. */
+/**
+ * Reads `count` consecutive little-endian u32s from byte `at`.
+ * @param {Buffer} buffer @param {number} at @param {number} count
+ */
 function readWords(buffer, at, count) {
   return Array.from({length: count}, (_, k) => buffer.readUInt32LE(at + k * 4));
 }
 
-/** The x, y, w, h words at the start of a table entry. */
+/** The x, y, w, h words at the start of a table entry. @param {Buffer} buffer @param {number} at */
 function readRect(buffer, at) {
   const [x, y, w, h] = readWords(buffer, at, 4);
   return {x, y, w, h};
 }
 
-/**
- * FNV-1a over whole little-endian words of `bytes`, as nativeChecksum and the shader do it.
- * @param {Buffer} bytes
- * @param {number} [checksum]
- */
-function fnv(bytes, checksum = FNV_OFFSET_BASIS) {
-  for (let at = 0; at < bytes.length; at += 4)
-    checksum = Math.imul(checksum ^ bytes.readUInt32LE(at), FNV_PRIME) >>> 0;
-  return checksum;
-}
-
 /** @param {Buffer} page A page buffer; its checksum over header words 0..9 and the tables. */
 function checksum(page) {
-  const header = fnv(page.subarray(0, CHECKSUM_WORDS * 4));
-  return fnv(page.subarray(ITEMS_OFFSET, BODY_OFFSET), header);
+  return encoder.checksum(page);
 }
 
 /**
- * The body under construction: each placed buffer is padded to a whole word, and the body
- * may not outgrow the page.
- */
-function createBody() {
-  const chunks = [];
-  let length = 0;
-
-  /** Appends `bytes`, which must be `expected` long, and returns its offset in the body. */
-  function place(bytes, expected, what) {
-    check(bytes.length === expected, what + ' bytes do not match its size');
-    const offset = length;
-    chunks.push(Buffer.from(bytes.buffer, bytes.byteOffset, bytes.length));
-    length += bytes.length;
-
-    const padding = (4 - (length % 4)) % 4;
-    if (padding) {
-      chunks.push(Buffer.alloc(padding));
-      length += padding;
-    }
-
-    check(length <= MAX_BODY_BYTES, 'UI page body exceeds the page');
-    return offset;
-  }
-
-  return {
-    place,
-    get length() {
-      return length;
-    },
-    chunks
-  };
-}
-
-/**
- * The page as bytes: header, the three tables and the body, ready to write at a buffer's
- * offset. Only the bytes used are returned; the rest of the buffer may hold stale data.
+ * The page as bytes (page-encode.js), ready to write at a buffer's offset.
  * @param {Page} page
  * @returns {Buffer}
  */
 function serialize(page) {
-  const items = page.items ?? [];
-  const texts = page.texts ?? [];
-  const images = page.images ?? [];
-  const cursorHome = page.cursorHome ?? 0;
-
-  check(isU32(page.epoch) && page.epoch !== 0, 'UI page needs a nonzero epoch');
-  check(isU32(page.sequence) && page.sequence !== 0, 'UI page needs a nonzero sequence');
-  check(items.length <= MAX_ITEMS, 'Too many UI items');
-  check(texts.length <= MAX_TEXTS, 'Too many UI texts');
-  check(images.length <= MAX_IMAGES, 'Too many UI images');
-  check(cursorHome < Math.max(1, items.length), 'UI cursor home is not an item');
-
-  const out = Buffer.alloc(BODY_OFFSET);
-  const body = createBody();
-
-  for (const [i, item] of items.entries()) {
-    check(isU32(item.id) && item.id !== 0, 'UI item needs a nonzero id');
-    check(inScreen(item), 'UI item rect is off screen');
-
-    const at = ITEMS_OFFSET + i * ITEM_WORDS * 4;
-    writeWords(out, at, [item.id, item.x, item.y, item.w, item.h, item.flags ?? 0]);
-  }
-
-  for (const [i, text] of texts.entries()) {
-    check(textFits(text), 'UI text rect');
-
-    const at = TEXTS_OFFSET + i * TEXT_WORDS * 4;
-    const offset = body.place(text.alpha, text.w * text.h, 'UI text strip');
-    writeWords(out, at, [text.x, text.y, text.w, text.h, offset, text.color ?? 0xffffffff]);
-  }
-
-  for (const [i, image] of images.entries()) {
-    check(imageFits(image), 'UI image rect');
-
-    const at = IMAGES_OFFSET + i * IMAGE_WORDS * 4;
-    const offset = body.place(image.rgba, image.w * image.h * 4, 'UI image');
-    writeWords(out, at, [image.x, image.y, image.w, image.h, offset, FORMAT_RGBA8]);
-  }
-
-  writeWords(out, 0, [
-    MAGIC,
-    page.epoch,
-    page.sequence,
-    page.flags ?? 0,
-    items.length,
-    texts.length,
-    images.length,
-    body.length,
-    page.background ?? 0xff000000,
-    cursorHome
-  ]);
-  out.writeUInt32LE(checksum(out), CHECKSUM_WORDS * 4);
-
-  return Buffer.concat([out, ...body.chunks]);
+  const bytes = encoder.encode(page);
+  return Buffer.from(bytes.buffer, bytes.byteOffset, bytes.length);
 }
 
 /**
@@ -244,6 +140,7 @@ function validate(page, expected = {}) {
   check(cursorHome < Math.max(1, items), 'UI cursor home');
   check(page.readUInt32LE(CHECKSUM_WORDS * 4) === checksum(page), 'UI page checksum');
 
+  /** @param {number} offset @param {number} bytes */
   const inBody = (offset, bytes) => offset % 4 === 0 && offset + bytes <= bodyBytes;
 
   for (let i = 0; i < items; i++) {
@@ -278,7 +175,10 @@ function parse(page) {
   const {items, texts, images, bodyBytes} = validate(page);
   const body = page.subarray(BODY_OFFSET, BODY_OFFSET + bodyBytes);
 
-  /** The first `width` words of each of `count` table entries from `offset`. */
+  /**
+   * The first `width` words of each of `count` table entries from `offset`.
+   * @param {number} offset @param {number} count @param {number} width
+   */
   const table = (offset, count, width) =>
     Array.from({length: count}, (_, i) => readWords(page, offset + i * width * 4, width));
 
@@ -324,42 +224,6 @@ function pageAddress(mapped, page) {
   return mapped + UI_OFFSET + page * UI_PAGE_BYTES;
 }
 
-/**
- * The host words that announce a service (uiMagic, uiEpoch) or a published page
- * (uiSequence, uiPage), as 16 bytes to write at UI.uiMagic.
- * @param {{magic: number, epoch: number, sequence: number, page: number}} words
- */
-function hostWords({magic, epoch, sequence, page}) {
-  const out = Buffer.alloc(16);
-  writeWords(out, 0, [magic >>> 0, epoch >>> 0, sequence >>> 0, page >>> 0]);
-  return out;
-}
-
-/**
- * The compute shader's words from the host's one read at COMMAND_READ.
- * @param {Buffer} bytes
- */
-function readCommand(bytes) {
-  check(bytes.length >= COMMAND_READ.bytes, 'UI command read is short');
-  const word = name => bytes.readUInt32LE(UI[name] - COMMAND_READ.offset);
-  const value = word('cmdValue');
-
-  return {
-    applied: word('uiApplied'),
-    cursor: word('uiCursor'),
-    overlay: word('uiOverlay') !== 0,
-    touchItem: word('uiTouchItem'),
-    command: {
-      sequence: word('cmdSequence'),
-      op: word('cmdOp'),
-      item: word('cmdItem'),
-      value: value === 0xffffffff ? -1 : value,
-      page: word('cmdPage'),
-      epoch: word('cmdEpoch')
-    }
-  };
-}
-
 export {
   MAGIC,
   MAX_ITEMS,
@@ -371,13 +235,9 @@ export {
   MAX_IMAGE,
   PAGE_FLAG,
   ITEM_FLAG,
-  COMMAND_READ,
-  UI_OP,
   checksum,
   serialize,
   validate,
   parse,
-  pageAddress,
-  hostWords,
-  readCommand
+  pageAddress
 };
