@@ -3,6 +3,7 @@
  * answers collected for a short window and turned into host candidates (CLAUDE.md).
  */
 import dgram from 'node:dgram';
+import {sameHost} from './hosts.js';
 
 /** The service GameStream hosts announce. */
 const SERVICE = '_nvstream._tcp.local';
@@ -199,20 +200,25 @@ function candidates(records) {
 }
 
 /**
- * The manual list with the discovered hosts appended: an existing entry keeps its name and
- * address whether it collides by address or by name, a new address is appended once.
- * @param {{name: string, address: string}[]} existing
- * @param {{name: string, address: string}[]} discovered
+ * The saved list with the discovered hosts appended. A found host is known when it is the same
+ * PC as a saved or removed one: the same uniqueid when both carry one, else the same address,
+ * never the name alone (ui/CLAUDE.md, Discovery). Saved entries are copied unchanged.
+ * @param {{name: string, address: string, uniqueid?: string}[]} existing
+ * @param {{name: string, address: string, uniqueid?: string}[]} discovered
+ * @param {{address: string, uniqueid?: string}[]} [removed] Hosts the user removed.
  */
-function merge(existing, discovered) {
-  const hosts = existing.map(host => ({name: host.name, address: host.address}));
+function merge(existing, discovered, removed = []) {
+  const hosts = existing.map(host => ({...host}));
 
   for (const found of discovered) {
-    const address = found.address.trim();
-    const known = hosts.some(
-      host => host.address.trim() === address || same(host.name, found.name)
-    );
-    if (!known) hosts.push({name: found.name, address});
+    const host = {...found, address: found.address.trim()};
+    const known = [...hosts, ...removed].some(entry => sameHost(entry, host));
+    if (known) continue;
+
+    /** @type {{name: string, address: string, uniqueid?: string}} */
+    const added = {name: host.name, address: host.address};
+    if (host.uniqueid) added.uniqueid = host.uniqueid;
+    hosts.push(added);
   }
 
   return hosts;

@@ -1,0 +1,303 @@
+import {createInput} from './input.js';
+import {createPresenter} from './presentation.js';
+import {streamVideo} from './stream.js';
+import fs from 'node:fs';
+import {createService, createChildren} from '../ui/service.js';
+import {hostsFile, loadHosts, loadRemoved, saveHosts} from '../ui/hosts.js';
+import {createPages} from '../ui/pages.js';
+import {createRaster} from '../ui/raster.js';
+import * as settings from '../ui/settings.js';
+import {sessionBitrate} from './bitrate-adaptation.js';
+import {createRemoteUi} from './console-ui.js';
+import {runFrameRateSession} from './frame-rate.js';
+import {createRefreshRate} from './refresh-rate.js';
+import {badgeText, createQuadBadge, rateChangeText} from './rate-badge.js';
+import {createStreamFallbacks} from './stream-fallback.js';
+
+/** @import {Civ7Rpc} from './transport.js' */
+/** @import {Host} from '../ui/model.js' */
+/** @import {PresenterMenu, PresenterApp} from './presentation.js' */
+
+/** The parts of prepareMoonlight's menu and GPU state this module and the presenter read. */
+/** @typedef {PresenterMenu & {controls: {mapped: number}}} Menu */
+/**
+ * @typedef {PresenterApp & {privateStorage: {memory: string, mapped: number, bytes: number,
+ *   memoryFlags: number}}} Gpu
+ */
+
+/** @param {unknown} error */
+const errorText = error => error instanceof Error ? error.message : String(error);
+
+/**
+ * `args` with `--codec` set to `codec`.
+ * @param {string[]} args
+ * @param {string} codec
+ */
+function withCodec(args, codec) {
+  const at = args.indexOf('--codec');
+  if (at < 0) return [...args, '--codec', codec];
+
+  return args.map((arg, index) => index === at + 1 ? codec : arg);
+}
+
+/**
+ * The size and requested rate of a launch's stream arguments, and the bitrate of a session at
+ * the rate and codec it actually runs: Auto is resolved again for each session, a 120 to 60
+ * fallback, an AV1 to H.264 fallback and the adaptation scale included.
+ * @param {string[]} args
+ */
+export function streamShape(args) {
+  /** @param {string} name @param {string} fallback */
+  const option = (name, fallback) => args.includes(name) ? args[args.indexOf(name) + 1] : fallback;
+  const [width, height] = option('--size', '1920x1080').split('x').map(Number);
+  const fps = Number(option('--fps', '60'));
+  const codec = /** @type {'h264' | 'av1'} */ (option('--codec', 'h264') === 'av1' ? 'av1' : 'h264');
+  const buttons = /** @type {'position' | 'labels'} */ (option('--buttons', '') === 'labels' ? 'labels' : 'position');
+  const helperArgs = ['--local-audio', '--sops'].filter(flag => args.includes(flag));
+  const streamInfo = args.includes('--stream-info');
+  const launched = option('--transport', '');
+  /** @type {'tcp' | 'udp' | undefined} */
+  let transport;
+  if (launched) transport = launched === 'udp' ? 'udp' : 'tcp';
+
+  /** @param {number} sessionFps @param {'h264' | 'av1'} [sessionCodec] */
+  const bitrate = (sessionFps, sessionCodec = codec) =>
+    sessionBitrate(withCodec(args, sessionCodec), width, height, sessionFps);
+  return {width, height, fps, codec, transport, bitrate, buttons, helperArgs, streamInfo};
+}
+
+/**
+ * The stream info badge text of one session: "1080p120 · AV1 · UDP · 30 Mbps".
+ * @param {{height: number, fps: number, codec: string, transport: string, bitrate: number}} session
+ */
+export function streamInfoText({height, fps, codec, transport, bitrate}) {
+  const codecName = codec === 'av1' ? 'AV1' : 'H.264';
+  const mbps = Math.round(bitrate / 100) / 10;
+  return [`${height}p${fps}`, codecName, transport.toUpperCase(), mbps + ' Mbps'].join(' · ');
+}
+
+/**
+ * The saved host list: hosts.json once it exists, the bundle's hosts until then, so a list the
+ * user emptied stays empty.
+ * @param {Host[]} seed
+ * @param {string} [file]
+ */
+export function hostStore(seed, file = hostsFile()) {
+  const read = () => fs.existsSync(file) ? loadHosts(file) : seed;
+  return {
+    read,
+    /** @param {Host[]} hosts */
+    write: hosts => saveHosts(file, hosts),
+    readRemoved: () => loadRemoved(file),
+    /** @param {import('../ui/hosts.js').RemovedHost[]} removed */
+    writeRemoved: removed => saveHosts(file, read(), removed)
+  };
+}
+
+/** Frames wait for the first published page, or this long if none comes. */
+const FIRST_PAGE_TIMEOUT_MS = 5000;
+
+/**
+ * Runs every cleanup step even when an earlier one fails, then throws the first failure.
+ * @param {(() => unknown)[]} steps
+ */
+export async function closeInOrder(steps) {
+  /** @type {unknown} */
+  let failure = null;
+  for (const step of steps) {
+    try {
+      await step();
+    } catch (error) {
+      failure ??= error;
+    }
+  }
+
+  if (failure) throw failure;
+}
+
+/**
+ * Holds Moonlight's first present until the service publishes a page, so the launcher's black
+ * frame stays up until the menu; `timeoutMs` bounds the wait if no page comes.
+ * @param {(event: Record<string, unknown>) => void} log
+ * @param {number} [timeoutMs]
+ */
+export function firstPageGate(log, timeoutMs = FIRST_PAGE_TIMEOUT_MS) {
+  /** @type {(value?: unknown) => void} */
+  let open = () => {};
+  const opened = new Promise(resolve => { open = resolve; });
+  const timer = setTimeout(() => open(), timeoutMs);
+
+  return {
+    opened,
+    /** @param {Record<string, unknown>} event */
+    log(event) {
+      if (event.event === 'published') open();
+      log(event);
+    },
+    close() {
+      open();
+      clearTimeout(timer);
+    }
+  };
+}
+
+/**
+ * Writes a stream event to the run log once, then hands it to the service on the `logged`
+ * channel, which drives the model from it without logging it again.
+ * @param {object} event
+ * @param {(event: object) => void} log
+ * @param {(channel: string, line: string) => void} onLine
+ */
+export function forwardStreamEvent(event, log, onLine) {
+  log(event);
+
+  const helperConnected = 'event' in event && event.event === 'connected';
+  if ('type' in event && event.type === 'video-connected') onLine('logged', '{"event":"connected"}');
+  else if (helperConnected) onLine('logged', '{"event":"video-starting"}');
+  else onLine('logged', JSON.stringify(event));
+}
+
+/**
+ * The Moonlight menu and its streams on one attached console, until the service stops.
+ * @param {{rpc: Civ7Rpc, directory: string, menu: Menu, gpu: Gpu, hostAddress: string, helper: string,
+ *   hosts: Host[], signal?: AbortSignal, raster?: ReturnType<typeof createRaster>,
+ *   connectionLost?: boolean, transport?: 'tcp' | 'udp', log?: (event: object) => void,
+ *   mark?: (name: string) => void}} options
+ *   `transport` is the bundle's video transport; a launch's `--transport` (the Settings row)
+ *   overrides it; `mark` takes startup-timing.js marks
+ */
+export async function runApplication({rpc, directory, menu, gpu, hostAddress, helper,
+  hosts, signal = undefined, raster: sharedRaster = undefined, connectionLost = false,
+  transport = 'udp', log = event => {}, mark = name => {}}) {
+  /** @type {Awaited<ReturnType<typeof createPresenter>> | undefined} */
+  let presenter;
+  /** @type {Awaited<ReturnType<typeof createInput>> | undefined} */
+  let input;
+  /** @type {Awaited<ReturnType<typeof createRemoteUi>> | undefined} */
+  let machine;
+  let raster = sharedRaster;
+  const children = createChildren({helperPath: helper});
+  const settingsFile = settings.settingsFile();
+  const savedHosts = hostStore(hosts);
+  /** @type {ReturnType<typeof createService> | undefined} */
+  let service;
+  let streaming = false;
+  let running = true;
+  /** @type {Promise<unknown>} */
+  let rendering = Promise.resolve();
+  let streamDone = Promise.resolve();
+  let renderLoop = Promise.resolve();
+  let active = true;
+  /** @type {Error | undefined} */
+  let connectionError;
+  const firstPage = firstPageGate(log);
+  /** @type {ReturnType<typeof createRefreshRate> | undefined} */
+  let refreshRate;
+  const stop = () => {
+    running = false;
+    firstPage.close();
+    return service?.stop().catch(error => log({event: 'stop-failed', message: errorText(error)}));
+  };
+  rpc.disconnected?.then(error => {
+    if (!active) return;
+    connectionError = error;
+    log({event: 'connection-lost', message: errorText(error)});
+    stop();
+  });
+  try {
+    const ui = {
+      presenter: presenter = await createPresenter(rpc, directory, menu, gpu),
+      input: input = await createInput(rpc, menu.controls.mapped),
+      raster: raster ??= createRaster()
+    };
+    mark('presenter-input');
+    const remote = machine = await createRemoteUi(rpc, gpu.privateStorage.mapped, savedHosts.read(),
+      settings.load(settingsFile));
+    mark('remote-ui');
+    const display = refreshRate = createRefreshRate(rpc, {directory, log, present: async () => {
+      await firstPage.opened;
+      return (await ui.presenter.run(3, ui.input.configuration)).frames;
+    }});
+    display.cleanup();
+    if (connectionLost) remote.initial = await remote.dispatch({type: 'connectionLost'});
+    children.stream = (runDirectory, host, app, args, onLine) => {
+      streaming = true;
+      const abort = new AbortController();
+      const {width, height, fps: requestedFps, codec, bitrate, transport: launched, buttons, helperArgs,
+        streamInfo} = streamShape(args);
+      const fallbacks = createStreamFallbacks({codec, transport: launched ?? transport},
+        {signal: abort.signal, log: event => forwardStreamEvent(event, log, onLine)});
+      /** @param {string[]} changes */
+      const badgeFor = changes => {
+        if (!changes.length) return undefined;
+        return createQuadBadge(rpc, {text: badgeText(changes), raster: ui.raster, storage: gpu.privateStorage, log});
+      };
+      const exited = (async () => {
+        try {
+          await rendering;
+          const result = await runFrameRateSession({fps: requestedFps,
+            measure: () => ui.presenter.run(24, ui.input.configuration),
+            signal: abort.signal, log,
+            display: {raise: async fps => (await display.set(fps)).ok, restore: display.restore,
+              measured: display.measured},
+            run: (fps, change) => fallbacks.run((choice, notes) => streamVideo({rpc, directory,
+              hostAddress, host: host.address, app: String(app.id), helper, helperArgs, buttons, width, height,
+              codec: choice.codec, transport: choice.transport, fps, bitrate: bitrate(fps, choice.codec),
+              badge: badgeFor([
+                ...(change ? [rateChangeText({height, fps: change.from}, {height, fps: change.to})] : []),
+                ...notes,
+                ...(streamInfo ? [streamInfoText({height, fps, codec: choice.codec,
+                  transport: choice.transport, bitrate: bitrate(fps, choice.codec)})] : [])]),
+              duration: null, signal: abort.signal, controls: menu.controls.mapped,
+              presentation: {configuration: ui.presenter.configuration, storage: gpu.privateStorage},
+              log: event => forwardStreamEvent(event, log, onLine)}))});
+          log({event: 'stream-result', ...result});
+          return {code: 0, signal: null, out: '', err: ''};
+        } catch (error) {
+          log({event: 'stream-failed', message: errorText(error)});
+          return {code: 1, signal: null, out: '', err: errorText(error)};
+        } finally { streaming = false; }
+      })();
+      streamDone = exited.then(() => {});
+      return {exited, cancel: () => { abort.abort(); return true; }};
+    };
+    const menuService = service = createService({memory: rpc, mapped: gpu.privateStorage.mapped,
+      pages: createPages(ui.raster), children, directory, readHosts: savedHosts.read,
+      writeHosts: savedHosts.write, readRemoved: savedHosts.readRemoved,
+      writeRemoved: savedHosts.writeRemoved, saveSettings: () => {}, machine: remote, log: firstPage.log});
+    signal?.addEventListener('abort', stop, {once: true});
+    renderLoop = (async () => {
+      await firstPage.opened;
+      while (running) {
+        if (streaming) {
+          await new Promise(resolve => setTimeout(resolve, 10));
+          continue;
+        }
+        rendering = ui.presenter.run(3, ui.input.configuration);
+        await rendering;
+      }
+    })();
+    renderLoop.catch(stop);
+    if (signal?.aborted) stop();
+    await menuService.start();
+    if (connectionError) throw connectionError;
+  } finally {
+    active = false;
+    running = false;
+    firstPage.close();
+    signal?.removeEventListener('abort', stop);
+    await closeInOrder([
+      () => service?.stop(),
+      () => streamDone,
+      () => {
+        running = false;
+        return renderLoop;
+      },
+      () => sharedRaster ? undefined : raster?.close(),
+      () => machine?.close(),
+      () => refreshRate?.close(),
+      () => input?.close(),
+      () => presenter?.close()
+    ]);
+  }
+}
