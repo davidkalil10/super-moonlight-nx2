@@ -59,12 +59,27 @@ static bool make_directory(char *path) {
   return mkdir(path, 0700) == 0 || errno == EEXIST;
 }
 
+/* The keys live in moonlight-nx2; until that exists, the old hblauncher/moonlight directory
+ * keeps serving the pairing made before the rename. */
 static bool key_directory(char *path, size_t size) {
+  char base[4096];
   const char *config = getenv("XDG_CONFIG_HOME");
   if (config && *config)
-    snprintf(path, size, "%s/hblauncher/moonlight", config);
+    snprintf(base, sizeof(base), "%s", config);
   else
-    snprintf(path, size, "%s/.config/hblauncher/moonlight", getenv("HOME"));
+    snprintf(base, sizeof(base), "%s/.config", getenv("HOME"));
+
+  struct stat info;
+  snprintf(path, size, "%s/moonlight-nx2", base);
+  if (stat(path, &info) == 0)
+    return true;
+
+  char legacy[sizeof(base) + 32];
+  snprintf(legacy, sizeof(legacy), "%s/hblauncher/moonlight", base);
+  if (stat(legacy, &info) == 0 && S_ISDIR(info.st_mode)) {
+    snprintf(path, size, "%s", legacy);
+    return true;
+  }
   return make_directory(path);
 }
 
@@ -163,12 +178,26 @@ static void log_message(const char *format, ...) {
   status("{\"event\":\"log\",\"message\":\"%s\"}", escaped);
 }
 
+/* Sunshine's loss and latency verdict; the PC adapts Auto bitrate on it. */
+static void connection_status(int connection_status) {
+  const char *name = connection_status == CONN_STATUS_POOR ? "poor" : "okay";
+  status("{\"event\":\"connection-status\",\"status\":\"%s\"}", name);
+}
+
 void session_listener(CONNECTION_LISTENER_CALLBACKS *listener) {
   LiInitializeConnectionCallbacks(listener);
   listener->stageFailed = stage_failed;
   listener->connectionStarted = connection_started;
   listener->connectionTerminated = connection_terminated;
   listener->logMessage = log_message;
+  listener->connectionStatusUpdate = connection_status;
+}
+
+void session_report_rtt(void) {
+  uint32_t rtt, variance;
+  if (!session_started() || !LiGetEstimatedRttInfo(&rtt, &variance))
+    return;
+  status("{\"event\":\"rtt\",\"ms\":%u,\"varianceMs\":%u}", rtt, variance);
 }
 
 bool session_started(void) {

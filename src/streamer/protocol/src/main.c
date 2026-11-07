@@ -1,26 +1,25 @@
-/* hbmoonlight: headless Moonlight client for the HBLauncher PC host.
+/* hbmoonlight: headless Moonlight client for the moonlight-nx2 PC host.
  *
  *   hbmoonlight pair HOST [--timeout SECONDS]
  *   hbmoonlight list HOST [--covers DIR]
+ *   hbmoonlight unpair HOST
  *   hbmoonlight quit HOST
- *   hbmoonlight stream HOST APP [--size WxH] [--fps N] [--bitrate KBPS]
- *                     [--codec h264|hevc] [--software] [--audio-fd FD] [--quit]
- *                     [--raw-h264-fd FD | --raw-hevc-fd FD] [--rgb]
+ *   hbmoonlight stream HOST APP --raw-fd FD [--codec h264|hevc|av1] [--size WxH] [--fps N]
+ *                     [--bitrate KBPS] [--audio-fd FD] [--sops] [--local-audio] [--quit]
  *
- * A raw fd receives every access unit in order as Annex B and turns off the
- * RGB24 output unless --rgb is also given. HBL_PROBE_PATCH=x,y,w,h turns on
- * the loopback latency probe on the raw output (see video.c).
- *
- * Pairing and app control come from moonlight-embedded's libgamestream, the
- * stream itself from moonlight-common-c. Client keys live in
- * $XDG_CONFIG_HOME/hblauncher/moonlight (or ~/.config/...). */
+ * --codec (default h264) is the only format offered to the host; the raw fd receives every
+ * access unit in order. Pairing and app control come from moonlight-embedded's libgamestream,
+ * the stream itself from moonlight-common-c. Client keys live in
+ * $XDG_CONFIG_HOME/moonlight-nx2 (or ~/.config/moonlight-nx2). */
 #include "helper.h"
 
 #include <client.h>
 #include <errors.h>
 #include <http.h>
+#include <xml.h>
 
 #include <errno.h>
+#include <limits.h>
 #include <poll.h>
 #include <pthread.h>
 #include <signal.h>
@@ -70,18 +69,13 @@ static void on_interrupt(int signal) {
   interrupted = 1;
 }
 
-static const char *option(int argc, char **argv, const char *name, const char *fallback) {
-  for (int i = 0; i + 1 < argc; i++)
-    if (strcmp(argv[i], name) == 0)
-      return argv[i + 1];
-  return fallback;
-}
+#define UNPAIR_TIMEOUT 15
+#define PAIR_TIMEOUT_MAX 600
 
-static bool flag(int argc, char **argv, const char *name) {
-  for (int i = 0; i < argc; i++)
-    if (strcmp(argv[i], name) == 0)
-      return true;
-  return false;
+/* A bad option value is a usage error, as a missing command is. */
+static int bad_option(const char *name) {
+  session_fail("bad option value", name);
+  return 2;
 }
 
 static int pair(char *host, int timeout) {
@@ -99,8 +93,13 @@ static int pair(char *host, int timeout) {
   char pin[5];
   snprintf(pin, sizeof(pin), "%d%d%d%d", random[0] % 10, random[1] % 10, random[2] % 10,
            random[3] % 10);
-  printf("{\"event\":\"pin\",\"pin\":\"%s\",\"url\":\"https://%s:47990/pin\",\"timeout\":%d}\n", pin,
-         host, timeout);
+  bool bracketed = strchr(host, ':') != NULL;
+  char url[320], escaped[1024];
+  snprintf(url, sizeof(url), "https://%s%s%s:47990/pin", bracketed ? "[" : "", host,
+           bracketed ? "]" : "");
+  json_string(escaped, sizeof(escaped), url);
+  printf("{\"event\":\"pin\",\"pin\":\"%s\",\"url\":\"%s\",\"timeout\":%d}\n", pin, escaped,
+         timeout);
   fflush(stdout);
 
   session_deadline(timeout, "pair");
@@ -112,7 +111,36 @@ static int pair(char *host, int timeout) {
   return 0;
 }
 
+/* Asks the host to forget this client's certificate; the keys stay for other hosts. */
+static int unpair(char *host) {
+  SERVER_DATA server;
+  if (session_connect(&server, host))
+    return 1;
+  if (!server.paired) {
+    printf("{\"event\":\"unpaired\",\"already\":true}\n");
+    return 0;
+  }
+
+  session_deadline(UNPAIR_TIMEOUT, "unpair");
+  int result = gs_unpair(&server);
+  session_deadline(0, NULL);
+  if (result != GS_OK)
+    return session_fail("unpair failed", gs_error);
+  printf("{\"event\":\"unpaired\",\"already\":false}\n");
+  return 0;
+}
+
+static double now_seconds(void) {
+  struct timespec time;
+  clock_gettime(CLOCK_MONOTONIC, &time);
+  return time.tv_sec + time.tv_nsec / 1e9;
+}
+
 #define COVER_TIMEOUT 5
+/* Covers start only within this many seconds of the first, so a list ends within
+ * connect + LIST_TIMEOUT + COVER_BUDGET + COVER_TIMEOUT (README.md, hbmoonlight timeouts). */
+#define COVER_BUDGET 10
+#define LIST_TIMEOUT 15
 #define COVER_MAX_BYTES (4 * 1024 * 1024)
 #define COVER_MAX_SIDE 4096
 #define QUIT_TIMEOUT 30
@@ -216,25 +244,54 @@ static bool fetch_cover(SERVER_DATA *server, const char *unique_id, int app_id,
   return WIFEXITED(result) && WEXITSTATUS(result) == 0;
 }
 
-static int list(int argc, char **argv) {
-  char *host = argv[2];
+/* The host's own uniqueid from /serverinfo, which libgamestream reads but does not keep; the
+ * UI keys a saved host on it. Empty when the host does not say. */
+static void read_server_id(SERVER_DATA *server, const char *client_id, char *out, size_t size) {
+  out[0] = 0;
+  uuid_t uuid;
+  char uuid_text[37];
+  uuid_generate_random(uuid);
+  uuid_unparse(uuid, uuid_text);
+  char url[1024];
+  snprintf(url, sizeof(url), "https://%s:%u/serverinfo?uniqueid=%s&uuid=%s",
+           server->serverInfo.address, server->httpsPort, client_id, uuid_text);
+  PHTTP_DATA data = http_create_data();
+  if (!data)
+    return;
+
+  char *found = NULL;
+  bool answered = http_request(url, data) == GS_OK;
+  if (answered && xml_search(data->memory, data->size, "uniqueid", &found) == GS_OK && found)
+    json_string(out, size, found);
+  free(found);
+  http_free_data(data);
+}
+
+static int list(char *host, int argc, char **argv) {
   const char *covers = option(argc, argv, "--covers", NULL);
   SERVER_DATA server;
   if (session_connect(&server, host))
     return 1;
   if (!server.paired)
     return session_fail("not paired", "run: hbmoonlight pair HOST");
+
+  char unique_id[64] = "";
+  char server_id[256] = "";
   PAPP_LIST apps;
-  if (gs_applist(&server, &apps) != GS_OK)
+  session_deadline(LIST_TIMEOUT, "applist");
+  int result = gs_applist(&server, &apps);
+  if (result == GS_OK && read_unique_id(unique_id, sizeof(unique_id)))
+    read_server_id(&server, unique_id, server_id, sizeof(server_id));
+  session_deadline(0, NULL);
+  if (result != GS_OK)
     return session_fail("cannot read the app list", gs_error);
   apps = session_host_order(apps);
 
-  char unique_id[64];
   if (covers && (mkdir(covers, 0700) != 0 && errno != EEXIST)) {
     status("{\"event\":\"warning\",\"message\":\"cannot create the cover directory\"}");
     covers = NULL;
   }
-  if (covers && !read_unique_id(unique_id, sizeof(unique_id))) {
+  if (covers && !unique_id[0]) {
     status("{\"event\":\"warning\",\"message\":\"no unique id for covers\"}");
     covers = NULL;
   }
@@ -242,11 +299,16 @@ static int list(int argc, char **argv) {
   char name[512];
   char cover[4096];
   char escaped[8192];
-  printf("{\"currentGame\":%d,\"apps\":[", server.currentGame);
+  double covers_end = now_seconds() + COVER_BUDGET;
+  printf("{\"currentGame\":%d", server.currentGame);
+  if (server_id[0])
+    printf(",\"uniqueid\":\"%s\"", server_id);
+  printf(",\"apps\":[");
   for (PAPP_LIST app = apps; app; app = app->next) {
     json_string(name, sizeof(name), app->name);
     printf("%s{\"id\":%d,\"name\":\"%s\"", app == apps ? "" : ",", app->id, name);
-    if (covers && fetch_cover(&server, unique_id, app->id, covers, cover, sizeof(cover))) {
+    bool in_budget = covers && now_seconds() < covers_end;
+    if (in_budget && fetch_cover(&server, unique_id, app->id, covers, cover, sizeof(cover))) {
       json_string(escaped, sizeof(escaped), cover);
       printf(",\"cover\":\"%s\"", escaped);
     }
@@ -280,23 +342,11 @@ static int quit(char *host) {
   return 0;
 }
 
-static double now_seconds(void) {
-  struct timespec time;
-  clock_gettime(CLOCK_MONOTONIC, &time);
-  return time.tv_sec + time.tv_nsec / 1e9;
-}
-
 static void report_stats(bool audio) {
   struct video_stats video;
   video_take_stats(&video);
-  status("{\"event\":\"stats\",\"decoded\":%u,\"written\":%u,\"dropped\":%u,\"failed\":%u,"
-         "\"decodeMs\":%.2f,\"audioDropped\":%u}",
-         video.decoded, video.written, video.dropped, video.failed,
-         video.decoded ? video.decode_ms / video.decoded : 0.0,
-         audio ? audio_take_dropped() : 0);
-  if (video.probed)
-    status("{\"event\":\"probe-stats\",\"probed\":%u,\"meanMs\":%.2f,\"maxMs\":%.2f}",
-           video.probed, video.probe_ms / video.probed, video.probe_max_ms);
+  status("{\"event\":\"stats\",\"written\":%u,\"failed\":%u,\"audioDropped\":%u}",
+         video.written, video.failed, audio ? audio_take_dropped() : 0);
 }
 
 static bool read_input(char *line, size_t size, size_t *used) {
@@ -342,6 +392,7 @@ static void run_until_stopped(bool audio) {
     }
     if (now_seconds() >= next_report) {
       report_stats(audio);
+      session_report_rtt();
       next_report += 1;
     }
   }
@@ -349,20 +400,24 @@ static void run_until_stopped(bool audio) {
     status("{\"event\":\"stopping\",\"reason\":\"signal\"}");
 }
 
-static int stream(int argc, char **argv) {
-  char *host = argv[2];
-  const char *app = argv[3];
+static int stream(char *host, const char *app, int argc, char **argv) {
   int width = 1920, height = 1080;
   if (sscanf(option(argc, argv, "--size", "1920x1080"), "%dx%d", &width, &height) != 2 ||
       width <= 0 || height <= 0)
     return session_fail("bad --size", NULL);
-  int audio_fd = atoi(option(argc, argv, "--audio-fd", "-1"));
-  bool hevc = strcmp(option(argc, argv, "--codec", "h264"), "hevc") == 0;
-  int raw_h264 = atoi(option(argc, argv, "--raw-h264-fd", "-1"));
-  int raw_hevc = atoi(option(argc, argv, "--raw-hevc-fd", "-1"));
-  if (raw_h264 >= 0 && raw_hevc >= 0)
-    return session_fail("pass only one of --raw-h264-fd and --raw-hevc-fd", NULL);
-  int raw_fd = raw_h264 >= 0 ? raw_h264 : raw_hevc;
+  int audio_fd, fps, bitrate;
+  if (!option_int(argc, argv, "--audio-fd", -1, 0, INT_MAX, &audio_fd))
+    return bad_option("--audio-fd");
+  if (!option_int(argc, argv, "--fps", 60, 1, 240, &fps))
+    return bad_option("--fps");
+  if (!option_int(argc, argv, "--bitrate", 20000, 1, 1000000, &bitrate))
+    return bad_option("--bitrate");
+  struct stream_codec codec;
+  const char *codec_error = stream_codec_parse(argc, argv, &codec);
+  if (codec_error)
+    return session_fail(codec_error, NULL);
+  struct stream_launch launch;
+  stream_launch_parse(argc, argv, &launch);
 
   SERVER_DATA server;
   if (session_connect(&server, host))
@@ -373,26 +428,14 @@ static int stream(int argc, char **argv) {
   if (app_id < 0)
     return session_fail("app not found", app);
 
-  int formats = VIDEO_FORMAT_H264 | (hevc ? VIDEO_FORMAT_H265 : 0);
-  if (raw_fd >= 0)
-    formats = raw_hevc >= 0 ? VIDEO_FORMAT_H265 : VIDEO_FORMAT_H264;
   STREAM_CONFIGURATION config;
-  session_configure(&config, width, height, atoi(option(argc, argv, "--fps", "60")),
-                    atoi(option(argc, argv, "--bitrate", "20000")), formats);
+  session_configure(&config, width, height, fps, bitrate, codec.format);
 
-  int result = gs_start_app(&server, &config, app_id, false, false, 1);
+  int result = gs_start_app(&server, &config, app_id, launch.sops, launch.local_audio, 1);
   if (result != GS_OK)
     return session_fail("cannot start the app", gs_error);
 
-  struct video_options video = {.width = width,
-                                .height = height,
-                                .software = flag(argc, argv, "--software"),
-                                .decode = raw_fd < 0 || flag(argc, argv, "--rgb"),
-                                .raw_fd = raw_fd};
-  const char *patch = getenv("HBL_PROBE_PATCH");
-  video.probing = raw_fd >= 0 && patch &&
-                  sscanf(patch, "%d,%d,%d,%d", &video.probe[0], &video.probe[1],
-                         &video.probe[2], &video.probe[3]) == 4;
+  struct video_options video = {.format = codec.format, .raw_fd = codec.raw_fd};
   video_configure(&video);
   DECODER_RENDERER_CALLBACKS video_callbacks_set;
   video_callbacks(&video_callbacks_set);
@@ -423,11 +466,11 @@ static int stream(int argc, char **argv) {
 static int usage(void) {
   fprintf(stderr, "usage: hbmoonlight pair HOST [--timeout SECONDS]\n"
                   "       hbmoonlight list HOST [--covers DIR]\n"
+                  "       hbmoonlight unpair HOST\n"
                   "       hbmoonlight quit HOST\n"
-                  "       hbmoonlight stream HOST APP [--size WxH] [--fps N] [--bitrate KBPS]\n"
-                  "                         [--codec h264|hevc] [--software] [--audio-fd FD]"
-                  " [--quit]\n"
-                  "                         [--raw-h264-fd FD | --raw-hevc-fd FD] [--rgb]\n");
+                  "       hbmoonlight stream HOST APP --raw-fd FD [--codec h264|hevc|av1]\n"
+                  "                         [--size WxH] [--fps N] [--bitrate KBPS] [--audio-fd FD]\n"
+                  "                         [--sops] [--local-audio] [--quit]\n");
   return 2;
 }
 
@@ -437,13 +480,26 @@ int main(int argc, char **argv) {
   signal(SIGPIPE, SIG_IGN);
   signal(SIGALRM, session_on_alarm);
 
-  if (strcmp(argv[1], "pair") == 0)
-    return pair(argv[2], atoi(option(argc, argv, "--timeout", "120")));
-  if (strcmp(argv[1], "list") == 0)
-    return list(argc, argv);
-  if (strcmp(argv[1], "quit") == 0)
+  const char *command = argv[1];
+  int first = options_index(command);
+  if (first > argc)
+    return usage();
+  int count = argc - first;
+  char **options = argv + first;
+
+  if (strcmp(command, "pair") == 0) {
+    int timeout;
+    if (!option_int(count, options, "--timeout", 120, 1, PAIR_TIMEOUT_MAX, &timeout))
+      return bad_option("--timeout");
+    return pair(argv[2], timeout);
+  }
+  if (strcmp(command, "list") == 0)
+    return list(argv[2], count, options);
+  if (strcmp(command, "unpair") == 0)
+    return unpair(argv[2]);
+  if (strcmp(command, "quit") == 0)
     return quit(argv[2]);
-  if (strcmp(argv[1], "stream") == 0 && argc >= 4)
-    return stream(argc, argv);
+  if (strcmp(command, "stream") == 0)
+    return stream(argv[2], argv[3], count, options);
   return usage();
 }

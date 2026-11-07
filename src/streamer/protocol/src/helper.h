@@ -1,6 +1,5 @@
-/* Shared declarations for hbmoonlight, the headless Moonlight client used by
- * HBLauncher. stdout carries raw frames (or JSON for pair/list), stderr carries
- * one JSON object per line. */
+/* Shared declarations for hbmoonlight, the headless Moonlight client of moonlight-nx2. The raw
+ * fd carries the access units, stdout JSON for pair/list, stderr one JSON object per line. */
 #pragma once
 
 #include <Limelight.h>
@@ -11,25 +10,34 @@
 void status(const char *format, ...) __attribute__((format(printf, 1, 2)));
 void json_string(char *out, size_t size, const char *text);
 
-struct video_options {
-  int width;
-  int height;
-  bool software;
-  bool decode;
+int options_index(const char *command);
+const char *option(int argc, char **argv, const char *name, const char *fallback);
+bool option_int(int argc, char **argv, const char *name, int fallback, long min, long max,
+                int *out);
+bool flag(int argc, char **argv, const char *name);
+
+struct stream_codec {
+  int format;
   int raw_fd;
-  bool probing;
-  int probe[4]; /* x, y, w, h in stream pixels */
+};
+
+const char *stream_codec_parse(int argc, char **argv, struct stream_codec *out);
+
+struct stream_launch {
+  bool sops;
+  bool local_audio;
+};
+
+void stream_launch_parse(int argc, char **argv, struct stream_launch *out);
+
+struct video_options {
+  int format;
+  int raw_fd;
 };
 
 struct video_stats {
-  unsigned decoded;
   unsigned written;
-  unsigned dropped;
   unsigned failed;
-  double decode_ms;
-  unsigned probed;
-  double probe_ms;
-  double probe_max_ms;
 };
 
 void video_configure(const struct video_options *options);
@@ -57,3 +65,4 @@ void session_listener(CONNECTION_LISTENER_CALLBACKS *listener);
 bool session_started(void);
 bool session_terminated(void);
 void session_announce_controller(void);
+void session_report_rtt(void);

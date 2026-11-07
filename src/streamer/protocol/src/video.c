@@ -1,26 +1,8 @@
-/* Video: decodes H.264/HEVC with libavcodec (VAAPI when available), converts to
- * RGB24 at the requested size and publishes the newest frame to a mailbox.
- *
- * A writer thread takes frames from an internal mailbox and writes
- * them to stdout; a frame still pending when the next one is decoded is
- * dropped, so a slow reader never builds a queue.
- *
- * With a raw fd, every access unit is written in order as Annex B (IDR units
- * start with SPS/PPS, plus VPS for HEVC) and announced as an "au" status line.
- * Decoding is skipped when only the raw output is wanted.
- *
- * The loopback probe (options.probing) decodes each raw unit again, in
- * software and only after it was written, and logs a "probe-patch" line with
- * the unit's receive time each time the mean luma of the probe rect crosses
- * mid-grey. The stream has no reordering, so a unit's frame comes out of its
- * own packet. */
+/* Video: writes every access unit unchanged and in order to the raw fd (Annex B for H.264/HEVC,
+ * OBUs for AV1) and announces each as an "au" status line. The console decodes them. */
 #include "helper.h"
 
 #include <errno.h>
-#include <libavcodec/avcodec.h>
-#include <libavutil/hwcontext.h>
-#include <libavutil/imgutils.h>
-#include <libswscale/swscale.h>
 #include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
@@ -28,98 +10,10 @@
 #include <time.h>
 #include <unistd.h>
 
-/* Newest-frame mailbox: three preallocated buffers rotate between a producer
- * (back), a one-frame slot (pending) and a consumer (front). Publishing over a
- * frame nobody took drops it (publish returns true), so a slow consumer never
- * builds a queue. */
-struct mailbox {
-  uint8_t *buffers[3];
-  double stamps[3];
-  int back, pending, front;
-  bool has_pending;
-  bool stopping;
-  pthread_mutex_t lock;
-  pthread_cond_t ready;
-};
-
-static bool mailbox_init(struct mailbox *box, size_t bytes) {
-  memset(box, 0, sizeof(*box));
-  pthread_mutex_init(&box->lock, NULL);
-  pthread_cond_init(&box->ready, NULL);
-  box->back = 0;
-  box->pending = 1;
-  box->front = 2;
-  for (int i = 0; i < 3; i++)
-    if (!(box->buffers[i] = calloc(1, bytes)))
-      return false;
-  return true;
-}
-
-static void mailbox_free(struct mailbox *box) {
-  for (int i = 0; i < 3; i++) {
-    free(box->buffers[i]);
-    box->buffers[i] = NULL;
-  }
-  pthread_mutex_destroy(&box->lock);
-  pthread_cond_destroy(&box->ready);
-}
-
-static uint8_t *mailbox_back(struct mailbox *box) {
-  return box->buffers[box->back];
-}
-
-static bool mailbox_publish(struct mailbox *box, double stamp) {
-  pthread_mutex_lock(&box->lock);
-  box->stamps[box->back] = stamp;
-  int swap = box->back;
-  box->back = box->pending;
-  box->pending = swap;
-  bool dropped = box->has_pending;
-  box->has_pending = true;
-  pthread_cond_signal(&box->ready);
-  pthread_mutex_unlock(&box->lock);
-  return dropped;
-}
-
-static const uint8_t *mailbox_take(struct mailbox *box, double *stamp) {
-  pthread_mutex_lock(&box->lock);
-  while (!box->has_pending && !box->stopping)
-    pthread_cond_wait(&box->ready, &box->lock);
-  if (box->stopping) {
-    pthread_mutex_unlock(&box->lock);
-    return NULL;
-  }
-  int swap = box->front;
-  box->front = box->pending;
-  box->pending = swap;
-  box->has_pending = false;
-  if (stamp)
-    *stamp = box->stamps[box->front];
-  pthread_mutex_unlock(&box->lock);
-  return box->buffers[box->front];
-}
-
-static void mailbox_stop(struct mailbox *box) {
-  pthread_mutex_lock(&box->lock);
-  box->stopping = true;
-  pthread_cond_broadcast(&box->ready);
-  pthread_mutex_unlock(&box->lock);
-}
-
 static struct video_options options;
-static AVCodecContext *codec;
-static AVBufferRef *device;
-static AVPacket *packet;
-static AVFrame *frame;
-static AVFrame *transfer;
-static struct SwsContext *scaler;
 static uint8_t *packet_data;
 static size_t packet_capacity;
-
-static struct mailbox internal;
-static struct mailbox *frames;
-static bool writer_running;
-static pthread_t writer;
+static uint64_t access_units;
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 static struct video_stats stats;
 
@@ -127,10 +21,6 @@ static double now_ms(void) {
   struct timespec time;
   clock_gettime(CLOCK_MONOTONIC, &time);
   return time.tv_sec * 1000.0 + time.tv_nsec / 1e6;
-}
-
-static size_t frame_bytes(void) {
-  return (size_t)options.width * options.height * 3;
 }
 
 /* Bytes written to fd that the reader has not taken: the send queue of node's socketpair, or
@@ -155,65 +45,6 @@ static bool write_all(int fd, const uint8_t *data, size_t size) {
   return true;
 }
 
-static void *write_frames(void *unused) {
-  for (;;) {
-    const uint8_t *rgb = mailbox_take(frames, NULL);
-    if (!rgb)
-      return NULL;
-    if (!write_all(STDOUT_FILENO, rgb, frame_bytes())) {
-      status("{\"event\":\"error\",\"message\":\"frame output closed\"}");
-      LiInterruptConnection();
-      return NULL;
-    }
-    pthread_mutex_lock(&lock);
-    stats.written++;
-    pthread_mutex_unlock(&lock);
-  }
-}
-
-static void publish(double started) {
-  double now = now_ms();
-  bool dropped = mailbox_publish(frames, now);
-  pthread_mutex_lock(&lock);
-  stats.dropped += dropped;
-  stats.decoded++;
-  stats.decode_ms += now - started;
-  pthread_mutex_unlock(&lock);
-}
-
-static enum AVPixelFormat pick_vaapi(AVCodecContext *context, const enum AVPixelFormat *formats) {
-  for (const enum AVPixelFormat *format = formats; *format != AV_PIX_FMT_NONE; format++)
-    if (*format == AV_PIX_FMT_VAAPI)
-      return *format;
-  return avcodec_default_get_format(context, formats);
-}
-
-static bool convert(AVFrame *decoded) {
-  AVFrame *source = decoded;
-  if (decoded->format == AV_PIX_FMT_VAAPI) {
-    av_frame_unref(transfer);
-    if (av_hwframe_transfer_data(transfer, decoded, 0) < 0)
-      return false;
-    source = transfer;
-  }
-  scaler = sws_getCachedContext(scaler, source->width, source->height, source->format,
-                                options.width, options.height, AV_PIX_FMT_RGB24,
-                                SWS_BILINEAR, NULL, NULL, NULL);
-  if (!scaler)
-    return false;
-
-  bool bt601 = source->colorspace == AVCOL_SPC_SMPTE170M || source->colorspace == AVCOL_SPC_BT470BG;
-  bool full_range = source->color_range == AVCOL_RANGE_JPEG;
-  sws_setColorspaceDetails(scaler, sws_getCoefficients(bt601 ? SWS_CS_ITU601 : SWS_CS_ITU709),
-                           full_range, sws_getCoefficients(SWS_CS_DEFAULT), 1, 0, 1 << 16,
-                           1 << 16);
-
-  uint8_t *planes[4] = {mailbox_back(frames)};
-  int strides[4] = {options.width * 3};
-  return sws_scale(scaler, (const uint8_t *const *)source->data, source->linesize, 0,
-                   source->height, planes, strides) > 0;
-}
-
 static const char *codec_name(int format) {
   if (format & VIDEO_FORMAT_MASK_H265)
     return "hevc";
@@ -222,228 +53,74 @@ static const char *codec_name(int format) {
   return "h264";
 }
 
-static uint64_t access_units;
-
-static AVCodecContext *probe_codec;
-static AVPacket *probe_packet;
-static AVFrame *probe_frame;
-static bool probe_started;
-static int probe_state;
-
-static uint64_t clock_us(clockid_t id) {
-  struct timespec time;
-  clock_gettime(id, &time);
-  return (uint64_t)time.tv_sec * 1000000 + (uint64_t)time.tv_nsec / 1000;
-}
-
-static void probe_open(enum AVCodecID id) {
-  const AVCodec *decoder = avcodec_find_decoder(id);
-  probe_codec = decoder ? avcodec_alloc_context3(decoder) : NULL;
-  if (probe_codec) {
-    probe_codec->flags |= AV_CODEC_FLAG_LOW_DELAY;
-    probe_codec->thread_type = FF_THREAD_SLICE;
-    probe_codec->thread_count = 2;
-  }
-  if (!probe_codec || avcodec_open2(probe_codec, decoder, NULL) < 0) {
-    status("{\"event\":\"error\",\"message\":\"cannot open the probe decoder\"}");
-    avcodec_free_context(&probe_codec);
-    return;
-  }
-  probe_packet = av_packet_alloc();
-  probe_frame = av_frame_alloc();
-  probe_started = false;
-  probe_state = -1;
-  status("{\"event\":\"probe-patch\",\"rect\":[%d,%d,%d,%d]}", options.probe[0],
-         options.probe[1], options.probe[2], options.probe[3]);
-}
-
-/* Mean luma of the probe rect, clipped to the frame, or -1 when nothing is left of it. */
-static int probe_luma(const AVFrame *decoded) {
-  int x0 = options.probe[0], y0 = options.probe[1];
-  int x1 = x0 + options.probe[2], y1 = y0 + options.probe[3];
-  if (x1 > decoded->width)
-    x1 = decoded->width;
-  if (y1 > decoded->height)
-    y1 = decoded->height;
-  if (x0 < 0 || y0 < 0 || x1 <= x0 || y1 <= y0)
-    return -1;
-  uint64_t sum = 0;
-  for (int y = y0; y < y1; y++) {
-    const uint8_t *row = decoded->data[0] + (size_t)y * decoded->linesize[0];
-    for (int x = x0; x < x1; x++)
-      sum += row[x];
-  }
-  return (int)(sum / ((uint64_t)(x1 - x0) * (uint64_t)(y1 - y0)));
-}
-
-static void probe(PDECODE_UNIT unit, uint64_t seq, size_t bytes, bool keyframe) {
-  if (!probe_codec || (!probe_started && !keyframe))
-    return;
-  uint64_t wall = clock_us(CLOCK_REALTIME);
-  uint64_t received =
-      unit->receiveTimeUs ? wall - (LiGetMicroseconds() - unit->receiveTimeUs) : 0;
-  probe_packet->data = packet_data;
-  probe_packet->size = (int)bytes;
-  probe_packet->flags = keyframe ? AV_PKT_FLAG_KEY : 0;
-  probe_started = avcodec_send_packet(probe_codec, probe_packet) == 0;
-  while (probe_started && avcodec_receive_frame(probe_codec, probe_frame) == 0) {
-    int luma = probe_luma(probe_frame);
-    int state = luma >= 128;
-    if (luma >= 0 && state != probe_state) {
-      uint64_t decoded = clock_us(CLOCK_REALTIME);
-      status("{\"event\":\"probe-patch\",\"seq\":%llu,\"frame\":%d,\"luma\":%d,\"state\":%d,"
-             "\"receivedUs\":%llu,\"decodedUs\":%llu,\"probeMs\":%.2f}",
-             (unsigned long long)seq, unit->frameNumber, luma, state,
-             (unsigned long long)received, (unsigned long long)decoded, (decoded - wall) / 1000.0);
-      probe_state = state;
-    }
-  }
-  double ms = (clock_us(CLOCK_REALTIME) - wall) / 1000.0;
-  pthread_mutex_lock(&lock);
-  stats.probed++;
-  stats.probe_ms += ms;
-  if (ms > stats.probe_max_ms)
-    stats.probe_max_ms = ms;
-  pthread_mutex_unlock(&lock);
-}
-
 static int setup(int format, int width, int height, int fps, void *context, int flags) {
+  if (format != options.format) {
+    status("{\"event\":\"error\",\"message\":\"negotiated video codec differs from requested codec\","
+           "\"requested\":\"%s\",\"received\":\"%s\"}", codec_name(options.format), codec_name(format));
+    return -1;
+  }
+
   access_units = 0;
-  enum AVCodecID id = AV_CODEC_ID_H264;
-  if (format & VIDEO_FORMAT_MASK_H265)
-    id = AV_CODEC_ID_HEVC;
-  else if (format & VIDEO_FORMAT_MASK_AV1)
-    id = AV_CODEC_ID_AV1;
-  if (options.probing)
-    probe_open(id);
-  if (!options.decode) {
-    status("{\"event\":\"video\",\"codec\":\"%s\",\"decode\":false,\"stream\":\"%dx%d@%d\"}",
-           codec_name(format), width, height, fps);
-    return 0;
-  }
-
-  const AVCodec *decoder = avcodec_find_decoder(id);
-  codec = decoder ? avcodec_alloc_context3(decoder) : NULL;
-  if (!codec) {
-    status("{\"event\":\"error\",\"message\":\"no %s decoder\"}", codec_name(format));
-    return -1;
-  }
-  codec->flags |= AV_CODEC_FLAG_LOW_DELAY;
-
-  bool hardware = !options.software &&
-                  av_hwdevice_ctx_create(&device, AV_HWDEVICE_TYPE_VAAPI, NULL, NULL, 0) == 0;
-  if (hardware) {
-    codec->hw_device_ctx = av_buffer_ref(device);
-    codec->get_format = pick_vaapi;
-  } else {
-    codec->thread_type = FF_THREAD_SLICE;
-    codec->thread_count = 4;
-  }
-  if (avcodec_open2(codec, decoder, NULL) < 0) {
-    status("{\"event\":\"error\",\"message\":\"cannot open the %s decoder\"}", codec_name(format));
-    return -1;
-  }
-
-  packet = av_packet_alloc();
-  frame = av_frame_alloc();
-  transfer = av_frame_alloc();
-  frames = &internal;
-  if (!mailbox_init(frames, frame_bytes())) {
-    status("{\"event\":\"error\",\"message\":\"out of memory\"}");
-    return -1;
-  }
-  writer_running = pthread_create(&writer, NULL, write_frames, NULL) == 0;
-
-  status("{\"event\":\"video\",\"codec\":\"%s\",\"hardware\":%s,\"stream\":\"%dx%d@%d\","
-         "\"output\":\"%dx%d\"}",
-         codec_name(format), hardware ? "true" : "false", width, height, fps, options.width,
-         options.height);
+  status("{\"event\":\"video\",\"codec\":\"%s\",\"stream\":\"%dx%d@%d\"}", codec_name(format),
+         width, height, fps);
   return 0;
 }
 
-static int submit(PDECODE_UNIT unit) {
-  double started = now_ms();
-  double queue_ms = (LiGetMicroseconds() - unit->enqueueTimeUs) / 1000.0;
-  int queued = LiGetPendingVideoFrames();
-  size_t needed = (size_t)unit->fullLength + AV_INPUT_BUFFER_PADDING_SIZE;
+/* Joins the unit's buffer list into one contiguous packet; false when memory runs out. */
+static bool gather(PDECODE_UNIT unit) {
+  size_t needed = (size_t)unit->fullLength;
   if (needed > packet_capacity) {
-    packet_data = realloc(packet_data, needed);
+    uint8_t *grown = realloc(packet_data, needed);
+    if (!grown)
+      return false;
+    packet_data = grown;
     packet_capacity = needed;
   }
+
   size_t offset = 0;
   for (PLENTRY entry = unit->bufferList; entry; entry = entry->next) {
     memcpy(packet_data + offset, entry->data, entry->length);
     offset += entry->length;
   }
-  memset(packet_data + offset, 0, AV_INPUT_BUFFER_PADDING_SIZE);
+  return true;
+}
 
-  bool keyframe = unit->frameType == FRAME_TYPE_IDR;
-  if (options.raw_fd >= 0) {
-    int unread = unread_bytes(options.raw_fd);
-    double write_started = now_ms();
-    if (!write_all(options.raw_fd, packet_data, offset)) {
-      status("{\"event\":\"error\",\"message\":\"raw output closed\"}");
-      LiInterruptConnection();
-      return DR_OK;
-    }
-    double written = now_ms();
-    double receive_ms = (LiGetMicroseconds() - unit->receiveTimeUs) / 1000.0;
-    uint64_t seq = access_units++;
-    status("{\"type\":\"au\",\"seq\":%llu,\"frame\":%d,\"bytes\":%zu,\"keyframe\":%s,"
-           "\"pts\":%llu,\"receiveMs\":%.2f,\"queueMs\":%.2f,\"queued\":%d,\"unread\":%d,"
-           "\"writeMs\":%.2f,\"hostMs\":%.1f,\"writtenAt\":%.3f}",
-           (unsigned long long)seq, unit->frameNumber, offset, keyframe ? "true" : "false",
-           (unsigned long long)unit->presentationTimeUs, receive_ms, queue_ms, queued, unread,
-           written - write_started, unit->frameHostProcessingLatency / 10.0, written);
-    probe(unit, seq, offset, keyframe);
-  }
-  if (!options.decode) {
+static int submit(PDECODE_UNIT unit) {
+  double queue_ms = (LiGetMicroseconds() - unit->enqueueTimeUs) / 1000.0;
+  int queued = LiGetPendingVideoFrames();
+  if (!gather(unit)) {
     pthread_mutex_lock(&lock);
-    stats.written++;
+    stats.failed++;
     pthread_mutex_unlock(&lock);
+    return DR_NEED_IDR;
+  }
+
+  size_t bytes = (size_t)unit->fullLength;
+  bool keyframe = unit->frameType == FRAME_TYPE_IDR;
+  int unread = unread_bytes(options.raw_fd);
+  double write_started = now_ms();
+  if (!write_all(options.raw_fd, packet_data, bytes)) {
+    status("{\"event\":\"error\",\"message\":\"raw output closed\"}");
+    LiInterruptConnection();
     return DR_OK;
   }
 
-  packet->data = packet_data;
-  packet->size = (int)offset;
-  packet->flags = keyframe ? AV_PKT_FLAG_KEY : 0;
-  if (avcodec_send_packet(codec, packet) < 0)
-    goto failed;
-
-  while (avcodec_receive_frame(codec, frame) == 0) {
-    if (!convert(frame))
-      goto failed;
-    publish(started);
-  }
-  return DR_OK;
-
-failed:
+  double written = now_ms();
+  double receive_ms = (LiGetMicroseconds() - unit->receiveTimeUs) / 1000.0;
+  uint64_t seq = access_units++;
+  status("{\"type\":\"au\",\"seq\":%llu,\"frame\":%d,\"bytes\":%zu,\"keyframe\":%s,"
+         "\"pts\":%llu,\"receiveMs\":%.2f,\"queueMs\":%.2f,\"queued\":%d,\"unread\":%d,"
+         "\"writeMs\":%.2f,\"hostMs\":%.1f,\"writtenAt\":%.3f}",
+         (unsigned long long)seq, unit->frameNumber, bytes, keyframe ? "true" : "false",
+         (unsigned long long)unit->presentationTimeUs, receive_ms, queue_ms, queued, unread,
+         written - write_started, unit->frameHostProcessingLatency / 10.0, written);
   pthread_mutex_lock(&lock);
-  stats.failed++;
+  stats.written++;
   pthread_mutex_unlock(&lock);
-  return DR_NEED_IDR;
+  return DR_OK;
 }
 
 static void cleanup(void) {
-  if (frames) {
-    mailbox_stop(frames);
-    if (writer_running)
-      pthread_join(writer, NULL);
-    writer_running = false;
-    mailbox_free(frames);
-  }
-  frames = NULL;
-
-  avcodec_free_context(&codec);
-  avcodec_free_context(&probe_codec);
-  av_packet_free(&probe_packet);
-  av_frame_free(&probe_frame);
-  av_buffer_unref(&device);
-  av_packet_free(&packet);
-  av_frame_free(&frame);
-  av_frame_free(&transfer);
-  sws_freeContext(scaler);
-  scaler = NULL;
   free(packet_data);
   packet_data = NULL;
   packet_capacity = 0;
