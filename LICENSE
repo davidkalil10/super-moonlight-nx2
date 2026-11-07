@@ -3,8 +3,6 @@ hbl-moonlight carries work under the GNU General Public License, version 3:
 - src/streamer/protocol/: the hbmoonlight protocol client, built against the pinned
   moonlight-stream sources fetch.sh checks out (moonlight-embedded, moonlight-common-c with
   its enet fork). Those upstreams are GPL-3.0; the helper is distributed under the same terms.
-- src/renderer/moonlight/assets/icon.png: the Moonlight logo, the 256 px frame of app/moonlight.ico
-  from moonlight-qt (GPL-3.0, commit ac29686), exported as PNG and otherwise unchanged.
 
 The licence text follows.
 
