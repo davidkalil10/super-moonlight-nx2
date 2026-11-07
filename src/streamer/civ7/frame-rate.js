@@ -1,5 +1,6 @@
 const MEASUREMENT_FLOOR = 12;
 const RATE_MARGIN = 0.9;
+const BUSY_SHARE = 0.9;
 
 /** @param {number} fps */
 function validRate(fps) {
@@ -33,6 +34,8 @@ export function selectFrameRate(requestedFps, measurement = undefined) {
  * remains overloaded. A recommendation ends this session; the next starts a fresh H.264 chain.
  * With the console's busy ms per unit (latency.js ConsoleLoop) it says which side was short:
  * `console` when that cost exceeds the frame period, else `transport`.
+ * Only an overloaded short second counts toward the window; a starved one, where the console's
+ * loop sat idle waiting for units, is only added to `starvedMs` (README.md, "Current evidence").
  * @param {{fps: number, startedAt?: number, warmupMs?: number, sustainedMs?: number}} options
  */
 export function createFrameRateGuard({fps, startedAt = Date.now(), warmupMs = 1500, sustainedMs = 3000}) {
@@ -41,35 +44,43 @@ export function createFrameRateGuard({fps, startedAt = Date.now(), warmupMs = 15
     throw Error('Invalid frame rate observation window');
 
   let previous = {at: startedAt, presented: 0, dropped: 0, idrRequests: 0};
-  let badMs = 0;
-  let badFrames = 0;
-  let badDrops = 0;
-  let badIdrs = 0;
-  /** @type {number[]} */
-  let badUnitMs = [];
+  let bad = emptyWindow();
+  let pending = emptyWindow();
+  let starvedMs = 0;
   let recommended = false;
 
   function reset() {
-    badMs = 0;
-    badFrames = 0;
-    badDrops = 0;
-    badIdrs = 0;
-    badUnitMs = [];
+    bad = emptyWindow();
+    pending = emptyWindow();
   }
 
   /** @param {number} frameMs */
   function consoleCost(frameMs) {
-    if (!badUnitMs.length) return {};
+    if (!bad.unitMs.length) return {};
 
-    const total = badUnitMs.reduce((sum, value) => sum + value, 0);
-    const consoleUnitMs = Math.round(total / badUnitMs.length * 100) / 100;
+    const total = bad.unitMs.reduce((sum, value) => sum + value, 0);
+    const consoleUnitMs = Math.round(total / bad.unitMs.length * 100) / 100;
     return {consoleUnitMs, limit: consoleUnitMs > frameMs ? 'console' : 'transport'};
+  }
+
+  /**
+   * Short seconds wait for the console's next loop block, which covers every second since the
+   * last one; its idle share says whether they were overloaded or starved.
+   * @param {{busyMs: number, elapsedMs: number} | undefined} loop
+   */
+  function settle(loop) {
+    if (!loop) return;
+
+    if (consoleSaturated(loop)) addWindow(bad, pending);
+    else starvedMs += pending.ms;
+    pending = emptyWindow();
   }
 
   return {
     /**
      * @param {{at: number, presented: number, dropped: number, idrRequests: number,
-     *   queueAgeMs: number, acknowledgementMs: number, consoleUnitMs?: number}} sample
+     *   queueAgeMs: number, acknowledgementMs: number, consoleUnitMs?: number,
+     *   console?: {busyMs: number, elapsedMs: number} | null}} sample
      */
     observe(sample) {
       const {at, presented, dropped, idrRequests, queueAgeMs, acknowledgementMs} = sample;
@@ -99,19 +110,41 @@ export function createFrameRateGuard({fps, startedAt = Date.now(), warmupMs = 15
         return null;
       }
 
-      badMs += elapsedMs;
-      badFrames += frames;
-      badDrops += drops;
-      badIdrs += idrs;
-      if (Number.isFinite(sample.consoleUnitMs)) badUnitMs.push(/** @type {number} */ (sample.consoleUnitMs));
-      if (badMs < sustainedMs) return null;
+      addWindow(pending, {ms: elapsedMs, frames, drops, idrs, unitMs: []});
+      if (Number.isFinite(sample.consoleUnitMs)) pending.unitMs.push(/** @type {number} */ (sample.consoleUnitMs));
+      settle(sample.console ?? undefined);
+      if (bad.ms < sustainedMs) return null;
 
       recommended = true;
       return {from: fps, to: 60, reason: 'presentation-overload',
-        measuredFps: badFrames * 1000 / badMs, elapsedMs: badMs,
-        dropped: badDrops, idrRequests: badIdrs, ...consoleCost(frameMs)};
+        measuredFps: bad.frames * 1000 / bad.ms, elapsedMs: bad.ms,
+        dropped: bad.drops, idrRequests: bad.idrs, starvedMs, ...consoleCost(frameMs)};
     }
   };
+}
+
+/** @typedef {{ms: number, frames: number, drops: number, idrs: number, unitMs: number[]}} ShortWindow */
+
+/** @returns {ShortWindow} */
+function emptyWindow() {
+  return {ms: 0, frames: 0, drops: 0, idrs: 0, unitMs: []};
+}
+
+/** @param {ShortWindow} into @param {ShortWindow} from */
+function addWindow(into, from) {
+  into.ms += from.ms;
+  into.frames += from.frames;
+  into.drops += from.drops;
+  into.idrs += from.idrs;
+  into.unitMs.push(...from.unitMs);
+}
+
+/**
+ * Busy for most of the loop block: units were there and the console could not keep up.
+ * @param {{busyMs: number, elapsedMs: number}} loop
+ */
+function consoleSaturated(loop) {
+  return loop.busyMs >= loop.elapsedMs * BUSY_SHARE;
 }
 
 /**

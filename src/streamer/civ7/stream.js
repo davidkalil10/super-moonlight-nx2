@@ -452,7 +452,7 @@ export async function streamVideo({rpc, directory, presentation, hostAddress, ho
     telemetry = setInterval(() => {
       const recommendation = frameRate.observe({at: Date.now(), presented: videoOut.acknowledged,
         dropped: units.dropped, idrRequests: units.idrRequests, queueAgeMs, acknowledgementMs,
-        consoleUnitMs: consoleLoop?.unitMs ?? undefined});
+        consoleUnitMs: consoleLoop?.unitMs ?? undefined, console: consoleLoop});
       if (recommendation) {
         rateFallback = recommendation;
         log({type: 'frame-rate-overload', ...recommendation});
