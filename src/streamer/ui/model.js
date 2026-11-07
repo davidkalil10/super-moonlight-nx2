@@ -30,7 +30,7 @@ import * as settingsRules from './settings.js';
  *   | {type: 'operationMode', docked: boolean}
  *   | {type: 'failed', message: string, back?: string}} Event
  * @typedef {Record<string, any>} Settings
- * @typedef {{rows: {id: string, locked: boolean, unbacked: boolean}[], defaults: () => Settings,
+ * @typedef {{rows: {id: string, locked: boolean, unbacked: boolean, lockedSizes?: string[]}[], defaults: () => Settings,
  *   adjust: (settings: Settings, id: string, direction: number, docked?: boolean) => Settings}} Rules
  */
 
@@ -302,7 +302,8 @@ function createMachine(rules) {
     if (op === 'y') return next(model, {settings: rules.defaults()}, [{type: 'saveSettings'}]);
 
     const setting = rules.rows[item - ITEM.setting];
-    const editable = setting && !setting.locked && !setting.unbacked;
+    const editable = setting && !setting.locked && !setting.unbacked &&
+      !setting.lockedSizes?.includes(model.settings.size);
     if (op === 'a' && editable) return next(model, {editing: setting.id});
     return same(model);
   }

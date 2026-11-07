@@ -61,7 +61,7 @@ const BUTTONS = {position: 'By position', labels: 'By letter'};
  * while the console is docked.
  * @typedef {{id: string, label: string, values: any[], fallback: any,
  *   text: (value: any, settings: Record<string, any>) => string, locked?: boolean,
- *   unbacked?: boolean, formerDefaults?: any[], resetBefore?: number, docked?: any[]}} Setting
+ *   unbacked?: boolean, formerDefaults?: any[], resetBefore?: number, docked?: any[], lockedSizes?: string[]}} Setting
  */
 
 /** @type {Setting[]} */
@@ -79,7 +79,8 @@ const CATALOG = [
     label: 'Frame rate',
     values: [60, 120],
     fallback: 60,
-    text: value => value + ' fps'
+    text: value => value + ' fps',
+    lockedSizes: ['3840x2160']
   },
   {
     id: 'bitrate',
@@ -159,14 +160,15 @@ const VALUES = CATALOG.map(setting => ({
   unbacked: Boolean(setting.unbacked),
   formerDefaults: setting.formerDefaults ?? [],
   resetBefore: setting.resetBefore ?? 0,
-  docked: setting.docked ?? []
+  docked: setting.docked ?? [],
+  lockedSizes: setting.lockedSizes ?? []
 }));
 
 /**
  * Defaults, sanitising and stepping over the catalog values. Self-contained: payload.js ships it
  * with toString() so the console model uses the same rules.
  * @param {{id: string, values: any[], fallback: any, locked: boolean, unbacked: boolean,
- *   formerDefaults: any[], resetBefore: number, docked: any[]}[]} rows
+ *   formerDefaults: any[], resetBefore: number, docked: any[], lockedSizes?: string[]}[]} rows
  */
 function createSettingsCore(rows) {
   /**
@@ -208,6 +210,11 @@ function createSettingsCore(rows) {
       const reset = row.resetBefore > 0 && (!versioned || savedVersion < row.resetBefore);
       if (known && !former && !reset) settings[row.id] = value;
     }
+    if (settings.size === '3840x2160') {
+      settings.fpsBefore4k = [60, 120].includes(Number(fields.fpsBefore4k))
+        ? Number(fields.fpsBefore4k) : settings.fps;
+      settings.fps = 60;
+    }
     return settings;
   }
 
@@ -222,7 +229,7 @@ function createSettingsCore(rows) {
    */
   function adjust(settings, id, direction, docked = false) {
     const row = rows.find(entry => entry.id === id);
-    if (!row || row.locked || row.unbacked) return settings;
+    if (!row || row.locked || row.unbacked || row.lockedSizes?.includes(settings.size)) return settings;
 
     const step = Math.sign(direction);
     const offered = (/** @type {any} */ value) => docked || !row.docked.includes(value);
@@ -230,7 +237,14 @@ function createSettingsCore(rows) {
     while (index >= 0 && index < row.values.length && !offered(row.values[index])) index += step;
     if (index < 0 || index >= row.values.length) return settings;
 
-    return {...settings, [id]: row.values[index]};
+    const value = row.values[index];
+    if (id === 'size' && value === '3840x2160')
+      return {...settings, size: value, fps: 60, fpsBefore4k: settings.fps};
+    if (id === 'size' && settings.size === '3840x2160') {
+      const {fpsBefore4k, ...rest} = settings;
+      return {...rest, size: value, fps: [60, 120].includes(fpsBefore4k) ? fpsBefore4k : settings.fps};
+    }
+    return {...settings, [id]: value};
   }
 
   return {version, defaults, sanitize, adjust};
@@ -293,7 +307,7 @@ function rows(settings, docked = false) {
     id: setting.id,
     label: setting.label,
     value: setting.text(settings[setting.id], settings),
-    adjustable: !setting.locked && !setting.unbacked,
+    adjustable: !setting.locked && !setting.unbacked && !setting.lockedSizes?.includes(settings.size),
     greyed: Boolean(setting.unbacked),
     canLeft: moves(setting.id, -1),
     canRight: moves(setting.id, 1)
@@ -317,6 +331,7 @@ function bitrateArg(value) {
  * @param {Record<string, any>} settings
  */
 function streamArgs(settings) {
+  settings = sanitize(settings);
   const args = [
     '--codec',
     settings.codec,

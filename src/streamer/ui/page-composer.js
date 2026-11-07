@@ -17,7 +17,7 @@
  * @typedef {{handheld: Record<string, [boolean, boolean]>, docked: Record<string, [boolean, boolean]>}} SettingEnds
  *   Per JSON value, whether a step left and right changes it, in each operation mode.
  * @typedef {{id: string, label: string, adjustable: boolean, greyed: boolean,
- *   texts: Record<string, string>, ends: SettingEnds}} SettingText
+ *   texts: Record<string, string>, ends: SettingEnds, lockedSizes?: string[]}} SettingText
  * @typedef {{rows: SettingText[], auto: Record<string, string>}} SettingTexts
  * @typedef {{item: Record<string, number>, keys: string, isAddress: (entry: string) => boolean,
  *   appsPerPage: number, hostsPerPage: number, settingTexts: SettingTexts, layout: {PAGE_FLAG: Record<string, number>,
@@ -251,8 +251,9 @@ function createPageComposer(painter, options) {
         : row.texts[JSON.stringify(value)] ?? String(value);
       const ends = docked ? row.ends.docked : row.ends.handheld;
       const [canLeft, canRight] = ends[JSON.stringify(value)] ?? [false, false];
-      return {id: row.id, label: row.label, value: text, adjustable: row.adjustable, greyed: row.greyed,
-        canLeft, canRight};
+      const adjustable = row.adjustable && !row.lockedSizes?.includes(settings.size);
+      return {id: row.id, label: row.label, value: text, adjustable, greyed: row.greyed,
+        canLeft: adjustable && canLeft, canRight: adjustable && canRight};
     });
   }
 

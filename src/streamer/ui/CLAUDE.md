@@ -25,6 +25,9 @@ at. Tests: `src/streamer/ui/test/` in moonlight-nx2-dev.
   only after the console reported docked (`operationMode` event); a save holding one stays when
   handheld and the launch falls back to 1080p with a badge (civ7/README.md, "Fallbacks"). They
   are not yet proven end to end on the console.
+  Selecting 4K forces 60 fps and locks the frame-rate card. `fpsBefore4k` keeps the previous
+  60/120 preference in the save; stepping back to a smaller size restores it and removes the
+  field. Older 4K120 saves are clamped while retaining 120 for the next smaller size.
   Settings are edited with A (user decision, Round 6): the D-pad moves across both columns, A on
   an adjustable card sets `editing`, left/right then step it, A or B ends the edit. A dock change
   keeps the edit; adjust() steps by the new mode. Locked and unbacked rows never edit.

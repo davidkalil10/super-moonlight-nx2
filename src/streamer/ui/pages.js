@@ -48,6 +48,7 @@ function settingTexts() {
       texts[JSON.stringify(value)] = setting.text(value, uiSettings.defaults());
     }
     return {id: setting.id, label: setting.label, adjustable: row.adjustable, greyed: row.greyed, texts,
+      lockedSizes: setting.lockedSizes ?? [],
       ends: settingEnds(setting)};
   });
 
