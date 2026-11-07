@@ -9,12 +9,13 @@ export const TIMING = {magic: 0x314d4954, bytes: 32, none: 0xffffffff};
 export const LEGS = ['network', 'decode', 'present', 'input', 'ack'];
 
 /**
- * Loop block, once a second after a timing block: magic "LOP1", units, presented, pipelined,
- * elapsed µs, the second's µs per stage, then the sum and max µs from arrival to present over
- * the presented units; README.md, "Pipelined decode".
+ * Loop block, once a second after a timing block: magic "LOP2", units, presented, pipelined,
+ * elapsed µs, the second's µs per stage, the sum and max µs from arrival to present over the
+ * presented units, then the units whose work ran while the next one decoded and that work's µs;
+ * README.md, "Pipelined decode".
  */
 const LOOP_STAGES = ['idle', 'receive', 'submit', 'decodeWait', 'output', 'present', 'ack', 'acquire', 'gpuWait'];
-export const LOOP = {magic: 0x31504f4c, bytes: 28 + LOOP_STAGES.length * 4, stages: LOOP_STAGES};
+export const LOOP = {magic: 0x32504f4c, bytes: 36 + LOOP_STAGES.length * 4, stages: LOOP_STAGES};
 
 /**
  * @typedef {{sequence: number, header: number, arrived: number, decoded: number | null,
@@ -57,9 +58,11 @@ export function readTiming(bytes) {
 /**
  * @typedef {{units: number, presented: number, pipelined: number, elapsedMs: number, busyMs: number,
  *   unitMs: number | null, perUnitMs: Record<string, number> | null,
- *   receiveToPresentMs: {mean: number, max: number} | null}} ConsoleLoop
+ *   receiveToPresentMs: {mean: number, max: number} | null, overlapped: number,
+ *   overlappedMs: number | null}} ConsoleLoop
  *   `unitMs` is the console's busy time (elapsed minus idle) per unit, the cost the frame
- *   period must cover; `receiveToPresentMs` runs from a unit's arrival to its present returning
+ *   period must cover; `receiveToPresentMs` runs from a unit's arrival to its present returning;
+ *   `overlappedMs` is the mean ms of an `overlapped` unit's work that ran while the next decoded
  */
 
 /**
@@ -82,10 +85,12 @@ export function readLoop(bytes) {
   const receiveToPresentMs = presented
     ? {mean: round(ms(latencyAt) / presented), max: round(ms(latencyAt + 4))}
     : null;
+  const overlapped = bytes.readUInt32LE(latencyAt + 8);
+  const overlappedMs = overlapped ? round(ms(latencyAt + 12) / overlapped) : null;
   return {units, presented, pipelined: bytes.readUInt32LE(12),
     elapsedMs: round(elapsedMs), busyMs: round(busyMs), unitMs: units ? perUnit(busyMs) : null,
     perUnitMs: units ? Object.fromEntries(LOOP.stages.map(stage => [stage, perUnit(totals[stage])])) : null,
-    receiveToPresentMs};
+    receiveToPresentMs, overlapped, overlappedMs};
 }
 
 /**

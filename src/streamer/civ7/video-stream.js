@@ -65,7 +65,7 @@ export function videoStream(native, request) {
   const now = native.now || (() => Date.now());
   const timingMagic = 0x314d4954;
   const timingNone = 0xffffffff;
-  const loopMagic = 0x31504f4c;
+  const loopMagic = 0x32504f4c;
   const loopStages = ['idle', 'receive', 'submit', 'decodeWait', 'output', 'present', 'ack', 'acquire', 'gpuWait'];
   /** Acks are laid out here and stored to `header` a word at a time: a byte store costs as much. */
   const ack = new Uint8Array(0x1000);
@@ -73,7 +73,8 @@ export function videoStream(native, request) {
   let ackLength = 0;
   let lastAllowed = true;
   /** @type {Record<string, number>} */
-  const loop = {started: now(), units: 0, presented: 0, pipelined: 0, latencySum: 0, latencyMax: 0};
+  const loop = {started: now(), units: 0, presented: 0, pipelined: 0, latencySum: 0, latencyMax: 0,
+    overlapped: 0, hidden: 0};
   for (const stage of loopStages) loop[stage] = 0;
   /** @type {import('./present-batch.js').Present | null} */
   let presentation = null;
@@ -166,9 +167,12 @@ export function videoStream(native, request) {
     for (const stage of loopStages) stageWord(micro(loop[stage]));
     stageWord(micro(loop.latencySum));
     stageWord(micro(loop.latencyMax));
+    stageWord(loop.overlapped);
+    stageWord(micro(loop.hidden));
 
     loop.started = at;
-    for (const key of ['units', 'presented', 'pipelined', 'latencySum', 'latencyMax', ...loopStages]) loop[key] = 0;
+    for (const key of ['units', 'presented', 'pipelined', 'latencySum', 'latencyMax', 'overlapped', 'hidden',
+      ...loopStages]) loop[key] = 0;
   }
 
   /** Sends the staged ack, with the loop block when a second has passed. */
@@ -268,7 +272,11 @@ export function videoStream(native, request) {
       loop.latencyMax = Math.max(loop.latencyMax, latency);
     },
     done(unit) { acknowledge(/** @type {StreamUnit} */ (unit)); },
-    spent(stage, ms) { loop[stage] += ms; }
+    spent(stage, ms) { loop[stage] += ms; },
+    overlapped(ms) {
+      loop.overlapped++;
+      loop.hidden += ms;
+    }
   };
 
   /** @type {DecodeNative['createPresentation']} */

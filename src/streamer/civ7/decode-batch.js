@@ -16,10 +16,11 @@
  * A streaming caller's view of each unit. `ready` says the next unit already waits whole. With
  * `overlap` the previous unit then presents while the decoder works on the next; without it a
  * present that would wait on the swapchain (under `periodMs` since the last) gives way to the
- * newer unit; README.md, "Pipelined decode" and "Latest wins".
+ * newer unit. `overlapped` gets the ms a unit's work ran while the next one decoded; README.md,
+ * "Pipelined decode" and "Latest wins".
  * @typedef {{ready(): boolean, overlap?: boolean, periodMs?: number, decoded(unit: DecodeUnit): void,
  *   presented(unit: DecodeUnit): void, done(unit: DecodeUnit): void,
- *   spent(stage: DecodeStage, ms: number): void}} DecodePipeline
+ *   spent(stage: DecodeStage, ms: number): void, overlapped?(ms: number): void}} DecodePipeline
  */
 
 /**
@@ -300,7 +301,9 @@ export function decodeBatch(native, request) {
     for (const unit of units) {
       submit(unit);
       if (decoded) {
+        const since = clock();
         show(decoded, decodedFrame);
+        pipeline?.overlapped?.(clock() - since);
         decoded = null;
       }
 
