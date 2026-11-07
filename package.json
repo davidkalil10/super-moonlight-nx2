@@ -6,7 +6,7 @@
     "node": ">=22.12"
   },
   "scripts": {
-    "test": "node --test $(git ls-files '*.test.cjs')",
+    "test": "MOONLIGHT_APP=$PWD npm --prefix ../moonlight-nx2-dev test",
     "typecheck": "tsc -p tsconfig.json"
   },
   "devDependencies": {
