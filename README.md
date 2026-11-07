@@ -1,233 +1,157 @@
-# hbl-moonlight
+# moonlight-nx2
 
-Moonlight for HBLauncher: stream PC games from Sunshine to the Switch 2. The console runs
-the Moonlight HB package (`src/renderer/moonlight/`), the PC runs the streamer (`src/streamer/`): the
-`hbmoonlight` client, the stream senders and the console UI service. Each component keeps its
-unit tests in a `test/` beside it ([Tests](#tests)); CLAUDE.md has the decisions,
-measurements and research.
+Moonlight for the Switch 2: stream PC games from Sunshine to the console. It runs inside the
+CivSwitch loader (Civ7): `src/streamer/civ7/` is the console backend, packaged with the host
+helper as one payload by `src/streamer/payload/`. The console decodes H.264 with its movie
+decoder and AV1 with the lower decoder service, and draws through the Civ7 renderer
+(`src/renderer/civ7/`). The PC keeps `hbmoonlight` and the Sunshine session. CLAUDE.md
+has the decisions, measurements and research.
 
 ```
 Sunshine (rig, 192.168.8.245)
-   | RTSP/ENet/RTP, H.264 or HEVC + Opus
-hbmoonlight (PC)                    pairing, app list, covers, quit, stream
-   | --raw-h264-fd 4 | RGB24 stdout | PCM --audio-fd 3 | input on stdin
-live.js / native-h264.js (PC)       ring writes over the bridge, or native TCP
-   | 32 KiB (protocol 1/2) or up to 252 KiB (protocol 3) exchanges
-src/renderer (console GPU)        compute picks/decodes, fragment draws
+   | RTSP/ENet/RTP, AV1 or H.264 + Opus
+hbmoonlight (PC)          pairing, app list, quit, stream: raw units on --raw-fd 4, PCM on 3
+serve.js (PC, TCP 39380)  relays units over UDP or TCP, PCM, and the console's input records
+moonlight.js (console)    UI, settings, decode, present, AudioOut, input sampling
 ```
 
 ## Layout
 
-- `src/renderer/moonlight/`: the HB package that draws on the Switch 2 (`manifest.json`,
-  `assets/`, `backends/hblauncher.gpu-app/`, `build.js`); see [Package](#package).
-- `src/renderer/`: the HBV codecs and the glslang shim that `build.js` builds from.
+- `src/renderer/civ7/`: the console renderer: GLSL sources, `build.js` and the committed
+  `prebuilt/` SPIR-V the bundle ships; see [Renderer](#renderer).
+- `src/streamer/civ7/`: the console backend (src/streamer/civ7/README.md).
+- `src/streamer/payload/`: the bundle builder, `launch.js` and the helper `serve.js`
+  (src/streamer/payload/README.md).
 - `src/streamer/protocol/`: `hbmoonlight`, the Moonlight protocol client (C, GPLv3).
-- `src/streamer/stream/`: `session/` (`live.js`, `native-h264.js`, `protocol-binary.js` finds
-  the `hbmoonlight` binary), `scheduler/`, `worker/` and `native/` (src/streamer/stream/CLAUDE.md).
-- `src/streamer/audio/`: `audio-stream.js` and the socket audio worker.
-- `src/streamer/input/`: `input-feeder.js`, `controller.js`, `touch.js`.
-- `src/streamer/ui/`: the console UI service (see Console UI service).
-- `src/streamer/shared/`: `ring.js` and `feed.js`; `test-support/`: helpers the tests share.
-- `src/streamer/console-api/movie-functions.json`, `movie-event-functions.json`,
-  `movie-mode-functions.json`: the native symbols only Moonlight uses.
+- `src/streamer/session/`: `h264-stream.js`, `h264-sps.js` and `av1-stream.js` (the helper's
+  access-unit pipe), `native-decoder.js` (`movie::Decoder`), `bitrate.js`, and
+  `protocol-binary.js`, which pins the `hbmoonlight` binary.
+- `src/streamer/input/`: `controller.js`, `touch.js`, `input-record.js`.
+- `src/streamer/ui/`: the console UI's PC half (see Console UI).
+- `src/streamer/shared/ring.js`: the private memory layout; `test-support/`: shared test code.
+- `src/streamer/console-api/`: the native symbol tables the backend and probes verify.
+- `src/streamer/loopback/flip-window.py`: the patch flipper for the latency film.
 
-It needs `hbl-platform` beside it (bridge, `sdk/host`, `sdk/native`, `sdk/build.js`; the tests
-also use its `tests/` mocks) and, for the tests, `HBLauncher`; the layout is in
-[hbl-platform's README](../hbl-platform/README.md), Sibling checkouts. Launcher sessions
-live in `hbl-platform/runs/launcher-*`; every tool takes a session directory as its first
-argument and uses the newest one when it is omitted.
+## Running
+
+Build a bundle with `src/streamer/payload/build.js` (src/streamer/payload/README.md), then,
+with the CivSwitch loader listening on TCP 9026:
+
+```sh
+node bundle/launch.mjs CONSOLE_IP   # starts serve.mjs in the background, sends moonlight.js
+```
+
+Everything after that happens on the Switch: host, app and settings in the Moonlight UI.
+L+R+Minus+Plus stops the stream; SIGINT on the helper stops it in order, a second signal
+exits at once. Bitrate defaults to Auto (`bitrate.js` from size and fps). Steady 1080p60 is
+measured; 120 fps and end-to-end latency are open.
 
 ## Build
 
 ```sh
-src/streamer/protocol/build.sh [BUILD]   # hbmoonlight into BUILD/build/ (default ~/claude-builds/HBLauncher/moonlight-helper)
-node src/renderer/moonlight/build.js           # package shaders and memory image
-node ../hbl-platform/sdk/build.js --check src/renderer/moonlight  # check the package, write nothing
+src/streamer/protocol/build.sh [BUILD]   # hbmoonlight into BUILD/build/ (default /media/storage2/builds/moonlight/helper)
+node src/renderer/civ7/build.js --directory BUILD --install   # renderer SPIR-V into prebuilt/
 ```
 
-`build.js` needs glslc 2026.1 (Fedora 44) and `spirv-val`. It rewrites the package in place,
-so it refuses any argument, and it refuses a glslc other than the 2026.1 build behind the
-committed SPIR-V; both refusals write nothing. It always compiles through
-`src/renderer/glslang-shim.sh`, which maps the platform's `glslangValidator -V ... SRC -o OUT`
-call onto `glslc -Os --target-env=vulkan1.0`. `GLSLC` picks the glslc for both the version check
-and the shim; a `GLSLANG` setting is ignored with a notice.
+The renderer build needs glslc and `spirv-val` (src/renderer/civ7/README.md); a bundle build
+needs neither, as it ships `prebuilt/`.
 
 `build.sh` compiles natively when the -devel packages are present, otherwise inside a rootless
-podman `quay.io/fedora/fedora:44` image (`src/streamer/protocol/Containerfile`); rig and m5 run
-the same Fedora 44 sonames, so the container binary runs on m5 as is. Native packages:
+podman `quay.io/fedora/fedora:44` image (`src/streamer/protocol/Containerfile`). Native
+packages:
 
 ```sh
-sudo dnf install gcc gcc-c++ cmake openssl-devel libcurl-devel expat-devel libuuid-devel \
-  opus-devel libavcodec-free-devel libavutil-free-devel libswscale-free-devel
+sudo dnf install gcc gcc-c++ cmake openssl-devel libcurl-devel expat-devel libuuid-devel opus-devel
 ```
 
 `fetch.sh` pins the GPLv3 upstreams, never copied into this repo: moonlight-embedded
 (libgamestream: pairing, app list, launch; `discover.c` left out) at `f32e415`,
 moonlight-common-c at `b126e481` (has `LiSendTouchEvent`) and its enet at `dea6fb5`. A
-published `hbmoonlight` is GPLv3. The input test builds from `test/` (`DEV_DIR` in
+published `hbmoonlight` is GPLv3. The C tests build from `test/` (`DEV_DIR` in
 `CMakeLists.txt`).
-`src/streamer/stream/session/protocol-binary.js` finds the binary: `$HBMOONLIGHT`, else the default build path.
+`src/streamer/session/protocol-binary.js` finds the binary: `$HBMOONLIGHT`, else the pinned build.
 
-## Package
+## Renderer
 
-`src/renderer/` displays the frames the host writes into the app's private storage. The live
-route is the helper's raw H.264, decoded through the console's native movie API into NV12
-surfaces. The ring also takes HBV1 (`src/renderer/hbv.js`, fixed-size intra slots drawn
-straight from the ring) and HBV2 (`src/renderer/hbv2.js`, inter-coded variable-rate slots
-that the compute shader decodes into a persistent 1080p frame). Without a sender the app shows
-the built-in HBV2 test card.
+`src/renderer/civ7/` displays the NV12 frames the console decodes into the app's private
+storage, and the UI pages the PC paints, with per-slot command buffers recorded once at
+startup. `bundle.js` loads `prebuilt/` and packs the asset blob (`payload/asset-blob.js`) that
+console startup uploads; src/renderer/civ7/README.md has the design.
 
-The app is an HB package (`manifest.json`, see the package spec in hbl-platform's README):
-`assets/` holds the icon and text atlas and `backends/hblauncher.gpu-app/` the shaders
-with their includes, the SPIR-V and the state and memory images. The compute and fragment
-shaders read the frame ring, so the package has no portable entry and no `src/` yet.
-`build.js` regenerates `hbv.glsl`, `hbv2-tables.glsl`, `ring.glsl`, `state.bin` and
-`memory.bin` under `backends/hblauncher.gpu-app/`, and `assets.py` the text atlas and
-`text.glsl`; do not edit those by hand. Private memory (`manifest.json` `memory.bytes`) is
-laid out in [Private memory](#private-memory-binding-1); the two UI page buffers came with 1.1.0.
+### AV1 and UDP
 
-The console UI (`ui.glsl`, included by `app.comp` and `app.frag`) draws the pages the host
-service publishes: text strips and images at the positions the host laid out, a cursor the
-console moves by geometry on the frame of the press, and one forwarded command per press
-(A/B/X/Y, left/right on an adjustable item, L+R held one second). A page replaces the video
-unless it is an overlay, which shows over the dimmed stream while raised. Plus and Minus held
-together still exit to HBLauncher from any screen.
-
-`assets/icon.png` is the Moonlight logo: the 256x256 frame of `app/moonlight.ico` from
-[moonlight-qt](https://github.com/moonlight-stream/moonlight-qt) at commit ac29686,
-GPL-3.0 like the helper's upstreams, exported as RGBA PNG with Pillow and otherwise unchanged.
-
-## Run
-
-On the console, from a fresh SmileBASIC session (`./start.sh --app moonlight` in HBLauncher),
-wait for the HBV2 test card. `live.js` refuses a session whose app private storage is smaller
-than `ring.MEMORY_BYTES` (20,217,856): the console still runs an older package, so tap
-Refresh in the launcher and relaunch. Hold Plus and Minus together for one second to return
-to the launcher; single B and Minus presses reach the PC.
+Defaults since settings version 4: Codec AV1, Transport UDP (an older save moves to them once;
+H.264 and TCP stay selectable in Settings). AV1 decodes through the console's lower decoder
+service rather than the public movie API (`src/streamer/civ7/README.md`, "AV1"), at 720p60 or
+1080p60, into the same NV12 present path; Auto bitrate is 0.7x H.264's. The pinned helper
+(`20261107T200357Z-19b4f09-helper`) streams AV1 and is `build.js`'s `--helper`
+default, and `--transport` defaults to `udp`:
 
 ```sh
-node src/streamer/stream/session/live.js [RUN_DIR] --moonlight 192.168.8.245 Desktop --codec h264 --fps 60
-# console UI: the console picks the host and app
-node src/streamer/ui/service.js [RUN_DIR]
+node src/streamer/payload/build.js --directory BUNDLE_DIR --host 192.168.8.245 \
+  --inspector PREVIOUS_BUNDLE/bin/nx2-modules
 ```
 
-### live.js flags
-
-| Flag                        | Default     | Meaning                                                                                           |
-| --------------------------- | ----------- | ------------------------------------------------------------------------------------------------- |
-| `--moonlight HOST APP`      |             | stream from Sunshine through `hbmoonlight`; APP is a name (case-insensitive) or an id from `list` |
-| `--codec h264`              | `h264`      | the only route left: the console decoder                                                          |
-| `--size WxH`                | `1920x1080` | stream and frame size                                                                             |
-| `--fps N`                   | `60`        | requested frame rate                                                                              |
-| `--bitrate KBPS\|auto`      | `auto`      | Moonlight's table: interpolated by pixels, linear in fps to 60, square root above; 500 to 150000  |
-| `--no-input` / `--no-audio` | on          | skip `input-feeder.js` / the audio path                                                           |
-
-### h264 flags (`native-h264.js`)
-
-| Flag                                        | Default                                 | Meaning                                                                                                                                                                                                                                                     |
-| ------------------------------------------- | --------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--staggered`                               | always                                  | lag-2 input and output workers, one status read and one gate write per frame; the only route, so the flag is a no-op                                                                                                                                        |
-| `--present-hz 60\|120`                      | `60`                                    | staggered: display refresh the pacer starts from                                                                                                                                                                                                            |
-| `--skip-backlog N\|off`                     | `1` at 60 Hz, else `2` (`1` with vsync) | staggered: units queued before outputs go off screen                                                                                                                                                                                                        |
-| `--skip-rule backlog\|vsync`                | `backlog`                               | staggered: skip by backlog, or keep one publication pending per vsync                                                                                                                                                                                       |
-| `--decode-wait`                             | off                                     | sleep to the predicted acquire (needs `--skip-rule vsync`)                                                                                                                                                                                                  |
-| `--trim-backlog-ms N`                       | off                                     | staggered, backlog rule, `--skip-backlog` 1 or more: skip one output once the unit in hand is N ms old with a unit queued, at 3 gates in a row, at most once per 6 gates; counted as `trimmed`. Pick N above the default run's `au.gateAgeMs` plus a margin |
-| `--drain-gates N`                           | off                                     | staggered, backlog rule, no `--gate-queue`: skip one output once units have waited behind the one in hand at N gates in a row (1-8), then cool down 3 gates; counted as `drained`                                                                           |
-| `--gate-on-receive`                         | off                                     | staggered, 60 Hz only: open decode N when unit N arrives instead of on N+1                                                                                                                                                                                  |
-| `--gate-queue`                              | off                                     | with `--gate-on-receive`: queue each gate behind its send instead of awaiting it, at most one unit primed ahead of the console's receive                                                                                                                    |
-| `--output-lag 1\|2`                         | `1` at 60 Hz, `2` at 120 Hz             | staggered: fetch each output 1 or 2 gates after its decode                                                                                                                                                                                                  |
-| `--receive-wait`                            | off                                     | sleep to the predicted receive                                                                                                                                                                                                                              |
-| `--avoid-window B-A`                        | off                                     | keep status reads out of B ms before to A ms after a predicted event (needs a wait flag)                                                                                                                                                                    |
-| `--queue N`                                 | `8`                                     | host access-unit queue, 1 to 16                                                                                                                                                                                                                             |
-| `--input-hz N`                              | `60`, `120` with push                   | input feeder rate, 10 to 120 (240 with `--input-push-pad`)                                                                                                                                                                                                  |
-| `--input-push`                              | off                                     | a console worker pushes the pad, touch and overlay words over native TCP instead of the feeder reading them (`input-feeder.js --push`); rows gain `inputPush` {pushed, dropped, gapMaxMs}                                                                   |
-| `--input-push-pad`                          | off                                     | with `--input-push`, handheld only (`auto-launch.json` dock=handheld): each pass reads the pad itself and ends the record with its count, which the feeder dedups on; `inputPush` gains `arrivalMs` and `samplingStep` (unverified)                         |
-| `--audio-frames N`                          | `960` on protocol 3, else `1920`        | AudioOut buffer, multiple of 240 (up to 3840 with socket audio)                                                                                                                                                                                             |
-| `--socket-audio` / `--socket-audio-tone`    | off                                     | PCM, or a 500 Hz tone, over native TCP to a console audio worker                                                                                                                                                                                            |
-| `--no-plus-guard`                           | on                                      | skip the + guard: SB4 context zeroed for the stream so + cannot stop the program (stream-plus-guard.js)                                                                                                                                                     |
-| `--duration S` / `--warmup S`               | none / `3`                              | run length; rows skipped before scoring                                                                                                                                                                                                                     |
-| `--expect fps=30,dropped=0,idr=0,trimmed=0` | dropped and IDR fail                    | limits for the PASS/FAIL verdict                                                                                                                                                                                                                            |
-
-The native route needs `--moonlight` and a launcher session from the current revision (the
-session records the host address for the TCP connection). Each run writes a source/build
-manifest, `events.jsonl`, the stats rows and `summary.json` under
-`/media/storage2/builds/HBLauncher/native-h264/` (`HB_BUILDS` moves the root,
-`HB_NATIVE_LOG_DIR` picks the directory). Per-second rows (`{"codec":"h264",...}`):
-`decoded` and `presented` climb toward the requested fps, `dropped` falls to 0, `resyncs` stays
-0, `idr` counts keyframe requests (at most one per second). A `native-resync` record carries
-`message` and `result`; `native-error` is a fatal decoder status. A hung worker shows as
-`Native job wait timed out; allocation remains in use` or `Repeating worker did not stop;
-resources retained`; the decoder then latches failed and the stream ends rather than reuse a
-thread that may still run. `HB_PIPELINE` does not help the decoder: the bridge serializes every
-command except raw write chunks.
+A start that fails on AV1 (Sunshine refuses it, the open fails, or AV1 is refused after a
+failed cleanup until the console app restarts) runs on H.264 with the badge "AV1 ▸ H.264"; a
+UDP start that gets no hello or fails to receive before the first unit runs on TCP with
+"UDP ▸ TCP" (`src/streamer/civ7/README.md`, "Fallbacks").
 
 ## hbmoonlight
 
 Status and errors are one JSON object per line on stderr.
 
-| Command                                                                                                                      | Output                                                                                                           |
-| ---------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| `pair HOST [--timeout 120]`                                                                                                  | `{"event":"pin","pin":"NNNN","url":...}`, then `{"event":"paired"}` once the PIN is entered in Sunshine's web UI |
-| `list HOST [--covers DIR]`                                                                                                   | `{"currentGame":N,"apps":[{"id":..,"name":..}]}`; with `--covers`, box art from `/appasset`                      |
-| `quit HOST`                                                                                                                  | quits the running app (`/cancel`)                                                                                |
-| `stream HOST APP [--size 1920x1080] [--fps 60] [--bitrate 20000] [--codec h264\|hevc] [--software] [--audio-fd FD] [--quit]` | raw RGB24 frames of exactly WxH on stdout                                                                        |
-| `stream ... --raw-h264-fd FD \| --raw-hevc-fd FD [--rgb]`                                                                    | every access unit in order as Annex B on FD; no RGB unless `--rgb`                                               |
+| Command                                                                                                   | Output                                                                                                           |
+| --------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `pair HOST [--timeout 120]`                                                                               | `{"event":"pin","pin":"NNNN","url":...}`, then `{"event":"paired"}` once the PIN is entered in Sunshine's web UI |
+| `list HOST [--covers DIR]`                                                                                | `{"currentGame":N,"uniqueid":..,"apps":[{"id":..,"name":..}]}`; with `--covers`, box art from `/appasset`        |
+| `quit HOST`                                                                                               | quits the running app (`/cancel`)                                                                                |
+| `unpair HOST`                                                                                             | `{"event":"unpaired","already":bool}`; the PC forgets this client                                               |
+| `stream HOST APP --raw-fd FD [--codec h264\|hevc\|av1] [--size 1920x1080] [--fps 60] [--bitrate 20000] [--audio-fd FD] [--quit] [--sops] [--local-audio]` | every access unit unchanged on FD                                                                      |
 
-- Keys and the unique id live in `$XDG_CONFIG_HOME/hblauncher/moonlight` (mode 0700). Never
-  commit them.
-- Video: libavcodec with VAAPI first (`--software` forces CPU), `sws_scale` to RGB24. Three
-  buffers rotate between decoder, a one-frame mailbox and a writer thread; a frame still pending
-  when the next one decodes is dropped and counted. Sunshine is asked for 4 slices per frame.
-- Raw mode pins Sunshine to the codec. Each IDR starts with SPS/PPS (VPS for HEVC). Writes
-  block, nothing is dropped, and each unit is announced on stderr as
-  `{"type":"au","seq":N,"frame":N,"bytes":N,"keyframe":bool,"pts":us}`.
-- Input: stdin JSON lines (below) and `request-idr` for a keyframe.
+- Keys and the unique id live in `$XDG_CONFIG_HOME/moonlight-nx2` (mode 0700); while that is
+  missing, an existing `hblauncher/moonlight` is used. Never commit them.
+- `--codec` (default `h264`) is the only format offered; a negotiated fallback to another codec
+  is refused. AV1 selects Main8. Raw AV1 carries OBUs, H.264/HEVC carry Annex B, and each IDR
+  starts with its parameter sets. Writes block, nothing is dropped, and each unit is announced
+  on stderr as `{"type":"au","seq":N,"frame":N,"bytes":N,"keyframe":bool,"pts":us}`. Sunshine
+  is asked for 4 slices per frame.
+- `--sops` lets Sunshine change the PC display to the stream shape; `--local-audio` keeps
+  the sound playing on the PC as well.
+- Input: stdin JSON lines (controller, touch) and `request-idr` for a keyframe.
 - Audio: Opus decoded to 48 kHz stereo s16le on `--audio-fd`, non-blocking; packets the reader
   cannot take are dropped (`audioDropped`).
 - Stop: SIGINT/SIGTERM or stdin EOF, then `LiStopConnection`; `--quit` also quits the host app.
-  A `stats` line each second reports decoded, written, dropped, failed and decode+convert ms.
+  A `stats` line each second reports units written, failed units and `audioDropped`.
 - Covers: only a real PNG of at most 4 MiB and 4096 px a side, fetched under a 5 s alarm.
+- Options are read only after HOST (and APP for `stream`). A numeric option without a value,
+  not a number or out of range (`--timeout` 1..600, `--fps` 1..240, `--bitrate` 1..1000000)
+  exits 2 with a `bad option value` error.
+- Timeouts: connect 15 s; `list` app list and host uniqueid 15 s, then covers start only within
+  10 s, each under 5 s; `unpair` 15 s; `quit` `/cancel` 30 s plus a reconnect; `pair` waits
+  `--timeout` for the PIN. The UI service kills a helper 5 s after that worst case
+  (`HELPER_TIMEOUT_MS` in `src/streamer/ui/service.js`: list 50 s, unpair 35 s, quit 65 s,
+  pair 140 s).
 
 ## Private memory (binding 1)
 
-`src/streamer/shared/ring.js` is the source of truth; `build.js` generates `ring.glsl` from it.
+`src/streamer/shared/ring.js` is the source of truth; `src/renderer/civ7/layout.js` reads it.
 
 ```
 control 0x000000  64 KiB: shader words, native publication, written[8160] at 0x400 (ends 0x8380),
                   UI block at 0xC000
-ring    0x010000  8 slots x 294,912 (9 exchanges); the host writes slot sequence % 8
-frames  0x250000  3 x 3,133,440 (1920x1088 NV12 / 4:2:0); HBV2 uses the first two
+ring    0x010000  8 x 294,912, unused since the HBV formats went; kept so the offsets hold
+frames  0x250000  3 x 3,133,440 (1920x1088 NV12 / 4:2:0); frames 0 and 1, badge pixels in 2
 spare   0xb47000  4 KiB
 ui      0xb48000  2 x 4 MiB page buffers        MEMORY_BYTES 20,217,856
 ```
 
-Control words (`ring.CONTROL`): `applied` 0, `applyCount` 4, `mode` 8 (0 none, 1 hbv1,
-2 hbv2, 3 native), `current` 12, `size` 16, `hbv1Slot` 20, `nativeReady` 24, `nativeApplied` 32,
+Control words (`ring.CONTROL`): `applied` 0, `applyCount` 4, `mode` 8 (0 none, 3 native),
+`current` 12, `size` 16, `nativeReady` 24, `nativeApplied` 32,
 `currentStride/SliceHeight/Color` 64..72. The host's native publication starts at byte 256
 (`nativeSequence`, index, width, height, stride, slice height, color, commit at 284), so GPU
 words (first 128 bytes) and host words never share a cache line. `NATIVE_ABI` `0x484e5633`
-rejects older shaders. The staggered workers stamp status groups at 0x200 (receive), 0x220
-(input), 0x260 (acquire) and 0x2a0 (fetch); one read from `current` (12) to 0x2bc returns all
-of them.
-
-### HBV1 and HBV2 slots
-
-- HBV1 (`hbv.js`, magic `0x31564248`): 16x16 macroblocks of exactly 9 words (four 8x8 luma DCT
-  blocks of 56 bits, Cb and Cr of 32 bits, 1.125 bpp), header magic, sequence, size, payload
-  bytes. Fixed rate, intra only; the fragment shader decodes per pixel.
-- HBV2 (`hbv2.js`, magic `0x32564248`): 8-word header (magic, sequence, `w | h<<16`, payload
-  bytes, reference sequence or 0 for a keyframe, `qp | chromaQp<<8`, chunk count, 0), a chunk
-  list (index in the low 11 bits, bit offset above) and one LSB-first bitstream. A chunk is 8
-  macroblocks; unchanged chunks are omitted. Per macroblock `1` skip, `00` inter (MV, 6-bit
-  cbp, residual) or `01` DC-predicted intra, with an integer IDCT shared by JS, C and GLSL. At
-  most 8 exchanges (256 KiB).
-- Both repeat the sequence in the last word of the last exchange used; a mismatch is a torn
-  slot and is ignored.
-- Decoder rules: a P frame is eligible only when its reference equals `applied`, the mode is
-  HBV2 and the size matches; keyframes and HBV1 always are. Pick the newest eligible
-  independent slot if it is newer than the oldest eligible P frame, else that P frame. Up to 3
-  slots apply per dispatch, into `current ^ 1`. Skips copy from the reference only when their
-  chunk is not coded. The compute workgroup is 512 invocations (`ring.LOCAL_SIZE`).
+rejects older shaders.
 
 ### Console UI block (0xC000, one u32 each)
 
@@ -281,122 +205,40 @@ bytes inside `bodyBytes`, and the checksum before it sets `uiApplied`. The host 
 next page only after `uiApplied` reached the last one, so the free buffer is always the unshown
 one.
 
-## Console UI service
+## Console UI
 
-`node src/streamer/ui/service.js [RUN_DIR]` is the PC half of the console UI (`RUN_DIR`
-from the `SESSION READY` line, else the newest). The console draws the pages the service
-publishes and sends back commands; the host owns every screen.
+The console owns screen transitions, settings, input gating and the page header
+(`civ7/console-ui.js`); `civ7/application.js` runs `ui/service.js`'s `createService` inside the
+helper with the console machine. The PC composes each page from the console's snapshot, writes
+it with write-raw and runs helper requests (`list`, `pair`, `quit`). src/streamer/ui/CLAUDE.md
+has the rules.
 
-- `model.js`: pure state machine; `reduce(model, event)` returns the next model and intents.
-  Item ids per screen are in `ITEM`.
-- `hosts.js`: the host list in `hosts.json` (`$XDG_CONFIG_HOME/hblauncher/moonlight/`) and the
+- `model.js`: the state machine the console runs; item ids per screen are in `ITEM`.
+- `hosts.js`: the host list in `hosts.json` (`$XDG_CONFIG_HOME/moonlight-nx2/`) and the
   helper's app list.
-- `settings.js`: the settings catalog (size, fps, bitrate, codec, audio, present rate),
-  `settings.json` beside `hosts.json`, and `streamArgs` for `live.js`.
-- `pages.js`: one layout per screen; strips and tiles are cached by text and size.
-- `raster.js` + `text.py`: a long-lived PIL child painting strips, cover tiles and letter tiles,
-  in Sora from `fonts/`.
-- `page.js`: page serializer, validator and parser, the mirror of the shader.
-- `discover.js`: mDNS for `_nvstream._tcp.local`, the answer parser, merging into the host list.
-- `service.js`: attach, publish, command poll, children (helper `list`/`pair`/`quit`,
-  `live.js`), exit.
-
-- Attach writes magic 0, reads the stale `uiApplied` and seeds the next sequence after it.
-  Commands written before attach are not replayed. A page is republished only when its bytes
-  change, so raising or hiding the overlay costs no sequence and keeps the cursor.
-- Every taken command is acked in `hostAck`; one for another epoch or page is logged as
-  `command-dropped`. `hostBusy` is 1 around helper calls; a helper is killed after 20 s. A page
-  not applied in 5 s is logged with its header.
-- While streaming only the overlay page is published. `input-feeder.js` reads `uiOverlay` every
-  100 ms and releases held input the frame it goes up; no signal comes from the service.
-- Return to apps stops `live.js` (SIGINT, SIGKILL after 10 s) and relists. Quit host app stops
-  the stream, runs `hbmoonlight quit` and relists; the result is the app grid subtitle ("Quit
-  confirmed" or "Quit failed: ...").
-- Covers come from `list --covers`, cached under `$XDG_CACHE_HOME/hblauncher/moonlight/covers`;
-  a missing cover never fails the list, the app draws a letter tile.
-- Hosts: `hosts.json` is the manual list (default Sunshine at 192.168.8.245). At attach and on Y
-  the service queries mDNS for 1.5 s and appends unknown hosts, saved through a rename; manual
-  entries are never changed and nothing is removed for missing a scan.
-- It exits when `app-runtime.json` names another active app, or on SIGINT/SIGTERM, writing
-  magic 0 last so the console shows the splash.
-
-Each run writes `/media/storage2/builds/HBLauncher/ui-service/<timestamp>-<session>/`
-(`HBL_UI_RUNS` moves it) with `manifest.json` and `events.jsonl`: `attach`, `published`,
-`header-rewrite`, `apply-timeout`, `command`, `command-dropped`, `helper` (a failure carries the
-helper's error line and `stage`), `stream-event`, `stream-exit`, `quit`, `app-gone`, `detach`.
-
-## Input and audio
-
-`input-feeder.js [RUN_DIR] [--hz 60] [--start-chord stickL+stickR]` reads the pad (bytes 0..40)
-and touch (128..784) of the mapped state in one 784-byte read per frame and writes compact JSON
-lines for the helper's stdin. With `--push` (default 120 Hz) a console worker sends the same 784
-bytes and the overlay words over native TCP instead: backlogs over 4 records keep the newest, and
-250 ms without a record releases everything and logs `Input push stalled`:
-
-```
-{"type":"controller","connected":true,"buttonFlags":4096,"leftTrigger":0,...}
-{"type":"touch","events":[{"id":1,"action":"down","x":0.5,"y":0.5,"pressure":0}]}
-```
-
-An untyped line is a controller line. The helper parses keys by substring, so lines carry no
-whitespace. Controller fields go to `LiSendMultiControllerEvent` as gamepad 0 (an Xbox pad with
-analog triggers; missing fields keep their value). + alone stops SmileBASIC 4, so PC Start also
-comes from `--start-chord`: while all its buttons are held (L3+R3 by default, `none` to turn it
-off), the PC sees Start in place of them. Touch is a verbatim
-`nn::hid::TouchScreenState<16>` (count at word 2, entry i at word 4 + i\*10: attributes, fingerId,
-x, y); the panel reports 1280x720, normalized to 0..1 and rounded to 4 decimals. `fingerId` is
-the pointer id: new id down, moved id move, End bit or absent id up; pressure 0 (unknown), no
-hover; every live id gets an up on exit. The helper checks `LI_FF_PEN_TOUCH_EVENTS` on the first
-touch line, prints `{"event":"touch","supported":bool}` and stops sending touch, without a mouse
-fallback, when unsupported.
-
-`audio-stream.js [RUN_DIR] [--fd N | --file PATH] [--buffer-frames 3840] [--queue 3] [--prime 2]
-[--stats]` plays helper PCM (stdin by default) on the console AudioOut: 8 descriptors at
-`base+0x400+i*0x40`, 8 PCM slots of 0x4000 at `base+0x10000`; a buffer is one write, with its
-append in the same exchange when the rpc supports it. It primes `prime` buffers, starts, and
-keeps at most `queue` in flight; added latency is about queue x buffer + one exchange (3 x 80 ms
-by default). Releases are predicted on a host playhead, so the release poll stays near one call
-per buffer. Pending input beyond (queue + 2) buffers drops the oldest whole buffers (`overruns`,
-`droppedBytes`); a starved queue counts `underruns` and resumes; an EOF tail is padded with
-silence. On exit it writes `moonlight-audio-<ts>.json` into the session. The h264 route runs it
-with `--queue 2 --prime 2` and 960-frame (20 ms) buffers on protocol 3, 1920 (40 ms) otherwise.
+- `settings.js`: the settings catalog and `streamArgs`; Civ7 stores settings in the game's save
+  data and the PC file only seeds migration.
+- `pages.js`, `page-composer.js`, `page-encode.js`, `page.js`: layouts, composition, encoding
+  and the page serializer and validator, the mirror of the shader.
+- `raster.js` + `glyph-raster.js`: paint strips, cover tiles and letter tiles from the glyph
+  atlas `fonts/glyphs.bin`; `glyphs.py` rebuilds it through `text.py` (Pillow, build time only).
+- `discover.js`: mDNS for `_nvstream._tcp.local`, merged into the host list.
 
 ## Tests
 
-Each component's unit tests sit in its `test/` and import the code beside them, so a worktree
-tests its own code. From the repo root:
+Tests, fixtures and their generators, test support and the component READMEs live in the
+sibling repo `moonlight-nx2-dev`, at the same `src/...` paths. Its `link-app.cjs` links this
+checkout's sources beside each `test/` before a run; `MOONLIGHT_APP` picks the checkout
+(default `../moonlight-nx2`, then `../hbl-moonlight`). From this repo's root:
 
 ```sh
-npm install                        # once: TypeScript and @types/node
-npm test                           # node --test over every tracked *.test.cjs
-npm run typecheck                  # tsc --checkJs over the modules listed in tsconfig.json
+npm install                  # once, here and in ../moonlight-nx2-dev: TypeScript and @types/node
+npm test                     # the dev repo's whole suite against this checkout
+npm run typecheck            # tsc --checkJs over the modules in tsconfig.json
+npm run typecheck:strict     # the strict file list
 ```
 
-### Tools
-
-- `src/streamer/stream/scheduler/test/request-budget.cjs`: offline request budget for the staggered native
-  H.264 host loop, a virtual-clock model of its gate cycle.
-- `src/streamer/protocol/test/input.c`: the helper input-routing test, built by the
-  helper CMake project (`src/streamer/protocol/`).
-
-### Live test pass
-
-Only with the user at the console (`DEVICE-RULES.md` in hbl-notes). From `hbl-moonlight`,
-against a fresh `./start.sh --app moonlight` session showing the HBV2 test card, in order:
-
-1. Video: `node src/streamer/stream/session/live.js --moonlight 192.168.8.245 Desktop --codec h264 --staggered --no-input --no-audio`
-   (the h264 flags are above).
-2. Input: drop `--no-input`. Sticks and taps move the host cursor; touch is native multi-touch.
-3. Audio: drop `--no-audio`. If `OpenDefaultAudioOut` fails, the audio process prints a hint
-   and exits while video and input keep running.
-4. A real game from `hbmoonlight list 192.168.8.245` in place of `Desktop`.
-
-### Protocol 3 write test
-
-The A/B for the open Protocol 3 question in CLAUDE.md. Start two sessions with
-`HB_WRITE_CHUNK=32768 ./start.sh` and `HB_WRITE_CHUNK=258048 ./start.sh` in HBLauncher
-(the latter is the protocol 3 default). In each, the gap in
-`hbl-platform/runs/<session>/launcher-auto-operations.jsonl` between `vkMapMemory2` and the next
-`vkCreateBuffer` is the launcher's startup write (8 MiB of zeros, the state, the text atlas and
-the catalog raster: 14,681,088 bytes in the 2026-10-24 sessions); divide to get MB/s. Capture a
-protocol 2 session too if small exchanges dominate the workload.
+The helper's C tests also live there; `build.sh` passes them as `DEV_DIR` (`MOONLIGHT_DEV`
+overrides the dev repo path) and `ctest` in the build directory runs them
+(src/streamer/protocol/CLAUDE.md). `ui/glyphs.py reference` writes the raster fixture into the
+dev repo (`--out` for another path).
