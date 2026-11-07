@@ -289,10 +289,14 @@ export function decodeBatch(native, request) {
   }
 
   const showing = Boolean(present && publication);
-  /** @type {DecodeUnit | null} */
-  let decoded = null;
-  let decodedFrame = destination;
-  try {
+  /**
+   * A unit's output comes before the next submit; above 60 fps its present and ack wait for the
+   * next unit when one waits whole; README.md, "Pipelined decode".
+   */
+  function presentUnits() {
+    /** @type {DecodeUnit | null} */
+    let decoded = null;
+    let decodedFrame = destination;
     for (const unit of units) {
       submit(unit);
       if (decoded) {
@@ -324,6 +328,10 @@ export function decodeBatch(native, request) {
       }
     }
     if (decoded) show(decoded, decodedFrame);
+  }
+
+  try {
+    presentUnits();
   } finally {
     present?.finish?.();
   }
