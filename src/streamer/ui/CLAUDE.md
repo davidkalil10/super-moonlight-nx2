@@ -25,6 +25,9 @@ at. Tests: `src/streamer/ui/test/` in moonlight-nx2-dev.
   only after the console reported docked (`operationMode` event); a save holding one stays when
   handheld and the launch falls back to 1080p with a badge (civ7/README.md, "Fallbacks"). They
   are not yet proven end to end on the console.
+  A value shows `‹` and `›` only where adjust() would change it in the current mode, so a
+  handheld 1080p has no `›`. The composer paints the whole `‹   value   ›` and clears the arrow
+  that cannot step, so the value stays where it is.
   Saves carry `version`; a save without the current version has its `formerDefaults` (the old
   20 Mbps bitrate default) replaced by today's fallback, so it gets Auto. Bump the version
   whenever a default changes. The frame rate is also the display rate; there is no present-rate row.
