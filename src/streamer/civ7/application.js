@@ -63,6 +63,7 @@ export function streamShape(args) {
   const buttons = /** @type {'position' | 'labels'} */ (option('--buttons', '') === 'labels' ? 'labels' : 'position');
   const helperArgs = ['--local-audio', '--sops'].filter(flag => args.includes(flag));
   const streamInfo = args.includes('--stream-info');
+  const frameCounter = args.includes('--frame-counter');
   const launched = option('--transport', '');
   /** @type {'tcp' | 'udp' | undefined} */
   let transport;
@@ -74,7 +75,8 @@ export function streamShape(args) {
    */
   const bitrate = (sessionFps, sessionCodec = codec, size = {width, height}) =>
     sessionBitrate(withCodec(args, sessionCodec), size.width, size.height, sessionFps);
-  return {width, height, fps, undockedFps, codec, transport, bitrate, buttons, helperArgs, streamInfo};
+  return {width, height, fps, undockedFps, codec, transport, bitrate, buttons, helperArgs, streamInfo,
+    frameCounter};
 }
 
 /**
@@ -255,20 +257,23 @@ export async function runApplication({rpc, directory, menu, gpu, hostAddress, he
       renderMode.invalidate();
       const abort = new AbortController();
       const {width, height, fps: requestedFps, undockedFps, codec, bitrate, transport: launched, buttons, helperArgs,
-        streamInfo} = streamShape(args);
+        streamInfo, frameCounter} = streamShape(args);
       let choice = {codec, transport: launched ?? transport};
+      /** @type {ReturnType<typeof createQuadBadge> | undefined} */
+      let shownBadge;
       /** @param {object} event */
       const streamLog = event => {
         forwardStreamEvent(event, log, onLine);
+        void shownBadge?.observe(event);
         if ('type' in event && event.type === 'stop-chord') abort.abort(Error('Stream stopped'));
       };
       /** @param {string[]} changes */
       const badgeFor = changes => {
-        if (!changes.length) return undefined;
+        if (!changes.length && !frameCounter) return shownBadge = undefined;
 
-        const durationMs = streamInfo ? BADGE_STAYS : BADGE_MS;
-        return createQuadBadge(rpc, {text: badgeText(changes), raster: ui.raster, storage: gpu.privateStorage,
-          durationMs, log});
+        const durationMs = streamInfo || frameCounter ? BADGE_STAYS : BADGE_MS;
+        return shownBadge = createQuadBadge(rpc, {text: badgeText(changes), raster: ui.raster,
+          storage: gpu.privateStorage, durationMs, counter: frameCounter, log});
       };
       const exited = (async () => {
         /** @type {ReturnType<typeof createHostDisplay>} */

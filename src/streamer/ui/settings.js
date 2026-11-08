@@ -165,6 +165,13 @@ const CATALOG = [
     values: [false, true],
     fallback: false,
     text: onOff
+  },
+  {
+    id: 'frameCounter',
+    label: 'Frame counter',
+    values: [false, true],
+    fallback: false,
+    text: onOff
   }
 ];
 
@@ -385,6 +392,7 @@ function streamArgs(settings) {
   if (settings.optimise) args.push('--sops');
   if (settings.buttons === 'labels') args.push('--buttons', 'labels');
   if (settings.streamInfo) args.push('--stream-info');
+  if (settings.frameCounter) args.push('--frame-counter');
   return args;
 }
 

@@ -1,6 +1,6 @@
 // The badge shown top right when a stream runs other than requested (rate, size, a codec or
-// transport fallback), or all stream long with the stream info setting: the PC composes it and
-// the renderer draws it as a UI quad.
+// transport fallback), or all stream long with the stream info setting, and the frame counter
+// line under it: the PC composes it and the renderer draws it as a UI quad.
 import {BADGE, BADGE_OFFSET, BADGE_BYTES, WIDTH, HEIGHT} from '../../renderer/civ7/layout.js';
 
 /** @import {Civ7Rpc} from './transport.js' */
@@ -17,14 +17,22 @@ const PADDING_Y = 4;
 const MARGIN = 24;
 const ACCENT_WIDTH = 4;
 const MAX_WIDTH = 960;
-const MAX_HEIGHT = 64;
+const MAX_HEIGHT = 96;
 const BACKGROUND = [12, 16, 24];
 const INK = [240, 246, 250];
 const ACCENT = [64, 217, 230];
 
 /** @typedef {{height: number, fps: number}} StreamShape */
 /** @typedef {{width: number, height: number}} FrameSize */
-/** @typedef {{x: number, y: number, width: number, height: number, rgba: Uint8Array}} Badge */
+/**
+ * `counter` is where a counter line's rows start and where its text sits, in badge rows.
+ * @typedef {{x: number, y: number, width: number, height: number, rgba: Uint8Array,
+ *   counter?: {from: number, top: number}}} Badge
+ */
+/**
+ * One civ7-stats second (stream.js): `dropped` counts the whole stream.
+ * @typedef {{type: 'civ7-stats', presented: number, caughtUp?: number, dropped?: number}} CounterStats
+ */
 /**
  * @typedef {{text: (text: string, size: number, width: number, align?: 'left' | 'center' | 'right',
  *   style?: {weight?: number}) => {width: number, height: number, bytes: Uint8Array}}} TextRaster
@@ -63,6 +71,19 @@ export function rateChangeText(from, to) {
   return changeText(`${from.height}p${from.fps}`, `${to.height}p${to.fps}`);
 }
 
+/**
+ * The frame counter line: frames presented in the last second, then those decoded but skipped
+ * to catch up and those dropped before decode.
+ * @param {{presented: number | string, caughtUp: number | string, dropped: number | string}} counts
+ */
+export function counterText({presented, caughtUp, dropped}) {
+  return `${presented} fps · ${caughtUp} skipped · ${dropped} dropped`;
+}
+
+/** The counter line before the first second, and the widest one, which sets the badge width. */
+const COUNTER_START = counterText({presented: '-', caughtUp: '-', dropped: '-'});
+const COUNTER_WIDEST = counterText({presented: 888, caughtUp: 888, dropped: 888});
+
 /** @param {number} scale */
 function fontFor(scale) {
   const wanted = FONTS[0].size * scale + 0.5;
@@ -76,61 +97,130 @@ function inkWidth(strip) {
   return 0;
 }
 
-/**
- * The badge in `frame` pixels, top right; the quad badge composes it at the display size.
- * @param {TextRaster} raster
- * @param {string} text
- * @param {FrameSize} frame
- * @returns {Badge}
- */
-export function composeBadge(raster, text, frame) {
+/** @param {FrameSize} frame */
+function metrics(frame) {
   const scale = frame.height / REFERENCE_HEIGHT;
-  const font = fontFor(scale);
-  const strip = raster.text(text, font.size, Math.floor(frame.width / 2), 'left', {weight: font.weight});
-  const paddingX = even(PADDING_X * scale);
-  const paddingY = even(PADDING_Y * scale);
-  const accent = Math.max(2, even(ACCENT_WIDTH * scale));
-  const width = even(inkWidth(strip) + accent + 2 * paddingX);
-  const height = even(strip.height + 2 * paddingY);
-  if (width > MAX_WIDTH || height > MAX_HEIGHT || width > frame.width || height > frame.height)
-    throw Error('Badge does not fit the frame');
+  return {font: fontFor(scale), paddingX: even(PADDING_X * scale), paddingY: even(PADDING_Y * scale),
+    accent: Math.max(2, even(ACCENT_WIDTH * scale)), margin: even(MARGIN * scale)};
+}
 
-  const rgba = new Uint8Array(width * height * 4);
-  for (let y = 0; y < height; y++) {
+/**
+ * @param {TextRaster} raster @param {string} text @param {FrameSize} frame
+ * @param {{size: number, weight: number}} font
+ */
+function line(raster, text, frame, font) {
+  return raster.text(text, font.size, Math.floor(frame.width / 2), 'left', {weight: font.weight});
+}
+
+/**
+ * Badge rows `from` to `to` into `rgba`, which starts at row `from`: the accent, the background
+ * and `strip` with its first row at badge row `top`.
+ * @param {Uint8Array} rgba @param {number} width @param {number} from @param {number} to
+ * @param {{width: number, height: number, bytes: Uint8Array}} strip @param {number} top
+ * @param {ReturnType<typeof metrics>} metric
+ */
+function paintRows(rgba, width, from, to, strip, top, metric) {
+  for (let y = from; y < to; y++) {
     for (let x = 0; x < width; x++) {
-      const textX = x - accent - paddingX;
-      const textY = y - paddingY;
+      const textX = x - metric.accent - metric.paddingX;
+      const textY = y - top;
       const inStrip = textX >= 0 && textX < strip.width && textY >= 0 && textY < strip.height;
       const alpha = inStrip ? strip.bytes[textY * strip.width + textX] / 255 : 0;
-      const under = x < accent ? ACCENT : BACKGROUND;
-      const at = (y * width + x) * 4;
+      const under = x < metric.accent ? ACCENT : BACKGROUND;
+      const at = ((y - from) * width + x) * 4;
       for (let channel = 0; channel < 3; channel++)
         rgba[at + channel] = Math.round(under[channel] + (INK[channel] - under[channel]) * alpha);
       rgba[at + 3] = 255;
     }
   }
+}
 
-  const margin = even(MARGIN * scale);
-  return {x: frame.width - margin - width, y: margin, width, height, rgba};
+/**
+ * The badge in `frame` pixels, top right; the quad badge composes it at the display size. With
+ * `counter`, a frame counter line follows `text` (or stands alone when `text` is empty), as wide
+ * as the widest counter so the badge keeps its size as the numbers change.
+ * @param {TextRaster} raster
+ * @param {string} text
+ * @param {FrameSize} frame
+ * @param {string | null} [counter]
+ * @returns {Badge}
+ */
+export function composeBadge(raster, text, frame, counter = null) {
+  const metric = metrics(frame);
+  const lines = counter === null ? [text] : [...(text ? [text] : []), counter];
+  const strips = lines.map(entry => line(raster, entry, frame, metric.font));
+  const sized = counter === null ? strips : [...strips, line(raster, COUNTER_WIDEST, frame, metric.font)];
+  const lineHeight = strips[0].height;
+  const width = even(Math.max(...sized.map(inkWidth)) + metric.accent + 2 * metric.paddingX);
+  const height = even(lineHeight * lines.length + 2 * metric.paddingY);
+  if (width > MAX_WIDTH || height > MAX_HEIGHT || width > frame.width || height > frame.height)
+    throw Error('Badge does not fit the frame');
+
+  const rgba = new Uint8Array(width * height * 4);
+  const tops = strips.map((_, index) => metric.paddingY + index * lineHeight);
+  strips.forEach((strip, index) => {
+    const from = index ? tops[index] : 0;
+    const to = index === strips.length - 1 ? height : tops[index + 1];
+    paintRows(rgba.subarray(from * width * 4), width, from, to, strip, tops[index], metric);
+  });
+
+  const x = frame.width - metric.margin - width;
+  const badge = {x, y: metric.margin, width, height, rgba};
+  if (counter === null) return badge;
+
+  const last = tops.length - 1;
+  return {...badge, counter: {from: last ? tops[last] : 0, top: tops[last]}};
+}
+
+/**
+ * The counter rows of a badge composed with a counter line, painted with `counter`, and their
+ * byte offset in the badge pixels: one contiguous write.
+ * @param {TextRaster} raster
+ * @param {Badge} badge
+ * @param {string} counter
+ * @param {FrameSize} frame
+ */
+export function composeCounter(raster, badge, counter, frame) {
+  if (!badge.counter) throw Error('The badge has no counter line');
+
+  const metric = metrics(frame);
+  const {from, top} = badge.counter;
+  const rgba = new Uint8Array((badge.height - from) * badge.width * 4);
+  paintRows(rgba, badge.width, from, badge.height, line(raster, counter, frame, metric.font), top, metric);
+  return {offset: from * badge.width * 4, rgba};
 }
 
 /**
  * One stream's badge: `show` composes it at the display size, writes its pixels and rectangle
  * into private storage and asks the console to show the quad for `durationMs` (BADGE_STAYS:
  * until the stream ends). Nothing to create or destroy; the console hides it with its
- * presentation. A failure is logged as `overlay-failed`.
+ * presentation. With `counter`, `observe` takes the stream's events and, on each civ7-stats
+ * second, rewrites only the counter rows when its line changes. A failure is logged as `overlay-failed`.
  * @param {Pick<Civ7Rpc, 'write' | 'request'>} rpc
  * @param {{text: string, raster: TextRaster, storage: {mapped: number}, durationMs?: number,
- *   log?: (event: object) => void}} options
+ *   counter?: boolean, log?: (event: object) => void}} options
  */
-export function createQuadBadge(rpc, {text, raster, storage, durationMs = BADGE_MS, log = event => {}}) {
+export function createQuadBadge(rpc, {text, raster, storage, durationMs = BADGE_MS, counter = false,
+  log = event => {}}) {
+  const frame = {width: WIDTH, height: HEIGHT};
   let failed = false;
+  /** @type {Badge | null} */
+  let shown = null;
+  let counted = COUNTER_START;
+  let dropped = 0;
+  let writing = Promise.resolve();
+
+  /** @param {string} stage @param {unknown} error */
+  function fail(stage, error) {
+    failed = true;
+    log({type: 'overlay-failed', stage, text, message: String(/** @type {Error} */ (error)?.message || error)});
+  }
 
   async function show() {
     if (failed) return;
 
     try {
-      const badge = composeBadge(raster, text, {width: WIDTH, height: HEIGHT});
+      const badge = composeBadge(raster, text, frame, counter ? counted : null);
       if (badge.rgba.length > BADGE_BYTES) throw Error('Badge exceeds its pixel area');
       await rpc.write(storage.mapped + BADGE_OFFSET, Buffer.from(badge.rgba));
       const words = Buffer.alloc(20);
@@ -139,13 +229,35 @@ export function createQuadBadge(rpc, {text, raster, storage, durationMs = BADGE_
       await rpc.request({command: 'overlay-show', quad: hex(storage.mapped + BADGE.visible), durationMs});
       log({type: 'overlay-shown', text, x: badge.x, y: badge.y, width: badge.width, height: badge.height,
         durationMs, quad: true});
+      shown = badge;
     } catch (error) {
-      failed = true;
-      log({type: 'overlay-failed', stage: 'show', text, message: String(/** @type {Error} */ (error)?.message || error)});
+      fail('show', error);
     }
   }
 
-  return {text, prepare: async () => {}, show, close: async () => {}};
+  /** @param {object} event */
+  function observe(event) {
+    if (!counter || !('type' in event) || event.type !== 'civ7-stats') return writing;
+
+    const {presented, caughtUp = 0, dropped: total = 0} = /** @type {CounterStats} */ (event);
+    const line = counterText({presented, caughtUp, dropped: Math.max(0, total - dropped)});
+    dropped = total;
+    if (line === counted) return writing;
+
+    counted = line;
+    writing = writing.then(async () => {
+      if (failed || !shown || line !== counted) return;
+      try {
+        const rows = composeCounter(raster, shown, line, frame);
+        await rpc.write(storage.mapped + BADGE_OFFSET + rows.offset, Buffer.from(rows.rgba));
+      } catch (error) {
+        fail('count', error);
+      }
+    });
+    return writing;
+  }
+
+  return {text, prepare: async () => {}, show, observe, close: () => writing};
 }
 
 /**

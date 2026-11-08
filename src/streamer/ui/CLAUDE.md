@@ -55,9 +55,12 @@ at. Tests: `src/streamer/ui/test/` in moonlight-nx2-dev.
   button layout and the stream info badge; SOPS and quit-on-return became real.
   Stream info on keeps "1080p120 · AV1 · UDP · 30 Mbps" (plus any fallback note) on the top
   right badge for the whole stream at every layer size; off, the badge shows fallbacks for 4 s.
+  Frame counter on (no save version change; a save without it loads it off) adds a line under
+  it, or a badge of its own, with each civ7-stats second: "58 fps · 2 skipped · 0 dropped"
+  (presented, caughtUp, dropped that second). Only the counter rows are rewritten, about 77 KB
+  in one write, and only when a number changes.
   Left out: surround (helper and console audio are stereo), touch as mouse (the helper sends
-  touch events only), pacing toggles (the deferred wait is automatic) and a live stats
-  overlay (the rate badge is a start-of-stream badge).
+  touch events only) and pacing toggles (the deferred wait is automatic).
 - Hosts (`hosts.json`, `{hosts, removed}`; an older plain array still loads): a typed or found
   host is saved once `list` succeeds on it, so a cancelled or failed pairing leaves the file
   alone. The list also gives the host's `uniqueid`, which is saved with it; a known uniqueid
