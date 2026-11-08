@@ -5,7 +5,8 @@
 
 /**
  * @typedef {{id: number, x: number, y: number, w: number, h: number, flags?: number}} Item
- * @typedef {{x: number, y: number, w: number, h: number, alpha: Uint8Array, color?: number}} Text
+ * @typedef {{x: number, y: number, w: number, h: number, alpha: Uint8Array, color?: number,
+ *   cursorItem?: number}} Text `cursorItem`: drawn only while the cursor is on the item with that id
  * @typedef {{x: number, y: number, w: number, h: number, rgba: Uint8Array}} Image
  * @typedef {{epoch: number, sequence: number, flags?: number, background?: number,
  *   cursorHome?: number, items?: Item[], texts?: Text[], images?: Image[]}} Page
@@ -182,6 +183,8 @@ function createPageEncoder(pageBytes) {
     for (const text of texts) {
       check(textFits(text), 'UI text rect');
       check(text.alpha.length === text.w * text.h, 'UI text strip bytes do not match its size');
+      const anchored = text.cursorItem === undefined || items.some(item => item.id === text.cursorItem);
+      check(anchored, 'UI text follows an item the page lacks');
     }
     for (const image of images) {
       check(imageFits(image), 'UI image rect');
@@ -212,7 +215,9 @@ function createPageEncoder(pageBytes) {
     for (const [block, offset] of placed) out.set(block, BODY_OFFSET + offset);
     texts.forEach((text, i) => {
       const offset = /** @type {number} */ (placed.get(text.alpha));
-      put(TEXTS_OFFSET + i * TEXT_WORDS * 4, [text.x, text.y, text.w, text.h, offset, text.color ?? 0xffffffff]);
+      const cursor = text.cursorItem === undefined ? 0 : items.findIndex(item => item.id === text.cursorItem) + 1;
+      put(TEXTS_OFFSET + i * TEXT_WORDS * 4, [text.x, text.y, text.w, text.h, offset, text.color ?? 0xffffffff,
+        cursor]);
     });
     images.forEach((image, i) => {
       const offset = /** @type {number} */ (placed.get(image.rgba));

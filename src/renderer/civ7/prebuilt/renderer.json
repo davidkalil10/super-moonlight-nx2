@@ -109,15 +109,15 @@
   },
   "blob": {
     "path": "shaders.bin",
-    "bytes": 79536,
-    "sha256": "c10e653b68c44d8737d07e1cb47a3b9cb7051a565d2541d7c0c9ec61d8fa9427"
+    "bytes": 80048,
+    "sha256": "422c6c4aa7f324cdd885484ec3962bb9ecc6c034c60b4fd4feaf4d24520c59f1"
   },
   "sources": {
     "publish.comp": "229bde753bc835c376e0fa0f1d0b7b9cb271ccdac9887d22a972f9db97df24ef",
     "storage.glsl": "81c18548664c68dfcf7bb9b2ce683234dbcd08b161a6c1756555ace8a912d3e6",
-    "ui-control.glsl": "cadfbcdbed7b17f8a7962b62be8b6e39a0c0ffae82f739943ff8126bcb72669b",
+    "ui-control.glsl": "2b2423ca6bd16a5d52cd1b2617af0f4cd70766a4335d28f5dbe5bd9bfac6580d",
     "ui.frag": "a8c0dff07b50f4c609c8f35d8a6f67ee3418989dd9a462af2199225f35fb8c08",
-    "ui.vert": "2f5da62dfe1f92852fa8386b4de85c63cf84793741b38f22e7966cb8c5e28393",
+    "ui.vert": "8a00c933c615a384e4efa773b455bdc6bd616f3730db624ca05ce073952d2d7c",
     "video-storage.frag": "bd7c0b6877d11fafa3d691d01498d5039651f434d6dcba9fdcf7ed66d0b5fdb9",
     "video.frag": "eb48b715e2c0bbfa9591cf40c0757dbd65b166ca1e8effed1b4cd53cb0f880d5",
     "video.glsl": "bdc0b6a4ea437eecfd441581344dc8d671afbc99a1f5f444e3a993c643edec38",

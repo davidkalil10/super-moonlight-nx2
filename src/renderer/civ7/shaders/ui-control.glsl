@@ -72,7 +72,7 @@ bool uiValid(uint base, uint epoch, uint sequence) {
     uvec4 r = uiRect(base, UI_TEXTS, i, 0u);
     uint offset = uiWord(base + UI_TEXTS + i * 8u + 4u);
     if (!uiRectOk(r, 1920u, 96u) || (offset & 3u) != 0u ||
-        offset + r.z * r.w > body)
+        offset + r.z * r.w > body || uiWord(base + UI_TEXTS + i * 8u + 6u) > items)
       return false;
   }
   for (uint i = 0u; i < images; i++) {

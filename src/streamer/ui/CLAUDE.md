@@ -30,7 +30,9 @@ at. Tests: `src/streamer/ui/test/` in moonlight-nx2-dev.
   Resolution's `docked` values (2560x1440, 3840x2160, added 2026-11-08 for G4) are stepped onto
   only after the console reported docked (`operationMode` event); a save holding one stays when
   handheld and the launch falls back to 1080p with a badge (civ7/README.md, "Fallbacks"). They
-  are not yet proven end to end on the console.
+  are not yet proven end to end on the console. Handheld, the settings page carries "1440p and
+  4K are only available when docked" bottom right, drawn only while the cursor is on Resolution
+  (a text strip with `cursorItem`, which the shader shows against the live cursor).
   Selecting 4K forces 60 fps and locks the frame-rate card. `fpsBefore4k` keeps the previous
   60/120 preference in the save; stepping back to a smaller size restores it and removes the
   field. Older 4K120 saves are clamped while retaining 120 for the next smaller size.

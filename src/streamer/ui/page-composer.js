@@ -11,7 +11,8 @@
  * @typedef {Bitmap & {left: number, top: number}} Trimmed A bitmap cut to its ink and where
  *   the cut starts in the painted one.
  * @typedef {'left' | 'center' | 'right'} Align
- * @typedef {{weight?: number, tracking?: number}} TextStyle
+ * @typedef {{weight?: number, tracking?: number, cursorItem?: number}} TextStyle `cursorItem`: shown
+ *   only while the cursor is on that item, by the shader, so a cursor move publishes nothing
  * @typedef {{text: (text: string, size: number, width: number, align?: Align,
  *   style?: TextStyle) => Bitmap,
  *   legend: (keys: [string, string][], size: number, width: number) => Bitmap,
@@ -307,20 +308,27 @@ function createPageComposer(painter, options) {
     /** @type {Item[]} */
     const items = [];
 
-    /** @param {number} x @param {number} y @param {number} color @param {Bitmap | Trimmed} bitmap */
-    function strip(x, y, color, bitmap) {
+    /**
+     * @param {number} x @param {number} y @param {number} color @param {Bitmap | Trimmed} bitmap
+     * @param {number} [cursorItem]
+     */
+    function strip(x, y, color, bitmap, cursorItem) {
       const left = 'left' in bitmap ? bitmap.left : 0;
       const top = 'top' in bitmap ? bitmap.top : 0;
-      texts.push({x: x + left, y: y + top, w: bitmap.width, h: bitmap.height, alpha: bitmap.bytes, color});
+      /** @type {Text} */
+      const text = {x: x + left, y: y + top, w: bitmap.width, h: bitmap.height, alpha: bitmap.bytes, color};
+      if (cursorItem !== undefined) text.cursorItem = cursorItem;
+      texts.push(text);
       return page;
     }
 
     /** @type {PageBuilder} */
     const page = {
       text(x, y, label, size, width, color = COLOR.ink, align = 'left', style = {}) {
-        const {weight = 600, tracking = 0} = style;
+        const {weight = 600, tracking = 0, cursorItem} = style;
         const key = ['t', label, size, width, align, weight, tracking].join('\u0000');
-        return strip(x, y, color, remember(key, () => trim(usePainter().text(label, size, width, align, {weight, tracking}))));
+        const bitmap = remember(key, () => trim(usePainter().text(label, size, width, align, {weight, tracking})));
+        return strip(x, y, color, bitmap, cursorItem);
       },
 
       /** A value between ‹ ›, an arrow cleared where it cannot step. */
@@ -671,6 +679,11 @@ function createPageComposer(painter, options) {
       keys
     });
     rows.forEach((row, i) => settingCard(page, row, i, row.id === model.editing));
+    const size = rows.findIndex(row => row.id === 'size');
+    if (!model.docked && size >= 0) {
+      page.text(SCREEN_WIDTH - SIDE - NOTE_WIDTH, LEGEND.y + 5, '1440p and 4K are only available when docked', 24,
+        NOTE_WIDTH, COLOR.muted, 'right', {weight: 500, cursorItem: ITEM.setting + size});
+    }
     return page.build();
   }
 
@@ -767,7 +780,7 @@ function createPageComposer(painter, options) {
     const parts = [built.flags ?? 0, built.background, built.cursorHome];
     for (const item of built.items) parts.push(item.id, item.x, item.y, item.w, item.h, item.flags ?? 0);
     parts.push('t');
-    for (const text of built.texts) parts.push(text.x, text.y, text.color, idOf(text.alpha));
+    for (const text of built.texts) parts.push(text.x, text.y, text.color, text.cursorItem, idOf(text.alpha));
     parts.push('i');
     for (const image of built.images) parts.push(image.x, image.y, idOf(image.rgba));
     return parts.join(',');

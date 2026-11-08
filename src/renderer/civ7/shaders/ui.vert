@@ -22,7 +22,9 @@ void main() {
     info = uvec4(1u, word(at + 4u), 0u, 0u);
   } else if (instance <= 72u) {
     uint index = instance - 25u, at = base + 272u + index * 8u;
-    visible = visible && index < word(base + 5u);
+    uint follows = word(at + 6u);
+    visible = visible && index < word(base + 5u) &&
+              (follows == 0u || follows == word(UI_CURSOR) + 1u);
     rect = uvec4(word(at), word(at + 1u), word(at + 2u), word(at + 3u));
     info = uvec4(2u, word(at + 4u), word(at + 5u), 0u);
   } else if (instance <= 104u) {

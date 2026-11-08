@@ -46,7 +46,8 @@ const HEADER = {
 /**
  * @typedef {{id: number, x: number, y: number, w: number, h: number, flags?: number}} Item
  * @typedef {{x: number, y: number, w: number, h: number, alpha: Uint8Array | Buffer,
- *   color?: number}} Text An alpha-8 strip of w × h bytes; color is RGBA8 packed as 0xAABBGGRR.
+ *   color?: number, cursorItem?: number}} Text An alpha-8 strip of w × h bytes; color is RGBA8
+ *   packed as 0xAABBGGRR. With `cursorItem` it shows only while the cursor is on that item.
  * @typedef {{x: number, y: number, w: number, h: number, rgba: Uint8Array | Buffer}} Image
  * @typedef {{epoch: number, sequence: number, flags?: number, background?: number,
  *   cursorHome?: number, items?: Item[], texts?: Text[], images?: Image[]}} Page
@@ -165,6 +166,7 @@ function validate(page, expected = {}) {
     const rect = readRect(page, at);
     check(textFits(rect), 'UI text rect');
     check(inBody(page.readUInt32LE(at + 16), rect.w * rect.h), 'UI text strip bytes');
+    check(page.readUInt32LE(at + 24) <= items, 'UI text cursor item');
   }
 
   for (let i = 0; i < images; i++) {
@@ -207,12 +209,13 @@ function parse(page) {
       h,
       flags
     })),
-    texts: table(TEXTS_OFFSET, texts, TEXT_WORDS).map(([x, y, w, h, offset, color]) => ({
+    texts: table(TEXTS_OFFSET, texts, TEXT_WORDS).map(([x, y, w, h, offset, color, cursor]) => ({
       x,
       y,
       w,
       h,
       color,
+      cursorIndex: cursor - 1,
       alpha: body.subarray(offset, offset + w * h)
     })),
     images: table(IMAGES_OFFSET, images, IMAGE_WORDS).map(([x, y, w, h, offset]) => ({
