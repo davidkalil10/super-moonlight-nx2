@@ -45,7 +45,6 @@ Open **Settings** in Moonlight before launching a game.
 | Frame rate | 60 or 120 fps; 4K is limited to 60 fps |
 | Bitrate | Auto, or 5–40 Mbps |
 | Codec | AV1 or H.264 |
-| Transport | UDP or TCP |
 | Play audio on the PC | On / Off |
 | Optimise game settings | Request host resolution matching; requires host display automation |
 | Quit host app on return | On / Off |

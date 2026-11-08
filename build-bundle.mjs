@@ -11,17 +11,16 @@ const root = import.meta.dirname;
 export async function buildBundle(args) {
   const {values} = parseArgs({args, options: {
     host: {type: 'string'}, directory: {type: 'string'},
-    port: {type: 'string', default: '39380'}, transport: {type: 'string', default: 'udp'},
+    port: {type: 'string', default: '39380'},
     help: {type: 'boolean', short: 'h'}
   }});
   if (values.help) {
-    console.log('Usage: npm run bundle -- --host HOST_IP [--directory BUILD_DIR] [--port 39380] [--transport udp|tcp]');
+    console.log('Usage: npm run bundle -- --host HOST_IP [--directory BUILD_DIR] [--port 39380]');
     return;
   }
   if (!values.host || !net.isIPv4(values.host)) throw Error('--host must be this computer’s LAN IPv4 address');
   const port = Number(values.port);
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw Error('--port must be 1–65535');
-  if (!['udp', 'tcp'].includes(values.transport)) throw Error('--transport must be udp or tcp');
   if (process.platform !== 'linux') throw Error('Bundle builds currently require Linux');
 
   for (const program of ['git', 'cmake', 'cc', 'podman']) {
@@ -56,7 +55,7 @@ export async function buildBundle(args) {
     run('Compiling inspector', 'cmake', ['--build', path.join(directory, 'inspector'), '--parallel']);
     console.log('Packing bundle');
     const result = await build({directory: path.join(directory, 'bundle'), host: values.host, port,
-      transport: values.transport, helper: path.join(directory, 'helper', 'hbmoonlight'),
+      helper: path.join(directory, 'helper', 'hbmoonlight'),
       inspector: path.join(directory, 'inspector', 'nx2-modules'), image});
     fs.writeFileSync(path.join(directory, 'BUILD-INFO.json'), JSON.stringify({
       sourceRevision: revision, builder: os.hostname(),

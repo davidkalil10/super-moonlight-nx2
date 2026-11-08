@@ -1,14 +1,12 @@
-// The codec and transport of one launch's sessions: a failed AV1 start runs again on H.264, a
-// failed UDP start on TCP, each once per launch; and the size and rate they run at (README.md,
-// "Fallbacks").
+// The codec of one launch's sessions: a failed AV1 start runs again on H.264, once per launch;
+// and the size and rate they run at (README.md, "Fallbacks").
 import {changeText, rateChangeText} from './rate-badge.js';
 
-/** @typedef {{codec: 'h264' | 'av1', transport: 'tcp' | 'udp'}} StreamChoice */
+/** @typedef {{codec: 'h264' | 'av1'}} StreamChoice */
 
 /** What each fallback changes, and its badge text. */
 export const FALLBACKS = {
-  codec: {from: 'av1', to: 'h264', text: changeText('AV1', 'H.264')},
-  transport: {from: 'udp', to: 'tcp', text: changeText('UDP', 'TCP')}
+  codec: {from: 'av1', to: 'h264', text: changeText('AV1', 'H.264')}
 };
 
 /** The largest size H.264 and a handheld console stream; above it needs AV1 docked. */
@@ -53,38 +51,35 @@ export function shapeChanges(requested, session) {
 /**
  * The fallback a failed start's error names (stream.js `withFallback`), or null.
  * @param {unknown} error
- * @returns {'codec' | 'transport' | null}
+ * @returns {'codec' | null}
  */
 export function fallbackOf(error) {
   if (!(error instanceof Error) || !('fallback' in error)) return null;
 
-  const kind = error.fallback;
-  if (kind === 'codec' || kind === 'transport') return kind;
-  return null;
+  return error.fallback === 'codec' ? 'codec' : null;
 }
 
 /** @param {unknown} error */
 const errorText = error => error instanceof Error ? error.message : String(error);
 
 /**
- * The one-time notice a failed start carries for the user (av1-decoder.js `AV1_RESTART_NOTICE`).
+ * The notice a failed start carries for the user (av1-decoder.js `AV1_RESTART_NOTICE`, stream.js
+ * `UDP_START_ERROR`).
  * @param {unknown} error
  * @returns {{notice?: string}}
  */
-function noticeOf(error) {
+export function noticeOf(error) {
   const notice = error instanceof Error && 'notice' in error ? error.notice : undefined;
   return typeof notice === 'string' ? {notice} : {};
 }
 
 /**
- * `choice` with one fallback applied, or null when it does not apply to it.
+ * `choice` with the codec fallback applied, or null when it does not apply to it.
  * @param {StreamChoice} choice
- * @param {'codec' | 'transport'} kind
  * @returns {StreamChoice | null}
  */
-function applied(choice, kind) {
-  if (kind === 'codec') return choice.codec === 'av1' ? {...choice, codec: 'h264'} : null;
-  return choice.transport === 'udp' ? {...choice, transport: 'tcp'} : null;
+function applied(choice) {
+  return choice.codec === 'av1' ? {...choice, codec: 'h264'} : null;
 }
 
 /**
@@ -112,7 +107,7 @@ export function createStreamFallbacks(choice, {signal = undefined, log = event =
         return await start({...current}, notes);
       } catch (error) {
         const kind = fallbackOf(error);
-        const next = kind ? applied(current, kind) : null;
+        const next = kind ? applied(current) : null;
         if (!kind || !next || signal?.aborted) throw error;
 
         const {from, to, text} = FALLBACKS[kind];

@@ -94,17 +94,14 @@ serve(import.meta.dirname, abort.signal, event => console.log(JSON.stringify(eve
 }
 
 /** What the command line uses for an option it is not given; `helper` is the pinned helper. */
-export const BUILD_DEFAULTS = {port: '39380', transport: 'udp', helper: HELPER};
+export const BUILD_DEFAULTS = {port: '39380', helper: HELPER};
 
 /**
  * Writes the payload bundle: runtime sources, helper, inspector, payload and host.json.
  * @param {{directory: string, host: string, helper: string, inspector: string, image?: string,
- *   port?: number, transport?: string}} options
- *   `transport` tcp sends video over TCP instead of UDP (civ7/README.md, "UDP transport")
+ *   port?: number}} options
  */
-export async function build({directory, host, helper, inspector, image, port = 39380,
-  transport = BUILD_DEFAULTS.transport}) {
-  if (!['tcp', 'udp'].includes(transport)) throw Error('Expected --transport tcp or udp');
+export async function build({directory, host, helper, inspector, image, port = 39380}) {
   if (!net.isIPv4(host) || !Number.isInteger(port) || port < 1 || port > 65535)
     throw Error('Expected a LAN IPv4 host and TCP port');
   await fs.access(helper, constants.X_OK);
@@ -128,7 +125,7 @@ export async function build({directory, host, helper, inspector, image, port = 3
   await fs.writeFile(path.join(directory, 'package.json'), '{"type":"module"}\n');
   const token = crypto.randomBytes(32).toString('hex');
   await fs.writeFile(path.join(directory, 'moonlight.js'), buildPayload({host, port, token, nativeStackBytes: 0x100000}), {mode: 0o600});
-  const config = {host, port, token, transport, hosts: [{name: 'Sunshine', address: host}]};
+  const config = {host, port, token, hosts: [{name: 'Sunshine', address: host}]};
   await fs.writeFile(path.join(directory, 'host.json'), JSON.stringify(config, null, 2) + '\n', {mode: 0o600});
   const entry = 'runtime/src/streamer/payload/';
   await fs.writeFile(path.join(directory, 'serve.mjs'), serveEntry(`./${entry}serve.js`));
@@ -205,8 +202,7 @@ finally { raster.close(); }
 if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(import.meta.filename)) {
   const {values} = parseArgs({options: {directory: {type: 'string'}, host: {type: 'string'},
     helper: {type: 'string', default: BUILD_DEFAULTS.helper}, inspector: {type: 'string'}, image: {type: 'string'},
-    port: {type: 'string', default: BUILD_DEFAULTS.port},
-    transport: {type: 'string', default: BUILD_DEFAULTS.transport}}});
+    port: {type: 'string', default: BUILD_DEFAULTS.port}}});
   /** @param {string | undefined} value @param {string} name */
   const required = (value, name) => {
     if (!value) throw Error('Missing --' + name);

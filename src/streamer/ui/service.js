@@ -37,7 +37,8 @@ const PIPED = /** @type {const} */ (['ignore', 'pipe', 'pipe']);
  * @import {Host, App, Intent, Event, Model, Step} from './model.js'
  * @import {RemovedHost} from './hosts.js'
  * @import {Painted} from './raster.js'
- * @typedef {{code: number | null, signal: NodeJS.Signals | null, out: string, err: string}} Exited
+ * @typedef {{code: number | null, signal: NodeJS.Signals | null, out: string, err: string,
+ *   notice?: string}} Exited `notice` is what a failed stream start shows instead of its exit code
  * @typedef {{exited: Promise<Exited>, cancel: (signal?: NodeJS.Signals) => boolean,
  *   stopping?: Promise<void>}} Child
  * @typedef {(stream: string, line: string) => void} OnLine
@@ -731,7 +732,7 @@ function createService({
         if (startFailed) {
           await dispatch({
             type: 'failed',
-            message: 'The stream did not start (exit ' + result.code + ')',
+            message: result.notice ?? 'The stream did not start (exit ' + result.code + ')',
             back: 'apps'
           });
           return;

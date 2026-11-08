@@ -9,7 +9,6 @@ No previous bundle or separate libnx2 checkout is required.
 | `--host HOST_IP` | Required | LAN address of the computer running the bundle |
 | `--directory PATH` | `dist/<timestamp>-<revision>` | New build directory; contains the finished `bundle/` |
 | `--port NUMBER` | `39380` | Payload connection port on that computer |
-| `--transport udp` or `tcp` | `udp` | Initial video transport; the console setting can override it |
 
 ```sh
 npm run bundle -- --host HOST_IP --directory /path/to/new-build

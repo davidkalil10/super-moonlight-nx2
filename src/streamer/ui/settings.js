@@ -34,9 +34,6 @@ function bitrateText(value, settings) {
 /** Value text of the codec row. */
 const CODECS = {h264: 'H.264', av1: 'AV1'};
 
-/** Value text of the transport row. */
-const TRANSPORTS = {udp: 'UDP', tcp: 'TCP'};
-
 /** Sizes above 1080p: AV1 only and docked only; 2160p runs at 60 fps (civ7/README.md, "Fallbacks"). */
 const DOCKED_SIZES = ['2560x1440', '3840x2160'];
 
@@ -113,14 +110,6 @@ const CATALOG = [
     values: ['h264', 'av1'],
     fallback: 'av1',
     text: (/** @type {keyof typeof CODECS} */ value) => CODECS[value],
-    resetBefore: 4
-  },
-  {
-    id: 'transport',
-    label: 'Transport',
-    values: ['udp', 'tcp'],
-    fallback: 'udp',
-    text: (/** @type {keyof typeof TRANSPORTS} */ value) => TRANSPORTS[value],
     resetBefore: 4
   },
   {
@@ -356,9 +345,8 @@ function bitrateArg(value) {
 
 /**
  * The stream arguments of a launch with these settings: the proven control shape, then the
- * opt-in rows. The frame rate is also the display rate; there is no separate present rate.
- * `--transport` wins over host.json's transport (civ7/README.md, "UDP transport"). Quit on
- * return is the model's, not an argument.
+ * opt-in rows. The frame rate is also the display rate; there is no separate present rate. Quit
+ * on return is the model's, not an argument.
  * @param {Record<string, any>} settings
  */
 function streamArgs(settings) {
@@ -366,8 +354,6 @@ function streamArgs(settings) {
   const args = [
     '--codec',
     settings.codec,
-    '--transport',
-    settings.transport,
     '--size',
     settings.size,
     '--fps',

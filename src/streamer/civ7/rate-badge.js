@@ -1,5 +1,5 @@
-// The badge shown top right when a stream runs other than requested (rate, size, a codec or
-// transport fallback), or all stream long with the stream info setting, and the frame counter
+// The badge shown top right when a stream runs other than requested (rate, size, a codec
+// fallback), or all stream long with the stream info setting, and the frame counter
 // line under it: the PC composes it and the renderer draws it as a UI quad.
 import {BADGE, BADGE_OFFSET, BADGE_BYTES, WIDTH, HEIGHT} from '../../renderer/civ7/layout.js';
 
@@ -55,7 +55,7 @@ export function changeText(from, to) {
 }
 
 /**
- * Several changes on one badge: "1080p120 ▸ 1080p60 · UDP ▸ TCP".
+ * Several changes on one badge: "1080p120 ▸ 1080p60 · AV1 ▸ H.264".
  * @param {string[]} changes
  */
 export function badgeText(changes) {

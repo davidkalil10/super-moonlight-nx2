@@ -16,7 +16,7 @@
  *   crossfadePcm: typeof import('./audio-queue.js').crossfadePcm,
  *   serviceControl?: () => void, ui?: {poll(): void, allowInput(): boolean, interactive?: () => boolean} | null,
  *   setReceiveBuffer?: typeof import('./socket-options.js').setReceiveBuffer,
- *   createUdpReceiver?: typeof import('./udp-receiver.js').createUdpReceiver,
+ *   createUdpReceiver: typeof import('./udp-receiver.js').createUdpReceiver,
  *   now?: () => number}} VideoStreamNative
  */
 
@@ -28,15 +28,16 @@
  */
 
 /**
- * Console side, shipped by payload.js with toString(). Each acknowledgement is followed by a
- * timing block (latency.js TIMING) stamped on `native.now`, the clock of the `time` command,
- * and once a second by the loop block (latency.js LOOP).
+ * Console side, shipped by payload.js with toString(). Units arrive over UDP (udp-receiver.js);
+ * the TCP socket carries the token, acknowledgements and drop blocks. Each acknowledgement is
+ * followed by a timing block (latency.js TIMING) stamped on `native.now`, the clock of the `time`
+ * command, and once a second by the loop block (latency.js LOOP).
  * @param {VideoStreamNative} native
  * @param {ConsoleRequest} request
  */
 export function videoStream(native, request) {
-  const {address, integer, checkMemory, read32, read64, write64, writeBuffer, encode,
-    socket, connect, receive, send, close} = native;
+  const {address, integer, checkMemory, read32, write64, writeBuffer, encode,
+    socket, connect, send, close} = native;
   const stream = /** @type {ConsoleRequest} */ (request.stream);
   if (typeof stream.host !== 'string') throw Error('Invalid video host');
   const host = stream.host.split('.').map(Number);
@@ -45,13 +46,12 @@ export function videoStream(native, request) {
   const port = integer(stream.port, 1, 65535);
   const token = typeof stream.token === 'string' ? stream.token : '';
   if (!/^[0-9a-f]{64}$/.test(token)) throw Error('Invalid video token');
+  if (typeof stream.udp !== 'object' || stream.udp === null) throw Error('Missing UDP video settings');
   const header = address(stream.header);
-  const buffer = address(stream.buffer);
   const capacity = integer(stream.capacity, 1, 8 * 1024 * 1024);
   const frames = integer(stream.frames, 1, 0x7fffffff);
   const fps = stream.fps === undefined ? 60 : integer(stream.fps, 1, 240);
   checkMemory(header, 0x1000, 3);
-  checkMemory(buffer, capacity, 3);
   const input = request.input ? native.createInputReader(native, /** @type {ConsoleRequest} */ (request.input)) : null;
   const buttons = stream.buttons === 'labels' ? 'labels' : 'position';
   const recorder = input ? native.createInputRecorder(native.inputMapping, buttons) : null;
@@ -100,21 +100,19 @@ export function videoStream(native, request) {
   }
 
   /**
-   * @param {typeof receive} operation receive or send
+   * Sends all `length` bytes on the TCP socket, pumping audio while a send would block.
    * @param {bigint} pointer
    * @param {number} length
    */
-  function transfer(operation, pointer, length, allowEnd = false) {
+  function transfer(pointer, length) {
     let offset = 0;
     while (offset < length) {
       if (audio) pump();
-      const count = Number(operation(channel, pointer + BigInt(offset), length - offset, audio ? 0x80 : 0));
+      const count = Number(send(channel, pointer + BigInt(offset), length - offset, audio ? 0x80 : 0));
       if (count < 0 && audio) { audio.retry(); continue; }
-      if (count === 0 && allowEnd && offset === 0) return false;
       if (count <= 0 || count > length - offset) throw Error('Video transfer failed: ' + count);
       offset += count;
     }
-    return true;
   }
 
   /**
@@ -191,7 +189,7 @@ export function videoStream(native, request) {
     stampLoop();
     for (let offset = 0; offset < ackLength; offset += 8)
       write64(header + BigInt(offset), ackView.getBigUint64(offset, true));
-    transfer(send, header, ackLength);
+    transfer(header, ackLength);
     ackLength = 0;
     loop.ack += now() - started;
   }
@@ -237,21 +235,9 @@ export function videoStream(native, request) {
     flushAcks();
   }
 
-  /**
-   * Units already in the socket (MSG_PEEK | MSG_DONTWAIT): depth 0, 1 for the next header, 2
-   * when a whole unit and its successor's header wait; `whole` once the next unit is all there.
-   * The second peek lands in `buffer`, whose unit the decoder has already copied.
-   */
+  /** Units the receiver already holds: udp-receiver.js `peek`, depth 0 before it exists. */
   function peek() {
-    if (datagrams) return datagrams.peek();
-    if (Number(receive(channel, header, 16, 0x82)) !== 16) return {depth: 0, whole: false};
-
-    const length = Number(read32(header));
-    const behind = length + 32;
-    if (length < 1 || behind > capacity) return {depth: 1, whole: false};
-
-    const waiting = Number(receive(channel, buffer, behind, 0x82));
-    return {depth: waiting === behind ? 2 : 1, whole: waiting >= length + 16};
+    return datagrams ? datagrams.peek() : {depth: 0, whole: false};
   }
 
   /** The depth before a receive: the pipeline's peek when nothing ran since, else a new one. */
@@ -337,9 +323,12 @@ export function videoStream(native, request) {
   }
 
   /**
-   * A unit is behind when a whole unit waits after it, or when it was waiting and came more
-   * than a frame later than the floor. After a run of max(2, round(fps / 30)) behind units
-   * one skips its present and the count restarts; README.md, "Catching up".
+   * The units, reassembled by the UDP receiver in `buffer`'s slots, with the first datagram as
+   * the header mark. A unit is behind when another waits after it, or when it was waiting and
+   * came more than a frame later than the floor; the overlapped output takes each unit once it is
+   * whole, so there only a unit already arriving behind it counts. After a run of
+   * max(2, round(fps / 30)) behind units one skips its present and the count restarts;
+   * README.md, "UDP transport" and "Catching up".
    */
   function* units() {
     const endpoint = new Uint8Array(16);
@@ -357,53 +346,11 @@ export function videoStream(native, request) {
       receiveBuffer = native.setReceiveBuffer(native, channel, bufferRequest);
     if (connect(channel, header + 0x100n, 16) !== 0n) throw Error('Video connection failed');
     writeBuffer(header + 0x200n, encode(token));
-    transfer(send, header + 0x200n, 64);
-    if (stream.udp) {
-      yield* datagramUnits();
-      return;
-    }
-    const catchUpUnits = Math.max(2, Math.round(fps / 30));
-    const periodMs = 1000 / fps;
-    let behindUnits = 0;
-    for (let index = 0; index < frames; index++) {
-      const depth = index > 0 ? queueDepth() : 0;
+    transfer(header + 0x200n, 64);
 
-      const waited = now();
-      if (!transfer(receive, header, 16, true)) break;
-      const headerAt = now();
-      loop.idle += headerAt - waited;
-      const words = read64(header);
-      const length = integer(Number(words & 0xffffffffn), 1, capacity);
-      const sequence = Number(words >> 32n);
-      const pts = read64(header + 8n);
-      if (pts > BigInt(Number.MAX_SAFE_INTEGER)) throw Error('Invalid video timestamp');
-
-      const overdue = lateness(pts, headerAt) > periodMs;
-      const behind = depth > 1 || (depth > 0 && overdue);
-      behindUnits = behind ? behindUnits + 1 : 0;
-      const late = behindUnits >= catchUpUnits;
-      if (late) behindUnits = 0;
-      transfer(receive, buffer, length);
-      const arrived = now();
-      loop.receive += arrived - headerAt;
-      loop.units++;
-      pump();
-      yield {source: buffer, length, pts, present: !late, waiting: depth > 0, echo: echoOf(length, sequence, pts),
-        sequence, header: headerAt, arrived, decoded: -1, presented: -1, input: -1};
-    }
-  }
-
-  /**
-   * The UDP transport's units, reassembled in `buffer`'s slots; the same catch-up rule with the
-   * first datagram as the header mark. The overlapped output takes each unit once it is whole, so
-   * there only a unit already arriving behind it counts as behind; README.md, "UDP transport"
-   * and "Catching up".
-   */
-  function* datagramUnits() {
-    if (!native.createUdpReceiver) throw Error('UDP video needs createUdpReceiver');
-    datagrams = native.createUdpReceiver(native, {.../** @type {ConsoleRequest} */ (stream.udp),
+    const receiver = datagrams = native.createUdpReceiver(native, {.../** @type {ConsoleRequest} */ (stream.udp),
       host: stream.host, units: stream.buffer, capacity, control: channel},
-      {pump, control: (pointer, length) => transfer(send, pointer, length)});
+      {pump, control: transfer});
     const catchUpUnits = Math.max(2, Math.round(fps / 30));
     const periodMs = 1000 / fps;
     const takenWhole = stream.overlapOutput === true;
@@ -413,10 +360,10 @@ export function videoStream(native, request) {
       const depth = index > 0 ? queueDepth() : 0;
 
       const waited = now();
-      const before = datagrams.drainMs;
-      const unit = datagrams.next();
+      const before = receiver.drainMs;
+      const unit = receiver.next();
       if (!unit) break;
-      const drained = datagrams.drainMs;
+      const drained = receiver.drainMs;
       loop.idle += now() - waited - (drained - before);
       loop.receive += drained - drainedMs;
       drainedMs = drained;

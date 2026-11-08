@@ -14,7 +14,7 @@ import {runFrameRateSession} from './frame-rate.js';
 import {createRefreshRate} from './refresh-rate.js';
 import {BADGE_MS, BADGE_STAYS, NOTE_MS, badgeText, createQuadBadge, createTouchNotice,
   rateChangeText} from './rate-badge.js';
-import {createStreamFallbacks, launchRate, sessionSize, shapeChanges} from './stream-fallback.js';
+import {createStreamFallbacks, launchRate, noticeOf, sessionSize, shapeChanges} from './stream-fallback.js';
 import {createOperationModeReader} from './operation-mode.js';
 import {createDockMonitor, runDockSession} from './dock-switch.js';
 import {createHostDisplay} from './host-display.js';
@@ -65,10 +65,6 @@ export function streamShape(args) {
   const helperArgs = ['--local-audio', '--sops'].filter(flag => args.includes(flag));
   const streamInfo = args.includes('--stream-info');
   const frameCounter = args.includes('--frame-counter');
-  const launched = option('--transport', '');
-  /** @type {'tcp' | 'udp' | undefined} */
-  let transport;
-  if (launched) transport = launched === 'udp' ? 'udp' : 'tcp';
 
   /**
    * @param {number} sessionFps @param {'h264' | 'av1'} [sessionCodec]
@@ -76,18 +72,17 @@ export function streamShape(args) {
    */
   const bitrate = (sessionFps, sessionCodec = codec, size = {width, height}) =>
     sessionBitrate(withCodec(args, sessionCodec), size.width, size.height, sessionFps);
-  return {width, height, fps, undockedFps, codec, transport, bitrate, buttons, helperArgs, streamInfo,
-    frameCounter};
+  return {width, height, fps, undockedFps, codec, bitrate, buttons, helperArgs, streamInfo, frameCounter};
 }
 
 /**
- * The stream info badge text of one session: "1080p120 · AV1 · UDP · 30 Mbps".
- * @param {{height: number, fps: number, codec: string, transport: string, bitrate: number}} session
+ * The stream info badge text of one session: "1080p120 · AV1 · 30 Mbps".
+ * @param {{height: number, fps: number, codec: string, bitrate: number}} session
  */
-export function streamInfoText({height, fps, codec, transport, bitrate}) {
+export function streamInfoText({height, fps, codec, bitrate}) {
   const codecName = codec === 'av1' ? 'AV1' : 'H.264';
   const mbps = Math.round(bitrate / 100) / 10;
-  return [`${height}p${fps}`, codecName, transport.toUpperCase(), mbps + ' Mbps'].join(' · ');
+  return [`${height}p${fps}`, codecName, mbps + ' Mbps'].join(' · ');
 }
 
 /**
@@ -175,18 +170,16 @@ export function forwardStreamEvent(event, log, onLine) {
  * The Moonlight menu and its streams on one attached console, until the service stops.
  * @param {{rpc: Civ7Rpc, directory: string, menu: Menu, gpu: Gpu, hostAddress: string, helper: string,
  *   hosts: Host[], signal?: AbortSignal, raster?: ReturnType<typeof createRaster>,
- *   lostHost?: Host | null, onStream?: (host: Host | null) => void, transport?: 'tcp' | 'udp',
+ *   lostHost?: Host | null, onStream?: (host: Host | null) => void,
  *   layer?: {width: number, height: number}, log?: (event: object) => void,
  *   mark?: (name: string) => void}} options
  *   `lostHost` is the PC whose stream the console link dropped last launch; `onStream` hears
- *   each stream's PC as it starts and null as it ends;
- *   `transport` is the bundle's video transport; a launch's `--transport` (the Settings row)
- *   overrides it; `layer` is the open layer's size, which no stream exceeds; `mark` takes
- *   startup-timing.js marks
+ *   each stream's PC as it starts and null as it ends; `layer` is the open layer's size, which
+ *   no stream exceeds; `mark` takes startup-timing.js marks
  */
 export async function runApplication({rpc, directory, menu, gpu, hostAddress, helper,
   hosts, signal = undefined, raster: sharedRaster = undefined, lostHost = null,
-  onStream = host => {}, transport = 'udp', layer = DEFAULT_SIZE, log = event => {}, mark = name => {}}) {
+  onStream = host => {}, layer = DEFAULT_SIZE, log = event => {}, mark = name => {}}) {
   /** @type {Awaited<ReturnType<typeof createPresenter>> | undefined} */
   let presenter;
   /** @type {Awaited<ReturnType<typeof createInput>> | undefined} */
@@ -257,9 +250,9 @@ export async function runApplication({rpc, directory, menu, gpu, hostAddress, he
       onStream(host);
       renderMode.invalidate();
       const abort = new AbortController();
-      const {width, height, fps: requestedFps, undockedFps, codec, bitrate, transport: launched, buttons, helperArgs,
+      const {width, height, fps: requestedFps, undockedFps, codec, bitrate, buttons, helperArgs,
         streamInfo, frameCounter} = streamShape(args);
-      let choice = {codec, transport: launched ?? transport};
+      let choice = {codec};
       /** @type {ReturnType<typeof createQuadBadge> | undefined} */
       let shownBadge;
       const touchNotice = createTouchNotice(text => void (shownBadge ?? createQuadBadge(rpc, {text: '',
@@ -316,13 +309,13 @@ export async function runApplication({rpc, directory, menu, gpu, hostAddress, he
                       ? [rateChangeText({height: size.height, fps: change.from}, {height: size.height, fps: change.to})] : [];
                     return streamVideo({rpc, directory, hostAddress, host: host.address, app: String(app.id), helper,
                       helperArgs, buttons, width: size.width, height: size.height, codec: choice.codec,
-                      transport: choice.transport, fps, bitrate: kbps,
+                      fps, bitrate: kbps,
                       badge: badgeFor([
                         ...shapeChanges({height, fps: requestedFps}, {height: size.height, fps: launchFps}),
                         ...rate,
                         ...notes,
                         ...(streamInfo ? [streamInfoText({height: size.height, fps, codec: choice.codec,
-                          transport: choice.transport, bitrate: kbps})] : [])]),
+                          bitrate: kbps})] : [])]),
                       duration: null, signal, controls: menu.controls.mapped,
                       presentation: {configuration: ui.presenter.configuration, storage: gpu.privateStorage},
                       log: streamLog});
@@ -334,7 +327,7 @@ export async function runApplication({rpc, directory, menu, gpu, hostAddress, he
         } catch (error) {
           if (abort.signal.aborted) return {code: 0, signal: null, out: '', err: ''};
           log({event: 'stream-failed', message: errorText(error)});
-          return {code: 1, signal: null, out: '', err: errorText(error)};
+          return {code: 1, signal: null, out: '', err: errorText(error), ...noticeOf(error)};
         } finally {
           try { await hostDisplay?.restore(); }
           catch (error) { log({event: 'host-display-restore-failed', message: errorText(error)}); }

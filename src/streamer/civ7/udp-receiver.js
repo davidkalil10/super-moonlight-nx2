@@ -22,7 +22,7 @@
  * @param {UdpReceiverNative} native
  * @param {ConsoleRequest} config the request's `stream.udp` plus `host`, `units`, `capacity` and `control`
  * @param {{pump?: () => void, control: (pointer: bigint, length: number) => void}} hooks `control`
- *   sends bytes on the TCP video socket (drop blocks)
+ *   sends bytes on the TCP socket (drop blocks)
  */
 export function createUdpReceiver(native, config, hooks) {
   const {address, integer, checkMemory, verified, call, read32, read64, write64, writeBuffer, encode,
@@ -656,7 +656,7 @@ export function createUdpReceiver(native, config, hooks) {
         confirmed = readable;
       }
     },
-    /** Like videoStream's socket peek: depth 2 when a later unit started behind a whole one. */
+    /** Units waiting for videoStream: depth 1 for a whole next unit, 2 when a later one started behind it. */
     peek() {
       drain(false);
       const slot = head(now());

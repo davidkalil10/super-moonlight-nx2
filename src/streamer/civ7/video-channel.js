@@ -36,9 +36,10 @@ const RECORD_OFFSET = HEADER_BYTES + 4;
  * `latency: {rpc, log}` syncs the console clock and logs per-second `civ7-latency` events.
  * A fixed `window` bounds the units in flight; with `fps` instead, adaptWindow() sizes it from
  * the ack round trip (video-window.js).
- * With `datagrams` (udp-video.js) the units go over UDP and only acks, drop blocks and timing
- * come back on this socket; a drop block (16 bytes: magic, frame, reason) ends a unit the
- * console gave up on, in any order against the acks. README.md, "UDP transport".
+ * Video passes `datagrams` (udp-video.js): the units go over UDP and only acks, drop blocks and
+ * timing come back on this socket; a drop block (16 bytes: magic, frame, reason) ends a unit the
+ * console gave up on, in any order against the acks. README.md, "UDP transport". Without it the
+ * units go on this socket, as audio.js sends its PCM.
  * @param {{port?: number, timeoutMs?: number, window?: number, fps?: number, input?: boolean,
  *   onInput?: (record: InputRecord | null) => void,
  *   onAcknowledged?: (event: {sequence: number, elapsedMs: number}) => void,
@@ -220,7 +221,7 @@ export async function videoChannel({port = 0, timeoutMs = 15000, window = undefi
   return {
     port: endpoint.port, token, connected,
     get acknowledged() { return acknowledged; },
-    /** Units the console dropped over UDP (late or skipped to a keyframe); 0 over TCP. */
+    /** Units the console dropped over UDP (late or skipped to a keyframe); 0 without datagrams. */
     get dropped() { return dropped; },
     get window() { return limit(); },
     /**

@@ -18,8 +18,7 @@ import {pickLayerSize} from '../civ7/layer-size.js';
 
 /**
  * host.json, as build.js writes it.
- * @typedef {{host: string, port: number, token: string, transport?: 'tcp' | 'udp',
- *   hosts: Host[]}} HostConfiguration
+ * @typedef {{host: string, port: number, token: string, hosts: Host[]}} HostConfiguration
  */
 
 /** @param {unknown} error */
@@ -163,7 +162,7 @@ export async function serve(bundle, signal, log = (/** @type {object} */ event) 
         await runApplication({rpc: session, directory: run, menu, gpu, hostAddress: configuration.host,
           helper: path.join(bundle, 'hbmoonlight'), hosts: configuration.hosts, layer,
           signal: controller.signal, log: record, mark: timing.mark, raster, lostHost: lostStream.take(),
-          onStream: lostStream.streaming, transport: configuration.transport === 'tcp' ? 'tcp' : 'udp'});
+          onStream: lostStream.streaming});
       } catch (error) {
         if (!controller.signal.aborted) log({event: 'session-failed', message: errorText(error)});
       } finally {

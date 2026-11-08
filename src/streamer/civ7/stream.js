@@ -32,6 +32,9 @@ const COPY_SIGNATURE = 'ec0301cb8a0940924b000aeb69040054e90301aae80300aa6a0100b4
 
 const RELEASED_PAD = toMoonlight(NEUTRAL);
 
+/** @param {unknown} error */
+const errorText = error => error instanceof Error ? error.message : String(error);
+
 /**
  * Forwards the console's input records (input/input-record.js) to the helper. The console maps
  * gates input and detects the stop chord. This side forwards records and ends the stream on
@@ -192,33 +195,22 @@ export function codecRefusal(codec, event) {
   return null;
 }
 
-/**
- * The fallback a start that failed in `stage` allows (README.md, "Fallbacks"): `codec` while an
- * AV1 start is checked and opened, `transport` while UDP is set up and until the first
- * acknowledged unit; none once streaming.
- * @param {'start' | 'av1' | 'udp' | 'streaming'} stage
- * @returns {'codec' | 'transport' | null}
- */
-export function setupFallback(stage) {
-  if (stage === 'av1') return 'codec';
-  if (stage === 'udp') return 'transport';
-  return null;
-}
+/** What the console shows when the UDP video stream does not start (README.md, "UDP transport"). */
+export const UDP_START_ERROR = 'Could not open the UDP video stream; check firewall on the PC';
 
 /**
  * The setup failures a device test forces through `MOONLIGHT_FORCE_FALLBACK` (README.md,
- * "Fallbacks"): a comma list of `codec` and `transport`, empty when unset.
+ * "Fallbacks"): `codec` or nothing.
  * @param {string | undefined} value
- * @returns {Set<'codec' | 'transport'>}
+ * @returns {Set<'codec'>}
  */
 export function forcedFallbacks(value) {
-  /** @type {Set<'codec' | 'transport'>} */
+  /** @type {Set<'codec'>} */
   const forced = new Set();
   const words = (value ?? '').split(',').map(word => word.trim()).filter(Boolean);
 
   for (const word of words) {
-    if (word !== 'codec' && word !== 'transport')
-      throw Error('MOONLIGHT_FORCE_FALLBACK takes codec and transport, not ' + word);
+    if (word !== 'codec') throw Error('MOONLIGHT_FORCE_FALLBACK takes codec, not ' + word);
     forced.add(word);
   }
   return forced;
@@ -227,12 +219,24 @@ export function forcedFallbacks(value) {
 /**
  * `error` marked with the fallback it allows, unless it already names one.
  * @param {unknown} error
- * @param {'codec' | 'transport' | null} fallback
+ * @param {'codec' | null} fallback
  */
 export function withFallback(error, fallback) {
   const markable = fallback && error instanceof Error && !('fallback' in error);
   if (markable) Object.assign(error, {fallback});
   return error;
+}
+
+/**
+ * The error a start that failed in `stage` ends with (README.md, "Fallbacks"): the UDP message,
+ * also its console notice, while the UDP stream opens, until the first acknowledged unit; marked
+ * for the H.264 fallback while an AV1 start is checked and opened; as it is otherwise.
+ * @param {unknown} error
+ * @param {'start' | 'av1' | 'udp' | 'streaming'} stage
+ */
+export function startFailure(error, stage) {
+  if (stage === 'udp') return Object.assign(Error(UDP_START_ERROR, {cause: error}), {notice: UDP_START_ERROR});
+  return withFallback(error, stage === 'av1' ? 'codec' : null);
 }
 
 /**
@@ -248,8 +252,8 @@ export function streamTuning({fps, codec, height}) {
 }
 
 /**
- * The UDP transport's sender, console area and the request's `stream.udp`; RecvMMsg, Poll and
- * GetLastErrno must verify, SetSockOpt is optional as on the TCP sockets.
+ * The UDP sender, console area and the request's `stream.udp`; RecvMMsg, Poll and GetLastErrno
+ * must verify, SetSockOpt is optional as on the TCP sockets.
  * @param {Civ7Rpc} rpc
  * @param {number} fps
  * @param {number} copy the verified native memcpy the decoder uses
@@ -275,24 +279,24 @@ async function udpTransport(rpc, fps, copy) {
 }
 
 /**
- * One Sunshine session: the helper's H.264 or AV1 and PCM go to the console's video-stream
- * request, the console's input records come back to the helper.
+ * One Sunshine session: the helper's H.264 or AV1 goes to the console's video-stream request over
+ * UDP (README.md, "UDP transport") and its PCM over the audio socket; the console's input records
+ * come back to the helper.
  * @param {{rpc: Civ7Rpc, directory: string, hostAddress: string, host: string, app: string, helper: string,
  *   presentation: {configuration: unknown, storage: {mapped: number, bytes: number, memoryFlags: number}},
  *   helperPrefix?: string[], helperArgs?: string[], buttons?: 'position' | 'labels', fps?: number, bitrate?: number, duration?: number | null, width?: number,
  *   height?: number, controls?: number, signal?: AbortSignal, allowInput?: () => boolean,
- *   audioEnabled?: boolean, badge?: StreamBadge, codec?: 'h264' | 'av1', transport?: 'tcp' | 'udp',
+ *   audioEnabled?: boolean, badge?: StreamBadge, codec?: 'h264' | 'av1',
  *   log?: (event: object) => void}} options
- *   `badge` is shown from the first acknowledged frame (rate-badge.js); `transport: 'udp'` sends
- *   video over UDP (README.md, "UDP transport"). A failed start's error carries `fallback` when
- *   H.264 or TCP may succeed instead (setupFallback). `helperArgs` are launch flags passed through
- *   to the helper (--local-audio, --sops); `buttons` is the console's face button layout.
+ *   `badge` is shown from the first acknowledged frame (rate-badge.js). A failed start's error
+ *   carries `fallback` when H.264 may succeed instead (startFailure). `helperArgs` are launch
+ *   flags passed through to the helper (--local-audio, --sops); `buttons` is the console's face
+ *   button layout.
  */
 export async function streamVideo({rpc, directory, presentation, hostAddress, host, app,
   helper, helperPrefix = [], helperArgs = [], buttons = 'position', fps = 60, bitrate = 20000, duration = 30, width = 1920, height = 1080,
   controls = undefined, signal = undefined, allowInput = () => true, audioEnabled = true, badge = undefined,
-  codec = 'h264', transport = 'tcp', log = event => {}}) {
-  if (transport !== 'tcp' && transport !== 'udp') throw Error('Expected transport tcp or udp');
+  codec = 'h264', log = event => {}}) {
   if (!Number.isInteger(fps) || fps < 1 || fps > 120 || (duration !== null && !(duration > 0)))
     throw Error('Invalid video stream duration or rate');
   if (codec !== 'h264' && codec !== 'av1') throw Error('Expected codec h264 or av1');
@@ -300,8 +304,7 @@ export async function streamVideo({rpc, directory, presentation, hostAddress, ho
   const forced = forcedFallbacks(process.env.MOONLIGHT_FORCE_FALLBACK);
   if (forced.size) log({type: 'stream-forced-fallback', kinds: [...forced]});
   const {deferWait, overlapOutput} = streamTuning({fps, codec, height});
-  if (deferWait) log({type: 'stream-tuning', deferWait, overlapOutput,
-    udpPrefetch: transport === 'udp' && overlapOutput});
+  if (deferWait) log({type: 'stream-tuning', deferWait, overlapOutput});
   const videoArgs = ['--codec', codec, '--raw-fd', '4'];
   const storage = presentation.storage;
   if (storage.bytes < ring.MEMORY_BYTES || !(storage.memoryFlags & 4))
@@ -376,8 +379,8 @@ export async function streamVideo({rpc, directory, presentation, hostAddress, ho
   let failure;
   /** @type {'start' | 'av1' | 'udp' | 'streaming'} */
   let stage = 'start';
-  /** @type {'codec' | 'transport' | null} */
-  let fallback = null;
+  /** @type {'start' | 'av1' | 'udp' | 'streaming'} */
+  let failedStage = 'start';
   const stop = () => { rateFallback = undefined; reader.close(); };
   signal?.addEventListener('abort', stop, {once: true});
   const inputs = createInputForwarder({write: line => stdin.write(line), allowInput, onStop: stop, log});
@@ -409,11 +412,10 @@ export async function streamVideo({rpc, directory, presentation, hostAddress, ho
     source = await rpc.allocate(CAPACITY);
     const copy = rpc.a.sdk + COPY_OFFSET;
     await rpc.request({command: 'verify-function', address: copy, hex: COPY_SIGNATURE});
-    if (transport === 'udp') stage = 'udp';
-    const udp = transport === 'udp' ? await udpTransport(rpc, fps, copy) : null;
-    datagrams = udp?.sender;
-    udpArea = udp?.area;
-    if (udp && forced.has('transport')) throw Error('UDP setup forced to fail (MOONLIGHT_FORCE_FALLBACK)');
+    stage = 'udp';
+    const udp = await udpTransport(rpc, fps, copy);
+    const sender = datagrams = udp.sender;
+    udpArea = udp.area;
     stage = 'start';
     if (controls !== undefined) input = await createInput(rpc, controls);
     if (audioEnabled) {
@@ -431,12 +433,12 @@ export async function streamVideo({rpc, directory, presentation, hostAddress, ho
       },
       onTiming: caughtUp.onTiming,
       onLoop: loop => { consoleLoop = loop; },
-      datagrams,
+      datagrams: sender,
       onDropped: event => { if (event.reason === 'late' || event.keyframe) units.lost(event.sequence); }});
     const context = decoder.nativeContext;
     await badge?.prepare();
     const receiveBuffer = await receiveBufferRequest(rpc, header + REPORT_OFFSET);
-    if (udp) stage = 'udp';
+    stage = 'udp';
     const request = streamRequest = rpc.request({command: 'video-stream', memory: address(context.memory),
       functions: Object.fromEntries(Object.entries({...context.functions, copy})
         .map(([key, value]) => [key, address(value)])), layout: context.layout,
@@ -453,13 +455,13 @@ export async function streamVideo({rpc, directory, presentation, hostAddress, ho
         header: address(header), buffer: address(source), capacity: CAPACITY, frames: 0x7fffffff, fps,
         ...(overlapOutput ? {overlapOutput} : {}),
         ...(buttons === 'labels' ? {buttons} : {}),
-        ...(receiveBuffer ? {receiveBuffer} : {}), ...(udp ? {udp: udp.request} : {})}}, undefined, 0);
+        ...(receiveBuffer ? {receiveBuffer} : {}), udp: udp.request}}, undefined, 0);
     consoleRequest = watchConsoleRequest(request, {log,
       onFailure: error => { reader.fail(error); videoOut.close(); }});
     audioOut?.done.catch(error => { reader.fail(error); videoOut.close(); });
     await videoOut.connected;
     rcvbuf = await receiveBufferReports(rpc, {video: receiveBuffer, audio: audioOut?.configuration.receiveBuffer,
-      ...(udp ? {udp: udp.request.receiveBuffer} : {})});
+      udp: udp.request.receiveBuffer});
     log({type: 'video-connected', ...dimensions, fps, rcvbuf});
     log({type: 'video-rate', fps, bitrate});
     const frameRate = createFrameRateGuard({fps});
@@ -477,7 +479,7 @@ export async function streamVideo({rpc, directory, presentation, hostAddress, ho
         dropped: units.dropped, idrRequests: units.idrRequests, queueAgeMs, acknowledgementMs,
         window: videoOut.adaptWindow(), drops, idrs, held, console: consoleLoop,
         inputChanges: inputs.changes(), touchEvents: inputs.touchEvents(), audio: audioOut?.stats,
-        ...(datagrams ? {udp: datagrams.take(), udpDropped: videoOut.dropped} : {}),
+        udp: sender.take(), udpDropped: videoOut.dropped,
         ...(firstStats ? {rcvbuf} : {})});
       firstStats = false;
       previousFrames = videoOut.acknowledged;
@@ -507,16 +509,17 @@ export async function streamVideo({rpc, directory, presentation, hostAddress, ho
       throw Error('Video frame acknowledgements do not match the sent frames');
     if (typeof elapsedMs !== 'number') throw Error('Invalid console stream result');
     return {...result, ...dimensions, sent, acknowledged: videoOut.acknowledged,
-      dropped: units.dropped, idrRequests: units.idrRequests, transport,
-      ...(datagrams ? {udpDropped: videoOut.dropped, udpSender: datagrams.stats()} : {}), inputChanges: inputs.changes(), touchEvents: inputs.touchEvents(), requestedFps: fps,
+      dropped: units.dropped, idrRequests: units.idrRequests,
+      udpDropped: videoOut.dropped, udpSender: sender.stats(), inputChanges: inputs.changes(), touchEvents: inputs.touchEvents(), requestedFps: fps,
       audioSource: audioOut?.stats,
       rateFallback, rcvbuf,
       presentedFps: sent * 1000 / elapsedMs};
   } catch (error) {
     failure = error;
     const live = !signal?.aborted && rpc.connected !== false;
-    fallback = live ? setupFallback(stage) : null;
-    throw withFallback(error, fallback);
+    failedStage = live ? stage : 'start';
+    if (failedStage === 'udp') log({type: 'udp-start-failed', message: errorText(error)});
+    throw startFailure(error, failedStage);
   } finally {
     clearTimeout(startup);
     clearTimeout(deadline);
@@ -550,7 +553,7 @@ export async function streamVideo({rpc, directory, presentation, hostAddress, ho
       ['helper', () => stopChild(child)]
     ], log);
     const consoleFailure = consoleRequest?.failure();
-    if (failure && consoleFailure) throw withFallback(consoleFailure.error, fallback);
+    if (failure && consoleFailure) throw startFailure(consoleFailure.error, failedStage);
     if (!failure && errors.length) throw new AggregateError(errors, 'Stream cleanup failed');
   }
 }
