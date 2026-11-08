@@ -286,6 +286,7 @@ export async function runApplication({rpc, directory, menu, gpu, hostAddress, he
               if (launchSize.fallback) forwardStreamEvent(launchSize.fallback, log, onLine);
               const fps = dockedAtLaunch ? requestedFps : undockedFps;
               const launchFps = launchRate({...launchSize.size, fps, codec: choice.codec}, dockedAtLaunch);
+              void hostDisplay?.apply({...launchSize.size, fps: launchFps}).catch(() => {});
               if (launchFps <= 60) await display.set(60);
               try {
                 return await runFrameRateSession({fps: launchFps,

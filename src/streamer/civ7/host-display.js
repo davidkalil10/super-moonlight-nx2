@@ -48,25 +48,43 @@ export function createHostDisplay(host, {file = path.join(configDirectory(), 'ho
   /** @param {string} action @param {Partial<StreamMode>} [mode] */
   const request = (action, mode = {}) => execute(command,
     {action, session, host, options: adapter.options, ...mode});
+  /** @type {Promise<unknown>} */
+  let queue = Promise.resolve();
+  /**
+   * Runs one change after the earlier ones settle, so an apply started ahead of a session and
+   * that session's own apply never reach the host at once.
+   * @param {() => Promise<void>} change
+   */
+  const serial = change => {
+    const done = queue.then(change);
+    queue = done.catch(() => {});
+    return done;
+  };
+
   return {
     /** @param {StreamMode} mode */
     async apply(mode) {
       if (![mode.width, mode.height, mode.fps].every(value => Number.isSafeInteger(value) && value > 0))
         throw Error('Invalid host display mode');
-      if (applied?.width === mode.width && applied.height === mode.height && applied.fps === mode.fps) return;
 
-      active = true;
-      await request('apply', mode);
-      applied = {...mode};
-      log({event: 'host-display-applied', host, ...mode});
+      return serial(async () => {
+        if (applied?.width === mode.width && applied.height === mode.height && applied.fps === mode.fps) return;
+
+        active = true;
+        await request('apply', mode);
+        applied = {...mode};
+        log({event: 'host-display-applied', host, ...mode});
+      });
     },
-    async restore() {
-      if (!active) return;
+    restore() {
+      return serial(async () => {
+        if (!active) return;
 
-      await request('restore');
-      active = false;
-      applied = null;
-      log({event: 'host-display-restored', host});
+        await request('restore');
+        active = false;
+        applied = null;
+        log({event: 'host-display-restored', host});
+      });
     }
   };
 }
