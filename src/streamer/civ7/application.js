@@ -12,7 +12,7 @@ import {sessionBitrate} from './bitrate-adaptation.js';
 import {createRemoteUi} from './console-ui.js';
 import {runFrameRateSession} from './frame-rate.js';
 import {createRefreshRate} from './refresh-rate.js';
-import {badgeText, createQuadBadge, rateChangeText} from './rate-badge.js';
+import {BADGE_MS, BADGE_STAYS, badgeText, createQuadBadge, rateChangeText} from './rate-badge.js';
 import {createStreamFallbacks, launchRate, sessionSize, shapeChanges} from './stream-fallback.js';
 import {createOperationModeReader} from './operation-mode.js';
 import {createDockMonitor, runDockSession} from './dock-switch.js';
@@ -261,7 +261,10 @@ export async function runApplication({rpc, directory, menu, gpu, hostAddress, he
       /** @param {string[]} changes */
       const badgeFor = changes => {
         if (!changes.length) return undefined;
-        return createQuadBadge(rpc, {text: badgeText(changes), raster: ui.raster, storage: gpu.privateStorage, log});
+
+        const durationMs = streamInfo ? BADGE_STAYS : BADGE_MS;
+        return createQuadBadge(rpc, {text: badgeText(changes), raster: ui.raster, storage: gpu.privateStorage,
+          durationMs, log});
       };
       const exited = (async () => {
         /** @type {ReturnType<typeof createHostDisplay>} */

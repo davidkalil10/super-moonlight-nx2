@@ -41,6 +41,8 @@ at. Tests: `src/streamer/ui/test/` in moonlight-nx2-dev.
   whenever a default changes. The frame rate is also the display rate; there is no present-rate row.
   Version 5 (2026-11-07) drops 30 fps (a save of 30 falls back to 60) and adds host audio,
   button layout and the stream info badge; SOPS and quit-on-return became real.
+  Stream info on keeps "1080p120 · AV1 · UDP · 30 Mbps" (plus any fallback note) on the top
+  right badge for the whole stream at every layer size; off, the badge shows fallbacks for 4 s.
   Left out: surround (helper and console audio are stereo), touch as mouse (the helper sends
   touch events only), pacing toggles (the deferred wait is automatic) and a live stats
   overlay (the rate badge is a start-of-stream badge).

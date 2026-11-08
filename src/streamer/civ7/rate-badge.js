@@ -1,11 +1,14 @@
 // The badge shown top right when a stream runs other than requested (rate, size, a codec or
-// transport fallback): the PC composes it and the renderer draws it as a UI quad.
+// transport fallback), or all stream long with the stream info setting: the PC composes it and
+// the renderer draws it as a UI quad.
 import {BADGE, BADGE_OFFSET, BADGE_BYTES, WIDTH, HEIGHT} from '../../renderer/civ7/layout.js';
 
 /** @import {Civ7Rpc} from './transport.js' */
 /** @import {ConsoleNative, ConsoleRequest} from './console-runtime.js' */
 
 export const BADGE_MS = 4000;
+/** A badge with this duration stays until its stream's presentation ends (stream info). */
+export const BADGE_STAYS = 0;
 
 const REFERENCE_HEIGHT = 1080;
 const FONTS = [{size: 26, weight: 600}, {size: 24, weight: 600}, {size: 22, weight: 600}, {size: 18, weight: 700}];
@@ -113,8 +116,9 @@ export function composeBadge(raster, text, frame) {
 
 /**
  * One stream's badge: `show` composes it at the display size, writes its pixels and rectangle
- * into private storage and asks the console to show the quad. Nothing to create or destroy; the
- * console hides it with its presentation. A failure is logged as `overlay-failed`.
+ * into private storage and asks the console to show the quad for `durationMs` (BADGE_STAYS:
+ * until the stream ends). Nothing to create or destroy; the console hides it with its
+ * presentation. A failure is logged as `overlay-failed`.
  * @param {Pick<Civ7Rpc, 'write' | 'request'>} rpc
  * @param {{text: string, raster: TextRaster, storage: {mapped: number}, durationMs?: number,
  *   log?: (event: object) => void}} options
@@ -146,13 +150,15 @@ export function createQuadBadge(rpc, {text, raster, storage, durationMs = BADGE_
 
 /**
  * The console half: `overlay-show` sets the quad's visible word and arms the badge; while armed
- * each present counts toward `durationMs` after the first such present, then hides it. Hidden,
- * the present pays one property read. Shipped by toString().
+ * each present counts toward `durationMs` after the first such present, then hides it; a
+ * duration of 0 (BADGE_STAYS) stays until detach. Hidden, the present pays one property read.
+ * Shipped by toString().
  * @param {Pick<ConsoleNative, 'address' | 'integer' | 'checkMemory' | 'write32'> & {now?: () => number}} native
  */
 export function createOverlay(native) {
   const {address, integer, checkMemory, write32} = native;
   const now = native.now || (() => Date.now());
+  const STAYS = 0;
   let attached = false;
   let durationMs = 0;
   let until = 0;
@@ -182,6 +188,8 @@ export function createOverlay(native) {
     },
 
     frame() {
+      if (durationMs === STAYS) return;
+
       const at = now();
       if (!until) until = at + durationMs;
       else if (at >= until) overlay.hide();
@@ -195,7 +203,7 @@ export function createOverlay(native) {
 
       overlay.hide();
       visible = word;
-      durationMs = integer(request.durationMs, 1, 60000);
+      durationMs = integer(request.durationMs, STAYS, 60000);
       until = 0;
       overlay.armed = true;
       setVisible(true);
