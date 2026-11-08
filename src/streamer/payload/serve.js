@@ -38,6 +38,32 @@ async function sinceLaunch(bundle) {
 }
 
 /**
+ * The PC a stream was on when the console link dropped, kept for the next launch only. A drop
+ * in the menu, or after a stream ended, leaves nothing to report.
+ */
+export function createLostStream() {
+  /** @type {Host | null} */
+  let current = null;
+  /** @type {Host | null} */
+  let lost = null;
+  return {
+    /** @param {Host | null} host */
+    streaming: host => { current = host; },
+    dropped: () => {
+      lost = current;
+      current = null;
+      return lost;
+    },
+    lost: () => lost,
+    take: () => {
+      const host = lost;
+      lost = null;
+      return host;
+    }
+  };
+}
+
+/**
  * Serves the bundle's Moonlight session to each payload that connects, until `signal` aborts.
  * @param {string} bundle
  * @param {AbortSignal} signal
@@ -62,7 +88,7 @@ export async function serve(bundle, signal, log = (/** @type {object} */ event) 
   let state = 'starting';
   /** @type {string | null} */
   let activeRun = null;
-  let connectionLost = false;
+  const lostStream = createLostStream();
   const raster = createRaster();
   const health = http.createServer((request, response) => {
     if (request.url !== '/status' || request.method !== 'GET') {
@@ -70,7 +96,8 @@ export async function serve(bundle, signal, log = (/** @type {object} */ event) 
       return;
     }
     response.setHeader('Content-Type', 'application/json');
-    response.end(JSON.stringify({id: manifest.id, pid: process.pid, state, run: activeRun, connectionLost}));
+    response.end(JSON.stringify({id: manifest.id, pid: process.pid, state, run: activeRun,
+      connectionLost: lostStream.lost() !== null}));
   });
   try {
     await new Promise((resolve, reject) => {
@@ -96,11 +123,11 @@ export async function serve(bundle, signal, log = (/** @type {object} */ event) 
         const session = rpc = await listener.connected;
         const timing = createStartupTiming({sentMs: await sinceLaunch(bundle), bridgeMs: session.bridgeMs});
         session.disconnected.then(error => {
-          if (!session.connected && state === 'running') {
-            connectionLost = true;
-            state = 'connection-lost';
-            log({event: 'connection-lost', message: error.message});
-          }
+          if (session.connected || state !== 'running') return;
+
+          state = 'connection-lost';
+          const host = lostStream.dropped();
+          log({event: 'connection-lost', message: error.message, streaming: host !== null});
         });
         const stamp = new Date().toISOString().replace(/[-:.]/g, '');
         const run = activeRun = path.join(runs, stamp);
@@ -135,9 +162,8 @@ export async function serve(bundle, signal, log = (/** @type {object} */ event) 
         state = 'running';
         await runApplication({rpc: session, directory: run, menu, gpu, hostAddress: configuration.host,
           helper: path.join(bundle, 'hbmoonlight'), hosts: configuration.hosts, layer,
-          signal: controller.signal, log: record, mark: timing.mark, raster, connectionLost,
-          transport: configuration.transport === 'tcp' ? 'tcp' : 'udp'});
-        connectionLost = false;
+          signal: controller.signal, log: record, mark: timing.mark, raster, lostHost: lostStream.take(),
+          onStream: lostStream.streaming, transport: configuration.transport === 'tcp' ? 'tcp' : 'udp'});
       } catch (error) {
         if (!controller.signal.aborted) log({event: 'session-failed', message: errorText(error)});
       } finally {

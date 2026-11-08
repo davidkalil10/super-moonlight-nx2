@@ -172,15 +172,18 @@ export function forwardStreamEvent(event, log, onLine) {
  * The Moonlight menu and its streams on one attached console, until the service stops.
  * @param {{rpc: Civ7Rpc, directory: string, menu: Menu, gpu: Gpu, hostAddress: string, helper: string,
  *   hosts: Host[], signal?: AbortSignal, raster?: ReturnType<typeof createRaster>,
- *   connectionLost?: boolean, transport?: 'tcp' | 'udp', layer?: {width: number, height: number},
- *   log?: (event: object) => void, mark?: (name: string) => void}} options
+ *   lostHost?: Host | null, onStream?: (host: Host | null) => void, transport?: 'tcp' | 'udp',
+ *   layer?: {width: number, height: number}, log?: (event: object) => void,
+ *   mark?: (name: string) => void}} options
+ *   `lostHost` is the PC whose stream the console link dropped last launch; `onStream` hears
+ *   each stream's PC as it starts and null as it ends;
  *   `transport` is the bundle's video transport; a launch's `--transport` (the Settings row)
  *   overrides it; `layer` is the open layer's size, which no stream exceeds; `mark` takes
  *   startup-timing.js marks
  */
 export async function runApplication({rpc, directory, menu, gpu, hostAddress, helper,
-  hosts, signal = undefined, raster: sharedRaster = undefined, connectionLost = false,
-  transport = 'udp', layer = DEFAULT_SIZE, log = event => {}, mark = name => {}}) {
+  hosts, signal = undefined, raster: sharedRaster = undefined, lostHost = null,
+  onStream = host => {}, transport = 'udp', layer = DEFAULT_SIZE, log = event => {}, mark = name => {}}) {
   /** @type {Awaited<ReturnType<typeof createPresenter>> | undefined} */
   let presenter;
   /** @type {Awaited<ReturnType<typeof createInput>> | undefined} */
@@ -240,7 +243,7 @@ export async function runApplication({rpc, directory, menu, gpu, hostAddress, he
     const readMode = await createOperationModeReader(rpc);
     const docked = (await readMode()).docked;
     if (docked) remote.initial = await remote.dispatch({type: 'operationMode', docked});
-    if (connectionLost) remote.initial = await remote.dispatch({type: 'connectionLost'});
+    if (lostHost) remote.initial = await remote.dispatch({type: 'connectionLost', host: lostHost});
     const monitor = dockMonitor = createDockMonitor({initial: docked, read: readMode, log,
       changed: docked => {
         service?.dispatch({type: 'operationMode', docked})
@@ -248,6 +251,7 @@ export async function runApplication({rpc, directory, menu, gpu, hostAddress, he
       }});
     children.stream = (runDirectory, host, app, args, onLine) => {
       streaming = true;
+      onStream(host);
       renderMode.invalidate();
       const abort = new AbortController();
       const {width, height, fps: requestedFps, undockedFps, codec, bitrate, transport: launched, buttons, helperArgs,
@@ -327,6 +331,7 @@ export async function runApplication({rpc, directory, menu, gpu, hostAddress, he
           catch (error) { log({event: 'host-display-restore-failed', message: errorText(error)}); }
           renderMode.invalidate();
           streaming = false;
+          onStream(null);
         }
       })();
       streamDone = exited.then(() => {});

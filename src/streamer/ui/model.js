@@ -22,7 +22,8 @@ import * as settingsRules from './settings.js';
  * @typedef {{model: Model, intents: Intent[]}} Step
  * @typedef {({type: 'command'} & Command)
  *   | {type: 'attached' | 'notPaired' | 'paired' | 'streamStarted' | 'streamEnded' | 'quitDone'
- *       | 'appGone' | 'connectionLost' | 'unpaired'}
+ *       | 'appGone' | 'unpaired'}
+ *   | {type: 'connectionLost', host?: Host | null}
  *   | {type: 'hosts', hosts: Host[]}
  *   | ({type: 'listed'} & Listed)
  *   | {type: 'pin', pin: string | null, url: string | null}
@@ -406,6 +407,8 @@ function createMachine(rules) {
       case 'error':
       case 'connectionLost':
         if (op !== 'a' && op !== 'b') return same(model);
+        if (model.screen === 'connectionLost' && op === 'b')
+          return next(model, {screen: 'hosts', host: null, message: null});
         if (model.back === 'apps' && model.host) return openHost(model, model.host);
         return next(model, {screen: 'hosts', host: null, message: null});
       default:
@@ -439,6 +442,30 @@ function createMachine(rules) {
   }
 
   /**
+   * The console link dropped. Given the PC a stream was on and still saved, A reconnects to it
+   * and B goes to the PCs with it selected.
+   * @param {Model} model @param {Host | null | undefined} lost
+   */
+  function onConnectionLost(model, lost) {
+    const index = model.hosts.findIndex(host => host.address === lost?.address);
+    const page = {screen: 'connectionLost', app: null, apps: [], overlay: false};
+    if (index < 0) {
+      const message = 'Connection lost. Select a PC to reconnect.';
+      return next(model, {...page, host: null, back: 'hosts', message});
+    }
+
+    const host = model.hosts[index];
+    return next(model, {
+      ...page,
+      host,
+      hostIndex: index,
+      hostPage: Math.floor(index / HOSTS_PER_PAGE),
+      back: 'apps',
+      message: 'The stream from ' + host.name + ' was cut off. Press A to reconnect.'
+    });
+  }
+
+  /**
    * @param {Model} model
    * @param {Event} event A console command or a service result, told apart by type.
    * @returns {Step}
@@ -451,8 +478,7 @@ function createMachine(rules) {
         if (model.screen === 'connectionLost') return same(model);
         return next(model, {screen: 'hosts'});
       case 'connectionLost':
-        return next(model, {screen: 'connectionLost', host: null, app: null, apps: [],
-          overlay: false, back: 'hosts', message: 'Connection lost. Select a PC to reconnect.'});
+        return onConnectionLost(model, event.host);
       case 'hosts':
         return next(model, {
           hosts: event.hosts,

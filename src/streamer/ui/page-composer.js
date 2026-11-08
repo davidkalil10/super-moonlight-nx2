@@ -759,12 +759,14 @@ function createPageComposer(painter, options) {
 
   /** @param {Model} model */
   function error(model) {
-    const page = horizon({chips: hostChips(model), keys: [['A', 'Back']]});
-    heading(page, 'Something went wrong', model.message ?? 'Something went wrong', null, {
-      y: HEADING.status,
-      size: 48
-    });
-    button(page, ITEM.back, SIDE, BUTTON.y, BUTTON.width, 'Back');
+    const lost = model.screen === 'connectionLost';
+    const action = lost && model.host ? 'Reconnect' : 'Back';
+    /** @type {[string, string][]} */
+    const keys = action === 'Reconnect' ? [['A', action], ['B', 'PCs']] : [['A', action]];
+    const page = horizon({chips: hostChips(model), keys});
+    heading(page, lost ? 'Connection lost' : 'Something went wrong', model.message ?? 'Something went wrong',
+      null, {y: HEADING.status, size: 48});
+    button(page, ITEM.back, SIDE, BUTTON.y, BUTTON.width, action);
     return page.build();
   }
 
