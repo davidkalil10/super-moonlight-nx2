@@ -51,6 +51,21 @@ function sizeText(value) {
   return text;
 }
 
+/** How the docked note of a handheld row names a docked-only size. */
+const SHORT_SIZES = {'2560x1440': '1440p', '3840x2160': '4K'};
+
+/**
+ * What a launch streams in this operation mode: handheld, a docked-only size streams 1080p, and
+ * 4K at 120 fps (`--undocked-fps`, application.js). The saved settings stay as they are.
+ * @param {Record<string, any>} settings
+ * @param {boolean} docked
+ */
+function inUse(settings, docked) {
+  if (docked || !DOCKED_SIZES.includes(settings.size)) return settings;
+
+  return {...settings, size: '1920x1080', fps: settings.size === '3840x2160' ? 120 : settings.fps};
+}
+
 /** Value text of the button layout row (input/CLAUDE.md, "Controller"). */
 const BUTTONS = {position: 'By position', labels: 'By letter'};
 
@@ -60,7 +75,8 @@ const BUTTONS = {position: 'By position', labels: 'By letter'};
  * takes today's fallback for the row whatever it holds. `docked` values are only stepped onto
  * while the console is docked.
  * @typedef {{id: string, label: string, values: any[], fallback: any,
- *   text: (value: any, settings: Record<string, any>) => string, locked?: boolean,
+ *   text: (value: any, settings: Record<string, any>) => string,
+ *   short?: (value: any) => string, locked?: boolean,
  *   unbacked?: boolean, formerDefaults?: any[], resetBefore?: number, docked?: any[], lockedSizes?: string[]}} Setting
  */
 
@@ -72,6 +88,7 @@ const CATALOG = [
     values: ['1280x720', '1920x1080', ...DOCKED_SIZES],
     fallback: '1920x1080',
     text: sizeText,
+    short: (/** @type {keyof typeof SHORT_SIZES} */ value) => SHORT_SIZES[value],
     docked: DOCKED_SIZES
   },
   {
@@ -294,6 +311,22 @@ function createFileStore(file = settingsFile()) {
 }
 
 /**
+ * The value text of a row in this operation mode: what is in use, followed by the saved value
+ * when that only applies docked ("1920 × 1080 · 4K when docked").
+ * @param {Setting} setting
+ * @param {Record<string, any>} settings
+ * @param {boolean} docked
+ */
+function valueText(setting, settings, docked) {
+  const saved = settings[setting.id];
+  const used = inUse(settings, docked);
+  if (used[setting.id] === saved) return setting.text(saved, used);
+
+  const short = setting.short ? setting.short(saved) : setting.text(saved, settings);
+  return setting.text(used[setting.id], used) + ' · ' + short + ' when docked';
+}
+
+/**
  * The settings page rows: label, value text, whether the row takes left/right, and which way a
  * step would change the value, as adjust() steps it in this operation mode.
  * @param {Record<string, any>} settings
@@ -306,7 +339,7 @@ function rows(settings, docked = false) {
   return CATALOG.map(setting => ({
     id: setting.id,
     label: setting.label,
-    value: setting.text(settings[setting.id], settings),
+    value: valueText(setting, settings, docked),
     adjustable: !setting.locked && !setting.unbacked && !setting.lockedSizes?.includes(settings.size),
     greyed: Boolean(setting.unbacked),
     canLeft: moves(setting.id, -1),
@@ -368,5 +401,6 @@ export {
   save,
   adjust,
   rows,
+  inUse,
   streamArgs
 };

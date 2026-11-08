@@ -61,15 +61,23 @@ function settingTexts() {
     return setting;
   };
   const bitrate = catalog('bitrate');
+  /** @type {import('./page-composer.js').SettingTexts['handheld']} */
+  const handheld = {};
   for (const size of catalog('size').values) {
     for (const fps of catalog('fps').values) {
       for (const codec of catalog('codec').values) {
         const settings = {...uiSettings.defaults(), size, fps, codec, bitrate: 'auto'};
         auto[size + '@' + fps + '@' + codec] = bitrate.text('auto', settings);
       }
+      const saved = {...uiSettings.defaults(), size, fps};
+      const used = uiSettings.inUse(saved, false);
+      const texts = Object.fromEntries(uiSettings.rows(saved, false)
+        .filter(row => row.id === 'size' || row.id === 'fps')
+        .map(row => [row.id, row.value]));
+      handheld[size + '@' + fps] = {size: used.size, fps: used.fps, texts};
     }
   }
-  return {rows, auto};
+  return {rows, auto, handheld};
 }
 
 /** What createPageComposer takes. */

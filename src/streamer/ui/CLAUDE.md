@@ -29,7 +29,9 @@ at. Tests: `src/streamer/ui/test/` in moonlight-nx2-dev.
   yet and stays greyed, so the page shows it without pretending it works.
   Resolution's `docked` values (2560x1440, 3840x2160, added 2026-11-08 for G4) are stepped onto
   only after the console reported docked (`operationMode` event); a save holding one stays when
-  handheld and the launch falls back to 1080p with a badge (civ7/README.md, "Fallbacks"). They
+  handheld and the launch falls back to 1080p with a badge (civ7/README.md, "Fallbacks"). Handheld,
+  the size and rate rows show what a launch streams then the save (`1920 × 1080 · 4K when docked`,
+  settings.js `inUse`); the save itself only changes when stepped. They
   are not yet proven end to end on the console. Handheld, the settings page carries "1440p and
   4K are only available when docked" bottom right, drawn only while the cursor is on Resolution
   (a text strip with `cursorItem`, which the shader shows against the live cursor).

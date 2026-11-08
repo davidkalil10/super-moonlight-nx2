@@ -21,7 +21,8 @@
  *   Per JSON value, whether a step left and right changes it, in each operation mode.
  * @typedef {{id: string, label: string, adjustable: boolean, greyed: boolean,
  *   texts: Record<string, string>, ends: SettingEnds, lockedSizes?: string[]}} SettingText
- * @typedef {{rows: SettingText[], auto: Record<string, string>}} SettingTexts
+ * @typedef {{rows: SettingText[], auto: Record<string, string>,
+ *   handheld: Record<string, {size: string, fps: number, texts: Record<string, string>}>}} SettingTexts
  * @typedef {{item: Record<string, number>, keys: string, isAddress: (entry: string) => boolean,
  *   appsPerPage: number, hostsPerPage: number, settingTexts: SettingTexts, layout: {PAGE_FLAG: Record<string, number>,
  *   ITEM_FLAG: Record<string, number>, MAX_ITEMS: number, MAX_TEXTS: number, MAX_IMAGES: number},
@@ -301,6 +302,16 @@ function createPageComposer(painter, options) {
   }
 
   /**
+   * The size and rate a launch streams in this mode (settings.js `inUse`), from the text table.
+   * @param {Model['settings']} settings
+   * @param {boolean} docked
+   */
+  function inUse(settings, docked) {
+    const used = docked ? null : SETTING_TEXTS.handheld[settings.size + '@' + settings.fps];
+    return used ? {...settings, size: used.size, fps: used.fps} : settings;
+  }
+
+  /**
    * The settings page rows from the PC-made text table (pages.js `settingTexts`), with the ways
    * each value steps in the operation mode.
    * @param {Model['settings']} settings
@@ -308,11 +319,13 @@ function createPageComposer(painter, options) {
    * @returns {SettingRow[]}
    */
   function settingRows(settings, docked = false) {
+    const used = inUse(settings, docked);
+    const handheld = docked ? {} : SETTING_TEXTS.handheld[settings.size + '@' + settings.fps]?.texts ?? {};
     return SETTING_TEXTS.rows.map(row => {
       const value = settings[row.id];
       const text = value === 'auto'
-        ? SETTING_TEXTS.auto[settings.size + '@' + settings.fps + '@' + settings.codec] ?? 'Auto'
-        : row.texts[JSON.stringify(value)] ?? String(value);
+        ? SETTING_TEXTS.auto[used.size + '@' + used.fps + '@' + settings.codec] ?? 'Auto'
+        : handheld[row.id] ?? row.texts[JSON.stringify(value)] ?? String(value);
       const ends = docked ? row.ends.docked : row.ends.handheld;
       const [canLeft, canRight] = ends[JSON.stringify(value)] ?? [false, false];
       const adjustable = row.adjustable && !row.lockedSizes?.includes(settings.size);
@@ -585,12 +598,7 @@ function createPageComposer(painter, options) {
    */
   function apps(model, covers) {
     const {pages, start, shown} = pageOf(model.apps, model.appPage, APPS_PER_PAGE);
-    const shownSettings = {...model.settings};
-    if (!model.docked && ['2560x1440', '3840x2160'].includes(shownSettings.size)) {
-      if (shownSettings.size === '3840x2160') shownSettings.fps = 120;
-      shownSettings.size = '1920x1080';
-    }
-    const shape = settingRows(shownSettings, model.docked)
+    const shape = settingRows(inUse(model.settings, model.docked), model.docked)
       .filter(row => ['size', 'fps', 'bitrate'].includes(row.id))
       .map(row => row.value)
       .join(' · ');
