@@ -5,7 +5,7 @@
 import readline from 'node:readline';
 import {spawn} from 'node:child_process';
 import {UI} from '../shared/ring.js';
-import {serialize, pageAddress} from './page.js';
+import {changedRanges, serializeOver, pageAddress} from './page.js';
 import {createPages} from './pages.js';
 import * as uiSettings from './settings.js';
 import {parseList, rememberIn, sameHost} from './hosts.js';
@@ -42,6 +42,7 @@ const PIPED = /** @type {const} */ (['ignore', 'pipe', 'pipe']);
  *   stopping?: Promise<void>}} Child
  * @typedef {(stream: string, line: string) => void} OnLine
  * @import {PageState} from '../civ7/console-ui.js'
+ * @import {Page} from './page.js'
  * @typedef {Step & {revision?: number, storageError?: string | null,
  *   published?: {event: string, sequence: number}[], page?: PageState}} MachineStep
  * @typedef {{initial: MachineStep, dispatch: (event: Event) => Promise<MachineStep>,
@@ -218,6 +219,13 @@ function createService({
   let queue = Promise.resolve();
   /** The console's page buffers, as its last snapshot reported them. */
   let consolePage = machine.initial.page ?? null;
+  /**
+   * What each page buffer holds as this service last wrote it, under the console epoch: its
+   * bytes and where each bitmap sits. A republish keeps those bitmaps in place and writes only
+   * the changed ranges. Forgotten while a write is in flight, so a failed one is not trusted.
+   * @type {{epoch: number, page: {bytes: Buffer, placed: Map<Uint8Array, number>} | null}[]}
+   */
+  const buffers = [{epoch: 0, page: null}, {epoch: 0, page: null}];
   /** @type {string | null} */
   let shownSignature = null;
   /** @type {string | null} */
@@ -244,6 +252,34 @@ function createService({
     transfer(async () => {
       if (!lost) await memory.write(mapped + address, u32(value));
     });
+
+  /**
+   * The page encoded over what its buffer holds, and the ranges that differ from it.
+   * @param {Omit<Page, 'epoch' | 'sequence'>} page @param {number} epoch @param {number} sequence
+   */
+  function encodePage(page, epoch, sequence) {
+    const buffer = buffers[sequence & 1];
+    const resident = buffer.epoch === epoch ? buffer.page : null;
+    const encoded = serializeOver({...page, epoch, sequence}, resident);
+    return {...encoded, ranges: changedRanges(resident?.bytes ?? null, encoded.bytes)};
+  }
+
+  /**
+   * Writes the changed ranges into the page's buffer and remembers what it now holds.
+   * @param {number} epoch @param {number} sequence @param {ReturnType<typeof encodePage>} encoded
+   */
+  async function writePage(epoch, sequence, encoded) {
+    const buffer = buffers[sequence & 1];
+    buffer.page = null;
+
+    const base = pageAddress(mapped, sequence & 1);
+    for (const {start, end} of encoded.ranges)
+      await transfer(() => memory.write(base + start, encoded.bytes.subarray(start, end)));
+
+    buffer.epoch = epoch;
+    buffer.page = {bytes: encoded.bytes, placed: encoded.placed};
+    return encoded.ranges.reduce((sum, range) => sum + range.end - range.start, 0);
+  }
 
   /**
    * Composes the model's page here, writes it into the console's next page buffer with
@@ -274,9 +310,9 @@ function createService({
 
       const screen = model.screen;
       const composed = Date.now();
-      const bytes = serialize({...page, epoch: target.epoch, sequence: target.next});
+      const encodedPage = encodePage(page, target.epoch, target.next);
       const encoded = Date.now();
-      await transfer(() => memory.write(pageAddress(mapped, target.next & 1), bytes));
+      const writtenBytes = await writePage(target.epoch, target.next, encodedPage);
       const written = Date.now();
       const result = await machine.show({sequence: target.next, screen});
 
@@ -284,7 +320,8 @@ function createService({
       shownSignature = signature;
       shownScreen = screen;
       shownAt = Date.now();
-      log({event: 'published', screen, sequence: target.next, bytes: bytes.length,
+      log({event: 'published', screen, sequence: target.next, bytes: encodedPage.bytes.length, written: writtenBytes,
+        writes: encodedPage.ranges.length,
         composeMs: composed - started, encodeMs: encoded - composed, writeMs: written - encoded,
         showMs: shownAt - written});
       await accept(result, 'show');

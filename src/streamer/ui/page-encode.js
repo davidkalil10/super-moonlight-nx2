@@ -105,12 +105,69 @@ function createPageEncoder(pageBytes) {
   const padded = (/** @type {number} */ length) => (length + 3) & ~3;
 
   /**
+   * Body offsets for each distinct bitmap: one the buffer already holds at a free offset stays
+   * there, the rest fill the gaps first and then go past the end. Strips sharing one bitmap
+   * (card fills) share its bytes. Null when the kept offsets leave no room.
+   * @param {Uint8Array[]} blocks
+   * @param {Map<Uint8Array, number>} resident
+   * @returns {{placed: Map<Uint8Array, number>, bodyBytes: number} | null}
+   */
+  function place(blocks, resident) {
+    /** @type {Map<Uint8Array, number>} */
+    const placed = new Map();
+    /** @type {{start: number, end: number}[]} */
+    const used = [];
+    const overlaps = (/** @type {number} */ start, /** @type {number} */ end) =>
+      used.some(range => start < range.end && range.start < end);
+
+    for (const block of blocks) {
+      const offset = resident.get(block);
+      if (offset === undefined || placed.has(block)) continue;
+      const end = offset + padded(block.length);
+      if (overlaps(offset, end)) continue;
+
+      placed.set(block, offset);
+      used.push({start: offset, end});
+    }
+
+    used.sort((a, b) => a.start - b.start);
+    for (const block of blocks) {
+      if (placed.has(block)) continue;
+
+      const length = padded(block.length);
+      let offset = 0;
+      for (const range of used) {
+        if (offset + length <= range.start) break;
+        offset = Math.max(offset, range.end);
+      }
+      placed.set(block, offset);
+      used.push({start: offset, end: offset + length});
+      used.sort((a, b) => a.start - b.start);
+    }
+
+    const bodyBytes = used.reduce((end, range) => Math.max(end, range.end), 0);
+    if (bodyBytes > LAYOUT.MAX_BODY_BYTES) return null;
+    return {placed, bodyBytes};
+  }
+
+  /**
    * The page as bytes: header, the three tables and the body. Only the bytes used are
    * returned; the rest of the page buffer may hold stale data.
    * @param {Page} page
    * @returns {Uint8Array}
    */
   function encode(page) {
+    return encodeOver(page, null).bytes;
+  }
+
+  /**
+   * The page encoded over the page a buffer already holds: bitmaps of that page keep their body
+   * offsets and its other body bytes stay as they were, so only what changed differs from it.
+   * @param {Page} page
+   * @param {{bytes: Uint8Array, placed: Map<Uint8Array, number>} | null} resident
+   * @returns {{bytes: Uint8Array, placed: Map<Uint8Array, number>}}
+   */
+  function encodeOver(page, resident) {
     const items = page.items ?? [];
     const texts = page.texts ?? [];
     const images = page.images ?? [];
@@ -122,21 +179,24 @@ function createPageEncoder(pageBytes) {
     check(texts.length <= MAX_TEXTS, 'Too many UI texts');
     check(images.length <= MAX_IMAGES, 'Too many UI images');
     check(cursorHome < Math.max(1, items.length), 'UI cursor home is not an item');
-
-    let bodyBytes = 0;
     for (const text of texts) {
       check(textFits(text), 'UI text rect');
       check(text.alpha.length === text.w * text.h, 'UI text strip bytes do not match its size');
-      bodyBytes += padded(text.alpha.length);
     }
     for (const image of images) {
       check(imageFits(image), 'UI image rect');
       check(image.rgba.length === image.w * image.h * 4, 'UI image bytes do not match its size');
-      bodyBytes += padded(image.rgba.length);
     }
-    check(bodyBytes <= LAYOUT.MAX_BODY_BYTES, 'UI page body exceeds the page');
+
+    const blocks = [...texts.map(text => text.alpha), ...images.map(image => image.rgba)];
+    const over = resident ? place(blocks, resident.placed) : null;
+    const layout = over ?? place(blocks, new Map());
+    check(layout !== null, 'UI page body exceeds the page');
+    const {placed, bodyBytes} = /** @type {NonNullable<typeof layout>} */ (layout);
+    const keptBytes = over && resident ? resident.bytes : null;
 
     const out = new Uint8Array(BODY_OFFSET + bodyBytes);
+    if (keptBytes) out.set(keptBytes.subarray(BODY_OFFSET, Math.min(keptBytes.length, out.length)), BODY_OFFSET);
     const words = new DataView(out.buffer);
     /** @param {number} at @param {number[]} values */
     const put = (at, values) => {
@@ -149,25 +209,23 @@ function createPageEncoder(pageBytes) {
       put(ITEMS_OFFSET + i * ITEM_WORDS * 4, [item.id, item.x, item.y, item.w, item.h, item.flags ?? 0]);
     });
 
-    let body = 0;
+    for (const [block, offset] of placed) out.set(block, BODY_OFFSET + offset);
     texts.forEach((text, i) => {
-      out.set(text.alpha, BODY_OFFSET + body);
-      put(TEXTS_OFFSET + i * TEXT_WORDS * 4, [text.x, text.y, text.w, text.h, body, text.color ?? 0xffffffff]);
-      body += padded(text.alpha.length);
+      const offset = /** @type {number} */ (placed.get(text.alpha));
+      put(TEXTS_OFFSET + i * TEXT_WORDS * 4, [text.x, text.y, text.w, text.h, offset, text.color ?? 0xffffffff]);
     });
     images.forEach((image, i) => {
-      out.set(image.rgba, BODY_OFFSET + body);
-      put(IMAGES_OFFSET + i * IMAGE_WORDS * 4, [image.x, image.y, image.w, image.h, body, LAYOUT.FORMAT_RGBA8]);
-      body += padded(image.rgba.length);
+      const offset = /** @type {number} */ (placed.get(image.rgba));
+      put(IMAGES_OFFSET + i * IMAGE_WORDS * 4, [image.x, image.y, image.w, image.h, offset, LAYOUT.FORMAT_RGBA8]);
     });
 
     put(0, [LAYOUT.MAGIC, page.epoch, page.sequence, page.flags ?? 0, items.length, texts.length,
       images.length, bodyBytes, page.background ?? 0xff000000, cursorHome]);
     put(CHECKSUM_WORDS * 4, [checksum(out)]);
-    return out;
+    return {bytes: out, placed};
   }
 
-  return {LAYOUT, encode, checksum};
+  return {LAYOUT, encode, encodeOver, checksum};
 }
 
 export {createPageEncoder};

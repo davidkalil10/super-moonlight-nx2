@@ -18,6 +18,12 @@ at. Tests: `src/streamer/ui/test/` in moonlight-nx2-dev.
   RGBA8 images at absolute screen positions, plus the item rects. The shader makes the same
   checks as `validate()` before it draws. Contract: team note `moonlight-ui-design.md`,
   "Memory and words".
+- Page writes (device runs: write-raw ~5 MB/s, a 1.37 MB settings page took 257 ms on average,
+  up to 4 s): strips are trimmed to their ink plus one clear pixel, strips sharing a bitmap share
+  its bytes, and the service encodes each page over what its buffer held (`encodeOver`: kept
+  bitmaps stay at their offsets) and writes only the changed ranges. A settings page went from
+  1.66 MB to ~0.23 MB; a value step writes ~30 KB in 3 requests. The first change after a
+  screen opens rewrites the older buffer.
 - Settings (settings.js): only values the console path has run are offered (team note
   `ui-settings-catalog.md`). A `locked` row has one value; an `unbacked` row has no host plumbing
   yet and stays greyed, so the page shows it without pretending it works.

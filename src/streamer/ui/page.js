@@ -116,6 +116,17 @@ function serialize(page) {
 }
 
 /**
+ * The page encoded over the one a buffer holds (page-encode.js `encodeOver`), so a republish
+ * differs from it only where the page changed.
+ * @param {Page} page
+ * @param {{bytes: Uint8Array, placed: Map<Uint8Array, number>} | null} resident
+ */
+function serializeOver(page, resident) {
+  const {bytes, placed} = encoder.encodeOver(page, resident);
+  return {bytes: Buffer.from(bytes.buffer, bytes.byteOffset, bytes.length), placed};
+}
+
+/**
  * The checks the shader makes before it applies a page, on a serialized page or the whole
  * buffer. Throws with the first failure, as the host wants to know why a page stays unapplied.
  * @param {Buffer} page
@@ -215,6 +226,41 @@ function parse(page) {
 }
 
 /**
+ * The byte ranges of `next` that differ from `previous`, the page a buffer already holds, so a
+ * republish writes only those. Ranges closer than `gap` bytes merge, since each write is one
+ * request. Without a previous page the whole page is one range.
+ * @param {Uint8Array | null} previous
+ * @param {Uint8Array} next
+ * @param {number} [gap]
+ * @returns {{start: number, end: number}[]}
+ */
+function changedRanges(previous, next, gap = 4096) {
+  if (!previous) return [{start: 0, end: next.length}];
+
+  /** @type {{start: number, end: number}[]} */
+  const ranges = [];
+  let at = 0;
+  while (at < next.length) {
+    const same = at < previous.length && previous[at] === next[at];
+    if (same) {
+      at++;
+      continue;
+    }
+
+    const start = at;
+    let end = at + 1;
+    let quiet = 0;
+    for (at = end; at < next.length && quiet < gap; at++) {
+      const differs = at >= previous.length || previous[at] !== next[at];
+      quiet = differs ? 0 : quiet + 1;
+      if (differs) end = at + 1;
+    }
+    ranges.push({start, end});
+  }
+  return ranges;
+}
+
+/**
  * Where a page buffer lives in private memory.
  * @param {number} mapped The private storage's mapped address.
  * @param {number} page 0 or 1.
@@ -236,7 +282,9 @@ export {
   PAGE_FLAG,
   ITEM_FLAG,
   checksum,
+  changedRanges,
   serialize,
+  serializeOver,
   validate,
   parse,
   pageAddress

@@ -8,6 +8,8 @@
  * @import {Item, Text, Image} from './page-encode.js'
  * @import {Model, App} from './model.js'
  * @typedef {{width: number, height: number, bytes: Uint8Array}} Bitmap
+ * @typedef {Bitmap & {left: number, top: number}} Trimmed A bitmap cut to its ink and where
+ *   the cut starts in the painted one.
  * @typedef {'left' | 'center' | 'right'} Align
  * @typedef {{weight?: number, tracking?: number}} TextStyle
  * @typedef {{text: (text: string, size: number, width: number, align?: Align,
@@ -173,6 +175,42 @@ function createPageComposer(painter, options) {
     return stepper;
   }
 
+  /**
+   * The bitmap cut to its ink plus one clear pixel each side, so a filtered edge still fades to
+   * nothing: a card label is a few hundred columns of an 840-column strip.
+   * @param {Bitmap} bitmap
+   * @returns {Trimmed}
+   */
+  function trim(bitmap) {
+    const {width, height, bytes} = bitmap;
+    let top = height;
+    let bottom = -1;
+    let left = width;
+    let right = -1;
+    for (let row = 0; row < height; row++) {
+      for (let column = 0; column < width; column++) {
+        if (!bytes[row * width + column]) continue;
+
+        top = Math.min(top, row);
+        bottom = Math.max(bottom, row);
+        left = Math.min(left, column);
+        right = Math.max(right, column);
+      }
+    }
+    if (bottom < 0) return {width: 1, height: 1, bytes: new Uint8Array(1), left: 0, top: 0};
+
+    top = Math.max(0, top - 1);
+    left = Math.max(0, left - 1);
+    const cutWidth = Math.min(width - 1, right + 1) - left + 1;
+    const cutHeight = Math.min(height - 1, bottom + 1) - top + 1;
+    const cut = new Uint8Array(cutWidth * cutHeight);
+    for (let row = 0; row < cutHeight; row++) {
+      const from = (top + row) * width + left;
+      cut.set(bytes.subarray(from, from + cutWidth), row * cutWidth);
+    }
+    return {width: cutWidth, height: cutHeight, bytes: cut, left, top};
+  }
+
   /** @param {Bitmap} bitmap @param {number} column */
   function inked(bitmap, column) {
     for (let row = 0; row < bitmap.height; row++)
@@ -269,9 +307,11 @@ function createPageComposer(painter, options) {
     /** @type {Item[]} */
     const items = [];
 
-    /** @param {number} x @param {number} y @param {number} color @param {Bitmap} bitmap */
+    /** @param {number} x @param {number} y @param {number} color @param {Bitmap | Trimmed} bitmap */
     function strip(x, y, color, bitmap) {
-      texts.push({x, y, w: bitmap.width, h: bitmap.height, alpha: bitmap.bytes, color});
+      const left = 'left' in bitmap ? bitmap.left : 0;
+      const top = 'top' in bitmap ? bitmap.top : 0;
+      texts.push({x: x + left, y: y + top, w: bitmap.width, h: bitmap.height, alpha: bitmap.bytes, color});
       return page;
     }
 
@@ -280,13 +320,13 @@ function createPageComposer(painter, options) {
       text(x, y, label, size, width, color = COLOR.ink, align = 'left', style = {}) {
         const {weight = 600, tracking = 0} = style;
         const key = ['t', label, size, width, align, weight, tracking].join('\u0000');
-        return strip(x, y, color, remember(key, () => usePainter().text(label, size, width, align, {weight, tracking})));
+        return strip(x, y, color, remember(key, () => trim(usePainter().text(label, size, width, align, {weight, tracking}))));
       },
 
       /** A value between ‹ ›, an arrow cleared where it cannot step. */
       stepper(x, y, value, size, width, canLeft, canRight) {
         const key = ['v', value, size, width, canLeft, canRight].join('\u0000');
-        return strip(x, y, COLOR.ink, remember(key, () => stepperStrip(value, size, width, canLeft, canRight)));
+        return strip(x, y, COLOR.ink, remember(key, () => trim(stepperStrip(value, size, width, canLeft, canRight))));
       },
 
       /** A filled rectangle under the strips added after it. */
@@ -299,7 +339,7 @@ function createPageComposer(painter, options) {
       /** Button hints, each key in a ring. */
       legend(x, y, keys, color = COLOR.soft) {
         const key = ['l', JSON.stringify(keys)].join('\u0000');
-        return strip(x, y, color, remember(key, () => usePainter().legend(keys, LEGEND.size, 1200)));
+        return strip(x, y, color, remember(key, () => trim(usePainter().legend(keys, LEGEND.size, 1200))));
       },
 
       image(x, y, tile) {
