@@ -346,8 +346,9 @@ export async function runApplication({rpc, directory, menu, gpu, hostAddress, he
           await new Promise(resolve => setTimeout(resolve, 10));
           continue;
         }
+        const menuDocked = monitor.current();
         rendering = (async () => {
-          await renderMode.menu(monitor.current());
+          await renderMode.menu(menuDocked, () => monitor.current() !== menuDocked);
           return ui.presenter.run(3, ui.input.configuration);
         })();
         await rendering;

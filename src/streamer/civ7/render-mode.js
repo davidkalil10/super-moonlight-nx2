@@ -33,8 +33,12 @@ export function createRenderMode({rpc, storage, layer, presenter, refresh, input
   return {
     apply,
     invalidate() { menu = ''; },
-    /** @param {boolean} docked */
-    async menu(docked) {
+    /**
+     * @param {boolean} docked
+     * @param {() => boolean} [left] true once the console left `docked`; a rate check then
+     *   stops unclaimed so the next call sets up the new mode
+     */
+    async menu(docked, left = () => false) {
       const size = await apply(docked);
       const requested = size.height > 1440 ? 60 : 120;
       const key = active + '@' + requested;
@@ -45,6 +49,7 @@ export function createRenderMode({rpc, storage, layer, presenter, refresh, input
       let confirmed = requested === 60 && selected.ok;
       if (requested > 60 && selected.ok) {
         for (let attempt = 0; attempt < 8; attempt++) {
+          if (left()) return;
           const measurement = await presenter.run(24, input);
           const state = await refresh.measured(measurement);
           const fast = measurement.frames * 1000 / measurement.elapsedMs >= requested * 0.9;
