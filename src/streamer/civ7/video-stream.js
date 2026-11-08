@@ -395,7 +395,9 @@ export function videoStream(native, request) {
 
   /**
    * The UDP transport's units, reassembled in `buffer`'s slots; the same catch-up rule with the
-   * first datagram as the header mark. README.md, "UDP transport".
+   * first datagram as the header mark. The overlapped output takes each unit once it is whole, so
+   * there only a unit already arriving behind it counts as behind; README.md, "UDP transport"
+   * and "Catching up".
    */
   function* datagramUnits() {
     if (!native.createUdpReceiver) throw Error('UDP video needs createUdpReceiver');
@@ -404,6 +406,7 @@ export function videoStream(native, request) {
       {pump, control: (pointer, length) => transfer(send, pointer, length)});
     const catchUpUnits = Math.max(2, Math.round(fps / 30));
     const periodMs = 1000 / fps;
+    const takenWhole = stream.overlapOutput === true;
     let behindUnits = 0;
     let drainedMs = 0;
     for (let index = 0; index < frames; index++) {
@@ -419,7 +422,9 @@ export function videoStream(native, request) {
       drainedMs = drained;
 
       const overdue = lateness(unit.pts, unit.completedAt) > periodMs;
-      const behind = depth > 1 || (depth > 0 && overdue);
+      const queued = depth > 1;
+      const waitedLate = depth > 0 && overdue && !takenWhole;
+      const behind = queued || waitedLate;
       behindUnits = behind ? behindUnits + 1 : 0;
       const late = behindUnits >= catchUpUnits;
       if (late) behindUnits = 0;
