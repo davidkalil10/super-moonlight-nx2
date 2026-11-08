@@ -169,6 +169,12 @@ stays in the background and accepts another payload after Moonlight exits.
 
 A 120 fps request raises the panel to 120 Hz and falls back to 60 when the console cannot keep
 up. End-to-end latency remains to be measured.
+
+## Touch
+
+Handheld only. Enable Native Pen/Touch Support under Input in Sunshine
+(https://docs.lizardbyte.dev/projects/sunshine/latest/md_docs_2configuration.html#native_pen_touch);
+on Linux Sunshine needs uinput access, and the game must accept touch input.
 `);
   const smoke = `await import(process.argv[1]);
 const {loadRenderer} = await import(process.argv[2]);

@@ -9,6 +9,10 @@ import {BADGE, BADGE_OFFSET, BADGE_BYTES, WIDTH, HEIGHT} from '../../renderer/ci
 export const BADGE_MS = 4000;
 /** A badge with this duration stays until its stream's presentation ends (stream info). */
 export const BADGE_STAYS = 0;
+/** How long a note a stream raises mid-way (`note`) stays up. */
+export const NOTE_MS = 7000;
+/** The note when the PC's Sunshine takes no touch: its Input setting, as its web UI names it. */
+export const TOUCH_NOTE = 'Touch is off on this PC · enable Native Pen/Touch Support in Sunshine';
 
 const REFERENCE_HEIGHT = 1080;
 const FONTS = [{size: 26, weight: 600}, {size: 24, weight: 600}, {size: 22, weight: 600}, {size: 18, weight: 700}];
@@ -83,6 +87,22 @@ export function counterText({presented, caughtUp, dropped}) {
 /** The counter line before the first second, and the widest one, which sets the badge width. */
 const COUNTER_START = counterText({presented: '-', caughtUp: '-', dropped: '-'});
 const COUNTER_WIDEST = counterText({presented: 888, caughtUp: 888, dropped: 888});
+
+/**
+ * Calls `note` with TOUCH_NOTE the first time the helper reports that the host takes no touch
+ * (`{"event":"touch","supported":false}`, protocol/src/input.c), and never again.
+ * @param {(text: string) => void} note
+ */
+export function createTouchNotice(note) {
+  let noted = false;
+  return (/** @type {object} */ event) => {
+    if (noted || !('event' in event) || event.event !== 'touch') return;
+    if (!('supported' in event) || event.supported !== false) return;
+
+    noted = true;
+    note(TOUCH_NOTE);
+  };
+}
 
 /** @param {number} scale */
 function fontFor(scale) {
@@ -195,7 +215,8 @@ export function composeCounter(raster, badge, counter, frame) {
  * into private storage and asks the console to show the quad for `durationMs` (BADGE_STAYS:
  * until the stream ends). Nothing to create or destroy; the console hides it with its
  * presentation. With `counter`, `observe` takes the stream's events and, on each civ7-stats
- * second, rewrites only the counter rows when its line changes. A failure is logged as `overlay-failed`.
+ * second, rewrites only the counter rows when its line changes. `note` puts a line in its place
+ * for NOTE_MS, then a staying badge comes back. A failure is logged as `overlay-failed`.
  * @param {Pick<Civ7Rpc, 'write' | 'request'>} rpc
  * @param {{text: string, raster: TextRaster, storage: {mapped: number}, durationMs?: number,
  *   counter?: boolean, log?: (event: object) => void}} options
@@ -209,6 +230,8 @@ export function createQuadBadge(rpc, {text, raster, storage, durationMs = BADGE_
   let counted = COUNTER_START;
   let dropped = 0;
   let writing = Promise.resolve();
+  /** @type {NodeJS.Timeout | undefined} */
+  let restore;
 
   /** @param {string} stage @param {unknown} error */
   function fail(stage, error) {
@@ -216,23 +239,45 @@ export function createQuadBadge(rpc, {text, raster, storage, durationMs = BADGE_
     log({type: 'overlay-failed', stage, text, message: String(/** @type {Error} */ (error)?.message || error)});
   }
 
+  /** @param {Badge} badge @param {string} line @param {number} ms */
+  async function put(badge, line, ms) {
+    if (badge.rgba.length > BADGE_BYTES) throw Error('Badge exceeds its pixel area');
+    await rpc.write(storage.mapped + BADGE_OFFSET, Buffer.from(badge.rgba));
+    const words = Buffer.alloc(20);
+    [0, badge.x, badge.y, badge.width, badge.height].forEach((value, index) => words.writeUInt32LE(value, index * 4));
+    await rpc.write(storage.mapped + BADGE.visible, words);
+    await rpc.request({command: 'overlay-show', quad: hex(storage.mapped + BADGE.visible), durationMs: ms});
+    log({type: 'overlay-shown', text: line, x: badge.x, y: badge.y, width: badge.width, height: badge.height,
+      durationMs: ms, quad: true});
+  }
+
   async function show() {
     if (failed) return;
 
     try {
       const badge = composeBadge(raster, text, frame, counter ? counted : null);
-      if (badge.rgba.length > BADGE_BYTES) throw Error('Badge exceeds its pixel area');
-      await rpc.write(storage.mapped + BADGE_OFFSET, Buffer.from(badge.rgba));
-      const words = Buffer.alloc(20);
-      [0, badge.x, badge.y, badge.width, badge.height].forEach((value, index) => words.writeUInt32LE(value, index * 4));
-      await rpc.write(storage.mapped + BADGE.visible, words);
-      await rpc.request({command: 'overlay-show', quad: hex(storage.mapped + BADGE.visible), durationMs});
-      log({type: 'overlay-shown', text, x: badge.x, y: badge.y, width: badge.width, height: badge.height,
-        durationMs, quad: true});
+      await put(badge, text, durationMs);
       shown = badge;
     } catch (error) {
       fail('show', error);
     }
+  }
+
+  /** @param {string} line */
+  function note(line) {
+    writing = writing.then(async () => {
+      if (failed) return;
+
+      const back = durationMs === BADGE_STAYS && shown !== null;
+      shown = null;
+      try {
+        await put(composeBadge(raster, line, frame), line, back ? BADGE_STAYS : NOTE_MS);
+        if (back) restore = setTimeout(() => void show(), NOTE_MS);
+      } catch (error) {
+        fail('note', error);
+      }
+    });
+    return writing;
   }
 
   /** @param {object} event */
@@ -257,7 +302,8 @@ export function createQuadBadge(rpc, {text, raster, storage, durationMs = BADGE_
     return writing;
   }
 
-  return {text, prepare: async () => {}, show, observe, close: () => writing};
+  return {text, prepare: async () => {}, show, observe, note,
+    close: () => { clearTimeout(restore); return writing; }};
 }
 
 /**

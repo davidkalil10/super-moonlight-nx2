@@ -12,7 +12,8 @@ import {sessionBitrate} from './bitrate-adaptation.js';
 import {createRemoteUi} from './console-ui.js';
 import {runFrameRateSession} from './frame-rate.js';
 import {createRefreshRate} from './refresh-rate.js';
-import {BADGE_MS, BADGE_STAYS, badgeText, createQuadBadge, rateChangeText} from './rate-badge.js';
+import {BADGE_MS, BADGE_STAYS, NOTE_MS, badgeText, createQuadBadge, createTouchNotice,
+  rateChangeText} from './rate-badge.js';
 import {createStreamFallbacks, launchRate, sessionSize, shapeChanges} from './stream-fallback.js';
 import {createOperationModeReader} from './operation-mode.js';
 import {createDockMonitor, runDockSession} from './dock-switch.js';
@@ -261,10 +262,13 @@ export async function runApplication({rpc, directory, menu, gpu, hostAddress, he
       let choice = {codec, transport: launched ?? transport};
       /** @type {ReturnType<typeof createQuadBadge> | undefined} */
       let shownBadge;
+      const touchNotice = createTouchNotice(text => void (shownBadge ?? createQuadBadge(rpc, {text: '',
+        raster: ui.raster, storage: gpu.privateStorage, durationMs: NOTE_MS, log})).note(text));
       /** @param {object} event */
       const streamLog = event => {
         forwardStreamEvent(event, log, onLine);
         void shownBadge?.observe(event);
+        touchNotice(event);
         if ('type' in event && event.type === 'stop-chord') abort.abort(Error('Stream stopped'));
       };
       /** @param {string[]} changes */

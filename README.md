@@ -51,10 +51,18 @@ Open **Settings** in Moonlight before launching a game.
 | Quit host app on return | On / Off |
 | Button layout | Button positions or button labels |
 | Stream info badge | On / Off |
+| Frame counter | On / Off: presented, skipped and dropped frames each second |
 
 Selecting 4K remembers your previous frame rate and restores it at smaller resolutions.
 After choosing 1440p or 4K, fully close and reopen the console app once.
 Undocking from 4K switches the menu and stream to 1080p120; docking restores 4K60.
+
+## Touch
+
+Touch works in handheld mode only. It needs **Native Pen/Touch Support** enabled under Input in
+Sunshine ([`native_pen_touch`](https://docs.lizardbyte.dev/projects/sunshine/latest/md_docs_2configuration.html#native_pen_touch)),
+and on Linux Sunshine needs access to uinput. The game must accept touch input; if the PC
+takes no touch, the stream says so once on the badge.
 
 ## Credits
 
