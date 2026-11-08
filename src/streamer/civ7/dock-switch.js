@@ -64,7 +64,9 @@ export function createDockMonitor({initial, read, changed = () => {}, log = () =
 
 /**
  * One game across dock transitions. A change stops and cleans the current stream before the
- * newest mode starts; user cancellation always wins. Saved settings stay outside this loop.
+ * newest mode starts; a stream that fails while the console changes mode, before the poll saw
+ * it, starts again in the new mode. User cancellation always wins. Saved settings stay outside
+ * this loop.
  * @template Result
  * @param {{monitor: ReturnType<typeof createDockMonitor>, signal: AbortSignal,
  *   run: (docked: boolean, signal: AbortSignal) => Promise<Result>, log?: (event: object) => void}} options
@@ -92,7 +94,13 @@ export async function runDockSession({monitor, signal, run, log = () => {}}) {
         if (generation === started) return result;
       } catch (error) {
         signal.throwIfAborted();
+        if (generation !== started) continue;
+
+        await monitor.poll();
+        signal.throwIfAborted();
         if (generation === started) throw error;
+        log({event: 'stream-dock-retry', docked: monitor.current(),
+          message: error instanceof Error ? error.message : String(error)});
       }
     }
   } finally {
