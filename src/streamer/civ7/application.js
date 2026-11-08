@@ -61,7 +61,7 @@ export function streamShape(args) {
   const fps = Number(option('--fps', '60'));
   const undockedFps = Number(option('--undocked-fps', String(fps)));
   const codec = /** @type {'h264' | 'av1'} */ (option('--codec', 'h264') === 'av1' ? 'av1' : 'h264');
-  const buttons = /** @type {'position' | 'labels'} */ (option('--buttons', '') === 'labels' ? 'labels' : 'position');
+  const buttons = /** @type {'position' | 'labels'} */ (option('--buttons', '') === 'position' ? 'position' : 'labels');
   const helperArgs = ['--local-audio', '--sops'].filter(flag => args.includes(flag));
   const streamInfo = args.includes('--stream-info');
   const frameCounter = args.includes('--frame-counter');

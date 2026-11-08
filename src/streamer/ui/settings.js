@@ -63,8 +63,11 @@ function inUse(settings, docked) {
   return {...settings, size: '1920x1080', fps: settings.size === '3840x2160' ? 120 : settings.fps};
 }
 
-/** Value text of the button layout row (input/CLAUDE.md, "Controller"). */
-const BUTTONS = {position: 'By position', labels: 'By letter'};
+/**
+ * Value text of the controller layout row: Nintendo maps each button by its printed letter, Xbox
+ * by its position (input/CLAUDE.md, "Controller").
+ */
+const LAYOUTS = {labels: 'Nintendo', position: 'Xbox'};
 
 /**
  * A catalog row. `formerDefaults` are fallbacks of the unversioned format: a save from before
@@ -135,10 +138,11 @@ const CATALOG = [
   },
   {
     id: 'buttons',
-    label: 'Button layout',
-    values: ['position', 'labels'],
-    fallback: 'position',
-    text: (/** @type {keyof typeof BUTTONS} */ value) => BUTTONS[value]
+    label: 'Controller layout',
+    values: ['labels', 'position'],
+    fallback: 'labels',
+    text: (/** @type {keyof typeof LAYOUTS} */ value) => LAYOUTS[value],
+    resetBefore: 6
   },
   {
     id: 'streamInfo',
@@ -179,9 +183,10 @@ function createSettingsCore(rows) {
    * Saved format; version 2 made Auto the bitrate default and dropped the present rate, version
    * 3 added AV1 to the codec row, version 4 added the transport row and moved every save to AV1
    * over UDP once, version 5 dropped 30 fps and added the host audio, SOPS, quit on return,
-   * button layout and stream info rows, keeping every other value.
+   * button layout and stream info rows, keeping every other value, version 6 made the button
+   * layout the controller layout with Nintendo (by letter) as the default and reset it once.
    */
-  const version = 5;
+  const version = 6;
   /** The first version whose saves hold today's defaults rather than the former ones. */
   const currentDefaults = 2;
 
@@ -367,7 +372,7 @@ function streamArgs(settings) {
 
   if (settings.hostAudio) args.push('--local-audio');
   if (settings.optimise) args.push('--sops');
-  if (settings.buttons === 'labels') args.push('--buttons', 'labels');
+  if (settings.buttons === 'position') args.push('--buttons', 'position');
   if (settings.streamInfo) args.push('--stream-info');
   if (settings.frameCounter) args.push('--frame-counter');
   return args;

@@ -53,7 +53,7 @@ export function videoStream(native, request) {
   const fps = stream.fps === undefined ? 60 : integer(stream.fps, 1, 240);
   checkMemory(header, 0x1000, 3);
   const input = request.input ? native.createInputReader(native, /** @type {ConsoleRequest} */ (request.input)) : null;
-  const buttons = stream.buttons === 'labels' ? 'labels' : 'position';
+  const buttons = stream.buttons === 'position' ? 'position' : 'labels';
   const recorder = input ? native.createInputRecorder(native.inputMapping, buttons) : null;
   const audio = request.audio
     ? native.createAudioPump(native, /** @type {AudioConfiguration} */ (request.audio)) : null;

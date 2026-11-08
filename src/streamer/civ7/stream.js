@@ -291,10 +291,10 @@ async function udpTransport(rpc, fps, copy) {
  *   `badge` is shown from the first acknowledged frame (rate-badge.js). A failed start's error
  *   carries `fallback` when H.264 may succeed instead (startFailure). `helperArgs` are launch
  *   flags passed through to the helper (--local-audio, --sops); `buttons` is the console's face
- *   button layout.
+ *   button layout, `labels` for the Nintendo controller layout and `position` for Xbox.
  */
 export async function streamVideo({rpc, directory, presentation, hostAddress, host, app,
-  helper, helperPrefix = [], helperArgs = [], buttons = 'position', fps = 60, bitrate = 20000, duration = 30, width = 1920, height = 1080,
+  helper, helperPrefix = [], helperArgs = [], buttons = 'labels', fps = 60, bitrate = 20000, duration = 30, width = 1920, height = 1080,
   controls = undefined, signal = undefined, allowInput = () => true, audioEnabled = true, badge = undefined,
   codec = 'h264', log = event => {}}) {
   if (!Number.isInteger(fps) || fps < 1 || fps > 120 || (duration !== null && !(duration > 0)))
@@ -454,7 +454,7 @@ export async function streamVideo({rpc, directory, presentation, hostAddress, ho
       stream: {host: hostAddress, port: videoOut.port, token: videoOut.token,
         header: address(header), buffer: address(source), capacity: CAPACITY, frames: 0x7fffffff, fps,
         ...(overlapOutput ? {overlapOutput} : {}),
-        ...(buttons === 'labels' ? {buttons} : {}),
+        ...(buttons === 'position' ? {buttons} : {}),
         ...(receiveBuffer ? {receiveBuffer} : {}), udp: udp.request}}, undefined, 0);
     consoleRequest = watchConsoleRequest(request, {log,
       onFailure: error => { reader.fail(error); videoOut.close(); }});

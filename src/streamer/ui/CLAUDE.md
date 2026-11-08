@@ -53,6 +53,10 @@ at. Tests: `src/streamer/ui/test/` in moonlight-nx2-dev.
   whenever a default changes. The frame rate is also the display rate; there is no present-rate row.
   Version 5 (2026-11-07) drops 30 fps (a save of 30 falls back to 60) and adds host audio,
   button layout and the stream info badge; SOPS and quit-on-return became real.
+  Version 6 (2026-11-08) renames the button layout row Controller layout: Nintendo (`labels`,
+  by letter, now the default) or Xbox (`position`). Its `resetBefore: 6` gives every older save
+  Nintendo: saves write every row, so a saved `position` cannot be told from the old default,
+  and a saved `labels` is Nintendo already.
   Stream info on keeps "1080p120 · AV1 · 30 Mbps" (plus any fallback note) on the top
   right badge for the whole stream at every layer size; off, the badge shows fallbacks for 4 s.
   Frame counter on (no save version change; a save without it loads it off) adds a line under

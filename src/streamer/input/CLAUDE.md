@@ -9,7 +9,7 @@ CLAUDE.md ("Input and audio") has the panel facts.
 - `controllerMapping(NPAD)`, `touchMapping()` and `createInputRecorder(mapping)` are
   self-contained; civ7/payload.js ships them by `toString()` and the PC exports are built from
   the same functions. `civ7/test/payload-scope.test.cjs` fails on any outside name.
-- The recorder maps the pad with `toMoonlight(state, 'position', [])` (no start chord, Plus is
+- The recorder maps the pad with `toMoonlight(state, layout, [])` (no start chord, Plus is
   Start), steps the touch tracker and returns only changes. On `STOP_CHORD` (L+R+Minus+Plus) it
   sends one released pad, lifts the touches, sets `stop` and returns nothing after that.
 - Wire: each video acknowledgement is the 16-byte unit header, a u32 length, then that many
@@ -29,10 +29,13 @@ CLAUDE.md ("Input and audio") has the panel facts.
 - `civ7/input.js` reads the NpadState (`NPAD_BYTES`, 40) from the console each sample; the
   `NPAD` bit table is copied from hbl-platform `sdk/host/npad.js`. Output is Limelight.h
   `*_FLAG` bits, triggers 0 or 255 (ZL/ZR are digital) and int16 sticks with Y up.
-- Layout `position` (default) maps by place (Nintendo B to A_FLAG, A to B, Y to X, X to Y);
-  `labels` maps by printed letter. The console recorder takes the layout from the request's
-  `stream.buttons` (the Button layout setting). HOME and Capture are not in NpadState, so SPECIAL_FLAG is
-  never set.
+- Layout `labels` maps by printed letter (the button printed A sends A_FLAG); `position` maps
+  by place, as on an Xbox pad (Nintendo B, the bottom button, to A_FLAG, A to B, Y to X, X to Y).
+  The Controller layout setting picks it when the stream starts: Nintendo (the default) is
+  `labels`, Xbox is `position`, sent as `--buttons position` and the request's
+  `stream.buttons`; the console recorder uses `labels` unless the request says `position`.
+  `toMoonlight` itself still defaults to `position`. HOME and Capture are not in NpadState, so
+  SPECIAL_FLAG is never set.
 - `toMoonlight` takes an optional start chord: while all of it is held, the PC sees Start
   instead of those buttons. The console recorder passes none, so Plus is Start.
 

@@ -48,7 +48,7 @@ Open **Settings** in Moonlight before launching a game.
 | Play audio on the PC | On / Off |
 | Optimise game settings | Request host resolution matching; requires host display automation |
 | Quit host app on return | On / Off |
-| Button layout | Button positions or button labels |
+| Controller layout | Nintendo (the button printed A sends A) or Xbox (the bottom button sends A) |
 | Stream info badge | On / Off |
 | Frame counter | On / Off: presented, skipped and dropped frames each second |
 
