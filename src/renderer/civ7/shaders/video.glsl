@@ -37,6 +37,7 @@ vec3 toRgb(float luma, vec2 chroma) {
 }
 
 void main() {
+  if (any(greaterThanEqual(gl_FragCoord.xy, targetSize()))) discard;
   uvec2 size = uvec2(slotWord(SLOT_WIDTH), slotWord(SLOT_HEIGHT));
   uint stride = slotWord(SLOT_STRIDE);
   vec2 target = targetSize();

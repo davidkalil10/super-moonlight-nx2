@@ -52,10 +52,10 @@ export const BADGE = {visible: 0xb100, x: 0xb104, y: 0xb108, width: 0xb10c, heig
 export const BADGE_OFFSET = ring.frameOffset(2);
 
 /**
- * The render target's size in pixels, the layer's, which console startup writes; zero reads as
- * WIDTH x HEIGHT. Page and badge rects stay in WIDTH x HEIGHT and scale to it. README.md, "Target".
+ * Active drawing size and retained backing extent. Startup writes both; mode changes update
+ * the active size. Page and badge rects stay in WIDTH x HEIGHT. README.md, "Target".
  */
-export const TARGET = {width: 0xb120, height: 0xb124};
+export const TARGET = {width: 0xb120, height: 0xb124, backingWidth: 0xb128, backingHeight: 0xb12c};
 export const BADGE_BYTES = 960 * 64 * 4;
 
 export const STAGES = {

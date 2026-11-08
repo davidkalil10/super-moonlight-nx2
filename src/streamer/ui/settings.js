@@ -346,7 +346,7 @@ function streamArgs(settings) {
     '--staggered',
     '--socket-audio'
   ];
-  if (settings.size === '3840x2160' && settings.fpsBefore4k === 120) args.push('--undocked-fps', '120');
+  if (settings.size === '3840x2160') args.push('--undocked-fps', '120');
 
   if (settings.hostAudio) args.push('--local-audio');
   if (settings.optimise) args.push('--sops');

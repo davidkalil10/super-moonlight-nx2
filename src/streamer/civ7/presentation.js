@@ -9,7 +9,7 @@ import {functionResolver} from './modules.js';
 /**
  * The launcher menu fields the presenter reads; handles are decimal strings.
  * @typedef {{session: unknown, ready: boolean, resources: {device: string, queue: string, swapchain: string,
- *   acquired: string, semaphores: string[]}}} PresenterMenu
+ *   acquired: string, semaphores: string[], layer?: string}}} PresenterMenu
  */
 
 /**
@@ -32,8 +32,9 @@ function presenterSlots(slots) {
  * @param {string} directory
  * @param {PresenterMenu} menu
  * @param {PresenterApp} app
+ * @param {{size?: {width: number, height: number}}} [options]
  */
-export async function createPresenter(rpc, directory, menu, app) {
+export async function createPresenter(rpc, directory, menu, app, {size = {width: 1920, height: 1080}} = {}) {
   if (menu.session !== rpc.a.session || app.session !== rpc.a.session || !menu.ready || !app.ready)
     throw Error('Presentation resources do not belong to this running session');
   /** @type {ModuleDescription} */
@@ -44,16 +45,33 @@ export async function createPresenter(rpc, directory, menu, app) {
   const names = {acquire: 'vkAcquireNextImage2KHR', submit: 'vkQueueSubmit', present: 'vkQueuePresentKHR',
     wait: 'vkQueueWaitIdle', waitFences: 'vkWaitForFences', resetFences: 'vkResetFences'};
   for (const [key, name] of Object.entries(names)) functions[key] = address(await resolve(name));
-  const memory = await rpc.allocate(0x1000);
   const resources = menu.resources;
+  /** @type {{function: string, layer: string, width: number, height: number} | undefined} */
+  let crop;
+  if (resources.layer) {
+    for (const name of ['_ZN2nn2vi5Layer16SetLayerNextCropEtttt',
+      '_ZN2nn2vi6detail13InternalLayer11SetNextCropEtttt']) await resolve(name);
+    crop = {function: address(await resolve('_ZN2nn2vi12SetLayerCropEPNS0_5LayerEiiii')),
+      layer: address(resources.layer), width: 0, height: 0};
+  }
+  const memory = await rpc.allocate(0x1000);
   const configuration = {memory: address(memory), functions,
     device: address(resources.device), queue: address(resources.queue),
     swapchain: address(resources.swapchain), acquired: address(resources.acquired),
     commands: app.commands[0].map(address), semaphores: resources.semaphores.map(address),
-    slots: presenterSlots(app.slots)};
+    slots: presenterSlots(app.slots), ...(crop ? {crop} : {})};
   let closed = false;
   return {
     configuration,
+    /** @param {{width: number, height: number}} target */
+    resize(target) {
+      const valid = [target.width, target.height].every(value => Number.isInteger(value) && value > 0);
+      if (!valid || target.width > size.width || target.height > size.height)
+        throw Error('Render size does not fit the retained layer');
+      const full = target.width === size.width && target.height === size.height;
+      if (!crop && !full) throw Error('Retained layer has no verified crop control');
+      if (crop) Object.assign(crop, {width: full ? 0 : target.width, height: full ? 0 : target.height});
+    },
     /**
      * `intervals` also asks for the ms between presents.
      * @param {number} frames @param {object} [input] @param {{intervals?: boolean}} [options]

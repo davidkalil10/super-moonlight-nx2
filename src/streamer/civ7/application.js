@@ -17,6 +17,7 @@ import {createStreamFallbacks, launchRate, sessionSize, shapeChanges} from './st
 import {createOperationModeReader} from './operation-mode.js';
 import {createDockMonitor, runDockSession} from './dock-switch.js';
 import {createHostDisplay} from './host-display.js';
+import {createRenderMode} from './render-mode.js';
 import {fitLayer} from './layer-size.js';
 import {DEFAULT_SIZE} from './display.js';
 
@@ -221,7 +222,7 @@ export async function runApplication({rpc, directory, menu, gpu, hostAddress, he
   });
   try {
     const ui = {
-      presenter: presenter = await createPresenter(rpc, directory, menu, gpu),
+      presenter: presenter = await createPresenter(rpc, directory, menu, gpu, {size: layer}),
       input: input = await createInput(rpc, menu.controls.mapped),
       raster: raster ??= createRaster()
     };
@@ -234,6 +235,8 @@ export async function runApplication({rpc, directory, menu, gpu, hostAddress, he
       return (await ui.presenter.run(3, ui.input.configuration)).frames;
     }});
     display.cleanup();
+    const renderMode = createRenderMode({rpc, storage: gpu.privateStorage.mapped, layer,
+      presenter: ui.presenter, refresh: display, input: ui.input.configuration, log});
     const readMode = await createOperationModeReader(rpc);
     const docked = (await readMode()).docked;
     if (docked) remote.initial = await remote.dispatch({type: 'operationMode', docked});
@@ -245,6 +248,7 @@ export async function runApplication({rpc, directory, menu, gpu, hostAddress, he
       }});
     children.stream = (runDirectory, host, app, args, onLine) => {
       streaming = true;
+      renderMode.invalidate();
       const abort = new AbortController();
       const {width, height, fps: requestedFps, undockedFps, codec, bitrate, transport: launched, buttons, helperArgs,
         streamInfo} = streamShape(args);
@@ -268,6 +272,8 @@ export async function runApplication({rpc, directory, menu, gpu, hostAddress, he
           await monitor.poll();
           const result = await runDockSession({monitor, signal: abort.signal, log,
             run: async (dockedAtLaunch, signal) => {
+              await renderMode.apply(dockedAtLaunch);
+              signal.throwIfAborted();
               const fallbacks = createStreamFallbacks(choice,
                 {signal, log: streamLog});
               /** @param {'h264' | 'av1'} sessionCodec */
@@ -277,6 +283,7 @@ export async function runApplication({rpc, directory, menu, gpu, hostAddress, he
               if (launchSize.fallback) forwardStreamEvent(launchSize.fallback, log, onLine);
               const fps = dockedAtLaunch ? requestedFps : undockedFps;
               const launchFps = launchRate({...launchSize.size, fps, codec: choice.codec}, dockedAtLaunch);
+              if (launchFps <= 60) await display.set(60);
               try {
                 return await runFrameRateSession({fps: launchFps,
                   measure: () => ui.presenter.run(24, ui.input.configuration),
@@ -314,6 +321,7 @@ export async function runApplication({rpc, directory, menu, gpu, hostAddress, he
         } finally {
           try { await hostDisplay?.restore(); }
           catch (error) { log({event: 'host-display-restore-failed', message: errorText(error)}); }
+          renderMode.invalidate();
           streaming = false;
         }
       })();
@@ -334,7 +342,10 @@ export async function runApplication({rpc, directory, menu, gpu, hostAddress, he
           await new Promise(resolve => setTimeout(resolve, 10));
           continue;
         }
-        rendering = ui.presenter.run(3, ui.input.configuration);
+        rendering = (async () => {
+          await renderMode.menu(monitor.current());
+          return ui.presenter.run(3, ui.input.configuration);
+        })();
         await rendering;
       }
     })();

@@ -19,5 +19,6 @@ void main() {
   slot = uint(gl_InstanceIndex);
   bool covered = pageVisible() && (word(pageBase() + 3u) & 1u) == 0u;
   bool shown = slotWord(SLOT_SEQUENCE) != 0u && slotFits();
-  gl_Position = covered || !shown ? vec4(2, 2, 0, 1) : vec4(p * 2.0 - 1.0, 0, 1);
+  gl_Position = covered || !shown ? vec4(2, 2, 0, 1)
+                                : vec4(p * targetSize() / backingSize() * 2.0 - 1.0, 0, 1);
 }

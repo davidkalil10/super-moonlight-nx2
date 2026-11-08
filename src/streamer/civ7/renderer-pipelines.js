@@ -722,7 +722,8 @@ function describe(rpc, {display, renderer, table, value, functions, created, req
       images: images.map(index => handle(table.images[index])),
       views: images.map(index => handle(table.views[index])),
       semaphores: images.map(index => handle(table.semaphores[index])),
-      acquired: handle(table.acquired[0]), pool: handle(table.pool)
+      acquired: handle(table.acquired[0]), pool: handle(table.pool),
+      ...(display.layer ? {layer: String(display.layer)} : {})
     },
     controls: {buffer: handle(table.inputBuffer), memory: handle(table.inputMemory),
       mapped: address(table.inputMapped), bytes: INPUT_BYTES}

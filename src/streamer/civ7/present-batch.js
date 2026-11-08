@@ -73,6 +73,19 @@ export function createPresentation(native, request) {
     if (!verified.has('0x' + pointer.toString(16))) throw Error('Unverified presentation function: ' + name);
     functions[name] = pointer;
   }
+  /** @type {{function: bigint, layer: bigint, width: bigint, height: bigint} | null} */
+  let crop = null;
+  if (request.crop) {
+    const config = /** @type {ConsoleRequest} */ (request.crop);
+    const fn = address(config.function);
+    const layer = address(config.layer);
+    const width = integer(config.width, 0, 3840);
+    const height = integer(config.height, 0, 2160);
+    if (!verified.has('0x' + fn.toString(16))) throw Error('Unverified layer crop function');
+    if ((width === 0) !== (height === 0)) throw Error('Invalid layer crop dimensions');
+    checkMemory(layer, 0x508, 3);
+    crop = {function: fn, layer, width: BigInt(width), height: BigInt(height)};
+  }
 
   for (let offset = 0; offset < 0x1000; offset += 8) write64(memory + BigInt(offset), 0n);
   /**
@@ -162,6 +175,7 @@ export function createPresentation(native, request) {
     if (overlay?.armed) overlay.frame();
     pointer(0x210, semaphores[index]);
     success('submit', [queue, 1n, memory + 0x300n, deferred ? slots.fences[slot] : 0n]);
+    if (crop) call(crop.function, crop.layer, 0n, 0n, crop.width, crop.height);
     success('present', [queue, memory + 0x400n], true);
     if (deferred) pending[slot] = true;
     else success('wait', [queue]);

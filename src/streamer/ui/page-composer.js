@@ -506,7 +506,12 @@ function createPageComposer(painter, options) {
    */
   function apps(model, covers) {
     const {pages, start, shown} = pageOf(model.apps, model.appPage, APPS_PER_PAGE);
-    const shape = settingRows(model.settings)
+    const shownSettings = {...model.settings};
+    if (!model.docked && ['2560x1440', '3840x2160'].includes(shownSettings.size)) {
+      if (shownSettings.size === '3840x2160') shownSettings.fps = 120;
+      shownSettings.size = '1920x1080';
+    }
+    const shape = settingRows(shownSettings, model.docked)
       .filter(row => ['size', 'fps', 'bitrate'].includes(row.id))
       .map(row => row.value)
       .join(' · ');

@@ -151,6 +151,7 @@ export const DESTROY = {
  * @property {number} queueFamily
  * @property {number} imageCount Swapchain images the display stage created.
  * @property {{width: number, height: number}} [size] The layer's extent; 1920x1080 when absent.
+ * @property {number | bigint | string} [layer] The opened vi layer.
  */
 
 const hex = (/** @type {number | bigint | string} */ value) => '0x' + BigInt(value).toString(16);

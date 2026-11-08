@@ -54,7 +54,7 @@ Open **Settings** in Moonlight before launching a game.
 
 Selecting 4K remembers your previous frame rate and restores it at smaller resolutions.
 After choosing 1440p or 4K, fully close and reopen the console app once.
-Undocking caps the stream at 1080p; docking restores your saved docked resolution.
+Undocking from 4K switches the menu and stream to 1080p120; docking restores 4K60.
 
 ## Credits
 

@@ -720,6 +720,24 @@
       "offset": 45697264,
       "size": 88,
       "hex": "800100b4080040f9480100b4090140f9aabd95d20a82a0f28aa0ddf2aa15e2f2"
+    },
+    "_ZN2nn2vi12SetLayerCropEPNS0_5LayerEiiii": {
+      "symbol": "_ZN2nn2vi12SetLayerCropEPNS0_5LayerEiiii",
+      "offset": 2481584,
+      "size": 4,
+      "hex": "b8d6a514"
+    },
+    "_ZN2nn2vi5Layer16SetLayerNextCropEtttt": {
+      "symbol": "_ZN2nn2vi5Layer16SetLayerNextCropEtttt",
+      "offset": 2479072,
+      "size": 8,
+      "hex": "002000913bd8a514"
+    },
+    "_ZN2nn2vi6detail13InternalLayer11SetNextCropEtttt": {
+      "symbol": "_ZN2nn2vi6detail13InternalLayer11SetNextCropEtttt",
+      "offset": 2470736,
+      "size": 68,
+      "hex": "7f3c0072400100549f3c00720001005428008052080012390104097902080979"
     }
   },
   "unnamed": {

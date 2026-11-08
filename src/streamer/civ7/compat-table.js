@@ -23,6 +23,8 @@ export const STARTUP_FUNCTIONS = [
   '_ZN2nn2vi21LayerCreationSettingsC1Eii', '_ZN2nn2vi5Layer15GetNativeWindowEv',
   '_ZN2nn2vi5Layer4OpenEPKNS0_21LayerCreationSettingsEPNS0_7DisplayEPKc', '_ZN2nn2vi5Layer5CloseEb',
   '_ZN2nn2vi5LayerC1Ev',
+  '_ZN2nn2vi12SetLayerCropEPNS0_5LayerEiiii', '_ZN2nn2vi5Layer16SetLayerNextCropEtttt',
+  '_ZN2nn2vi6detail13InternalLayer11SetNextCropEtttt',
   'vkAcquireNextImage2KHR', 'vkAllocateCommandBuffers', 'vkAllocateDescriptorSets', 'vkAllocateMemory',
   'vkBeginCommandBuffer', 'vkBindBufferMemory', 'vkBindImageMemory', 'vkCmdBeginRendering',
   'vkCmdBindDescriptorSets2', 'vkCmdBindPipeline', 'vkCmdCopyBuffer2', 'vkCmdCopyImageToBuffer2',

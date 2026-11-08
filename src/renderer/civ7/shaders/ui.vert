@@ -55,5 +55,6 @@ void main() {
   }
   vec2 p = origin + CORNERS[gl_VertexIndex] * extent;
   gl_Position =
-      visible ? vec4(p / DISPLAY_SIZE * 2.0 - 1.0, 0, 1) : vec4(2, 2, 0, 1);
+      visible ? vec4(p / DISPLAY_SIZE * targetSize() / backingSize() * 2.0 - 1.0, 0, 1)
+              : vec4(2, 2, 0, 1);
 }

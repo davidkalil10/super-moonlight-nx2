@@ -68,9 +68,11 @@ function ledgerStatus(reply) {
  * @param {{width: number, height: number}} layer
  */
 async function writeTarget(rpc, gpu, layer) {
-  const words = Buffer.alloc(8);
+  const words = Buffer.alloc(16);
   words.writeUInt32LE(layer.width, 0);
   words.writeUInt32LE(layer.height, 4);
+  words.writeUInt32LE(layer.width, 8);
+  words.writeUInt32LE(layer.height, 12);
   if (TARGET.height !== TARGET.width + 4) throw Error('Target words are not adjacent');
   await rpc.write(gpu.privateStorage.mapped + TARGET.width, words);
 }

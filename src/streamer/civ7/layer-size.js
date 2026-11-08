@@ -32,7 +32,7 @@ export const layerRestartNotice = size => 'Restart Moonlight on the console to s
 
 /**
  * Above 1080p the session needs its exact native layer; a mismatch runs at 1080p with a restart
- * notice. Smaller streams scale into any layer.
+ * notice. Smaller streams fit any retained backing.
  * @param {Size} size what the session would run at
  * @param {Size} layer
  * @returns {{size: Size, fallback?: {type: 'stream-fallback', kind: 'size', from: string, to: string,
