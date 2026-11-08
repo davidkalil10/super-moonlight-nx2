@@ -623,10 +623,15 @@ export function createUdpReceiver(native, config, hooks) {
     throw error;
   }
 
+  const buffered = () => {
+    const slot = nextFrame % unitSlots;
+    return frameOf[slot] === nextFrame && got[slot] === counts[slot];
+  };
+
   return {
+    buffered,
     pump() {
-      const slot = nextFrame % unitSlots;
-      if (frameOf[slot] === nextFrame && got[slot] === counts[slot]) return 0;
+      if (buffered()) return 0;
       return drain(false, 1);
     },
     /** The next whole unit in order, or null once the stream ended; never waits past a deadline. */

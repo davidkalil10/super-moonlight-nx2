@@ -266,6 +266,7 @@ export function videoStream(native, request) {
     overlap: fps > 60,
     overlapOutput: stream.overlapOutput === true,
     periodMs: 1000 / fps,
+    buffered: () => datagrams?.buffered() ?? false,
     ready() {
       peeked = peek();
       if (peeked.whole) loop.pipelined++;

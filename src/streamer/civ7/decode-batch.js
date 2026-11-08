@@ -13,13 +13,14 @@
 /** @typedef {'submit' | 'decodeWait' | 'output' | 'present'} DecodeStage */
 
 /**
- * A streaming caller's view of each unit. `ready` says the next unit already waits whole. With
+ * A streaming caller's view of each unit. `ready` polls for a whole next unit; `buffered` checks
+ * only units already reassembled, without native calls. With
  * `overlap` the previous unit then presents while the decoder works on the next; without it a
  * present that would wait on the swapchain (under `periodMs` since the last) gives way to the
  * newer unit. `overlapOutput` (AV1) submits the next unit as soon as a frame is ready, so the
  * frame's output runs under the next decode too. `overlapped` gets the ms a unit's work ran while
  * the next one decoded; README.md, "Pipelined decode", "Latest wins" and "Overlapped output".
- * @typedef {{ready(): boolean, overlap?: boolean, overlapOutput?: boolean, periodMs?: number,
+ * @typedef {{ready(): boolean, buffered?(): boolean, overlap?: boolean, overlapOutput?: boolean, periodMs?: number,
  *   decoded(unit: DecodeUnit): void, presented(unit: DecodeUnit): void, done(unit: DecodeUnit): void,
  *   spent(stage: DecodeStage, ms: number): void, overlapped?(ms: number): void}} DecodePipeline
  */
@@ -327,27 +328,40 @@ export function decodeBatch(native, request) {
   }
 
   /**
-   * Above 1080p: once a unit's frame is ready and the next unit waits whole, the next one is
-   * submitted first, so this one's output, present and ack run while it decodes; README.md,
-   * "Overlapped output".
+   * Above 1080p: a whole next unit is submitted before waiting for the current decode. Its
+   * receive and submit, then this frame's output, present and ack overlap the decoder;
+   * README.md, "Overlapped output".
    */
   function overlapOutputs() {
     /** @type {DecodeUnit | null} */
     let held = null;
+    let heldReady = false;
     for (const unit of units) {
       submit(unit);
       if (held) {
+        if (!heldReady) awaitAv1();
         const since = clock();
         finish(held);
         pipeline?.overlapped?.(clock() - since);
         held = null;
       }
 
+      if (pipeline?.buffered?.()) {
+        held = unit;
+        heldReady = false;
+        continue;
+      }
+
       awaitAv1();
-      if (pipeline?.ready()) held = unit;
-      else finish(unit);
+      if (pipeline?.ready()) {
+        held = unit;
+        heldReady = true;
+      } else finish(unit);
     }
-    if (held) finish(held);
+    if (held) {
+      if (!heldReady) awaitAv1();
+      finish(held);
+    }
   }
 
   /**
