@@ -206,10 +206,20 @@ export function decodeBatch(native, request) {
     }
   }
 
-  /** Waits until the AV1 decoder has filled the submitted unit's surface. */
-  function awaitAv1() {
-    const since = clock();
-    /** @type {NonNullable<typeof av1>} */ (av1).wait();
+  /**
+   * Waits until the AV1 decoder has filled the oldest submitted unit's surface. While it waits,
+   * `admit` runs each time `admissible` holds, so the next unit goes in as soon as it is whole.
+   * @param {() => boolean} [admissible]
+   * @param {() => void} [admit]
+   */
+  function awaitAv1(admissible, admit) {
+    const backend = /** @type {NonNullable<typeof av1>} */ (av1);
+    let since = clock();
+    while (!backend.wait(admissible)) {
+      spent('decodeWait', since);
+      admit?.();
+      since = clock();
+    }
     spent('decodeWait', since);
   }
 
@@ -310,14 +320,17 @@ export function decodeBatch(native, request) {
   /**
    * Takes the ready AV1 frame into a frame no present reads and presents it, or acknowledges it
    * unshown when it was caught up. No latest-wins skip: the overlapped loop fits the period, so
-   * one unit behind is not a backlog; README.md, "Overlapped output".
+   * one unit behind is not a backlog; README.md, "Overlapped output". `untiled` runs once the
+   * frame left its surface, before the present.
    * @param {DecodeUnit} unit
+   * @param {() => void} [untiled]
    */
-  function finish(unit) {
+  function finish(unit, untiled) {
     const frame = fillFrame();
     present?.release?.(slotOf(frame));
     outputAv1(frame);
     pipeline?.decoded(unit);
+    untiled?.();
     if (showing && unit.present !== false) {
       show(unit, frame);
       return;
@@ -328,39 +341,60 @@ export function decodeBatch(native, request) {
   }
 
   /**
-   * Above 1080p: a whole next unit is submitted before waiting for the current decode. Its
-   * receive and submit, then this frame's output, present and ack overlap the decoder;
-   * README.md, "Overlapped output".
+   * Above 1080p the decoder gets each unit as soon as it is whole, with up to two in flight:
+   * before the wait for the oldest, during it, or right after it. The oldest frame's output,
+   * present and ack then run under the next decode; README.md, "Overlapped output".
    */
   function overlapOutputs() {
-    /** @type {DecodeUnit | null} */
-    let held = null;
-    let heldReady = false;
-    for (const unit of units) {
-      submit(unit);
-      if (held) {
-        if (!heldReady) awaitAv1();
-        const since = clock();
-        finish(held);
-        pipeline?.overlapped?.(clock() - since);
-        held = null;
+    const source = units[Symbol.iterator]();
+    /** @type {DecodeUnit[]} */
+    const inFlight = [];
+    let ended = false;
+
+    /** Receives and submits the next unit; false once the stream ended. */
+    function admit() {
+      const next = source.next();
+      if (next.done) {
+        ended = true;
+        return false;
       }
 
-      if (pipeline?.buffered?.()) {
-        held = unit;
-        heldReady = false;
-        continue;
-      }
-
-      awaitAv1();
-      if (pipeline?.ready()) {
-        held = unit;
-        heldReady = true;
-      } else finish(unit);
+      submit(next.value);
+      inFlight.push(next.value);
+      return true;
     }
-    if (held) {
-      if (!heldReady) awaitAv1();
-      finish(held);
+
+    /** The decoder has room and a whole unit waits, found without native calls. */
+    function admissible() {
+      if (ended || inFlight.length > 1) return false;
+      return Boolean(pipeline?.buffered?.());
+    }
+
+    /** As `admissible`, but polls for a unit only the socket holds yet. */
+    function admissibleNow() {
+      if (ended || inFlight.length > 1) return false;
+      return Boolean(pipeline?.ready());
+    }
+
+    function admitWhole() {
+      if (admissible()) admit();
+    }
+
+    try {
+      for (;;) {
+        if (!inFlight.length && !admit()) break;
+
+        admitWhole();
+        awaitAv1(admissible, admit);
+        if (admissibleNow()) admit();
+
+        const unit = /** @type {DecodeUnit} */ (inFlight.shift());
+        const since = clock();
+        finish(unit, admitWhole);
+        if (inFlight.length) pipeline?.overlapped?.(clock() - since);
+      }
+    } finally {
+      source.return?.();
     }
   }
 

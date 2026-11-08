@@ -11,8 +11,9 @@
  */
 
 /**
- * @typedef {{submit(unit: DecodeUnit): void, wait(): void, output(target?: bigint): string, frameBytes: number,
- *   format: {stride: number, sliceHeight: number}, report(): {frames: number, steps: string[]}}} Av1Backend
+ * @typedef {{submit(unit: DecodeUnit): void, wait(until?: () => boolean): boolean,
+ *   output(target?: bigint): string, frameBytes: number, format: {stride: number, sliceHeight: number},
+ *   report(): {frames: number, steps: string[]}}} Av1Backend
  */
 
 /**
@@ -174,8 +175,12 @@ export function createAv1Backend(native, request, context) {
     return state === 1;
   }
 
-  /** Polls the oldest queued surface's fence until it signals, as the title's worker does. */
-  function wait() {
+  /**
+   * Polls the oldest queued surface's fence until it signals, as the title's worker does: true
+   * then, false as soon as `until` holds first.
+   * @param {() => boolean} [until]
+   */
+  function wait(until) {
     if (!pending.length) throw Error('No AV1 unit is in flight');
     const oldest = queued[0];
     if (!oldest) throw Error('No AV1 surface is queued');
@@ -188,8 +193,9 @@ export function createAv1Backend(native, request, context) {
       if (fenceReady(oldest)) {
         ready = oldest;
         note(() => 'fence s' + oldest.id + ' after ' + polls + ' polls');
-        return;
+        return true;
       }
+      if (until?.()) return false;
     } while (Date.now() < deadline);
     note(() => 'fence s' + oldest.id + ' unsignaled after ' + polls + ' polls');
     throw Error('AV1 decode timed out');
@@ -274,7 +280,7 @@ export function createAv1Backend(native, request, context) {
 
   return {
     submit: unit => traced(() => submit(unit)),
-    wait: () => traced(wait),
+    wait: until => traced(() => wait(until)),
     output: target => traced(() => output(target)),
     frameBytes,
     format: {stride: width, sliceHeight: height},
