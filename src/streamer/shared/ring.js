@@ -67,12 +67,13 @@ const UI = {
   cmdPage: UI_BLOCK + 48,
   cmdEpoch: UI_BLOCK + 52,
   uiShown: UI_BLOCK + 56,
+  uiEdit: UI_BLOCK + 60,
   hostAck: UI_BLOCK + 64,
   hostBusy: UI_BLOCK + 68
 };
 const UI_MAGIC = 0x49554248;
 /** Command operations the compute shader forwards; the host's state machine interprets them. */
-const UI_OP = {a: 1, b: 2, x: 3, y: 4, adjust: 5, chord: 6};
+const UI_OP = {a: 1, b: 2, x: 3, y: 4, adjust: 5, chord: 6, edit: 7};
 const MODE = {none: 0, native: 3};
 const NATIVE_ABI = 0x484e5633;
 

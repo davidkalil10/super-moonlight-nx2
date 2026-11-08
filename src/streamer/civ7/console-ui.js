@@ -275,8 +275,20 @@ export function createConsoleUi(native, configuration) {
     dispatch({type: 'command', op: 'chord', item: 0, value: 0});
   }
 
+  /**
+   * The shader owns the edit word, so an EDIT command overwritten by the ADJUST right after it
+   * still starts the edit before that ADJUST runs. Repeating it changes nothing.
+   */
+  function followEdit() {
+    const settings = model.screen === 'settings' && shownScreen === 'settings';
+    if (!settings) return;
+
+    dispatch({type: 'command', op: 'edit', item: word('uiEdit'), value: 0});
+  }
+
   function poll() {
     watch();
+    followEdit();
     consumeCommand();
     followOverlay();
   }

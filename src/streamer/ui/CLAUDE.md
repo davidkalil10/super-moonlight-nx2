@@ -29,8 +29,10 @@ at. Tests: `src/streamer/ui/test/` in moonlight-nx2-dev.
   60/120 preference in the save; stepping back to a smaller size restores it and removes the
   field. Older 4K120 saves are clamped while retaining 120 for the next smaller size.
   Settings are edited with A (user decision, Round 6): the D-pad moves across both columns, A on
-  an adjustable card sets `editing`, left/right then step it, A or B ends the edit. A dock change
-  keeps the edit; adjust() steps by the new mode. Locked and unbacked rows never edit.
+  an adjustable card starts an edit, left/right then step it, A or B ends the edit. The shader
+  owns the edit (`uiEdit` word, EDIT command), so Right straight after A steps; the model's
+  `editing` follows it. A dock change keeps the edit; adjust() steps by the new mode. Locked
+  and unbacked rows never edit.
   Only the edited value shows arrows, `‹` and `›` only where adjust() would change it in the
   current mode, so a handheld 1080p has no `›`. The composer paints the whole `‹   value   ›`
   and clears the arrows not shown, so the value stays where it is in and out of an edit.

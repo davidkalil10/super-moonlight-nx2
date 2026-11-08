@@ -291,31 +291,41 @@ function createMachine(rules) {
   }
 
   /**
-   * A on a setting that can change edits it; Y resets all of them; B goes back.
+   * EDIT names the setting the console is editing, or none; Y resets all of them; B goes back.
    * @param {Model} model @param {Command} command @returns {Step}
    */
   function onSettingsCommand(model, command) {
+    if (command.op === 'edit') return onEdit(model, command.item);
     if (model.editing) return onEditCommand(model, command);
 
-    const {op, item} = command;
+    const {op} = command;
     if (op === 'b') return next(model, {screen: model.from});
     if (op === 'y') return next(model, {settings: rules.defaults()}, [{type: 'saveSettings'}]);
-
-    const setting = rules.rows[item - ITEM.setting];
-    const editable = setting && !setting.locked && !setting.unbacked &&
-      !setting.lockedSizes?.includes(model.settings.size);
-    if (op === 'a' && editable) return next(model, {editing: setting.id});
     return same(model);
   }
 
   /**
-   * While a setting is edited, ADJUST on it steps, changes and saves it; A or B ends the edit and
-   * the rest waits for it. The edit outlives a dock change: adjust() steps by the new mode.
+   * The console's edit word, sent as a command and read back every poll, so repeating it
+   * changes nothing. Locked and unbacked rows never edit.
+   * @param {Model} model @param {number} item
+   * @returns {Step}
+   */
+  function onEdit(model, item) {
+    const setting = rules.rows[item - ITEM.setting];
+    const editable = setting && !setting.locked && !setting.unbacked &&
+      !setting.lockedSizes?.includes(model.settings.size);
+    const editing = editable ? setting.id : null;
+
+    if (editing === model.editing) return same(model);
+    return next(model, {editing});
+  }
+
+  /**
+   * While a setting is edited, ADJUST on it steps, changes and saves it; the rest waits for the
+   * edit to end. The edit outlives a dock change: adjust() steps by the new mode.
    * @param {Model} model @param {Command} command @returns {Step}
    */
   function onEditCommand(model, {op, item, value}) {
-    if (op === 'a' || op === 'b') return next(model, {editing: null});
-
     const setting = rules.rows[item - ITEM.setting];
     if (op !== 'adjust' || setting?.id !== model.editing) return same(model);
 

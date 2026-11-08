@@ -11,7 +11,7 @@ const uint UI_FLAG_OVERLAY = 1u, UI_FLAG_HIDE_CURSOR = 2u;
 const uint UI_ITEM_GREYED = 1u, UI_ITEM_CURRENT = 2u, UI_ITEM_ADJUSTABLE = 4u,
            UI_ITEM_PENDING = 8u, UI_ITEM_EDITING = 16u;
 const uint UI_OP_A = 1u, UI_OP_B = 2u, UI_OP_X = 3u, UI_OP_Y = 4u,
-           UI_OP_ADJUST = 5u, UI_OP_CHORD = 6u;
+           UI_OP_ADJUST = 5u, UI_OP_CHORD = 6u, UI_OP_EDIT = 7u;
 const uint UI_CHORD_FRAMES = 60u, UI_STICK_REPEAT = 12u;
 
 uint uiPageBase(uint page) { return UI_BASE + page * UI_PAGE_WORDS; }
@@ -91,6 +91,13 @@ uint uiItemId(uint base, uint index) {
 uint uiItemFlags(uint base, uint index) {
   return uiWord(base + UI_ITEMS + index * 8u + 5u);
 }
+bool uiHasItem(uint base, uint id) {
+  uint items = uiWord(base + UI_HDR_ITEMS);
+  for (uint i = 0u; i < items; i++)
+    if (uiItemId(base, i) == id)
+      return true;
+  return false;
+}
 // A new page keeps the cursor on the item with the same id, else goes to the
 // page's home. A page is current only when the shown page carries both its
 // sequence and its epoch, so a new service whose first sequence equals the
@@ -117,6 +124,8 @@ void uiApply() {
   }
   if ((uiWord(base + UI_HDR_FLAGS) & UI_FLAG_OVERLAY) == 0u || !sameEpoch)
     storage.words[UI_OVERLAY] = 0u;
+  if (!sameEpoch || !uiHasItem(base, uiWord(UI_EDIT)))
+    storage.words[UI_EDIT] = 0u;
   storage.words[UI_CURSOR] = cursor;
   storage.words[UI_SHOWN] = page;
   memoryBarrierBuffer();
@@ -134,6 +143,20 @@ void uiCommand(uint op, uint item, uint value) {
   memoryBarrierBuffer();
   uint sequence = uiWord(CMD_SEQUENCE) + 1u;
   storage.words[CMD_SEQUENCE] = sequence == 0u ? 1u : sequence;
+}
+// The edit lives here, not in the page, so input right after A already steps
+// the value (streamer/civ7/README.md, "Console UI"). A ends an edit; on an
+// adjustable item it starts one; elsewhere it is a plain A.
+void uiPress(uint base, uint index) {
+  uint id = uiItemId(base, index);
+  if (uiWord(UI_EDIT) != 0u) {
+    storage.words[UI_EDIT] = 0u;
+    uiCommand(UI_OP_EDIT, 0u, 0u);
+  } else if ((uiItemFlags(base, index) & UI_ITEM_ADJUSTABLE) != 0u) {
+    storage.words[UI_EDIT] = id;
+    uiCommand(UI_OP_EDIT, id, 0u);
+  } else
+    uiCommand(UI_OP_A, id, 0u);
 }
 // Nearest selectable item whose centre lies in the pressed direction, dominant
 // axis, no wrap.
@@ -206,11 +229,11 @@ void uiInput() {
   // An item being edited holds the cursor: left and right step it, up and
   // down do nothing until A or B ends the edit.
   if (items > 0u && move != vec2(0)) {
-    bool editing = (uiItemFlags(base, cursor) & UI_ITEM_EDITING) != 0u;
+    bool editing = uiWord(UI_EDIT) != 0u;
     if (!editing)
       cursor = uiNeighbour(base, cursor, move);
     else if (move.y == 0.0 && !sent) {
-      uiCommand(UI_OP_ADJUST, uiItemId(base, cursor),
+      uiCommand(UI_OP_ADJUST, uiWord(UI_EDIT),
                 move.x > 0.0 ? 1u : 0xffffffffu);
       sent = true;
     }
@@ -224,7 +247,7 @@ void uiInput() {
         cursor = i;
         storage.words[UI_TOUCH_ITEM] = i;
         if (!sent) {
-          uiCommand(UI_OP_A, uiItemId(base, i), 0u);
+          uiPress(base, i);
           sent = true;
         }
       }
@@ -234,7 +257,7 @@ void uiInput() {
     uint id = uiItemId(base, cursor);
     bool greyed = (uiItemFlags(base, cursor) & UI_ITEM_GREYED) != 0u;
     if ((pressed & BUTTON_A) != 0u && !greyed) {
-      uiCommand(UI_OP_A, id, 0u);
+      uiPress(base, cursor);
       sent = true;
     } else if ((pressed & BUTTON_X) != 0u) {
       uiCommand(UI_OP_X, id, 0u);
@@ -244,7 +267,10 @@ void uiInput() {
       sent = true;
     }
   }
-  if (!sent && (pressed & BUTTON_B) != 0u) {
+  if (!sent && (pressed & BUTTON_B) != 0u && uiWord(UI_EDIT) != 0u) {
+    storage.words[UI_EDIT] = 0u;
+    uiCommand(UI_OP_EDIT, 0u, 0u);
+  } else if (!sent && (pressed & BUTTON_B) != 0u) {
     if ((uiWord(base + UI_HDR_FLAGS) & UI_FLAG_OVERLAY) != 0u)
       storage.words[UI_OVERLAY] = 0u;
     uiCommand(UI_OP_B, 0u, 0u);
