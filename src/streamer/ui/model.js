@@ -31,7 +31,7 @@ import * as settingsRules from './settings.js';
  *   | {type: 'operationMode', docked: boolean}
  *   | {type: 'failed', message: string, back?: string}} Event
  * @typedef {Record<string, any>} Settings
- * @typedef {{rows: {id: string, locked: boolean, unbacked: boolean, lockedSizes?: string[]}[], defaults: () => Settings,
+ * @typedef {{rows: {id: string, unbacked: boolean, lockedSizes?: string[]}[], defaults: () => Settings,
  *   adjust: (settings: Settings, id: string, direction: number, docked?: boolean) => Settings}} Rules
  */
 
@@ -319,13 +319,13 @@ function createMachine(rules) {
 
   /**
    * The console's edit word, sent as a command and read back every poll, so repeating it
-   * changes nothing. Locked and unbacked rows never edit.
+   * changes nothing. Unbacked rows never edit.
    * @param {Model} model @param {number} item
    * @returns {Step}
    */
   function onEdit(model, item) {
     const setting = rules.rows[item - ITEM.setting];
-    const editable = setting && !setting.locked && !setting.unbacked &&
+    const editable = setting && !setting.unbacked &&
       !setting.lockedSizes?.includes(model.settings.size);
     const editing = editable ? setting.id : null;
 

@@ -25,8 +25,8 @@ at. Tests: `src/streamer/ui/test/` in moonlight-nx2-dev.
   1.66 MB to ~0.23 MB; a value step writes ~30 KB in 3 requests. The first change after a
   screen opens rewrites the older buffer.
 - Settings (settings.js): only values the console path has run are offered (team note
-  `ui-settings-catalog.md`). A `locked` row has one value; an `unbacked` row has no host plumbing
-  yet and stays greyed, so the page shows it without pretending it works.
+  `ui-settings-catalog.md`). An `unbacked` row has no host plumbing yet and stays greyed, so the
+  page shows it without pretending it works.
   Resolution's `docked` values (2560x1440, 3840x2160, added 2026-11-08 for G4) are stepped onto
   only after the console reported docked (`operationMode` event); a save holding one stays when
   handheld and the launch falls back to 1080p with a badge (civ7/README.md, "Fallbacks"). Handheld,

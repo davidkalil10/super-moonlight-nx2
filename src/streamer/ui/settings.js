@@ -76,8 +76,8 @@ const BUTTONS = {position: 'By position', labels: 'By letter'};
  * while the console is docked.
  * @typedef {{id: string, label: string, values: any[], fallback: any,
  *   text: (value: any, settings: Record<string, any>) => string,
- *   short?: (value: any) => string, locked?: boolean,
- *   unbacked?: boolean, formerDefaults?: any[], resetBefore?: number, docked?: any[], lockedSizes?: string[]}} Setting
+ *   short?: (value: any) => string, unbacked?: boolean, formerDefaults?: any[],
+ *   resetBefore?: number, docked?: any[], lockedSizes?: string[]}} Setting
  */
 
 /** @type {Setting[]} */
@@ -122,14 +122,6 @@ const CATALOG = [
     fallback: 'udp',
     text: (/** @type {keyof typeof TRANSPORTS} */ value) => TRANSPORTS[value],
     resetBefore: 4
-  },
-  {
-    id: 'audio',
-    label: 'Audio',
-    values: ['stereo'],
-    fallback: 'stereo',
-    text: () => 'Stereo',
-    locked: true
   },
   {
     id: 'hostAudio',
@@ -180,7 +172,6 @@ const VALUES = CATALOG.map(setting => ({
   id: setting.id,
   values: setting.values,
   fallback: setting.fallback,
-  locked: Boolean(setting.locked),
   unbacked: Boolean(setting.unbacked),
   formerDefaults: setting.formerDefaults ?? [],
   resetBefore: setting.resetBefore ?? 0,
@@ -191,7 +182,7 @@ const VALUES = CATALOG.map(setting => ({
 /**
  * Defaults, sanitising and stepping over the catalog values. Self-contained: payload.js ships it
  * with toString() so the console model uses the same rules.
- * @param {{id: string, values: any[], fallback: any, locked: boolean, unbacked: boolean,
+ * @param {{id: string, values: any[], fallback: any, unbacked: boolean,
  *   formerDefaults: any[], resetBefore: number, docked: any[], lockedSizes?: string[]}[]} rows
  */
 function createSettingsCore(rows) {
@@ -244,7 +235,7 @@ function createSettingsCore(rows) {
 
   /**
    * One step up or down the row's values, without wrapping, skipping the docked-only values
-   * while handheld; locked and unbacked rows do not move. A docked-only value saved while docked
+   * while handheld; unbacked rows do not move. A docked-only value saved while docked
    * stays until stepped off.
    * @param {Record<string, any>} settings
    * @param {string} id
@@ -253,7 +244,7 @@ function createSettingsCore(rows) {
    */
   function adjust(settings, id, direction, docked = false) {
     const row = rows.find(entry => entry.id === id);
-    if (!row || row.locked || row.unbacked || row.lockedSizes?.includes(settings.size)) return settings;
+    if (!row || row.unbacked || row.lockedSizes?.includes(settings.size)) return settings;
 
     const step = Math.sign(direction);
     const offered = (/** @type {any} */ value) => docked || !row.docked.includes(value);
@@ -347,7 +338,7 @@ function rows(settings, docked = false) {
     id: setting.id,
     label: setting.label,
     value: valueText(setting, settings, docked),
-    adjustable: !setting.locked && !setting.unbacked && !setting.lockedSizes?.includes(settings.size),
+    adjustable: !setting.unbacked && !setting.lockedSizes?.includes(settings.size),
     greyed: Boolean(setting.unbacked),
     canLeft: moves(setting.id, -1),
     canRight: moves(setting.id, 1)
