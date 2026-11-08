@@ -1,45 +1,46 @@
 /** @typedef {{docked: boolean, mode: string, reason?: string}} OperationMode */
 
 /**
- * A debounced dock state. Unknown reads keep the last known mode; polls never overlap.
+ * A debounced dock state: a poll that reads a new mode reads it again `confirmMs` later and
+ * switches only when both agree. Unknown or failed reads keep the last known mode; polls never
+ * overlap.
  * @param {{initial: boolean, read: () => Promise<OperationMode>,
- *   changed?: (docked: boolean) => void, log?: (event: object) => void}} options
+ *   changed?: (docked: boolean) => void, log?: (event: object) => void, confirmMs?: number,
+ *   wait?: (ms: number) => Promise<unknown>}} options
  */
-export function createDockMonitor({initial, read, changed = () => {}, log = () => {}}) {
+export function createDockMonitor({initial, read, changed = () => {}, log = () => {}, confirmMs = 100,
+  wait = ms => new Promise(resolve => setTimeout(resolve, ms))}) {
   let docked = initial;
-  let candidate = initial;
-  let samples = 0;
   let closed = false;
   /** @type {Promise<void> | null} */
   let pending = null;
   /** @type {Set<(docked: boolean) => void>} */
   const listeners = new Set();
 
-  async function check() {
+  /** @returns {Promise<boolean | null>} the mode one read reports, or null when it is unknown */
+  async function sample() {
     try {
       const mode = await read();
-      if (closed) return;
-      if (mode.mode !== 'handheld' && mode.mode !== 'console') {
-        samples = 0;
-        return;
-      }
-      if (mode.docked === docked) {
-        samples = 0;
-        return;
-      }
-      samples = mode.docked === candidate ? samples + 1 : 1;
-      candidate = mode.docked;
-      if (samples < 2) return;
-
-      docked = candidate;
-      samples = 0;
-      log({event: 'dock-mode', docked});
-      changed(docked);
-      for (const listener of listeners) listener(docked);
+      return mode.mode === 'handheld' || mode.mode === 'console' ? mode.docked : null;
     } catch (error) {
-      samples = 0;
       if (!closed) log({event: 'dock-mode-read-failed', message: error instanceof Error ? error.message : String(error)});
+      return null;
     }
+  }
+
+  async function check() {
+    const seen = await sample();
+    if (closed || seen === null || seen === docked) return;
+
+    await wait(confirmMs);
+    if (closed) return;
+    const confirmed = await sample();
+    if (closed || confirmed !== seen) return;
+
+    docked = seen;
+    log({event: 'dock-mode', docked});
+    changed(docked);
+    for (const listener of listeners) listener(docked);
   }
 
   return {
