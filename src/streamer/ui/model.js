@@ -246,12 +246,12 @@ function createMachine(rules) {
 
   /**
    * A on a cover launches it unless another app is running on the PC; B leaves the host and Y
-   * asks to quit the running app.
+   * on the running app's cover asks to quit it.
    * @param {Model} model @param {Command} command @returns {Step}
    */
   function onAppsCommand(model, {op, item}) {
     if (op === 'b') return next(model, LEAVE_HOST);
-    if (op === 'y') return next(model, {screen: 'quitConfirm'});
+    if (op === 'y') return onQuitAsked(model, item);
     if (op !== 'a') return same(model);
 
     if (item === ITEM.back) return next(model, LEAVE_HOST);
@@ -268,13 +268,25 @@ function createMachine(rules) {
     if (model.currentGame && app.id !== model.currentGame) {
       const running = model.apps.find(entry => entry.id === model.currentGame)?.name;
       const message =
-        (running ?? 'Another app') + ' is still running on the PC; press Y to quit it first';
+        (running ?? 'Another app') + ' is still running on the PC; press Y on it to quit it first';
       return next(model, {message});
     }
 
     return next(model, {screen: 'launching', app, appIndex, message: null, overlay: false}, [
       {type: 'launch', host: model.host, app, settings: model.settings}
     ]);
+  }
+
+  /**
+   * Y quits only from the cover of the app running on the PC; the page hints it only there.
+   * @param {Model} model @param {number} item @returns {Step}
+   */
+  function onQuitAsked(model, item) {
+    const hovered = model.apps[item - ITEM.app];
+    const running = model.currentGame !== 0 && hovered?.id === model.currentGame;
+    if (!running) return same(model);
+
+    return next(model, {screen: 'quitConfirm'});
   }
 
   /**

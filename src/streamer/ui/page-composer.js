@@ -35,6 +35,8 @@
  *     canRight: boolean) => PageBuilder,
  *   solid: (x: number, y: number, w: number, h: number, color: number) => PageBuilder,
  *   legend: (x: number, y: number, keys: [string, string][], color?: number) => PageBuilder,
+ *   legendTail: (x: number, y: number, head: [string, string][], keys: [string, string][],
+ *     cursorItem: number, color?: number) => PageBuilder,
  *   image: (x: number, y: number, tile: Bitmap) => PageBuilder,
  *   item: (item: Item) => PageBuilder,
  *   build: () => ComposedPage
@@ -83,6 +85,8 @@ function createPageComposer(painter, options) {
   const CHIP = {y: 64, height: 54, pad: 10, size: 26};
   /** The button hints along the bottom. */
   const LEGEND = {y: 984, size: 26, height: 40};
+  /** @type {[string, string][]} */
+  const APP_KEYS = [['A', 'Launch'], ['B', 'PCs'], ['X', 'Settings']];
   /** Host and setting cards, two to a row; every button is a card this high. */
   const CARDS = {y: 300, width: 840, height: 96, gapX: 48, gapY: 32, pad: 32};
   const HOST_CARDS_Y = 430;
@@ -210,6 +214,27 @@ function createPageComposer(painter, options) {
       cut.set(bytes.subarray(from, from + cutWidth), row * cutWidth);
     }
     return {width: cutWidth, height: cutHeight, bytes: cut, left, top};
+  }
+
+  /**
+   * The columns of the legend of `head` and `tail` past the ink of `head` alone, so the tail
+   * sits exactly where the whole legend draws it.
+   * @param {[string, string][]} head @param {[string, string][]} tail
+   * @returns {Trimmed}
+   */
+  function legendTail(head, tail) {
+    const whole = usePainter().legend([...head, ...tail], LEGEND.size, 1200);
+    const first = usePainter().legend(head, LEGEND.size, 1200);
+    const from = inkRun(first, first.width - 1, -1)[0] + 1;
+    const width = whole.width - from;
+    const bytes = new Uint8Array(width * whole.height);
+    for (let row = 0; row < whole.height; row++) {
+      const at = row * whole.width + from;
+      bytes.set(whole.bytes.subarray(at, at + width), row * width);
+    }
+
+    const cut = trim({width, height: whole.height, bytes});
+    return {...cut, left: cut.left + from};
   }
 
   /** @param {Bitmap} bitmap @param {number} column */
@@ -348,6 +373,12 @@ function createPageComposer(painter, options) {
       legend(x, y, keys, color = COLOR.soft) {
         const key = ['l', JSON.stringify(keys)].join('\u0000');
         return strip(x, y, color, remember(key, () => trim(usePainter().legend(keys, LEGEND.size, 1200))));
+      },
+
+      /** The hints of `keys` after `head`, where the whole legend puts them, shown on one item. */
+      legendTail(x, y, head, keys, cursorItem, color = COLOR.soft) {
+        const key = ['lt', JSON.stringify(head), JSON.stringify(keys)].join('\u0000');
+        return strip(x, y, color, remember(key, () => legendTail(head, keys)), cursorItem);
       },
 
       image(x, y, tile) {
@@ -567,8 +598,10 @@ function createPageComposer(painter, options) {
       chips: hostChips(model),
       note: shape,
       cursorHome: homeSlot(model.appIndex, start, shown),
-      keys: [['A', 'Launch'], ['B', 'PCs'], ['X', 'Settings'], ['Y', 'Quit host app']]
+      keys: APP_KEYS
     });
+    const running = shown.findIndex(app => model.currentGame !== 0 && app.id === model.currentGame);
+    if (running >= 0) page.legendTail(SIDE, LEGEND.y, APP_KEYS, [['Y', 'Quit host app']], ITEM.app + start + running);
 
     const line = [
       model.message,
