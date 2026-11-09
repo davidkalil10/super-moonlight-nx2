@@ -39,17 +39,22 @@ type Decoder = crate::gsv::GsvBackend;
 type Decoder = crate::video_sink::VideoSink;
 #[cfg(feature = "native-video")]
 type Decoder = crate::native_video::NativeVideo;
+#[cfg(feature = "native-video")]
+const SURFACES: usize = decoder::RING;
+#[cfg(not(feature = "native-video"))]
+const SURFACES: usize = decoder::SURFACES;
 
 #[cfg(any(feature = "diagnostic-frontend", feature = "native-video"))]
 pub(crate) fn decoder_capabilities() -> Capabilities {
-    <Decoder as decoder::Backend>::capabilities()
+    <Decoder as decoder::Backend<SURFACES>>::capabilities()
 }
 
 const MEDIA_SILENCE_MS: u64 = 10_000;
 
-type TcpSession = Session<'static, Decoder, NetSocket, Audout, Channel<'static, NetSocket>>;
+type TcpSession =
+    Session<'static, Decoder, NetSocket, Audout, Channel<'static, NetSocket>, SURFACES>;
 type UdpSession =
-    Session<'static, Decoder, NetSocket, Audout, Receiver<'static, NetSocket, UdpSocket>>;
+    Session<'static, Decoder, NetSocket, Audout, Receiver<'static, NetSocket, UdpSocket>, SURFACES>;
 
 enum Active {
     Tcp(TcpSession),
@@ -61,7 +66,7 @@ struct Buffers {
     video_outbound: Box<[u8]>,
     pcm: Box<[u8]>,
     pcm_outbound: Box<[u8]>,
-    frames: [Box<[u8]>; decoder::SURFACES],
+    frames: [Box<[u8]>; decoder::FRAMES],
 }
 
 impl Buffers {

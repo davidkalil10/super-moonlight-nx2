@@ -19,7 +19,7 @@ use core::{
 };
 use moonlight_nx2_core::{
     codec::Codec,
-    decoder::{Backend, BackendError, Backing, Config, FrameRegistration},
+    decoder::{Backend, BackendError, Backing, Config, FrameRegistration, RING},
     untile,
     video_wire::{self as wire, Fence, Message, Output, Reply},
 };
@@ -66,7 +66,7 @@ struct Surface {
     image: Option<u32>,
     fence: Option<Fence>,
     descriptor: [u8; 128],
-    cpu_read: bool,
+    consumed: bool,
 }
 
 impl Default for Surface {
@@ -77,13 +77,13 @@ impl Default for Surface {
             image: None,
             fence: None,
             descriptor: [0; 128],
-            cpu_read: false,
+            consumed: false,
         }
     }
 }
 
 struct Resources {
-    surfaces: [Surface; 2],
+    surfaces: [Surface; RING],
     inputs: [Option<Memory>; 2],
     workspace: Option<Memory>,
     mime: Option<Memory>,
@@ -285,7 +285,8 @@ impl NativeVideo {
         config: Config,
     ) -> Result<(), BackendError> {
         log(&format!("b2ar: before Vulkan allocation surface={index}"));
-        self.resources.surfaces[index].memory = Some(self.owner.allocate(bytes, alignment)?);
+        self.resources.surfaces[index].memory =
+            Some(self.owner.allocate_surface(index, bytes, alignment)?);
         log(&format!(
             "b2ar: Vulkan allocation and metadata passed surface={index}"
         ));
@@ -383,7 +384,7 @@ impl NativeVideo {
         let message =
             Message::configure(address, 10, config.coded).map_err(|_| BackendError::Invalid)?;
         self.exchange("decoder configure", service, message, 1, false)?;
-        for index in 0..2 {
+        for index in 0..RING {
             let Some(image) = self.resources.surfaces[index].image else {
                 log("b2ar: decoder image missing");
                 return Err(self.unknown());
@@ -462,12 +463,51 @@ impl NativeVideo {
 /// Enable only in a commit citing successful native pixel and clean-close evidence.
 pub const NATIVE_H264_VERIFIED: bool = false;
 
-impl Backend for NativeVideo {
+impl NativeVideo {
+    fn layout(&mut self, index: usize) -> Result<untile::Image, BackendError> {
+        let image = self
+            .resources
+            .surfaces
+            .get(index)
+            .and_then(|surface| surface.image)
+            .ok_or(BackendError::Invalid)?;
+        let reply = self.exchange(
+            "image descriptor",
+            self.root_handle()?,
+            Message::image(977, image),
+            33,
+            false,
+        )?;
+        let descriptor: [u8; 128] = reply.data[..128].try_into().unwrap();
+        if self.resources.surfaces[index].descriptor != descriptor {
+            log(&format!(
+                "native-video: surface{index} descriptor {descriptor:02x?}"
+            ));
+            self.resources.surfaces[index].descriptor = descriptor;
+        }
+        match untile::Image::decode(&descriptor) {
+            Ok(layout) => Ok(layout),
+            Err(untile::Error::Unsupported) => Err(BackendError::Unsupported),
+            Err(untile::Error::Invalid) => Err(self.unknown()),
+        }
+    }
+
+    fn consume(&mut self, index: usize) -> Result<(), BackendError> {
+        if self.in_flight == 0 || self.resources.surfaces[index].consumed {
+            return Err(self.unknown());
+        }
+        self.resources.surfaces[index].consumed = true;
+        self.in_flight -= 1;
+        Ok(())
+    }
+}
+
+impl Backend<RING> for NativeVideo {
     fn capabilities() -> moonlight_nx2_core::codec::Capabilities {
         crate::native_gate::capabilities(NATIVE_H264_VERIFIED)
     }
 
-    fn open(&mut self, config: Config) -> Result<[u32; 2], BackendError> {
+    fn open(&mut self, config: Config) -> Result<[u32; RING], BackendError> {
         if !matches!(config.codec, Codec::H264 | Codec::Av1) || config.backing != Backing::NativeGpu
         {
             return Err(BackendError::Unsupported);
@@ -510,7 +550,7 @@ impl Backend for NativeVideo {
         self.open_context()?;
         log("b2ar: decoder context opened");
         let (bytes, alignment) = self.surface_sizes(config)?;
-        for index in 0..2 {
+        for index in 0..RING {
             log(&format!(
                 "b2ar: before backing surface={index} bytes={bytes} alignment={alignment}"
             ));
@@ -523,16 +563,15 @@ impl Backend for NativeVideo {
         log("b2ar: before decoder service initialize/configure/register/start");
         self.open_service(config)?;
         log("b2ar: decoder service started");
-        match (
-            self.resources.surfaces[0].image,
-            self.resources.surfaces[1].image,
-        ) {
-            (Some(first), Some(second)) => Ok([first, second]),
-            _ => {
+        let mut images = [0; RING];
+        for (image, surface) in images.iter_mut().zip(&self.resources.surfaces) {
+            let Some(opened) = surface.image else {
                 log("b2ar: opened decoder is missing an image");
-                Err(self.unknown())
-            }
+                return Err(self.unknown());
+            };
+            *image = opened;
         }
+        Ok(images)
     }
 
     fn submit(&mut self, bytes: &[u8], pts_us: u64) -> Result<(), BackendError> {
@@ -608,29 +647,7 @@ impl Backend for NativeVideo {
         if out.len() < config.coded.nv12_bytes() {
             return Err(BackendError::Invalid);
         }
-        let image = self
-            .resources
-            .surfaces
-            .get(index)
-            .and_then(|surface| surface.image)
-            .ok_or(BackendError::Invalid)?;
-        let reply = self.exchange(
-            "image descriptor",
-            self.root_handle()?,
-            Message::image(977, image),
-            33,
-            false,
-        )?;
-        let descriptor: [u8; 128] = reply.data[..128].try_into().unwrap();
-        log(&format!(
-            "native-video: surface{index} descriptor {descriptor:02x?}"
-        ));
-        self.resources.surfaces[index].descriptor = descriptor;
-        let layout = match untile::Image::decode(&descriptor) {
-            Ok(layout) => layout,
-            Err(untile::Error::Unsupported) => return Err(BackendError::Unsupported),
-            Err(untile::Error::Invalid) => return Err(self.unknown()),
-        };
+        let layout = self.layout(index)?;
         let Some(memory) = self.resources.surfaces[index].memory.as_ref() else {
             log("b2ar: readback surface memory missing");
             return Err(self.unknown());
@@ -657,18 +674,32 @@ impl Backend for NativeVideo {
                 )
             });
         copied.map_err(|_| self.unknown())?;
-        self.resources.surfaces[index].cpu_read = true;
-        Ok(())
+        self.consume(index)
+    }
+
+    fn bind(&mut self, index: usize) -> Result<Option<untile::Image>, BackendError> {
+        if !self.ready(index)? {
+            return Err(BackendError::Invalid);
+        }
+        let presentable = self.resources.surfaces[index]
+            .memory
+            .as_ref()
+            .is_some_and(NativeMemory::presentable);
+        if !presentable {
+            return Ok(None);
+        }
+        let layout = self.layout(index)?;
+        self.consume(index)?;
+        Ok(Some(layout))
     }
 
     fn release(&mut self, index: usize) -> Result<(), BackendError> {
         self.active()?;
-        if self.in_flight == 0
-            || !self
-                .resources
-                .surfaces
-                .get(index)
-                .is_some_and(|surface| surface.cpu_read)
+        if !self
+            .resources
+            .surfaces
+            .get(index)
+            .is_some_and(|surface| surface.consumed)
         {
             return Err(BackendError::Invalid);
         }
@@ -687,8 +718,7 @@ impl Backend for NativeVideo {
         )?;
         let fence = Fence::parse(&reply).map_err(|_| self.unknown())?;
         self.resources.surfaces[index].fence = Some(fence);
-        self.resources.surfaces[index].cpu_read = false;
-        self.in_flight -= 1;
+        self.resources.surfaces[index].consumed = false;
         Ok(())
     }
 
@@ -723,7 +753,7 @@ impl Backend for NativeVideo {
                 self.exchange("finalize", service, Message::empty(131), 0, false)?;
                 self.initialized = false;
             }
-            for index in (0..2).rev() {
+            for index in (0..RING).rev() {
                 self.close_surface(index)?;
             }
             if let Some(service) = self.service {

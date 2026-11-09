@@ -26,8 +26,15 @@ pub enum Error {
     ObservationOverflow,
 }
 
-pub fn pump_network<F: Files + Clone, B: Backend, S: Socket, D: Device, V: VideoChannel>(
-    session: &mut Session<'_, B, S, D, V>,
+pub fn pump_network<
+    F: Files + Clone,
+    B: Backend<N>,
+    S: Socket,
+    D: Device,
+    V: VideoChannel,
+    const N: usize,
+>(
+    session: &mut Session<'_, B, S, D, V, N>,
     client: &mut Client<F>,
     epoch: Epoch,
     now_ms: u64,
@@ -45,8 +52,15 @@ pub fn pump_network<F: Files + Clone, B: Backend, S: Socket, D: Device, V: Video
     result.map_err(Error::Media)
 }
 
-pub fn step<F: Files + Clone, B: Backend, S: Socket, D: Device, V: VideoChannel>(
-    session: &mut Session<'_, B, S, D, V>,
+pub fn step<
+    F: Files + Clone,
+    B: Backend<N>,
+    S: Socket,
+    D: Device,
+    V: VideoChannel,
+    const N: usize,
+>(
+    session: &mut Session<'_, B, S, D, V, N>,
     client: &mut Client<F>,
     renderer: &mut Renderer,
     input: &FrameInput,
@@ -86,8 +100,15 @@ pub fn step<F: Files + Clone, B: Backend, S: Socket, D: Device, V: VideoChannel>
     result.map_err(Error::Media)
 }
 
-pub fn close<F: Files + Clone, B: Backend, S: Socket, D: Device, V: VideoChannel>(
-    session: &mut Session<'_, B, S, D, V>,
+pub fn close<
+    F: Files + Clone,
+    B: Backend<N>,
+    S: Socket,
+    D: Device,
+    V: VideoChannel,
+    const N: usize,
+>(
+    session: &mut Session<'_, B, S, D, V, N>,
     client: &mut Client<F>,
     epoch: Epoch,
 ) -> Option<media_session::Closed<D>> {

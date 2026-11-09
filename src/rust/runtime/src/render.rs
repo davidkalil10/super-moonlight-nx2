@@ -250,6 +250,8 @@ struct Objects {
     retained: bool,
     config: Config,
     info: Info,
+    #[cfg(all(target_os = "none", feature = "native-video"))]
+    native: Option<native::Presenter>,
 }
 
 #[cfg(all(target_os = "none", feature = "native-video"))]
@@ -341,6 +343,8 @@ impl Renderer {
                 sequence: 0,
                 rebuild: false,
                 retained: false,
+                #[cfg(all(target_os = "none", feature = "native-video"))]
+                native: None,
                 config,
                 info: Info::default(),
             })),
@@ -377,40 +381,45 @@ impl Renderer {
         Ok(self.objects.info)
     }
 
+    fn acquire_slot(&mut self) -> Result<usize, Error> {
+        self.objects.collect(0)?;
+        if let Some(slot) = self.objects.free_slot() {
+            return Ok(slot);
+        }
+        let deadline = sdk::now_ns().saturating_add(self.objects.config.upload_wait_ns);
+        for index in 0..2 {
+            let budget = deadline.saturating_sub(sdk::now_ns());
+            if budget == 0 {
+                break;
+            }
+            if self.objects.flights[index].slot == self.objects.current_slot {
+                continue;
+            }
+            match self.objects.wait_flight(index, budget) {
+                Ok(()) | Err(Error::Busy) => {}
+                Err(error) => return Err(error),
+            }
+            if self.objects.free_slot().is_some() {
+                break;
+            }
+        }
+        match self.objects.free_slot() {
+            Some(slot) => Ok(slot),
+            None => {
+                self.objects.info.busy_uploads += 1;
+                Err(Error::Busy)
+            }
+        }
+    }
+
     pub fn upload(&mut self, frame: &Frame<'_>) -> Result<usize, Error> {
         self.active()?;
         frame.plan()?;
-        self.objects.collect(0)?;
-        let slot = self.objects.free_slot();
-        let slot = match slot {
-            Some(slot) => slot,
-            None => {
-                let deadline = sdk::now_ns().saturating_add(self.objects.config.upload_wait_ns);
-                for index in 0..2 {
-                    let budget = deadline.saturating_sub(sdk::now_ns());
-                    if budget == 0 {
-                        break;
-                    }
-                    if self.objects.flights[index].slot == self.objects.current_slot {
-                        continue;
-                    }
-                    match self.objects.wait_flight(index, budget) {
-                        Ok(()) | Err(Error::Busy) => {}
-                        Err(error) => return Err(error),
-                    }
-                    if self.objects.free_slot().is_some() {
-                        break;
-                    }
-                }
-                match self.objects.free_slot() {
-                    Some(slot) => slot,
-                    None => {
-                        self.objects.info.busy_uploads += 1;
-                        return Err(Error::Busy);
-                    }
-                }
-            }
-        };
+        let slot = self.acquire_slot()?;
+        #[cfg(all(target_os = "none", feature = "native-video"))]
+        if let Some(native) = self.objects.native.as_mut() {
+            native.forget_slot(slot);
+        }
         let offset = frame::FRAMES_OFFSET + slot * frame::FRAME_BYTES;
         let layout = frame
             .copy_to(&mut self.objects.storage.bytes_mut()[offset..offset + frame::FRAME_BYTES])?;
@@ -1101,8 +1110,20 @@ impl Objects {
                     return Err(error.into());
                 }
             };
-            self.pipelines[1] = self.graphics_pipeline(modules[1], modules[2], false)?;
-            self.pipelines[2] = self.graphics_pipeline(modules[3], modules[4], true)?;
+            self.pipelines[1] = self.graphics_pipeline(
+                modules[1],
+                modules[2],
+                false,
+                self.pipeline_layout,
+                self.pipeline_cache,
+            )?;
+            self.pipelines[2] = self.graphics_pipeline(
+                modules[3],
+                modules[4],
+                true,
+                self.pipeline_layout,
+                self.pipeline_cache,
+            )?;
             Ok(())
         })();
         for module in modules {
@@ -1120,6 +1141,8 @@ impl Objects {
         vertex: vk::ShaderModule,
         fragment: vk::ShaderModule,
         blended: bool,
+        layout: vk::PipelineLayout,
+        cache: vk::PipelineCache,
     ) -> Result<vk::Pipeline, Error> {
         let stages = [
             vk::PipelineShaderStageCreateInfo::default()
@@ -1161,15 +1184,14 @@ impl Objects {
             .multisample_state(&multisample)
             .color_blend_state(&blend)
             .dynamic_state(&dynamic)
-            .layout(self.pipeline_layout)
+            .layout(layout)
             .render_pass(self.pass)
             .base_pipeline_index(-1);
         match unsafe {
-            create!(self.device().create_graphics_pipelines(
-                self.pipeline_cache,
-                &[info],
-                allocator()
-            ))
+            create!(
+                self.device()
+                    .create_graphics_pipelines(cache, &[info], allocator())
+            )
         } {
             Ok(pipelines) => Ok(pipelines[0]),
             Err((pipelines, error)) => {
@@ -1734,7 +1756,13 @@ impl Objects {
                 }],
             );
             self.device().cmd_set_scissor(command, 0, &[area]);
-            if let Some(slot) = self.current_slot {
+            #[cfg(all(target_os = "none", feature = "native-video"))]
+            let native = self
+                .current_slot
+                .is_some_and(|slot| self.record_native(command, slot));
+            #[cfg(not(all(target_os = "none", feature = "native-video")))]
+            let native = false;
+            if let Some(slot) = self.current_slot.filter(|_| !native) {
                 self.device().cmd_bind_pipeline(
                     command,
                     vk::PipelineBindPoint::GRAPHICS,
@@ -1885,6 +1913,10 @@ impl Objects {
                     device.destroy_semaphore(flight.acquired, allocator());
                 }
                 device.destroy_command_pool(self.command_pool, allocator());
+                #[cfg(all(target_os = "none", feature = "native-video"))]
+                if let Some(native) = self.native.take() {
+                    native.destroy(&device);
+                }
                 for pipeline in self.pipelines {
                     device.destroy_pipeline(pipeline, allocator());
                 }

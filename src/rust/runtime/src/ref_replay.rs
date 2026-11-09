@@ -16,7 +16,7 @@ use alloc::{format, vec};
 use core::cell::Cell;
 use moonlight_nx2_core::{
     codec::{Capabilities, Codec, Depth, Evidence, Mode, Size},
-    decoder::{self, Backend, BackendError, Backing, Config, FrameRegistration, SURFACES},
+    decoder::{self, Backend, BackendError, Backing, Config, FrameRegistration},
     frame::Matrix,
     media::Header,
     video_wire::Output,
@@ -75,7 +75,7 @@ pub fn run(renderer: &mut Renderer) -> bool {
 }
 
 /// Feeds one clip's access units in order and logs the decoder's output sums.
-pub fn replay<B: Backend>(
+pub fn replay<B: Backend<N>, const N: usize>(
     renderer: &mut Renderer,
     backend: B,
     backing: Backing,
@@ -149,9 +149,9 @@ pub fn replay<B: Backend>(
     result.is_ok() && closed.is_ok() && stats.decoded == u64::from(clip.units)
 }
 
-fn feed<B: Backend>(
+fn feed<B: Backend<N>, const N: usize>(
     renderer: &mut Renderer,
-    video: &mut Video<'_, B>,
+    video: &mut Video<'_, B, N>,
     clip: &Clip<'_>,
 ) -> Result<(), video::Error> {
     for (index, (pts_us, unit)) in clip.iter().enumerate() {
@@ -185,7 +185,10 @@ fn feed<B: Backend>(
     Ok(())
 }
 
-fn step<B: Backend>(renderer: &mut Renderer, video: &mut Video<'_, B>) -> Result<(), video::Error> {
+fn step<B: Backend<N>, const N: usize>(
+    renderer: &mut Renderer,
+    video: &mut Video<'_, B, N>,
+) -> Result<(), video::Error> {
     if sdk::process_retired() || !unsafe { sdk::appletMainLoop() } {
         return Err(video::Error::Closed);
     }
@@ -253,30 +256,30 @@ impl<'a> Clip<'a> {
 }
 
 /// Forwards to any backend and logs CRC-32s of the displayed area of each NV12 readback.
-pub struct Checksummed<B> {
+pub struct Checksummed<B, const N: usize> {
     inner: B,
     name: &'static str,
     config: Option<Config>,
-    images: [u32; SURFACES],
-    stamps: [u64; SURFACES],
+    images: [u32; N],
+    stamps: [u64; N],
     frames: u32,
 }
 
-impl<B: Backend> Checksummed<B> {
+impl<B: Backend<N>, const N: usize> Checksummed<B, N> {
     pub fn new(inner: B, name: &'static str) -> Self {
         Self {
             inner,
             name,
             config: None,
-            images: [0; SURFACES],
-            stamps: [0; SURFACES],
+            images: [0; N],
+            stamps: [0; N],
             frames: 0,
         }
     }
 }
 
-impl<B: Backend> Backend for Checksummed<B> {
-    fn open(&mut self, config: Config) -> Result<[u32; SURFACES], BackendError> {
+impl<B: Backend<N>, const N: usize> Backend<N> for Checksummed<B, N> {
+    fn open(&mut self, config: Config) -> Result<[u32; N], BackendError> {
         let images = self.inner.open(config)?;
         self.config = Some(config);
         self.images = images;

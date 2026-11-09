@@ -8,7 +8,7 @@ use moonlight_nx2_app::{
     policy::Observation,
     service::RuntimeEvent,
 };
-use moonlight_nx2_core::decoder::Backend;
+use moonlight_nx2_core::decoder::{Backend, SURFACES};
 use moonlight_nx2_io::{audio::Device, socket::Socket};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -29,16 +29,25 @@ pub struct Closed<D> {
     pub decoder: Result<(), video::Error>,
 }
 
-pub struct Session<'a, B: Backend, S: Socket, D: Device, V: VideoChannel> {
-    video: Video<'a, B>,
+pub struct Session<
+    'a,
+    B: Backend<N>,
+    S: Socket,
+    D: Device,
+    V: VideoChannel,
+    const N: usize = SURFACES,
+> {
+    video: Video<'a, B, N>,
     media: Option<Media<'a, S, D, V>>,
     closing: bool,
     ended: bool,
     failure: Option<Error>,
 }
 
-impl<'a, B: Backend, S: Socket, D: Device, V: VideoChannel> Session<'a, B, S, D, V> {
-    pub fn new(video: Video<'a, B>, media: Media<'a, S, D, V>) -> Self {
+impl<'a, B: Backend<N>, S: Socket, D: Device, V: VideoChannel, const N: usize>
+    Session<'a, B, S, D, V, N>
+{
+    pub fn new(video: Video<'a, B, N>, media: Media<'a, S, D, V>) -> Self {
         Self {
             video,
             media: Some(media),
@@ -189,7 +198,9 @@ impl<'a, B: Backend, S: Socket, D: Device, V: VideoChannel> Session<'a, B, S, D,
     }
 }
 
-impl<B: Backend, S: Socket, D: Device, V: VideoChannel> Drop for Session<'_, B, S, D, V> {
+impl<B: Backend<N>, S: Socket, D: Device, V: VideoChannel, const N: usize> Drop
+    for Session<'_, B, S, D, V, N>
+{
     fn drop(&mut self) {
         if self
             .close(&mut |_| {})

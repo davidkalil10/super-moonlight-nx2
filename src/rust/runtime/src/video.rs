@@ -10,7 +10,7 @@ use alloc::format;
 use core::cell::Cell;
 use moonlight_nx2_core::{
     codec::{Capabilities, Depth},
-    decoder::{self, Backend, Decoder},
+    decoder::{self, Backend, Decoder, FrameInfo, FrameToken, SURFACES},
     frame::{Frame, Matrix, Plane},
     media::Header,
 };
@@ -38,6 +38,7 @@ pub struct Stats {
     pub uploaded: u64,
     pub dropped: u64,
     pub presented: u64,
+    pub zero_copy: u64,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -54,27 +55,102 @@ struct Arrival {
     submitted_ns: u64,
 }
 
-pub struct Video<'a, B: Backend> {
-    decoder: Decoder<'a, B>,
+#[cfg(feature = "diagnostic-native-decode")]
+#[derive(Default)]
+struct Timing {
+    window_ns: u64,
+    logged: u64,
+    frames: u64,
+    decode_us: u64,
+    decode_max_us: u64,
+    latency_us: u64,
+    latency_max_us: u64,
+    last_present_ns: u64,
+    interval_max_us: u64,
+}
+
+#[cfg(feature = "diagnostic-native-decode")]
+impl Timing {
+    fn record(&mut self, pts_us: u64, submitted: u64, decoded: u64, started: u64, returned: u64) {
+        let decode_us = decoded.saturating_sub(submitted) / 1000;
+        let latency_us = returned.saturating_sub(submitted) / 1000;
+        let interval_us = if self.last_present_ns == 0 {
+            0
+        } else {
+            returned.saturating_sub(self.last_present_ns) / 1000
+        };
+        if self.logged < 120 {
+            self.logged += 1;
+            platform::log(&format!(
+                "video-timing: pts_us={pts_us} present_return_ns={returned} submit_to_readback_us={decode_us} present_call_us={} submit_to_present_return_us={latency_us}",
+                returned.saturating_sub(started) / 1000
+            ));
+        }
+        self.last_present_ns = returned;
+        self.frames += 1;
+        self.decode_us += decode_us;
+        self.decode_max_us = self.decode_max_us.max(decode_us);
+        self.latency_us += latency_us;
+        self.latency_max_us = self.latency_max_us.max(latency_us);
+        self.interval_max_us = self.interval_max_us.max(interval_us);
+    }
+
+    fn summarize(&mut self, now: u64, stats: &Stats) {
+        if self.window_ns == 0 {
+            self.window_ns = now;
+            return;
+        }
+        let elapsed = now.saturating_sub(self.window_ns);
+        if elapsed < 1_000_000_000 {
+            return;
+        }
+        let frames = self.frames.max(1);
+        platform::log(&format!(
+            "video-pace: window_ms={} presented={} fps_x10={} decode_mean_us={} decode_max_us={} latency_mean_us={} latency_max_us={} interval_max_us={} zero_copy_total={} dropped_total={}",
+            elapsed / 1_000_000,
+            self.frames,
+            self.frames * 10_000_000_000 / elapsed,
+            self.decode_us / frames,
+            self.decode_max_us,
+            self.latency_us / frames,
+            self.latency_max_us,
+            self.interval_max_us,
+            stats.zero_copy,
+            stats.dropped
+        ));
+        *self = Self {
+            window_ns: now,
+            logged: self.logged,
+            last_present_ns: self.last_present_ns,
+            ..Self::default()
+        };
+    }
+}
+
+pub struct Video<'a, B: Backend<N>, const N: usize = SURFACES> {
+    decoder: Decoder<'a, B, N>,
     matrix: Matrix,
     failure: Option<Error>,
     pending: bool,
     closed: bool,
     stats: Stats,
-    arrivals: [Option<Arrival>; decoder::SURFACES],
+    arrivals: [Option<Arrival>; decoder::UNITS],
+    bound: [Option<FrameToken>; N],
     pending_arrival: Option<u64>,
     #[cfg(feature = "diagnostic-native-decode")]
     pending_timing: Option<(u64, u64, u64)>,
+    #[cfg(feature = "diagnostic-native-decode")]
+    timing: Timing,
     presentation: Option<Presentation>,
 }
 
-impl<'a, B: Backend> Video<'a, B> {
+impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
     pub fn open(
         backend: B,
         config: Config,
         capabilities: &Capabilities,
         retired: &'a Cell<bool>,
-        frames: [&'a mut [u8]; 2],
+        frames: [&'a mut [u8]; decoder::FRAMES],
     ) -> Result<Self, Error> {
         if !capabilities.supports(
             config.decoder.codec,
@@ -88,7 +164,7 @@ impl<'a, B: Backend> Video<'a, B> {
             retired.set(true);
             return Err(Error::Decoder(decoder::Error::Retired));
         }
-        let decoder = match Decoder::open(backend, config.decoder, retired, frames) {
+        let mut decoder = match Decoder::open(backend, config.decoder, retired, frames) {
             Ok(decoder) => decoder,
             Err(error) => {
                 if retired.get() {
@@ -97,6 +173,10 @@ impl<'a, B: Backend> Video<'a, B> {
                 return Err(Error::Decoder(error));
             }
         };
+        decoder.set_zero_copy(
+            cfg!(all(target_os = "none", feature = "native-video"))
+                && config.decoder.backing == decoder::Backing::NativeGpu,
+        );
         Ok(Self {
             decoder,
             matrix: config.matrix,
@@ -104,12 +184,19 @@ impl<'a, B: Backend> Video<'a, B> {
             pending: false,
             closed: false,
             stats: Stats::default(),
-            arrivals: [None; decoder::SURFACES],
+            arrivals: [None; decoder::UNITS],
+            bound: [None; N],
             pending_arrival: None,
             #[cfg(feature = "diagnostic-native-decode")]
             pending_timing: None,
+            #[cfg(feature = "diagnostic-native-decode")]
+            timing: Timing::default(),
             presentation: None,
         })
+    }
+
+    pub fn set_zero_copy(&mut self, enabled: bool) {
+        self.decoder.set_zero_copy(enabled);
     }
 
     pub fn stats(&self) -> Stats {
@@ -186,79 +273,128 @@ impl<'a, B: Backend> Video<'a, B> {
         }
     }
 
+    fn release_bound(&mut self, renderer: &mut Renderer) -> Result<(), Error> {
+        for surface in 0..N {
+            let Some(token) = self.bound[surface] else {
+                continue;
+            };
+            if native_busy(renderer, surface).map_err(|error| self.fail(Error::Renderer(error)))? {
+                continue;
+            }
+            self.bound[surface] = None;
+            self.decoder
+                .release(token)
+                .map_err(|error| self.fail(Error::Decoder(error)))?;
+        }
+        Ok(())
+    }
+
+    fn upload(&mut self, renderer: &mut Renderer, info: &FrameInfo) -> Result<bool, Error> {
+        if let (Some(image), Some(surface)) = (info.bound, info.token.surface()) {
+            let uploaded = native_upload(renderer, surface, image, info, self.matrix);
+            return match uploaded {
+                Ok(()) => {
+                    self.bound[surface] = Some(info.token);
+                    self.stats.zero_copy += 1;
+                    Ok(true)
+                }
+                Err(render::Error::Busy) => {
+                    self.decoder
+                        .release(info.token)
+                        .map_err(|error| self.fail(Error::Decoder(error)))?;
+                    Ok(false)
+                }
+                Err(error) => {
+                    let _ = self.decoder.release(info.token);
+                    Err(self.fail(Error::Renderer(error)))
+                }
+            };
+        }
+
+        let bytes = match self.decoder.frame(info.token) {
+            Ok(bytes) => bytes,
+            Err(error) => return Err(self.fail(Error::Decoder(error))),
+        };
+        let luma_bytes = info.coded.width() as usize * info.coded.height() as usize;
+        let (luma, chroma) = bytes.split_at(luma_bytes);
+        let frame = Frame {
+            luma: Plane {
+                bytes: luma,
+                stride: info.coded.width(),
+            },
+            chroma: Plane {
+                bytes: chroma,
+                stride: info.coded.width(),
+            },
+            coded_width: info.coded.width(),
+            coded_height: info.coded.height(),
+            crop_left: 0,
+            crop_top: 0,
+            display_width: info.display.width(),
+            display_height: info.display.height(),
+            matrix: self.matrix,
+            full_range: false,
+            timestamp_ns: info.timestamp_ns,
+        };
+        let uploaded = renderer.upload(&frame);
+        self.decoder
+            .release(info.token)
+            .map_err(|error| self.fail(Error::Decoder(error)))?;
+        match uploaded {
+            Ok(_) => Ok(true),
+            Err(render::Error::Busy) => Ok(false),
+            Err(error) => Err(self.fail(Error::Renderer(error))),
+        }
+    }
+
     pub fn poll_upload(&mut self, renderer: &mut Renderer) -> Result<bool, Error> {
         self.active()?;
+        self.release_bound(renderer)?;
         let frame = self
             .decoder
             .poll()
             .map_err(|error| self.fail(Error::Decoder(error)))?;
-        if let Some(info) = frame {
-            self.stats.decoded += 1;
-            let Some(index) = self
-                .arrivals
-                .iter()
-                .position(|entry| entry.is_some_and(|arrival| arrival.pts_us == info.pts_us))
-            else {
-                return Err(self.fail(Error::Decoder(decoder::Error::Invalid)));
-            };
-            let arrival = self.arrivals[index].unwrap().received_us;
-            #[cfg(feature = "diagnostic-native-decode")]
-            let submitted_ns = self.arrivals[index].unwrap().submitted_ns;
-            #[cfg(feature = "diagnostic-native-decode")]
-            let decoded_ns = platform::now_ns();
-            self.stats.dropped += index as u64;
-            self.arrivals.rotate_left(index + 1);
-            for entry in self.arrivals.iter_mut().skip(decoder::SURFACES - index - 1) {
-                *entry = None;
+        let Some(info) = frame else {
+            return Ok(false);
+        };
+
+        self.stats.decoded += 1;
+        let Some(index) = self
+            .arrivals
+            .iter()
+            .position(|entry| entry.is_some_and(|arrival| arrival.pts_us == info.pts_us))
+        else {
+            if info.bound.is_some() {
+                let _ = self.decoder.release(info.token);
             }
-            let bytes = match self.decoder.frame(info.token) {
-                Ok(bytes) => bytes,
-                Err(error) => return Err(self.fail(Error::Decoder(error))),
-            };
-            let luma_bytes = info.coded.width() as usize * info.coded.height() as usize;
-            let (luma, chroma) = bytes.split_at(luma_bytes);
-            let frame = Frame {
-                luma: Plane {
-                    bytes: luma,
-                    stride: info.coded.width(),
-                },
-                chroma: Plane {
-                    bytes: chroma,
-                    stride: info.coded.width(),
-                },
-                coded_width: info.coded.width(),
-                coded_height: info.coded.height(),
-                crop_left: 0,
-                crop_top: 0,
-                display_width: info.display.width(),
-                display_height: info.display.height(),
-                matrix: self.matrix,
-                full_range: false,
-                timestamp_ns: info.timestamp_ns,
-            };
-            let uploaded = renderer.upload(&frame);
-            self.decoder
-                .release(info.token)
-                .map_err(|error| self.fail(Error::Decoder(error)))?;
-            match uploaded {
-                Ok(_) => {
-                    self.stats.uploaded += 1;
-                    if self.pending {
-                        self.stats.dropped += 1;
-                    }
-                    self.pending = true;
-                    self.pending_arrival = arrival;
-                    #[cfg(feature = "diagnostic-native-decode")]
-                    {
-                        self.pending_timing = Some((info.pts_us, submitted_ns, decoded_ns));
-                    }
-                    return Ok(true);
-                }
-                Err(render::Error::Busy) => self.stats.dropped += 1,
-                Err(error) => return Err(self.fail(Error::Renderer(error))),
-            }
+            return Err(self.fail(Error::Decoder(decoder::Error::Invalid)));
+        };
+        let arrival = self.arrivals[index].unwrap().received_us;
+        #[cfg(feature = "diagnostic-native-decode")]
+        let submitted_ns = self.arrivals[index].unwrap().submitted_ns;
+        #[cfg(feature = "diagnostic-native-decode")]
+        let decoded_ns = platform::now_ns();
+        self.stats.dropped += index as u64;
+        self.arrivals.rotate_left(index + 1);
+        for entry in self.arrivals.iter_mut().skip(decoder::UNITS - index - 1) {
+            *entry = None;
         }
-        Ok(false)
+
+        if !self.upload(renderer, &info)? {
+            self.stats.dropped += 1;
+            return Ok(false);
+        }
+        self.stats.uploaded += 1;
+        if self.pending {
+            self.stats.dropped += 1;
+        }
+        self.pending = true;
+        self.pending_arrival = arrival;
+        #[cfg(feature = "diagnostic-native-decode")]
+        {
+            self.pending_timing = Some((info.pts_us, submitted_ns, decoded_ns));
+        }
+        Ok(true)
     }
 
     pub fn present_pending(
@@ -278,18 +414,16 @@ impl<'a, B: Backend> Video<'a, B> {
                     #[cfg(feature = "diagnostic-native-decode")]
                     if let Some((pts, submitted, decoded)) = self.pending_timing.take() {
                         let returned = platform::now_ns();
-                        platform::log(&format!(
-                            "video-timing: pts_us={pts} present_return_ns={returned} submit_to_readback_us={} present_call_us={} submit_to_present_return_us={}",
-                            decoded.saturating_sub(submitted) / 1000,
-                            returned.saturating_sub(present_start_ns) / 1000,
-                            returned.saturating_sub(submitted) / 1000
-                        ));
+                        self.timing
+                            .record(pts, submitted, decoded, present_start_ns, returned);
                     }
                     self.presentation = Some(Presentation {
                         received_us: self.pending_arrival.take(),
                         presented_us: platform::now_ns() / 1000,
                     });
                 }
+                #[cfg(feature = "diagnostic-native-decode")]
+                self.timing.summarize(platform::now_ns(), &self.stats);
                 Ok(presented)
             }
             Err(render::Error::Busy) => Ok(false),
@@ -309,6 +443,13 @@ impl<'a, B: Backend> Video<'a, B> {
         if platform::process_retired() {
             self.decoder.retire();
         }
+        for token in self.bound.iter_mut().filter_map(Option::take) {
+            if let Err(error) = self.decoder.release(token) {
+                self.decoder.retire();
+                platform::retire_process();
+                return Err(self.fail(Error::Decoder(error)));
+            }
+        }
         if let Err(error) = self.decoder.close() {
             self.decoder.retire();
             platform::retire_process();
@@ -316,6 +457,7 @@ impl<'a, B: Backend> Video<'a, B> {
         }
         self.closed = true;
         self.arrivals.fill(None);
+        self.bound.fill(None);
         self.pending_arrival = None;
         #[cfg(feature = "diagnostic-native-decode")]
         {
@@ -328,7 +470,7 @@ impl<'a, B: Backend> Video<'a, B> {
         &'t mut self,
         renderer: &'t mut Renderer,
         interactive: bool,
-    ) -> Tick<'t, 'a, B> {
+    ) -> Tick<'t, 'a, B, N> {
         Tick {
             video: self,
             renderer,
@@ -337,7 +479,7 @@ impl<'a, B: Backend> Video<'a, B> {
         }
     }
 
-    pub fn consume_tick<'t>(&'t mut self, renderer: &'t mut Renderer) -> Tick<'t, 'a, B> {
+    pub fn consume_tick<'t>(&'t mut self, renderer: &'t mut Renderer) -> Tick<'t, 'a, B, N> {
         Tick {
             video: self,
             renderer,
@@ -347,7 +489,7 @@ impl<'a, B: Backend> Video<'a, B> {
     }
 }
 
-impl<B: Backend> Drop for Video<'_, B> {
+impl<B: Backend<N>, const N: usize> Drop for Video<'_, B, N> {
     fn drop(&mut self) {
         if !self.closed && self.close().is_err() {
             platform::log("video: teardown retained; exit process");
@@ -355,14 +497,14 @@ impl<B: Backend> Drop for Video<'_, B> {
     }
 }
 
-pub struct Tick<'t, 'a, B: Backend> {
-    video: &'t mut Video<'a, B>,
+pub struct Tick<'t, 'a, B: Backend<N>, const N: usize = SURFACES> {
+    video: &'t mut Video<'a, B, N>,
     renderer: &'t mut Renderer,
     interactive: bool,
     present: bool,
 }
 
-impl<B: Backend> Tick<'_, '_, B> {
+impl<B: Backend<N>, const N: usize> Tick<'_, '_, B, N> {
     pub fn submit(&mut self, header: &Header, bytes: &[u8]) -> moonlight_nx2_app::media::Submit {
         self.submit_timed(header, bytes, None)
     }
@@ -385,7 +527,7 @@ impl<B: Backend> Tick<'_, '_, B> {
     }
 }
 
-impl<B: Backend> moonlight_nx2_app::media::Decoder for Tick<'_, '_, B> {
+impl<B: Backend<N>, const N: usize> moonlight_nx2_app::media::Decoder for Tick<'_, '_, B, N> {
     fn pending(&mut self) -> bool {
         self.video.pending()
     }
@@ -416,4 +558,36 @@ impl<B: Backend> moonlight_nx2_app::media::Decoder for Tick<'_, '_, B> {
             Err(_) => moonlight_nx2_app::media::Poll::Failed,
         }
     }
+}
+
+#[cfg(all(target_os = "none", feature = "native-video"))]
+fn native_busy(renderer: &mut Renderer, surface: usize) -> Result<bool, render::Error> {
+    renderer.native_busy(surface)
+}
+
+#[cfg(not(all(target_os = "none", feature = "native-video")))]
+fn native_busy(_renderer: &mut Renderer, _surface: usize) -> Result<bool, render::Error> {
+    Ok(false)
+}
+
+#[cfg(all(target_os = "none", feature = "native-video"))]
+fn native_upload(
+    renderer: &mut Renderer,
+    surface: usize,
+    image: moonlight_nx2_core::untile::Image,
+    info: &FrameInfo,
+    matrix: Matrix,
+) -> Result<(), render::Error> {
+    renderer.upload_native(surface, image, info.display, matrix)
+}
+
+#[cfg(not(all(target_os = "none", feature = "native-video")))]
+fn native_upload(
+    _renderer: &mut Renderer,
+    _surface: usize,
+    _image: moonlight_nx2_core::untile::Image,
+    _info: &FrameInfo,
+    _matrix: Matrix,
+) -> Result<(), render::Error> {
+    Err(render::Error::Unsupported)
 }
