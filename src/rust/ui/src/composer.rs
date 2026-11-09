@@ -1092,7 +1092,7 @@ impl Builder<'_> {
             chips: &chips,
             keys,
             background: COLOR_BACKGROUND,
-            cursor_home: 2,
+            cursor_home: 3,
             ..Default::default()
         });
         let line = "Remove keeps pairing; unpair makes the PC forget this console";

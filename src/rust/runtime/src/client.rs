@@ -111,6 +111,8 @@ pub struct Client<F> {
     ui_schedule: crate::hid::UiSchedule,
     menu_chord: crate::hid::MenuChord,
     stats_epoch: Option<moonlight_nx2_app::policy::Epoch>,
+    network_stats: Option<moonlight_nx2_app::metrics::Second>,
+    native_stats: Option<moonlight_nx2_core::stats::StreamStats>,
     badge: crate::policy_badge::Badge,
 }
 
@@ -169,6 +171,43 @@ fn ui_capabilities(context: &moonlight_nx2_app::policy::Context) -> Capabilities
     result
 }
 
+fn stream_stats_text(
+    network: Option<moonlight_nx2_app::metrics::Second>,
+    native: Option<moonlight_nx2_core::stats::StreamStats>,
+) -> alloc::string::String {
+    let fps = native
+        .map(|s| alloc::format!("{}.{:01}", s.fps_x10 / 10, s.fps_x10 % 10))
+        .or_else(|| {
+            network.filter(|s| s.elapsed_us > 0).map(|s| {
+                alloc::format!(
+                    "{}",
+                    u128::from(s.presented) * 1_000_000 / u128::from(s.elapsed_us)
+                )
+            })
+        })
+        .unwrap_or_else(|| alloc::string::String::from("--"));
+    let bitrate = network
+        .filter(|s| s.elapsed_us > 0)
+        .map(|s| alloc::format!("{}", u128::from(s.bytes) * 8_000 / u128::from(s.elapsed_us)))
+        .unwrap_or_else(|| alloc::string::String::from("--"));
+    let millis = |us: u32| alloc::format!("{}.{:01}", us / 1000, (us % 1000) / 100);
+    let decode = native
+        .filter(|s| s.presented > 0)
+        .map(|s| millis(s.decode_mean_us))
+        .unwrap_or_else(|| alloc::string::String::from("--"));
+    let present = native
+        .filter(|s| s.presented > 0)
+        .map(|s| millis(s.latency_mean_us))
+        .unwrap_or_else(|| alloc::string::String::from("--"));
+    let input = native
+        .filter(|s| s.input_mean_us != 0 || s.input_max_us != 0)
+        .map(|s| millis(s.input_mean_us))
+        .unwrap_or_else(|| alloc::string::String::from("--"));
+    alloc::format!(
+        "FPS {fps} | {bitrate} kbps | Decode {decode} ms | Present {present} ms | Input {input} ms"
+    )
+}
+
 fn storage(bytes: &mut [u8]) -> Result<&mut Storage, Error> {
     bytes.try_into().map_err(|_| Error::Storage)
 }
@@ -206,6 +245,8 @@ impl<F: Files + Clone> Client<F> {
             ui_schedule: crate::hid::UiSchedule::default(),
             menu_chord: crate::hid::MenuChord::default(),
             stats_epoch: None,
+            network_stats: None,
+            native_stats: None,
             badge: crate::policy_badge::Badge::default(),
         })
     }
@@ -267,8 +308,9 @@ impl<F: Files + Clone> Client<F> {
         let epoch = self.driver.session_epoch();
         if self.stats_epoch != epoch {
             self.stats_epoch = epoch;
-            self.bridge
-                .set_stream_stats("FPS --   Bitrate --   Latency --");
+            self.network_stats = None;
+            self.native_stats = None;
+            self.refresh_stream_stats();
         }
         let storage = storage(bytes)?;
         let active = self.bridge.model().screen() == Screen::Streaming
@@ -327,6 +369,23 @@ impl<F: Files + Clone> Client<F> {
         self.driver.next_policy_output()
     }
 
+    fn refresh_stream_stats(&mut self) {
+        self.bridge
+            .set_stream_stats(&stream_stats_text(self.network_stats, self.native_stats));
+    }
+
+    pub fn update_native_stats(&mut self, stats: Option<moonlight_nx2_core::stats::StreamStats>) {
+        let stats = if self.driver.session_epoch().is_some() {
+            stats
+        } else {
+            None
+        };
+        if self.native_stats != stats {
+            self.native_stats = stats;
+            self.refresh_stream_stats();
+        }
+    }
+
     pub fn paint_policy(
         &mut self,
         bytes: &mut [u8],
@@ -335,31 +394,8 @@ impl<F: Files + Clone> Client<F> {
         if let moonlight_nx2_app::policy::Feedback::Metrics { epoch, report } = feedback
             && self.driver.session_epoch() == Some(epoch)
         {
-            let second = report.second;
-            let (fps, kbps) = if second.elapsed_us == 0 {
-                (
-                    alloc::string::String::from("--"),
-                    alloc::string::String::from("--"),
-                )
-            } else {
-                (
-                    alloc::format!(
-                        "{}",
-                        u128::from(second.presented) * 1_000_000 / u128::from(second.elapsed_us)
-                    ),
-                    alloc::format!(
-                        "{}",
-                        u128::from(second.bytes) * 8_000 / u128::from(second.elapsed_us)
-                    ),
-                )
-            };
-            let latency = second
-                .receive_to_present
-                .map(|value| alloc::format!("{} ms", value.mean_ms()))
-                .unwrap_or_else(|| alloc::string::String::from("--"));
-            self.bridge.set_stream_stats(&alloc::format!(
-                "FPS {fps}   Bitrate {kbps} kbps   Receive to present {latency}"
-            ));
+            self.network_stats = Some(report.second);
+            self.refresh_stream_stats();
         }
         let storage = badge_storage(bytes)?;
         Ok(self.badge.apply(
@@ -430,5 +466,28 @@ impl<F: Files + Clone> Client<F> {
         self.badge.stop(badge_storage(bytes)?);
         self.bridge.close(bytes);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod overlay_stats_tests {
+    use super::*;
+
+    #[test]
+    fn native_timing_is_displayed_only_when_observed() {
+        let unknown = stream_stats_text(None, None);
+        assert!(unknown.contains("Present -- ms"));
+        let native = moonlight_nx2_core::stats::StreamStats {
+            fps_x10: 599,
+            decode_mean_us: 1250,
+            latency_mean_us: 3450,
+            presented: 60,
+            ..Default::default()
+        };
+        let text = stream_stats_text(None, Some(native));
+        assert!(text.contains("FPS 59.9"));
+        assert!(text.contains("Decode 1.2 ms"));
+        assert!(text.contains("Present 3.4 ms"));
+        assert!(text.contains("Input -- ms"));
     }
 }

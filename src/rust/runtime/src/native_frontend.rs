@@ -327,6 +327,8 @@ fn execute(
         }
         stream.pump(&mut app.client, now_ms);
         stream.step(&mut app.client, renderer, &input, now_ms, frame.interactive);
+        app.client
+            .update_native_stats(crate::stream_stats::latest());
         let compute = app.client.needs_ui_compute(&input, &frame);
         if let Err(error) = renderer.present(compute) {
             if error != crate::render::Error::Busy {

@@ -614,6 +614,7 @@ impl Service {
             IntentKind::StopStream => self.stop_stream(),
             IntentKind::CancelList => self.abandon(Op::List),
             IntentKind::CancelPair => self.cancel_pair(),
+            IntentKind::RememberHost => self.act(Action::RememberHost(host)),
             IntentKind::RemoveHost => self.act(Action::ForgetHost(host)),
             IntentKind::RenameHost => self.act(Action::RenameHost(host)),
             IntentKind::RefreshHosts => self.act(Action::RefreshHosts),
