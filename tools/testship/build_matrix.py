@@ -18,6 +18,10 @@ ALIAS = "/Users/azkali/claude-builds/moonlight/20261109T141228Z-ae67243-sdk-back
 DOCKER_IMAGE = "sha256:1fc388c3a0d34bd2045a6dadcb1020e069d5f876a187fd705de14b4440c00282"
 SDK_SHA256 = "0dd4be44ad73471969aac593ca1b03179f90e2014e1583c6c6249da4eeeeead7"
 ALIAS_SHA256 = "b33546d8f616e135257a27b5606992a2b8a9708dc8d11e8343b55faa34176531"
+UPSTREAM = "/media/storage2/builds/moonlight/20261107T200357Z-19b4f09-helper/upstream"
+UPSTREAM_BUILD = "/media/storage2/builds/moonlight/20261109T080033Z-ae67243-worker2-upstream-pic/build"
+NATIVE_LIBS = "/media/storage2/builds/moonlight/20261109T085525Z-ae67243-worker2-not-paired-full/native-lib"
+NATIVE_INCLUDES = "/media/storage2/builds/moonlight/20261109T081906Z-ae67243-worker2-opus-headers/include"
 TARGETS = ("production", "frontend", "native-decode", "ref-replay", "audio-cue", "io")
 
 
@@ -170,7 +174,11 @@ def main():
                                       "exit_code": test_status}
     print(f"{'PASS' if not test_status else 'FAIL'} host-test", flush=True)
 
-    worker_clippy = quote(["cargo", "clippy", "--manifest-path", manifest,
+    clippy_env = ["env", f"MOONLIGHT_UPSTREAM_DIR={UPSTREAM}",
+                  f"MOONLIGHT_UPSTREAM_BUILD={UPSTREAM_BUILD}",
+                  f"MOONLIGHT_NATIVE_LIB_DIR={NATIVE_LIBS}",
+                  f"MOONLIGHT_NATIVE_INCLUDE_DIR={NATIVE_INCLUDES}"]
+    worker_clippy = quote([*clippy_env, "cargo", "clippy", "--manifest-path", manifest,
                            "-p", "moonlight-nx2-host", "--bin", "moonlight-nx2-upstream-worker",
                            "--features", "upstream-worker", "--all-targets", "--offline", "--locked",
                            "--", "-D", "warnings"])
