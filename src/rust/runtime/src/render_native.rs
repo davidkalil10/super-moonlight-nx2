@@ -435,6 +435,7 @@ impl NativeOwner {
             .checked_add(alignment - 1)
             .ok_or(BackendError::Invalid)?
             .max(minimum);
+        #[cfg(feature = "diagnostic-native-decode")]
         log(&format!("b2ar: before vkAllocateMemory bytes={size}"));
         let memory = match unsafe {
             self.device.allocate_memory(
@@ -461,6 +462,7 @@ impl NativeOwner {
         if sdk::process_retired() {
             return Err(BackendError::Uncertain);
         }
+        #[cfg(feature = "diagnostic-native-decode")]
         log("b2ar: vkAllocateMemory passed; before vkMapMemory");
         let mapped = unsafe {
             self.device
@@ -474,8 +476,10 @@ impl NativeOwner {
                 return Err(BackendError::Uncertain);
             }
         };
+        #[cfg(feature = "diagnostic-native-decode")]
         log("b2ar: vkMapMemory passed; before backing metadata query");
         let report = sdk_backing::query(memory.as_raw());
+        #[cfg(feature = "diagnostic-native-decode")]
         log(&format!(
             "b2ar: backing metadata result={} lock={} metadata={}",
             report.result, report.lock_status, report.metadata_status
@@ -488,6 +492,7 @@ impl NativeOwner {
             memory_type: self.memory_type,
         };
         if sdk_backing::compare(allocation, &report).is_err() || sdk::process_retired() {
+            log("native backing metadata validation failed");
             sdk::retire_process();
             return Err(BackendError::Uncertain);
         }

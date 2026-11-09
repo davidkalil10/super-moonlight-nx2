@@ -65,6 +65,7 @@ struct Surface {
     memory_id: Option<u32>,
     image: Option<u32>,
     fence: Option<Fence>,
+    #[cfg(feature = "diagnostic-native-decode")]
     descriptor: [u8; 128],
     consumed: bool,
 }
@@ -76,6 +77,7 @@ impl Default for Surface {
             memory_id: None,
             image: None,
             fence: None,
+            #[cfg(feature = "diagnostic-native-decode")]
             descriptor: [0; 128],
             consumed: false,
         }
@@ -159,7 +161,9 @@ impl NativeVideo {
     }
 
     fn result(&mut self, stage: &str, result: u32) -> Result<(), BackendError> {
-        log(&format!("native-video: {stage} result=0x{result:x}"));
+        if cfg!(feature = "diagnostic-native-decode") || result != 0 {
+            log(&format!("native-video: {stage} result=0x{result:x}"));
+        }
         if result == 0 {
             return Ok(());
         }
@@ -197,6 +201,7 @@ impl NativeVideo {
         words: u32,
         moved: bool,
     ) -> Result<Reply<'_>, BackendError> {
+        #[cfg(feature = "diagnostic-native-decode")]
         log(&format!("native-video: before {stage}"));
         let bytes = message.bytes();
         let tls = sdk::tls();
@@ -216,7 +221,9 @@ impl NativeVideo {
             return Err(self.unknown());
         };
         let result = parsed.result;
-        log(&format!("native-video: {stage} service=0x{result:x}"));
+        if cfg!(feature = "diagnostic-native-decode") || result != 0 {
+            log(&format!("native-video: {stage} service=0x{result:x}"));
+        }
         if result != 0 {
             return Err(self.unknown());
         }
@@ -288,9 +295,11 @@ impl NativeVideo {
         _uncached: bool,
         config: Config,
     ) -> Result<(), BackendError> {
+        #[cfg(feature = "diagnostic-native-decode")]
         log(&format!("b2ar: before Vulkan allocation surface={index}"));
         self.resources.surfaces[index].memory =
             Some(self.owner.allocate_surface(index, bytes, alignment)?);
+        #[cfg(feature = "diagnostic-native-decode")]
         log(&format!(
             "b2ar: Vulkan allocation and metadata passed surface={index}"
         ));
@@ -299,9 +308,11 @@ impl NativeVideo {
             return Err(self.unknown());
         };
         let info = memory.info;
+        #[cfg(feature = "diagnostic-native-decode")]
         log(&format!("native-video: surface{index} backing {info:?}"));
         unsafe { sdk::armDCacheFlush(memory.pointer(), bytes) };
         let mut memory_id = 0;
+        #[cfg(feature = "diagnostic-native-decode")]
         log(&format!(
             "b2ar: before reserve image memory surface={index}"
         ));
@@ -313,6 +324,7 @@ impl NativeVideo {
             return Err(self.unknown());
         }
         self.resources.surfaces[index].memory_id = Some(memory_id);
+        #[cfg(feature = "diagnostic-native-decode")]
         log(&format!(
             "b2ar: before register image memory surface={index}"
         ));
@@ -353,6 +365,7 @@ impl NativeVideo {
             return Err(self.unknown());
         };
         let pointer = workspace.pointer();
+        #[cfg(feature = "diagnostic-native-decode")]
         log(&format!(
             "b2ar: before transfer memory create bytes={bytes}"
         ));
@@ -402,6 +415,7 @@ impl NativeVideo {
                 false,
             )?;
             let fence = Fence::parse(&reply).map_err(|_| self.unknown())?;
+            #[cfg(feature = "diagnostic-native-decode")]
             log(&format!(
                 "native-video: image{index} initial fence {fence:?}"
             ));
@@ -486,6 +500,7 @@ impl NativeVideo {
             false,
         )?;
         let descriptor: [u8; 128] = reply.data[..128].try_into().unwrap();
+        #[cfg(feature = "diagnostic-native-decode")]
         if self.resources.surfaces[index].descriptor != descriptor {
             log(&format!(
                 "native-video: surface{index} descriptor {descriptor:02x?}"
@@ -556,6 +571,7 @@ impl Backend<RING> for NativeVideo {
         unsafe extern "C" {
             fn moonlightNativeOwnerSync() -> *mut sdk::Sync;
         }
+        #[cfg(feature = "diagnostic-native-decode")]
         log("b2ar: borrow renderer root and sync; no second GPU or sync open");
         if self.root_handle().is_err() {
             log("b2ar: renderer root unavailable");
@@ -567,6 +583,7 @@ impl Backend<RING> for NativeVideo {
             return Err(BackendError::Refused);
         };
         self.sync = Some(sync);
+        #[cfg(feature = "diagnostic-native-decode")]
         log("b2ar: renderer sync borrowed");
         let permitted = sdk::permitted_frame_mode().ok_or(BackendError::Invalid)?;
         if let FrameRegistration::Observed(mode) = config.frame_registration
@@ -574,22 +591,28 @@ impl Backend<RING> for NativeVideo {
         {
             return Err(BackendError::Invalid);
         }
+        #[cfg(feature = "diagnostic-native-decode")]
         log("b2ar: before decoder context; no nvOpen call");
         self.open_context()?;
+        #[cfg(feature = "diagnostic-native-decode")]
         log("b2ar: decoder context opened");
         let (bytes, alignment) = self.surface_sizes(config)?;
         for index in 0..RING {
+            #[cfg(feature = "diagnostic-native-decode")]
             log(&format!(
                 "b2ar: before backing surface={index} bytes={bytes} alignment={alignment}"
             ));
             self.create_surface(index, bytes, alignment, permitted & 2 != 0, config)?;
+            #[cfg(feature = "diagnostic-native-decode")]
             log(&format!("b2ar: backing surface={index} registered"));
         }
         for index in 0..2 {
             self.resources.inputs[index] = Some(Memory::new(wire::INPUT_MAX as usize, 0x1000)?);
         }
+        #[cfg(feature = "diagnostic-native-decode")]
         log("b2ar: before decoder service initialize/configure/register/start");
         self.open_service(config)?;
+        #[cfg(feature = "diagnostic-native-decode")]
         log("b2ar: decoder service started");
         let mut images = [0; RING];
         for (image, surface) in images.iter_mut().zip(&self.resources.surfaces) {
@@ -620,12 +643,14 @@ impl Backend<RING> for NativeVideo {
         self.next_input = (self.next_input + 1) % 2;
         let message = Message::submit(address, bytes.len() as u32, pts_us, false)
             .map_err(|_| BackendError::Invalid)?;
+        #[cfg(feature = "diagnostic-native-decode")]
         log(&format!(
             "b2ar: before submit pts_us={pts_us} bytes={}",
             bytes.len()
         ));
         let service = self.service.ok_or(BackendError::Invalid)?;
         self.exchange("submit", service, message, 1, false)?;
+        #[cfg(feature = "diagnostic-native-decode")]
         log(&format!("b2ar: submitted pts_us={pts_us}"));
         self.in_flight += 1;
         Ok(())
