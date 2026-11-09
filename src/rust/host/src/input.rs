@@ -2,6 +2,8 @@ use serde::{Deserialize, Deserializer, Serialize};
 
 const LIMIT: usize = 3840;
 const MAX_TOUCH: usize = 32;
+/// Host gamepads: the primary pad is 0, version-2 records add players 1 to 7.
+const PADS: usize = 8;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -28,6 +30,23 @@ impl Pad {
             right_stick_y: 0,
         }
     }
+}
+
+/// A version-2 player beyond the primary pad.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct IndexedPad {
+    index: usize,
+    pad: Pad,
+}
+
+/// A version-2 motion sample: 1/1000 m/s^2 and 1/1000 deg/s.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Motion {
+    index: usize,
+    accel: [i32; 3],
+    gyro: [i32; 3],
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -66,12 +85,60 @@ struct Record {
     touch: Option<Vec<Touch>>,
     #[serde(default, deserialize_with = "present")]
     stop: Option<bool>,
+    #[serde(default, deserialize_with = "present")]
+    pads: Option<Vec<IndexedPad>>,
+    #[serde(default, deserialize_with = "present")]
+    motion: Option<Vec<Motion>>,
+    #[serde(default, deserialize_with = "present")]
+    mouse: Option<bool>,
+}
+
+impl Record {
+    fn valid(&self) -> bool {
+        let extended = self.pads.is_some() || self.motion.is_some() || self.mouse.is_some();
+        let any = self.pad.is_some()
+            || self.touch.is_some()
+            || self.stop.is_some()
+            || self.pads.is_some()
+            || self.motion.is_some();
+        let pads = self.pads.as_ref().is_none_or(|pads| {
+            !pads.is_empty()
+                && distinct(pads.iter().map(|pad| pad.index))
+                && pads.iter().all(|pad| (1..PADS).contains(&pad.index))
+        });
+        let motion = self.motion.as_ref().is_none_or(|samples| {
+            !samples.is_empty()
+                && distinct(samples.iter().map(|sample| sample.index))
+                && samples.iter().all(|sample| sample.index < PADS)
+        });
+        match self.v {
+            1 => !extended && any,
+            2 => {
+                any && pads
+                    && motion
+                    && self.mouse != Some(false)
+                    && (self.mouse.is_none() || self.touch.is_some())
+            }
+            _ => false,
+        }
+    }
+}
+
+fn distinct(indexes: impl Iterator<Item = usize>) -> bool {
+    let mut seen = 0u32;
+    indexes.into_iter().all(|index| {
+        let bit = 1u32 << index.min(31);
+        let new = seen & bit == 0;
+        seen |= bit;
+        new
+    })
 }
 
 #[derive(Serialize)]
 struct Controller<'a> {
     #[serde(rename = "type")]
     kind: &'static str,
+    index: usize,
     #[serde(flatten)]
     pad: &'a Pad,
 }
@@ -79,7 +146,18 @@ struct Controller<'a> {
 struct Touches<'a> {
     #[serde(rename = "type")]
     kind: &'static str,
+    #[serde(skip_serializing_if = "core::ops::Not::not")]
+    mouse: bool,
     events: &'a [Touch],
+}
+/// Motion in the units moonlight-common-c takes: m/s^2 and deg/s.
+#[derive(Serialize)]
+struct MotionLine {
+    #[serde(rename = "type")]
+    kind: &'static str,
+    index: usize,
+    accel: [f32; 3],
+    gyro: [f32; 3],
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -96,7 +174,7 @@ pub struct Output {
 
 #[derive(Default)]
 pub struct Forwarder {
-    last_pad: Option<Pad>,
+    last_pad: [Option<Pad>; PADS],
     active: Vec<Touch>,
     stopped: bool,
 }
@@ -113,10 +191,7 @@ impl Forwarder {
             return Err(Error::Invalid);
         }
         let record: Record = serde_json::from_slice(bytes).map_err(|_| Error::Invalid)?;
-        if record.v != 1
-            || record.stop == Some(false)
-            || (record.pad.is_none() && record.touch.is_none() && record.stop.is_none())
-        {
+        if !record.valid() || record.stop == Some(false) {
             return Err(Error::Invalid);
         }
         if let Some(touches) = &record.touch
@@ -149,14 +224,27 @@ impl Forwarder {
             }
             touches_out.push(touch);
         }
+        let mut pads: Vec<(usize, Pad)> = record.pad.into_iter().map(|pad| (0, pad)).collect();
+        pads.extend(
+            record
+                .pads
+                .unwrap_or_default()
+                .into_iter()
+                .map(|indexed| (indexed.index, indexed.pad)),
+        );
         let mut lines = Vec::new();
-        if let Some(pad) = &record.pad
-            && self.last_pad.as_ref() != Some(pad)
-        {
+        for (index, pad) in &pads {
+            if self.last_pad[*index].as_ref() != Some(pad) {
+                lines.push(controller_line(*index, pad));
+            }
+        }
+        for sample in record.motion.unwrap_or_default() {
             lines.push(
-                serde_json::to_vec(&Controller {
-                    kind: "controller",
-                    pad,
+                serde_json::to_vec(&MotionLine {
+                    kind: "motion",
+                    index: sample.index,
+                    accel: sample.accel.map(|value| value as f32 / 1000.0),
+                    gyro: sample.gyro.map(|value| value as f32 / 1000.0),
                 })
                 .map_err(|_| Error::Invalid)?,
             );
@@ -165,28 +253,30 @@ impl Forwarder {
             lines.push(
                 serde_json::to_vec(&Touches {
                     kind: "touch",
+                    mouse: record.mouse == Some(true),
                     events: &touches_out,
                 })
                 .map_err(|_| Error::Invalid)?,
             );
         }
         self.active = active;
-        if let Some(pad) = record.pad {
-            self.last_pad = Some(pad);
+        for (index, pad) in pads {
+            self.last_pad[index] = Some(pad);
         }
         let stop = record.stop == Some(true);
         self.stopped = stop;
         Ok(Output { lines, stop })
     }
+    /// Releases the primary pad, every other player still connected and all fingers.
     pub fn release(&mut self) -> Output {
         let pad = Pad::released();
-        let mut lines = vec![
-            serde_json::to_vec(&Controller {
-                kind: "controller",
-                pad: &pad,
-            })
-            .expect("controller encoding"),
-        ];
+        let mut lines = Vec::new();
+        for (index, last) in self.last_pad.iter_mut().enumerate() {
+            if index == 0 || last.as_ref().is_some_and(|last| last.connected) {
+                lines.push(controller_line(index, &pad));
+                *last = Some(pad.clone());
+            }
+        }
         let touches: Vec<_> = self
             .active
             .drain(..)
@@ -200,13 +290,22 @@ impl Forwarder {
             lines.push(
                 serde_json::to_vec(&Touches {
                     kind: "touch",
+                    mouse: false,
                     events: &touches,
                 })
                 .expect("touch encoding"),
             );
         }
-        self.last_pad = Some(pad);
         self.stopped = true;
         Output { lines, stop: true }
     }
+}
+
+fn controller_line(index: usize, pad: &Pad) -> Vec<u8> {
+    serde_json::to_vec(&Controller {
+        kind: "controller",
+        index,
+        pad,
+    })
+    .expect("controller encoding")
 }

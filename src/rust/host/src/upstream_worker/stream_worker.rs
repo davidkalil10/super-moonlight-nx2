@@ -301,7 +301,8 @@ pub fn run(args: &[String]) -> WorkerResult {
                     1,
                     native::LI_CTYPE_XBOX as u8,
                     buttons,
-                    native::LI_CCAP_ANALOG_TRIGGERS as u16,
+                    (native::LI_CCAP_ANALOG_TRIGGERS | native::LI_CCAP_ACCEL | native::LI_CCAP_GYRO)
+                        as u16,
                 )
             };
             announced = true;
