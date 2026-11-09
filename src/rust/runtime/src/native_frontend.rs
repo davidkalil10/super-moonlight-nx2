@@ -153,6 +153,8 @@ pub fn run(checked: bool) -> bool {
             return false;
         }
     };
+    #[cfg(feature = "diagnostic-ref-replay")]
+    crate::ref_replay::run(&mut renderer);
     let result = execute(
         &mut renderer,
         files,

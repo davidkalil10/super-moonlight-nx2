@@ -68,6 +68,8 @@ mod io_diagnostic;
 mod native_frontend;
 #[cfg(all(target_os = "none", feature = "diagnostic-frontend"))]
 mod video_sink;
+#[cfg(all(target_os = "none", feature = "diagnostic-ref-replay"))]
+mod ref_replay;
 #[cfg(target_os = "none")]
 pub mod net;
 #[cfg(all(target_os = "none", feature = "diagnostic-nvdec"))]
