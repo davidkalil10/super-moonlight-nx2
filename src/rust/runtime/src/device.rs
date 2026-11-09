@@ -296,7 +296,9 @@ pub extern "C" fn main() -> i32 {
     if !unsafe { moonlightPlatformStart() } {
         return 1;
     }
-    log(if cfg!(feature = "frontend") {
+    log(if cfg!(feature = "native-video") {
+        "Moonlight NX2 Rust frontend; native video behind verified capabilities"
+    } else if cfg!(feature = "frontend") {
         "Moonlight NX2 Rust frontend; native codecs disabled"
     } else {
         "Moonlight NX2 Rust runtime diagnostic; streaming not implemented"
