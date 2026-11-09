@@ -202,7 +202,12 @@ impl<'a> Connection<'a> {
                 let result = self.controller.request(frame);
                 self.parser.consume().map_err(Error::Frame)?;
                 match result {
-                    Ok(Started::Management | Started::StartPending | Started::StopPending) => {}
+                    Ok(
+                        Started::Management
+                        | Started::CoverReady
+                        | Started::StartPending
+                        | Started::StopPending,
+                    ) => {}
                     Ok(Started::Stream(descriptor)) => {
                         self.enqueue(now, |out| descriptor.encode(id, out))?
                     }
@@ -245,6 +250,7 @@ impl<'a> Connection<'a> {
                 let op = match operation {
                     management::OperationName::Pair => response::OperationName::Pair,
                     management::OperationName::List => response::OperationName::List,
+                    management::OperationName::Cover => response::OperationName::Cover,
                     management::OperationName::Unpair => response::OperationName::Unpair,
                     management::OperationName::Quit => response::OperationName::Quit,
                 };

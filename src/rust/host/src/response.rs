@@ -32,6 +32,7 @@ pub enum StreamFailureCode {
 pub enum OperationName {
     Pair,
     List,
+    Cover,
     Unpair,
     Quit,
     Stop,

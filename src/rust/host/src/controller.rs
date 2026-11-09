@@ -28,6 +28,7 @@ pub enum Error {
 
 pub enum Started {
     Management,
+    CoverReady,
     Stream(Descriptor),
     StartPending,
     StopPending,
@@ -188,6 +189,15 @@ struct HostBackend {
     cancelled_start: Option<u32>,
     preflight_stopped: bool,
     telemetry: bool,
+    cover_cache: crate::cover::Cache,
+    cover_pending: Option<CoverRequest>,
+    cover_result: Option<crate::bridge::Event>,
+}
+
+struct CoverRequest {
+    host: String,
+    app: u32,
+    offset: usize,
 }
 
 struct StartPreflight {
@@ -278,6 +288,35 @@ impl Backend for HostBackend {
     }
     fn execute(&mut self, id: u32, operation: Operation<'_>) -> Result<Started, Box<Error>> {
         match operation {
+            Operation::Cover { host, app, offset } => {
+                match self.cover_cache.chunk(host, app, offset) {
+                    Ok(Some(value)) => {
+                        self.cover_result = Some(crate::bridge::Event::Result {
+                            request_id: id,
+                            operation: management::OperationName::Cover,
+                            value,
+                        });
+                        return Ok(Started::CoverReady);
+                    }
+                    Err(_) => {
+                        self.cover_result = Some(crate::bridge::Event::Failure {
+                            request_id: id,
+                            code: response::Code::InvalidRequest,
+                        });
+                        return Ok(Started::CoverReady);
+                    }
+                    Ok(None) => {}
+                }
+                self.management
+                    .start(id, operation)
+                    .map_err(|e| Box::new(Error::Management(e)))?;
+                self.cover_pending = Some(CoverRequest {
+                    host: host.into(),
+                    app,
+                    offset,
+                });
+                Ok(Started::Management)
+            }
             Operation::Start { host, app, options } => {
                 self.management
                     .start_preflight(id, host)
@@ -322,7 +361,10 @@ impl Backend for HostBackend {
         }
     }
     fn is_busy(&self) -> bool {
-        self.management.is_busy() || self.stopping.is_some() || self.starting
+        self.management.is_busy()
+            || self.stopping.is_some()
+            || self.starting
+            || self.cover_result.is_some()
     }
     fn stop_pending(&self) -> bool {
         self.stopping.is_some()
@@ -406,6 +448,9 @@ impl Controller {
             cancelled_start: None,
             preflight_stopped: false,
             telemetry: false,
+            cover_cache: crate::cover::Cache::new(),
+            cover_pending: None,
+            cover_result: None,
         };
         Ok(Self {
             session: Session::new(token, backend).map_err(Error::Session)?,
@@ -456,6 +501,8 @@ impl Controller {
                         value: None,
                         stderr: crate::status::Lines::new(),
                         not_paired: false,
+                        cover_bytes: Vec::new(),
+                        cover_total: None,
                     });
                 }
                 if matches!(result, Started::StopPending)
@@ -479,6 +526,9 @@ impl Controller {
         }
     }
     pub fn poll(&mut self, now: Instant) -> Result<Option<Event>, Error> {
+        if let Some(result) = self.session.backend_mut().cover_result.take() {
+            return Ok(Some(Event::Management(result)));
+        }
         if let Some(request_id) = self.session.backend_mut().cancelled_start.take() {
             return Ok(Some(Event::Management(crate::bridge::Event::Failure {
                 request_id,
@@ -522,6 +572,30 @@ impl Controller {
                     bytes,
                     ..
                 } => {
+                    if pending.operation == management::OperationName::Cover {
+                        let mut remaining = bytes.as_slice();
+                        while !remaining.is_empty() {
+                            let count = remaining
+                                .iter()
+                                .position(|byte| *byte == b'\n')
+                                .map_or(remaining.len(), |index| index + 1);
+                            if count
+                                > moonlight_nx2_core::control::MAX_PAYLOAD - pending.buffer.len()
+                            {
+                                return self.fail_management(response::Code::TooLarge);
+                            }
+                            pending.buffer.extend_from_slice(&remaining[..count]);
+                            remaining = &remaining[count..];
+                            match crate::bridge::consume_available(pending) {
+                                Ok(Some(event)) => return Ok(Some(Event::Management(event))),
+                                Ok(None) => {}
+                                Err(()) => {
+                                    return self.fail_management(response::Code::BackendFailed);
+                                }
+                            }
+                        }
+                        return Ok(None);
+                    }
                     if bytes.len() > moonlight_nx2_core::control::MAX_PAYLOAD - pending.buffer.len()
                     {
                         return self.fail_management(response::Code::TooLarge);
@@ -570,6 +644,62 @@ impl Controller {
                         management::Completion::Cancelled => Some(response::Code::Cancelled),
                         _ => Some(response::Code::BackendFailed),
                     };
+                    if pending.operation == management::OperationName::Cover {
+                        let backend = self.session.backend_mut();
+                        let request = backend.cover_pending.take().expect("cover request");
+                        let result = if let Some(code) = code {
+                            crate::bridge::Event::Failure {
+                                request_id: pending.request_id,
+                                code,
+                            }
+                        } else {
+                            let hash = pending
+                                .value
+                                .as_ref()
+                                .and_then(|value| value.get("sha256"))
+                                .and_then(serde_json::Value::as_str)
+                                .and_then(crate::cover::parse_digest);
+                            let result = hash
+                                .ok_or(crate::cover::Error::BackendFailed)
+                                .and_then(|hash| {
+                                    backend.cover_cache.insert(
+                                        &request.host,
+                                        request.app,
+                                        request.offset,
+                                        pending.cover_bytes,
+                                        hash,
+                                    )
+                                })
+                                .and_then(|()| {
+                                    backend.cover_cache.chunk(
+                                        &request.host,
+                                        request.app,
+                                        request.offset,
+                                    )
+                                })
+                                .and_then(|value| value.ok_or(crate::cover::Error::BackendFailed));
+                            match result {
+                                Ok(value) => crate::bridge::Event::Result {
+                                    request_id: pending.request_id,
+                                    operation: management::OperationName::Cover,
+                                    value,
+                                },
+                                Err(error) => crate::bridge::Event::Failure {
+                                    request_id: pending.request_id,
+                                    code: match error {
+                                        crate::cover::Error::InvalidRequest => {
+                                            response::Code::InvalidRequest
+                                        }
+                                        crate::cover::Error::TooLarge => response::Code::TooLarge,
+                                        crate::cover::Error::BackendFailed => {
+                                            response::Code::BackendFailed
+                                        }
+                                    },
+                                },
+                            }
+                        };
+                        return Ok(Some(Event::Management(result)));
+                    }
                     if let Some(start) = self.session.backend_mut().preflight.take() {
                         let request_id = start.request_id;
                         if let Some(code) = code {

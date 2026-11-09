@@ -12,6 +12,12 @@ pub enum Request {
     List {
         host: String,
     },
+    Cover {
+        host: String,
+        app: u32,
+        #[serde(default)]
+        offset: usize,
+    },
     Unpair {
         host: String,
     },
@@ -88,6 +94,11 @@ impl Request {
                 timeout_seconds: *timeout_seconds,
             },
             Self::List { host } => Operation::List { host },
+            Self::Cover { host, app, offset } => Operation::Cover {
+                host,
+                app: *app,
+                offset: *offset,
+            },
             Self::Unpair { host } => Operation::Unpair { host },
             Self::Quit { host } => Operation::Quit { host },
             Self::Stop => Operation::Stop,

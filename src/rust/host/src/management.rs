@@ -39,6 +39,7 @@ pub enum Completion {
 pub enum OperationName {
     Pair,
     List,
+    Cover,
     Unpair,
     Quit,
 }
@@ -82,6 +83,7 @@ impl Management {
         let name = match operation {
             Operation::Pair { .. } => OperationName::Pair,
             Operation::List { .. } => OperationName::List,
+            Operation::Cover { .. } => OperationName::Cover,
             Operation::Unpair { .. } => OperationName::Unpair,
             Operation::Quit { .. } => OperationName::Quit,
             _ => return Err(Error::Start(StartError::UnsupportedOperation)),
@@ -189,6 +191,9 @@ impl crate::Backend for Management {
     type Error = Error;
 
     fn execute(&mut self, request_id: u32, operation: Operation<'_>) -> Result<(), Error> {
+        if matches!(operation, Operation::Cover { .. }) {
+            return Err(Error::Start(StartError::UnsupportedOperation));
+        }
         self.start(request_id, operation)
     }
 

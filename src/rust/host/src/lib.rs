@@ -8,9 +8,11 @@ pub mod channel;
 pub mod control_server;
 #[cfg(unix)]
 pub mod controller;
+pub mod cover;
 pub mod helper;
 pub mod input;
 pub mod listener;
+pub mod mac;
 pub mod management;
 #[cfg(unix)]
 pub mod relay;
@@ -70,6 +72,11 @@ pub enum Operation<'a> {
     List {
         host: &'a str,
     },
+    Cover {
+        host: &'a str,
+        app: u32,
+        offset: usize,
+    },
     Quit {
         host: &'a str,
     },
@@ -92,6 +99,7 @@ impl Operation<'_> {
                 timeout_seconds,
             } => text(host, 255) && (1..=600).contains(&timeout_seconds),
             Self::Unpair { host } | Self::List { host } | Self::Quit { host } => text(host, 255),
+            Self::Cover { host, app, .. } => text(host, 255) && app > 0,
             Self::Start { host, app, options } => {
                 text(host, 255)
                     && text(app, 1024)

@@ -35,6 +35,8 @@ pub(crate) struct Pending {
     pub(crate) value: Option<Value>,
     pub(crate) stderr: crate::status::Lines,
     pub(crate) not_paired: bool,
+    pub(crate) cover_bytes: Vec<u8>,
+    pub(crate) cover_total: Option<usize>,
 }
 
 impl Pending {
@@ -147,6 +149,8 @@ impl Bridge {
             value: None,
             stderr: crate::status::Lines::new(),
             not_paired: false,
+            cover_bytes: Vec::new(),
+            cover_total: None,
         });
         Ok(())
     }
@@ -304,6 +308,36 @@ fn consume_line(pending: &mut Pending) -> Result<Option<Event>, ()> {
     let line: Vec<_> = pending.buffer.drain(..=end).collect();
     let value: Value = serde_json::from_slice(&line).map_err(|_| ())?;
     let event = value.get("event").and_then(Value::as_str);
+    if pending.operation == OperationName::Cover && event == Some("cover_chunk") {
+        if pending.value.is_some() {
+            return Err(());
+        }
+        let total = value
+            .get("total")
+            .and_then(Value::as_u64)
+            .and_then(|n| usize::try_from(n).ok())
+            .ok_or(())?;
+        let offset = value
+            .get("offset")
+            .and_then(Value::as_u64)
+            .and_then(|n| usize::try_from(n).ok())
+            .ok_or(())?;
+        let bytes =
+            crate::cover::decode_base64(value.get("data").and_then(Value::as_str).ok_or(())?)
+                .map_err(|_| ())?;
+        if total == 0
+            || total > crate::cover::MAX_COVER_BYTES
+            || offset != pending.cover_bytes.len()
+            || offset > total
+            || pending.cover_total.is_some_and(|old| old != total)
+            || bytes.len() > total - offset
+        {
+            return Err(());
+        }
+        pending.cover_total = Some(total);
+        pending.cover_bytes.extend_from_slice(&bytes);
+        return Ok(None);
+    }
     if pending.operation == OperationName::Pair && event == Some("pin") {
         let pin = value.get("pin").and_then(Value::as_str).ok_or(())?;
         if pin.len() != 4
@@ -319,10 +353,33 @@ fn consume_line(pending: &mut Pending) -> Result<Option<Event>, ()> {
         }));
     }
     let valid = match pending.operation {
+        OperationName::Cover => {
+            event == Some("cover_done")
+                && pending.cover_total == Some(pending.cover_bytes.len())
+                && value
+                    .get("sha256")
+                    .and_then(Value::as_str)
+                    .is_some_and(|hash| {
+                        hash.len() == 64
+                            && hash
+                                .bytes()
+                                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+                    })
+        }
         OperationName::List => {
             let apps = value.get("apps").and_then(Value::as_array).ok_or(())?;
             value.get("currentGame").and_then(Value::as_i64).is_some()
                 && value.get("uniqueid").is_none_or(Value::is_string)
+                && value.get("macs").is_none_or(|macs| {
+                    macs.as_array().is_some_and(|values| {
+                        values.len() <= 8
+                            && values.iter().all(|value| {
+                                value.as_str().is_some_and(|mac| {
+                                    crate::mac::normalize(mac).as_deref() == Some(mac)
+                                })
+                            })
+                    })
+                })
                 && apps.iter().all(|app| {
                     app.get("id").and_then(Value::as_i64).is_some()
                         && app.get("name").and_then(Value::as_str).is_some()

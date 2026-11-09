@@ -75,6 +75,7 @@ impl Helper {
             return Err(StartError::InvalidOperation);
         }
         let mut command = std::process::Command::new(&self.executable);
+        let backpressure = matches!(operation, Operation::Cover { .. });
         let timeout = match operation {
             Operation::Pair {
                 host,
@@ -95,6 +96,10 @@ impl Helper {
                 command.args(["quit", host]);
                 Duration::from_secs(65)
             }
+            Operation::Cover { host, app, .. } => {
+                command.args(["cover", host, &app.to_string()]);
+                Duration::from_secs(40)
+            }
             Operation::Start { .. } | Operation::Stop => {
                 return Err(StartError::UnsupportedOperation);
             }
@@ -108,7 +113,10 @@ impl Helper {
             .stderr(Stdio::piped());
         let started = Instant::now();
         let child = command.spawn().map_err(StartError::Spawn)?;
-        Process::new(child, Some(started + timeout)).map_err(StartError::Spawn)
+        Process::new_with_mode(child, Some(started + timeout), backpressure, &mut |task| {
+            thread::Builder::new().spawn(task).map(|_| ())
+        })
+        .map_err(StartError::Spawn)
     }
 }
 
@@ -117,6 +125,7 @@ fn read_output<R: Read + Send + 'static>(
     stream: Stream,
     sender: mpsc::SyncSender<Output>,
     overflow: Arc<AtomicBool>,
+    backpressure: bool,
     spawn: &mut impl FnMut(Box<dyn FnOnce() + Send>) -> io::Result<()>,
 ) -> io::Result<()> {
     spawn(Box::new(move || {
@@ -129,6 +138,15 @@ fn read_output<R: Read + Send + 'static>(
                 Err(error) => Output::ReadError(stream, error),
             };
             let terminal = !matches!(event, Output::Data(..));
+            if backpressure {
+                if sender.send(event).is_err() {
+                    break;
+                }
+                if terminal {
+                    break;
+                }
+                continue;
+            }
             match sender.try_send(event) {
                 Ok(()) => {}
                 Err(mpsc::TrySendError::Full(_)) => {
@@ -176,6 +194,15 @@ impl Process {
         deadline: Option<Instant>,
         spawn: &mut impl FnMut(Box<dyn FnOnce() + Send>) -> io::Result<()>,
     ) -> io::Result<Self> {
+        Self::new_with_mode(child, deadline, false, spawn)
+    }
+
+    fn new_with_mode(
+        child: Child,
+        deadline: Option<Instant>,
+        backpressure: bool,
+        spawn: &mut impl FnMut(Box<dyn FnOnce() + Send>) -> io::Result<()>,
+    ) -> io::Result<Self> {
         let mut guard = ChildGuard(Some(child));
         let child = guard.0.as_mut().expect("child guard");
         let stdout = child
@@ -193,9 +220,17 @@ impl Process {
             Stream::Stdout,
             sender.clone(),
             overflow.clone(),
+            backpressure,
             spawn,
         )?;
-        read_output(stderr, Stream::Stderr, sender, overflow.clone(), spawn)?;
+        read_output(
+            stderr,
+            Stream::Stderr,
+            sender,
+            overflow.clone(),
+            backpressure,
+            spawn,
+        )?;
         Ok(Self {
             child: guard.0.take().expect("child guard"),
             receiver,

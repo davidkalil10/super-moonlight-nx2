@@ -8,6 +8,7 @@ mod native {
 
 #[allow(dead_code)]
 mod audio_callbacks;
+mod cover_fetch;
 #[allow(dead_code)]
 mod direct_input;
 #[allow(dead_code)]
@@ -71,6 +72,15 @@ fn run() -> WorkerResult {
     let mut args = arguments.into_iter();
     let operation = args.next().ok_or(())?;
     let host = CString::new(args.next().ok_or(())?).map_err(|_| ())?;
+    let app = if operation == "cover" {
+        let value: u32 = args.next().ok_or(())?.parse().map_err(|_| ())?;
+        if value == 0 {
+            return Err(WorkerError::Failed);
+        }
+        Some(value)
+    } else {
+        None
+    };
     let timeout = if operation == "pair" {
         if args.next().as_deref() != Some("--timeout") {
             return Err(WorkerError::Failed);
@@ -83,7 +93,12 @@ fn run() -> WorkerResult {
     } else {
         0
     };
-    if args.next().is_some() || !matches!(operation.as_str(), "list" | "pair" | "unpair" | "quit") {
+    if args.next().is_some()
+        || !matches!(
+            operation.as_str(),
+            "list" | "pair" | "unpair" | "quit" | "cover"
+        )
+    {
         return Err(WorkerError::Failed);
     }
     let key_path = key_directory()?;
@@ -94,6 +109,7 @@ fn run() -> WorkerResult {
         "unpair" => unpair(&mut server),
         "quit" => quit(&mut server, &host, &keys),
         "list" => list(&mut server, &host, &key_path),
+        "cover" => cover_fetch::fetch(&server, &host, &key_path, app.expect("cover app")),
         _ => Err(WorkerError::Failed),
     }
 }
@@ -271,17 +287,22 @@ fn list(server: &mut native::SERVER_DATA, host: &CStr, key_path: &std::path::Pat
     }
     apps.reverse();
     let mut value = serde_json::json!({"currentGame": server.currentGame, "apps": apps});
-    if let Some(server_id) = server_id(server, host, key_path) {
-        value["uniqueid"] = server_id.into();
+    if let Some((server_id, mac)) = server_details(server, host, key_path) {
+        if let Some(server_id) = server_id {
+            value["uniqueid"] = server_id.into();
+        }
+        if let Some(mac) = mac {
+            value["macs"] = serde_json::json!([mac]);
+        }
     }
     output(&value)
 }
 
-fn server_id(
+fn server_details(
     server: &native::SERVER_DATA,
     host: &CStr,
     key_path: &std::path::Path,
-) -> Option<String> {
+) -> Option<(Option<String>, Option<String>)> {
     let mut client_id = Vec::new();
     std::fs::File::open(key_path.join("uniqueid.dat"))
         .ok()?
@@ -329,23 +350,33 @@ fn server_id(
         if data.is_null() {
             return None;
         }
-        let mut found = ptr::null_mut();
-        let result = if native::http_request(url.as_ptr().cast_mut(), data) == 0
-            && native::xml_search(
-                (*data).memory,
-                (*data).size,
-                c"uniqueid".as_ptr().cast_mut(),
-                &mut found,
-            ) == 0
-            && !found.is_null()
-        {
-            CStr::from_ptr(found).to_str().ok().map(str::to_owned)
+        let result = if native::http_request(url.as_ptr().cast_mut(), data) == 0 {
+            let read = |name: &CStr| {
+                let mut found = ptr::null_mut();
+                let result = if native::xml_search(
+                    (*data).memory,
+                    (*data).size,
+                    name.as_ptr().cast_mut(),
+                    &mut found,
+                ) == 0
+                    && !found.is_null()
+                {
+                    CStr::from_ptr(found).to_str().ok().map(str::to_owned)
+                } else {
+                    None
+                };
+                libc::free(found.cast());
+                result.filter(|value| !value.is_empty())
+            };
+            Some((
+                read(c"uniqueid"),
+                read(c"mac").and_then(|value| moonlight_nx2_host::mac::normalize(&value)),
+            ))
         } else {
             None
         };
-        libc::free(found.cast());
         native::http_free_data(data);
-        result.filter(|id| !id.is_empty())
+        result
     }
 }
 
