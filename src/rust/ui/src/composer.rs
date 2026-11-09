@@ -1298,7 +1298,7 @@ impl Builder<'_> {
         self.heading(
             "Pairing",
             pin,
-            Some("Enter this PIN in Sunshine on the PC"),
+            Some("Enter this PIN in Sunshine; waiting for the PC"),
             &style,
         );
         if let Some(url) = model.url().filter(|u| !u.is_empty()) {

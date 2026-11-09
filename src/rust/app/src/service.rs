@@ -25,7 +25,6 @@ pub const FRAMES_PER_POLL: usize = 8;
 pub const LIST_TIMEOUT_MS: u64 = 55_000;
 pub const UNPAIR_TIMEOUT_MS: u64 = 40_000;
 pub const QUIT_TIMEOUT_MS: u64 = 70_000;
-pub const PAIR_MARGIN_MS: u64 = 20_000;
 pub const START_TIMEOUT_MS: u64 = 30_000;
 pub const STOP_TIMEOUT_MS: u64 = 15_000;
 pub const LINK_OPEN_TIMEOUT_MS: u64 = 10_000;
@@ -1769,7 +1768,7 @@ fn timeout_ms(op: Op) -> u64 {
         Op::List => LIST_TIMEOUT_MS,
         Op::Unpair => UNPAIR_TIMEOUT_MS,
         Op::Quit => QUIT_TIMEOUT_MS,
-        Op::Pair => u64::from(request::DEFAULT_PAIR_TIMEOUT_S) * 1000 + PAIR_MARGIN_MS,
+        Op::Pair => u64::from(request::DEFAULT_PAIR_TIMEOUT_S) * 1000,
         Op::Start => START_TIMEOUT_MS,
         Op::Stop => STOP_TIMEOUT_MS,
     }
