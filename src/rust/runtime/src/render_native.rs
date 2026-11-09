@@ -450,11 +450,11 @@ impl NativeOwner {
                 error @ (vk::Result::ERROR_OUT_OF_HOST_MEMORY
                 | vk::Result::ERROR_OUT_OF_DEVICE_MEMORY),
             ) => {
-                log(&format!("b2ar: vkAllocateMemory failed {error:?}"));
+                log(&format!("renderer: vkAllocateMemory failed {error:?}"));
                 return Err(BackendError::NoMemory);
             }
             Err(error) => {
-                log(&format!("b2ar: vkAllocateMemory uncertain {error:?}"));
+                log(&format!("renderer: vkAllocateMemory uncertain {error:?}"));
                 sdk::retire_process();
                 return Err(BackendError::Uncertain);
             }
@@ -471,7 +471,7 @@ impl NativeOwner {
         let mapped = match mapped {
             Ok(pointer) if !pointer.is_null() => pointer,
             error => {
-                log(&format!("b2ar: vkMapMemory failed {error:?}"));
+                log(&format!("renderer: vkMapMemory failed {error:?}"));
                 sdk::retire_process();
                 return Err(BackendError::Uncertain);
             }
@@ -518,7 +518,7 @@ impl NativeOwner {
         }
         info.requested_size = bytes as u64;
         let Some(pointer) = NonNull::new(info.cpu_address as *mut u8) else {
-            log("b2ar: backing query returned a null CPU pointer");
+            log("renderer: backing query returned a null CPU pointer");
             sdk::retire_process();
             return Err(BackendError::Uncertain);
         };
@@ -618,7 +618,7 @@ impl Drop for NativeOwner {
             if let Some(count) = self.children.get().checked_sub(1) {
                 self.children.set(count);
             } else {
-                log("b2ar: native owner count underflow");
+                log("renderer: native owner count underflow");
                 sdk::retire_process();
             }
         }

@@ -603,10 +603,10 @@ impl Objects {
             let info = vk::InstanceCreateInfo::default()
                 .application_info(&app)
                 .enabled_extension_names(&extensions);
-            #[cfg(feature = "native-video")]
+            #[cfg(feature = "diagnostic-native-decode")]
             log("b2ar: renderer create instance begin");
             self.instance = Some(create!(self.entry.create_instance(&info, allocator()))?);
-            #[cfg(feature = "native-video")]
+            #[cfg(feature = "diagnostic-native-decode")]
             log("b2ar: renderer create instance ok");
             self.surface_api = Some(ash::khr::surface::Instance::load(
                 &self.entry,
@@ -650,7 +650,7 @@ impl Objects {
                 .queue_family_index(self.family)
                 .queue_priorities(&priorities)];
             let extensions = [ash::khr::swapchain::NAME.as_ptr()];
-            #[cfg(feature = "native-video")]
+            #[cfg(feature = "diagnostic-native-decode")]
             log("b2ar: renderer create GPU device begin");
             self.device = Some(create!(
                 self.instance().create_device(
@@ -661,7 +661,7 @@ impl Objects {
                     allocator(),
                 )
             )?);
-            #[cfg(feature = "native-video")]
+            #[cfg(feature = "diagnostic-native-decode")]
             log("b2ar: renderer create GPU device ok");
             self.queue = self.device().get_device_queue(self.family, 0);
             self.swapchain_api = Some(ash::khr::swapchain::Device::load(

@@ -306,7 +306,7 @@ impl NativeVideo {
             "b2ar: Vulkan allocation and metadata passed surface={index}"
         ));
         let Some(memory) = self.resources.surfaces[index].memory.as_ref() else {
-            log("b2ar: surface allocation missing");
+            log("decoder: surface allocation missing");
             return Err(self.unknown());
         };
         let info = memory.info;
@@ -363,7 +363,7 @@ impl NativeVideo {
         };
         self.resources.workspace = Some(Memory::new(bytes, 0x1000)?);
         let Some(workspace) = self.resources.workspace.as_ref() else {
-            log("b2ar: decoder workspace missing");
+            log("decoder: decoder workspace missing");
             return Err(self.unknown());
         };
         let pointer = workspace.pointer();
@@ -376,7 +376,7 @@ impl NativeVideo {
         self.transfer_open = true;
         self.donated = true;
         let Some(service) = self.service else {
-            log("b2ar: decoder service missing");
+            log("decoder: decoder service missing");
             return Err(self.unknown());
         };
         self.exchange(
@@ -406,7 +406,7 @@ impl NativeVideo {
         self.exchange("decoder configure", service, message, 1, false)?;
         for index in 0..RING {
             let Some(image) = self.resources.surfaces[index].image else {
-                log("b2ar: decoder image missing");
+                log("decoder: decoder image missing");
                 return Err(self.unknown());
             };
             let reply = self.exchange(
@@ -458,7 +458,7 @@ impl NativeVideo {
         }
         if self.donated {
             let Some(workspace) = self.resources.workspace.as_ref() else {
-                log("b2ar: donated workspace missing");
+                log("decoder: donated workspace missing");
                 return Err(self.unknown());
             };
             let address = workspace.address();
@@ -576,12 +576,12 @@ impl Backend<RING> for NativeVideo {
         #[cfg(feature = "diagnostic-native-decode")]
         log("b2ar: borrow renderer root and sync; no second GPU or sync open");
         if self.root_handle().is_err() {
-            log("b2ar: renderer root unavailable");
+            log("decoder: renderer root unavailable");
             return Err(BackendError::Refused);
         }
         let sync = owner_call::call_before_open(|| unsafe { moonlightNativeOwnerSync() })?;
         let Some(sync) = NonNull::new(sync) else {
-            log("b2ar: renderer sync validation refused");
+            log("decoder: renderer sync validation refused");
             return Err(BackendError::Refused);
         };
         self.sync = Some(sync);
@@ -619,7 +619,7 @@ impl Backend<RING> for NativeVideo {
         let mut images = [0; RING];
         for (image, surface) in images.iter_mut().zip(&self.resources.surfaces) {
             let Some(opened) = surface.image else {
-                log("b2ar: opened decoder is missing an image");
+                log("decoder: opened decoder is missing an image");
                 return Err(self.unknown());
             };
             *image = opened;
@@ -636,7 +636,7 @@ impl Backend<RING> for NativeVideo {
             return Err(BackendError::Refused);
         }
         let Some(input) = self.resources.inputs[self.next_input].as_mut() else {
-            log("b2ar: decoder input buffer missing");
+            log("decoder: decoder input buffer missing");
             return Err(self.unknown());
         };
         input.cpu_bytes_mut()[..bytes.len()].copy_from_slice(bytes);
@@ -704,7 +704,7 @@ impl Backend<RING> for NativeVideo {
         }
         let layout = self.layout(index)?;
         let Some(memory) = self.resources.surfaces[index].memory.as_ref() else {
-            log("b2ar: readback surface memory missing");
+            log("decoder: readback surface memory missing");
             return Err(self.unknown());
         };
         unsafe { sdk::armDCacheFlush(memory.pointer(), memory.bytes()) };
@@ -794,7 +794,7 @@ impl Backend<RING> for NativeVideo {
             }
             if self.started {
                 let Some(service) = self.service else {
-                    log("b2ar: stop service missing");
+                    log("decoder: stop service missing");
                     return Err(self.unknown());
                 };
                 self.exchange("stop", service, Message::empty(223), 1, false)?;
@@ -802,7 +802,7 @@ impl Backend<RING> for NativeVideo {
             }
             if self.initialized {
                 let Some(service) = self.service else {
-                    log("b2ar: finalize service missing");
+                    log("decoder: finalize service missing");
                     return Err(self.unknown());
                 };
                 self.exchange("finalize", service, Message::empty(131), 0, false)?;

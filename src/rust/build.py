@@ -187,6 +187,8 @@ def build(args):
             commands[0].extend(["SDK_BACKING=1", f"SDK_BACKING_LIBRARY_DIR={alias_directory}"])
             if args.diagnostic in ("native-decode", "production"):
                 commands[0].append("NATIVE_DECODE=1")
+            if args.diagnostic == "native-decode":
+                commands[0].append("BREADCRUMBS=1")
         artifact = directory / "moonlight-nx2-rust.nro"
 
     directory.mkdir(parents=True, exist_ok=False)

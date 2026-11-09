@@ -91,12 +91,15 @@ $(OUTPUT).nro: $(OUTPUT).elf $(OUTPUT).nacp $(ICON_PATH)
 
 ifeq ($(NATIVE_DECODE),1)
 OBJECTS += $(BUILD_DIR)/native_owner.o
-OBJECTS += $(BUILD_DIR)/breadcrumb.o
-LDFLAGS += -Wl,--wrap=moonlightPlatformLog
 $(OUTPUT).elf: $(BUILD_DIR)/native_owner.o
-$(OUTPUT).elf: $(BUILD_DIR)/breadcrumb.o
 $(BUILD_DIR)/native_owner.o: $(SOURCE_DIR)/native_owner.c
 	$(CC) $(CPPFLAGS) $(CFLAGS) -MMD -MP -c $< -o $@
+endif
+
+ifeq ($(BREADCRUMBS),1)
+OBJECTS += $(BUILD_DIR)/breadcrumb.o
+LDFLAGS += -Wl,--wrap=moonlightPlatformLog
+$(OUTPUT).elf: $(BUILD_DIR)/breadcrumb.o
 $(BUILD_DIR)/breadcrumb.o: $(SOURCE_DIR)/breadcrumb.c
 	$(CC) $(CPPFLAGS) $(CFLAGS) -MMD -MP -c $< -o $@
 endif

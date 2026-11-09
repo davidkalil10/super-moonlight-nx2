@@ -44,7 +44,7 @@ fn call_inner<F: FnOnce() -> R, R>(operation: F, clean_refusal: bool) -> Result<
     };
     if raw != 0 || !context.called || sdk::process_retired() {
         crate::device::log(&alloc::format!(
-            "b2ar: owner call result={raw} callback={} retired={}",
+            "decoder: owner call result={raw} callback={} retired={}",
             context.called,
             sdk::process_retired()
         ));

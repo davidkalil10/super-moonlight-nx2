@@ -44,7 +44,7 @@ static ALLOCATOR: Allocator = Allocator;
 #[panic_handler]
 fn panic(_info: &PanicInfo<'_>) -> ! {
     #[cfg(feature = "native-video")]
-    log("b2ar: Rust panic; process exits, cleanup unconfirmed");
+    log("runtime: Rust panic; process exits, cleanup unconfirmed");
     unsafe { moonlightPlatformAbort() }
 }
 
