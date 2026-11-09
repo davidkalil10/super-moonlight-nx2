@@ -1,3 +1,5 @@
+//! Coordinates UI, control connections, host discovery and media requests.
+
 extern crate alloc;
 
 #[path = "cover_fetch.rs"]

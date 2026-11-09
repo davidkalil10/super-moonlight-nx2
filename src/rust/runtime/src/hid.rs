@@ -1,3 +1,5 @@
+//! Decodes platform controller and touch samples for the UI and stream.
+
 use crate::render::Error;
 use moonlight_nx2_app::input::{EXTRA_PADS, Extra, Motion, PadState, Touches};
 

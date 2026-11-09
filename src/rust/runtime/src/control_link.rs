@@ -1,3 +1,5 @@
+//! Authenticates and bounds the PC helper control connection.
+
 extern crate alloc;
 
 use alloc::{boxed::Box, vec::Vec};

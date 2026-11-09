@@ -1,3 +1,5 @@
+//! Connects the application driver, saved hosts, UI bridge and stream metrics.
+
 extern crate alloc;
 
 use alloc::{boxed::Box, vec::Vec};

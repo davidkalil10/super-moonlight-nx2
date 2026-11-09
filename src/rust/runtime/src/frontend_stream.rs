@@ -1,3 +1,5 @@
+//! Owns the active media session and its decoder, audio and transport.
+
 extern crate alloc;
 
 use crate::{

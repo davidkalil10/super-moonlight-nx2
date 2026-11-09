@@ -1,3 +1,5 @@
+//! Fetches and caches bounded, sequential cover chunks over the control link.
+
 extern crate alloc;
 
 use alloc::{format, vec::Vec};

@@ -1,3 +1,5 @@
+//! Maps session policy feedback to the on-screen statistics badge.
+
 use moonlight_nx2_app::policy::{Epoch, Feedback};
 use moonlight_nx2_ui::{badge, glyphs::Glyphs};
 

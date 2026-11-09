@@ -1,3 +1,5 @@
+//! Parses the one-time PC control session from local storage.
+
 use moonlight_nx2_ui::model::{Address, Host, Name, is_address};
 
 pub struct Session {

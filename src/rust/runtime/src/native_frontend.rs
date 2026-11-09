@@ -1,3 +1,5 @@
+//! Runs the native Switch frontend and its device services.
+
 extern crate alloc;
 
 use crate::{
