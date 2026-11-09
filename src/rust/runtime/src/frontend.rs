@@ -18,8 +18,10 @@ use moonlight_nx2_core::control::Frame as ControlFrame;
 use moonlight_nx2_io::{
     control,
     socket::{IoError, Socket},
+    udp::Datagram,
 };
 use moonlight_nx2_ui::{
+    discover::{self, Answers},
     json::{Json, Kind},
     model::Screen,
     store::{Files, Store},
@@ -36,7 +38,23 @@ pub trait Connections {
     type Socket: Socket + 'static;
     fn authorization(&mut self) -> Result<Session, AuthError>;
     fn connect(&mut self, address: [u8; 4], port: u16) -> Result<Self::Socket, IoError>;
+    /// An unconnected UDP socket for one mDNS query; none where the platform has no network.
+    fn discovery(&mut self) -> Result<Box<dyn Datagram>, IoError> {
+        Err(IoError::Failed)
+    }
 }
+
+/// One mDNS window: the query is sent once, answers are read each frame until the deadline.
+struct Discovery {
+    socket: Box<dyn Datagram>,
+    deadline_ms: u64,
+    answers: Answers,
+    /// Started by the user (Find hosts / Y), not at start-up: an empty result is reported.
+    asked: bool,
+}
+
+/// Datagrams read per frame, so a flood cannot stall the UI.
+const DISCOVERY_READS: usize = 16;
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Stats {
@@ -65,6 +83,9 @@ pub struct Frontend<F, S: Socket + 'static> {
     exit: bool,
     message: Option<&'static str>,
     stats: Stats,
+    discovery: Option<Discovery>,
+    /// The first frame runs discovery once, as the Civ7 service does on attach.
+    discover_at_start: bool,
 }
 
 struct Offline;
@@ -142,7 +163,76 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
             exit: false,
             message,
             stats: Stats::default(),
+            discovery: None,
+            discover_at_start: true,
         })
+    }
+
+    fn discover<C: Connections<Socket = S>>(
+        &mut self,
+        connections: &mut C,
+        now_ms: u64,
+        asked: bool,
+    ) {
+        if self.discovery.is_some() {
+            return;
+        }
+        let started =
+            connections
+                .discovery()
+                .and_then(|mut socket| match socket.send(&discover::query()) {
+                    Ok(()) => Ok(socket),
+                    Err(error) => {
+                        let _ = socket.close();
+                        Err(error)
+                    }
+                });
+        match started {
+            Ok(socket) => {
+                self.discovery = Some(Discovery {
+                    socket,
+                    deadline_ms: now_ms.saturating_add(discover::WINDOW_MS),
+                    answers: Answers::default(),
+                    asked,
+                })
+            }
+            Err(_) if asked => {
+                self.message = Some("PC discovery is unavailable; add the PC by address")
+            }
+            Err(_) => {}
+        }
+    }
+
+    fn poll_discovery(&mut self, now_ms: u64) {
+        let Some(discovery) = self.discovery.as_mut() else {
+            return;
+        };
+        let mut packet = alloc::vec![0; discover::MAX_PACKET + 1];
+        let mut failed = false;
+        for _ in 0..DISCOVERY_READS {
+            match discovery.socket.recv(&mut packet) {
+                Ok(count) if count <= discover::MAX_PACKET => {
+                    discovery.answers.add(&packet[..count])
+                }
+                Ok(_) | Err(IoError::Interrupted) => {}
+                Err(IoError::WouldBlock) => break,
+                Err(_) => {
+                    failed = true;
+                    break;
+                }
+            }
+        }
+        if !failed && now_ms < discovery.deadline_ms {
+            return;
+        }
+        let mut discovery = self.discovery.take().expect("discovery");
+        let _ = discovery.socket.close();
+        let found = discovery.answers.hosts();
+        if let Some(error) = self.client.discovered(&found) {
+            self.message = Some(error);
+        } else if found.is_empty() && discovery.asked {
+            self.message = Some("No PC answered; add the PC by address");
+        }
     }
 
     pub fn stats(&self) -> Stats {
@@ -288,15 +378,17 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
                     crate::render_platform::retire_process();
                     self.exit = true;
                 }
-                Effect::Action(Action::RefreshHosts) => {
-                    self.message = Some("Add the PC by address to connect")
-                }
+                Effect::Action(Action::RefreshHosts) => self.discover(connections, now_ms, true),
                 Effect::Action(Action::PauseInput) => crate::hid::stop_rumble(),
                 Effect::Action(Action::ResumeInput) => {}
                 Effect::HostsError(message) => self.message = Some(message),
                 Effect::Action(_) => {}
             }
         }
+        if core::mem::take(&mut self.discover_at_start) {
+            self.discover(connections, now_ms, false);
+        }
+        self.poll_discovery(now_ms);
         if disconnected {
             crate::hid::stop_rumble();
             if !self.close_control() {

@@ -367,6 +367,27 @@ impl Driver {
         }
     }
 
+    /// Hosts mDNS found: new ones are saved and the hosts page follows. Returns the error to
+    /// show when hosts.json could not take them.
+    pub fn discovered<U: Ui, F: Files>(
+        &mut self,
+        ui: &mut U,
+        store: &mut Store<F>,
+        found: &[moonlight_nx2_ui::model::Host],
+    ) -> Option<&'static str> {
+        match self.hosts.discovered(found, store) {
+            Ok(true) => {
+                let step = ui.reduce(&Event::Hosts {
+                    hosts: self.hosts.hosts(),
+                });
+                self.intents(ui, &step);
+                None
+            }
+            Ok(false) => None,
+            Err(error) => Some(error.message()),
+        }
+    }
+
     /// Dispatches an intent the UI already reduced, without reducing its event a second time.
     pub fn dispatch_intent<U: Ui>(&mut self, ui: &U, intent: &Intent) {
         let options = ui.stream_options();

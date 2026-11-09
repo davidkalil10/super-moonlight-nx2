@@ -91,6 +91,17 @@ impl Connections for NativeConnections {
         }
         NetSocket::connect(address, port)
     }
+    fn discovery(
+        &mut self,
+    ) -> Result<Box<dyn moonlight_nx2_io::udp::Datagram>, moonlight_nx2_io::socket::IoError> {
+        if !self.network {
+            self.network = unsafe { moonlightPlatformNetStart() };
+            if !self.network {
+                return Err(moonlight_nx2_io::socket::IoError::Failed);
+            }
+        }
+        Ok(Box::new(crate::net::DiscoverySocket::open()?))
+    }
 }
 
 impl Drop for NativeConnections {

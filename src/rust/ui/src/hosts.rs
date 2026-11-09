@@ -226,6 +226,33 @@ impl HostBook {
         Ok(true)
     }
 
+    /// Hosts mDNS found are appended unless they are the same PC as a saved or removed one
+    /// (merge in src/streamer/ui/discover.js); saved entries stay unchanged. True when added.
+    pub fn discovered(&mut self, found: &[Host]) -> Result<bool, Error> {
+        let mut added = false;
+        for host in found {
+            let key = (&host.address, &host.uniqueid);
+            let known = self
+                .hosts
+                .iter()
+                .any(|entry| same((&entry.address, &entry.uniqueid), key))
+                || self
+                    .removed
+                    .iter()
+                    .any(|entry| same((&entry.address, &entry.uniqueid), key));
+            if known || host.address.is_empty() {
+                continue;
+            }
+            if self.hosts.len() >= MAX_HOSTS {
+                return Err(Error::TooMany);
+            }
+            self.hosts.push(*host);
+            self.dirty = true;
+            added = true;
+        }
+        Ok(added)
+    }
+
     /// Drops the host and keeps it on the removed list; its pairing stays on the PC.
     pub fn forget(&mut self, host: &Host) {
         let entry = self

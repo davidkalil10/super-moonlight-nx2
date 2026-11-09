@@ -8,6 +8,7 @@ extern crate alloc;
 pub mod badge;
 pub mod bridge;
 pub mod composer;
+pub mod discover;
 pub mod glyphs;
 pub mod hosts;
 pub mod inflate;

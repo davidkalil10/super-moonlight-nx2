@@ -31,6 +31,15 @@ unsafe extern "C" {
     fn moonlightIoSocketSend(fd: i32, data: *const u8, bytes: usize, status: *mut Status);
     fn moonlightIoSocketRecv(fd: i32, data: *mut u8, bytes: usize, status: *mut Status);
     fn moonlightIoSocketClose(fd: i32, status: *mut Status);
+    fn moonlightIoDiscoveryOpen(status: *mut Status);
+    fn moonlightIoDiscoverySend(
+        fd: i32,
+        address: *const [u8; 4],
+        port: u16,
+        data: *const u8,
+        bytes: usize,
+        status: *mut Status,
+    );
 }
 
 fn io_error(status: &Status) -> IoError {
@@ -145,6 +154,71 @@ impl Datagram for UdpSocket {
         {
             None
         }
+    }
+}
+
+/// One unconnected UDP socket for an mDNS query: `send` goes to the mDNS group, `recv` takes
+/// unicast answers from any responder.
+pub struct DiscoverySocket {
+    socket: NetSocket,
+}
+
+impl DiscoverySocket {
+    pub fn open() -> Result<Self, IoError> {
+        if sdk::process_retired() {
+            return Err(IoError::Failed);
+        }
+        let mut status = Status::default();
+        unsafe { moonlightIoDiscoveryOpen(&mut status) };
+        if status.kind == IO_CLOSE_FAILED {
+            sdk::retire_process();
+            return Err(IoError::Failed);
+        }
+        match i32::try_from(status.value) {
+            Ok(fd) if fd >= 0 && status.kind == IO_OK => Ok(Self {
+                socket: NetSocket {
+                    fd,
+                    connected: true,
+                },
+            }),
+            _ => Err(io_error(&status)),
+        }
+    }
+}
+
+impl Datagram for DiscoverySocket {
+    fn poll_connect(&mut self) -> Result<bool, IoError> {
+        Ok(true)
+    }
+
+    fn send(&mut self, bytes: &[u8]) -> Result<(), IoError> {
+        use moonlight_nx2_ui::discover::{MDNS_ADDRESS, MDNS_PORT};
+        if self.socket.fd < 0 {
+            return Err(IoError::Failed);
+        }
+        let mut status = Status::default();
+        unsafe {
+            moonlightIoDiscoverySend(
+                self.socket.fd,
+                &MDNS_ADDRESS,
+                MDNS_PORT,
+                bytes.as_ptr(),
+                bytes.len(),
+                &mut status,
+            )
+        };
+        match self.socket.transfer(&status, bytes.len())? {
+            count if count == bytes.len() => Ok(()),
+            _ => Err(IoError::Failed),
+        }
+    }
+
+    fn recv(&mut self, bytes: &mut [u8]) -> Result<usize, IoError> {
+        self.socket.recv(bytes)
+    }
+
+    fn close(&mut self) -> Result<(), IoError> {
+        self.socket.close()
     }
 }
 

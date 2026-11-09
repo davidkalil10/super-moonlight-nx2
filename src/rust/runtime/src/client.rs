@@ -187,6 +187,12 @@ impl<F: Files + Clone> Client<F> {
         self.driver.event(&mut View(&mut self.bridge), event);
     }
 
+    /// Hosts mDNS found; returns the error to show when they could not be saved.
+    pub fn discovered(&mut self, found: &[moonlight_nx2_ui::model::Host]) -> Option<&'static str> {
+        self.driver
+            .discovered(&mut View(&mut self.bridge), &mut self.hosts, found)
+    }
+
     pub fn set_status(&mut self, text: Option<&str>) {
         self.bridge.set_status(text);
     }

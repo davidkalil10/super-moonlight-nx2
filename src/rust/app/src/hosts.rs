@@ -53,6 +53,24 @@ impl Hosts {
         self.load_error.map(Error::Load)
     }
 
+    /// Merges hosts mDNS found and saves the book when it grew. `Ok(true)` when the list changed.
+    pub fn discovered<F: Files>(
+        &mut self,
+        found: &[Host],
+        store: &mut Store<F>,
+    ) -> Result<bool, Error> {
+        if let Some(error) = self.load_error {
+            return Err(Error::Load(error));
+        }
+        if !self.book.discovered(found).map_err(Error::Book)? {
+            return Ok(false);
+        }
+        if !store.save_hosts(&mut self.book) {
+            return Err(Error::Save);
+        }
+        Ok(true)
+    }
+
     /// Applies `RememberHost`/`ForgetHost`. `Ok(true)` when the host list changed, so the
     /// caller dispatches `Event::Hosts { hosts: self.hosts() }`. Other actions are ignored.
     pub fn apply<F: Files>(

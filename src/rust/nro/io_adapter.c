@@ -118,6 +118,41 @@ void moonlightIoDatagramOpen(const uint8_t address[4], uint16_t port, MoonlightI
     open_socket(address, port, SOCK_DGRAM, IPPROTO_UDP, status);
 }
 
+/* An unconnected, nonblocking UDP socket on an ephemeral port for one mDNS query: answers
+ * come back by unicast (QU question) from any responder, so it is not connected to a peer. */
+void moonlightIoDiscoveryOpen(MoonlightIoStatus *status)
+{
+    int fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (fd < 0) {
+        set(status, -1, IO_FAILED, errno);
+        return;
+    }
+    int flags = fcntl(fd, F_GETFL, 0);
+    if (flags < 0 || fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0) {
+        int error = errno;
+        set(status, -1, close(fd) == 0 ? IO_FAILED : IO_CLOSE_FAILED, error);
+        return;
+    }
+    set(status, fd, IO_OK, 0);
+}
+
+void moonlightIoDiscoverySend(int32_t fd, const uint8_t address[4], uint16_t port, const void *data,
+                              size_t bytes, MoonlightIoStatus *status)
+{
+    struct sockaddr_in endpoint;
+    memset(&endpoint, 0, sizeof(endpoint));
+    endpoint.sin_len = sizeof(endpoint);
+    endpoint.sin_family = AF_INET;
+    endpoint.sin_port = htons(port);
+    memcpy(&endpoint.sin_addr, address, 4);
+    ssize_t count = sendto(fd, data, bytes, MSG_DONTWAIT, (const struct sockaddr *)&endpoint,
+                           sizeof(endpoint));
+    if (count < 0)
+        set(status, -1, classify(errno), errno);
+    else
+        set(status, count, IO_OK, 0);
+}
+
 void moonlightIoSocketPollConnect(int32_t fd, MoonlightIoStatus *status)
 {
     struct pollfd entry = {.fd = fd, .events = POLLOUT};
