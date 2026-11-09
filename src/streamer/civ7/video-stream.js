@@ -384,13 +384,15 @@ export function videoStream(native, request) {
 
   const controlsAt = input ? /** @type {ConsoleRequest} */ (request.input).controls : undefined;
   const controls = controlsAt === undefined ? null : address(controlsAt);
+  const menuChord = stream.menuChord !== false;
   let heldBefore = false;
   /**
    * The overlay chord counts on the compute pass, so L or R held keeps it running, and one frame
-   * after the release resets the shader's chord count and previous buttons.
+   * after the release resets the shader's chord count and previous buttons. Without the menu
+   * chord, L and R are the game's alone.
    */
   const interactive = () => {
-    const held = controls !== null && (read32(controls + 8n) & 0xc0n) !== 0n;
+    const held = menuChord && controls !== null && (read32(controls + 8n) & 0xc0n) !== 0n;
     const releasing = heldBefore;
     heldBefore = held;
     return held || releasing || (native.ui?.interactive?.() ?? true);

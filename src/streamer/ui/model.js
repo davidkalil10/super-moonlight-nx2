@@ -348,11 +348,13 @@ function createMachine(rules) {
   }
 
   /**
-   * The chord shows the overlay; with it shown, B hides it and A picks one of its buttons.
+   * The chord shows the overlay unless Hold L+R for menu is off; with it shown, B hides it and A
+   * picks one of its buttons.
    * Return to apps also quits the host app when the Quit on return setting is on.
    * @param {Model} model @param {Command} command @returns {Step}
    */
   function onStreamingCommand(model, {op, item}) {
+    if (op === 'chord' && model.settings.menuChord === false) return same(model);
     if (op === 'chord') return next(model, {overlay: true}, [{type: 'pauseInput'}]);
     if (!model.overlay) return same(model);
 

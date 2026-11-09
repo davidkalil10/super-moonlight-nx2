@@ -64,6 +64,7 @@ export function streamShape(args) {
   const helperArgs = ['--local-audio', '--sops'].filter(flag => args.includes(flag));
   const streamInfo = args.includes('--stream-info');
   const frameCounter = args.includes('--frame-counter');
+  const menuChord = !args.includes('--no-menu-chord');
 
   /**
    * @param {number} sessionFps @param {'h264' | 'av1'} [sessionCodec]
@@ -71,7 +72,7 @@ export function streamShape(args) {
    */
   const bitrate = (sessionFps, sessionCodec = codec, size = {width, height}) =>
     sessionBitrate(withCodec(args, sessionCodec), size.width, size.height, sessionFps);
-  return {width, height, fps, undockedFps, codec, bitrate, helperArgs, streamInfo, frameCounter};
+  return {width, height, fps, undockedFps, codec, bitrate, helperArgs, streamInfo, frameCounter, menuChord};
 }
 
 /**
@@ -250,7 +251,7 @@ export async function runApplication({rpc, directory, menu, gpu, hostAddress, he
       renderMode.invalidate();
       const abort = new AbortController();
       const {width, height, fps: requestedFps, undockedFps, codec, bitrate, helperArgs,
-        streamInfo, frameCounter} = streamShape(args);
+        streamInfo, frameCounter, menuChord} = streamShape(args);
       let choice = {codec};
       /** @type {ReturnType<typeof createQuadBadge> | undefined} */
       let shownBadge;
@@ -307,7 +308,7 @@ export async function runApplication({rpc, directory, menu, gpu, hostAddress, he
                     const rate = change
                       ? [rateChangeText({height: size.height, fps: change.from}, {height: size.height, fps: change.to})] : [];
                     return streamVideo({rpc, directory, hostAddress, host: host.address, app: String(app.id), helper,
-                      helperArgs, width: size.width, height: size.height, codec: choice.codec,
+                      helperArgs, menuChord, width: size.width, height: size.height, codec: choice.codec,
                       fps, bitrate: kbps,
                       badge: badgeFor([
                         ...shapeChanges({height, fps: requestedFps}, {height: size.height, fps: launchFps}),

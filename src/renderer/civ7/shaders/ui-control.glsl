@@ -7,7 +7,7 @@ const uint UI_ITEMS = 16u, UI_TEXTS = 272u, UI_IMAGES = 656u,
            UI_TABLES_END = 1024u, UI_BODY = 1024u;
 const uint UI_MAX_ITEMS = 32u, UI_MAX_TEXTS = 48u, UI_MAX_IMAGES = 24u,
            UI_MAX_BODY = UI_PAGE_WORDS * 4u - 4096u;
-const uint UI_FLAG_OVERLAY = 1u, UI_FLAG_HIDE_CURSOR = 2u;
+const uint UI_FLAG_OVERLAY = 1u, UI_FLAG_HIDE_CURSOR = 2u, UI_FLAG_NO_CHORD = 4u;
 const uint UI_ITEM_GREYED = 1u, UI_ITEM_CURRENT = 2u, UI_ITEM_ADJUSTABLE = 4u,
            UI_ITEM_PENDING = 8u, UI_ITEM_EDITING = 16u;
 const uint UI_OP_A = 1u, UI_OP_B = 2u, UI_OP_X = 3u, UI_OP_Y = 4u,
@@ -191,7 +191,8 @@ void uiInput() {
     return;
   uint base = uiShownBase(), held = inputButtons(), pressed = inputPressed();
   bool sent = false;
-  if (inputConnected() &&
+  bool chord = (uiWord(base + UI_HDR_FLAGS) & UI_FLAG_NO_CHORD) == 0u;
+  if (chord && inputConnected() &&
       (held & (BUTTON_L | BUTTON_R)) == (BUTTON_L | BUTTON_R)) {
     inputState.chordFrames++;
     if (inputState.chordFrames == UI_CHORD_FRAMES) {

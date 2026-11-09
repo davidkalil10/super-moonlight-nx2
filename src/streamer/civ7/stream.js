@@ -284,16 +284,17 @@ async function udpTransport(rpc, fps, copy) {
  * come back to the helper.
  * @param {{rpc: Civ7Rpc, directory: string, hostAddress: string, host: string, app: string, helper: string,
  *   presentation: {configuration: unknown, storage: {mapped: number, bytes: number, memoryFlags: number}},
- *   helperPrefix?: string[], helperArgs?: string[], fps?: number, bitrate?: number, duration?: number | null, width?: number,
+ *   helperPrefix?: string[], helperArgs?: string[], menuChord?: boolean, fps?: number, bitrate?: number, duration?: number | null, width?: number,
  *   height?: number, controls?: number, signal?: AbortSignal, allowInput?: () => boolean,
  *   audioEnabled?: boolean, badge?: StreamBadge, codec?: 'h264' | 'av1',
  *   log?: (event: object) => void}} options
  *   `badge` is shown from the first acknowledged frame (rate-badge.js). A failed start's error
  *   carries `fallback` when H.264 may succeed instead (startFailure). `helperArgs` are launch
- *   flags passed through to the helper (--local-audio, --sops).
+ *   flags passed through to the helper (--local-audio, --sops). `menuChord` false leaves L+R to
+ *   the game: the console stops watching it for the menu (video-stream.js `interactive`).
  */
 export async function streamVideo({rpc, directory, presentation, hostAddress, host, app,
-  helper, helperPrefix = [], helperArgs = [], fps = 60, bitrate = 20000, duration = 30, width = 1920, height = 1080,
+  helper, helperPrefix = [], helperArgs = [], menuChord = true, fps = 60, bitrate = 20000, duration = 30, width = 1920, height = 1080,
   controls = undefined, signal = undefined, allowInput = () => true, audioEnabled = true, badge = undefined,
   codec = 'h264', log = event => {}}) {
   if (!Number.isInteger(fps) || fps < 1 || fps > 120 || (duration !== null && !(duration > 0)))
@@ -453,6 +454,7 @@ export async function streamVideo({rpc, directory, presentation, hostAddress, ho
       stream: {host: hostAddress, port: videoOut.port, token: videoOut.token,
         header: address(header), buffer: address(source), capacity: CAPACITY, frames: 0x7fffffff, fps,
         ...(overlapOutput ? {overlapOutput} : {}),
+        ...(menuChord ? {} : {menuChord: false}),
         ...(receiveBuffer ? {receiveBuffer} : {}), udp: udp.request}}, undefined, 0);
     consoleRequest = watchConsoleRequest(request, {log,
       onFailure: error => { reader.fail(error); videoOut.close(); }});

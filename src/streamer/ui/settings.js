@@ -131,6 +131,13 @@ const CATALOG = [
     text: onOff
   },
   {
+    id: 'menuChord',
+    label: 'Hold L+R for menu',
+    values: [false, true],
+    fallback: true,
+    text: onOff
+  },
+  {
     id: 'streamInfo',
     label: 'Stream info badge',
     values: [false, true],
@@ -359,6 +366,7 @@ function streamArgs(settings) {
 
   if (settings.hostAudio) args.push('--local-audio');
   if (settings.optimise) args.push('--sops');
+  if (!settings.menuChord) args.push('--no-menu-chord');
   if (settings.streamInfo) args.push('--stream-info');
   if (settings.frameCounter) args.push('--frame-counter');
   return args;

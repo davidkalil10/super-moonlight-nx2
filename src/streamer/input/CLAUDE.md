@@ -22,7 +22,8 @@ CLAUDE.md ("Input and audio") has the panel facts.
   raised overlay word counts as the chord when its command was overwritten. The recorder
   ignores fingers and buttons held across the overlay until they lift, so the B that closes
   it never reaches the game. The PC validates and
-  forwards those records. A stop request always stops, overlay open or not.
+  forwards those records. A stop request always stops, overlay open or not, and with the Hold
+  L+R for menu setting off (ui/CLAUDE.md) no overlay opens, so L+R reaches the game.
 
 ## Controller (controller.js)
 

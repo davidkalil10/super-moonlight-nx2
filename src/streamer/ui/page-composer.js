@@ -740,9 +740,14 @@ function createPageComposer(painter, options) {
     return page.build();
   }
 
-  /** The menu over the stream: transparent, with opaque panels behind its parts. @param {Model} model */
+  /**
+   * The menu over the stream: transparent, with opaque panels behind its parts. With the menu
+   * chord off, the shader never raises it (`noChord`).
+   * @param {Model} model
+   */
   function overlay(model) {
-    const page = horizon({background: COLOR.clear, flags: PAGE_FLAG.overlay});
+    const chord = model.settings.menuChord === false ? PAGE_FLAG.noChord : 0;
+    const page = horizon({background: COLOR.clear, flags: PAGE_FLAG.overlay | chord});
 
     const width = 2 * OVERLAY_BUTTON + BUTTON.gap;
     const top = HEADING.status - 40;

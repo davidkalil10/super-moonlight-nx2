@@ -48,7 +48,7 @@ function createPageEncoder(pageBytes) {
     MAX_IMAGE: {width: 320, height: 180},
     FORMAT_RGBA8: 1,
     CHECKSUM_WORDS,
-    PAGE_FLAG: {overlay: 1, hideCursor: 2},
+    PAGE_FLAG: {overlay: 1, hideCursor: 2, noChord: 4},
     ITEM_FLAG: {greyed: 1, current: 2, adjustable: 4, pending: 8, editing: 16}
   };
 

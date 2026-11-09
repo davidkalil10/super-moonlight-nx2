@@ -73,6 +73,13 @@ at. Tests: `src/streamer/ui/test/` in moonlight-nx2-dev.
   the PC's send to the console's ack after present, so it holds this console time too. Only the
   counter rows are rewritten, about 112 KB in one write (77 KB before the console figure), and
   only when a number changes.
+  Hold L+R for menu (`menuChord`, default on; no save version change, a save without it loads
+  it on) decides at stream start whether L+R opens the overlay. Off, `--no-menu-chord` reaches
+  the console request as `stream.menuChord: false`, so video-stream.js stops running the
+  compute pass for L or R held; the overlay page carries `noChord` (page flag 4), so the shader
+  never counts the chord or raises `uiOverlay`; and the model ignores a chord command. L+R then
+  passes through like any buttons (`allowInput` stays true). The stop chord is the recorder's
+  and works either way (input/CLAUDE.md).
   Left out: surround (helper and console audio are stereo), touch as mouse (the helper sends
   touch events only) and pacing toggles (the deferred wait is automatic).
 - Hosts (`hosts.json`, `{hosts, removed}`; an older plain array still loads): a typed or found

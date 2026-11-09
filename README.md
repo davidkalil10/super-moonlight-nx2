@@ -32,8 +32,9 @@ node launch.mjs SWITCH_IP
 Replace `SWITCH_IP` with your Switch's IP address. Choose your PC in Moonlight, pair it
 using the PIN in Sunshine, then select a game.
 
-- **Hold L+R**: open the stream menu.
-- **L+R+Minus+Plus**: stop streaming.
+- **Hold L+R**: open the stream menu (unless **Hold L+R for menu** is off).
+- **L+R+Minus+Plus**: stop streaming and return to the apps. This always works, so with the
+  menu off it is the way to end a stream.
 
 ## Options
 
@@ -48,6 +49,7 @@ Open **Settings** in Moonlight before launching a game.
 | Play audio on the PC | On / Off |
 | Optimise game settings | Request host resolution matching; requires host display automation |
 | Quit host app on return | On / Off |
+| Hold L+R for menu | On (default) / Off: off, L+R goes to the game and only L+R+Minus+Plus stops the stream |
 | Stream info badge | On / Off |
 | Frame counter | On / Off: presented, skipped and dropped frames each second, and `console N ms`, the console's mean time from a frame arriving to its present (decode and display, not the network or the PC) |
 
