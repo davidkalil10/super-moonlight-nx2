@@ -833,8 +833,32 @@ fn rate_pending(session: &Session, launch: Option<&Launch>, fps: u32, reason: Re
         bitrate_after,
     }
 }
-fn badge(session: &Session, preferences: StreamOptions) -> Feedback {
+/// The stream info badge of a session, as streamInfoText in src/streamer/civ7/application.js:
+/// "1080p120 · AV1 · 30 Mbps" (bitrate rounded to tenths, a whole number shown without them).
+pub fn stream_info_text(options: &Options) -> metrics::Line {
     use core::fmt::Write;
+    let mut text = metrics::Line::new();
+    let codec = match options.codec {
+        crate::request::Codec::H264 => "H.264",
+        crate::request::Codec::Hevc => "HEVC",
+        crate::request::Codec::Av1 => "AV1",
+    };
+    let tenths = (options.bitrate_kbps + 50) / 100;
+    let _ = write!(
+        text,
+        "{}p{} \u{b7} {codec} \u{b7} {}",
+        options.height,
+        options.fps,
+        tenths / 10
+    );
+    if tenths % 10 != 0 {
+        let _ = write!(text, ".{}", tenths % 10);
+    }
+    let _ = write!(text, " Mbps");
+    text
+}
+
+fn badge(session: &Session, preferences: StreamOptions) -> Feedback {
     let mut text = metrics::Line::new();
     if (preferences.height, preferences.fps) != (session.options.height, session.options.fps) {
         text = metrics::rate_text(
@@ -844,7 +868,7 @@ fn badge(session: &Session, preferences: StreamOptions) -> Feedback {
             session.options.fps,
         );
     } else if preferences.stream_info {
-        let _ = write!(text, "{}p{}", session.options.height, session.options.fps);
+        text = stream_info_text(&session.options);
     }
     Feedback::Badge {
         epoch: session.epoch,
