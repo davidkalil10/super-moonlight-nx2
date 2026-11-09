@@ -211,6 +211,14 @@ impl<'a> Connection<'a> {
                     Ok(Started::Stream(descriptor)) => {
                         self.enqueue(now, |out| descriptor.encode(id, out))?
                     }
+                    Ok(Started::IdrReady { queued }) => self.enqueue(now, |out| {
+                        response::result(
+                            id,
+                            response::OperationName::Idr,
+                            &json!({"queued":queued}),
+                            out,
+                        )
+                    })?,
                     Err(controller::Error::Session(error)) => {
                         let code = match error {
                             crate::Error::InvalidRequest

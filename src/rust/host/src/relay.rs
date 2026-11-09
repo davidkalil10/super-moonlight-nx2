@@ -116,6 +116,9 @@ pub struct Relay {
     av1: crate::av1::Keyframes,
     current_keyframe: Option<bool>,
     idr_pending: bool,
+    last_idr_sent: Option<Instant>,
+    last_idr_requested: Option<Instant>,
+    idr_inflight: bool,
     video_window: crate::window::VideoWindow,
     window_updated: Instant,
     video_sent: VecDeque<(u32, Instant)>,
@@ -145,6 +148,22 @@ pub struct Relay {
 }
 
 impl Relay {
+    pub(crate) fn request_idr(&mut self, now: Instant) -> bool {
+        if self.stopping
+            || self.finished
+            || self.idr_pending
+            || self.idr_inflight
+            || self.last_idr_requested.is_some_and(|last| {
+                now.saturating_duration_since(last) < Duration::from_millis(500)
+            })
+        {
+            return false;
+        }
+        self.last_idr_requested = Some(now);
+        self.idr_pending = true;
+        true
+    }
+
     pub fn prepare(helper: Helper, config: Config) -> Result<Self, Error> {
         let Config {
             bind,
@@ -218,6 +237,9 @@ impl Relay {
             av1: crate::av1::Keyframes::new(),
             current_keyframe: None,
             idr_pending: false,
+            last_idr_sent: None,
+            last_idr_requested: None,
+            idr_inflight: false,
             video_window: crate::window::VideoWindow::new(options.fps).expect("validated fps"),
             window_updated: Instant::now(),
             video_sent: VecDeque::new(),
@@ -515,6 +537,7 @@ impl Relay {
             return;
         }
         if !self.stopping {
+            self.idr_pending = false;
             if self.process.is_none() {
                 let _ = self.cancel();
                 self.early_stopped = true;
@@ -592,17 +615,32 @@ impl Relay {
                 return Ok(());
             }
             self.input_inflight = false;
+            if self.idr_inflight {
+                self.idr_inflight = false;
+                self.last_idr_sent = Some(now);
+            }
         }
-        if self.pending_input.is_empty() && self.idr_pending && !self.stopping {
+        if self.pending_input.is_empty()
+            && self.idr_pending
+            && !self.stopping
+            && self.last_idr_sent.is_none_or(|last| {
+                now.saturating_duration_since(last) >= Duration::from_millis(500)
+            })
+        {
             self.pending_input
                 .push_back(br#"{"type":"request-idr"}"#.to_vec());
             self.idr_pending = false;
         }
         if let Some(line) = self.pending_input.pop_front() {
+            self.idr_inflight = line == br#"{"type":"request-idr"}"#;
             process.queue_input(&line).map_err(Error::Io)?;
             self.input_inflight = true;
             if process.flush_input().map_err(Error::Io)? {
                 self.input_inflight = false;
+                if self.idr_inflight {
+                    self.idr_inflight = false;
+                    self.last_idr_sent = Some(now);
+                }
             }
         }
         if self.stopping

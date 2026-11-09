@@ -30,6 +30,7 @@ pub enum Request {
         options: Options,
     },
     Stop,
+    Idr,
 }
 
 #[derive(Deserialize)]
@@ -102,6 +103,7 @@ impl Request {
             Self::Unpair { host } => Operation::Unpair { host },
             Self::Quit { host } => Operation::Quit { host },
             Self::Stop => Operation::Stop,
+            Self::Idr => Operation::Idr,
             Self::Start { host, app, options } => Operation::Start {
                 host,
                 app,

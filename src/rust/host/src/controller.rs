@@ -32,6 +32,7 @@ pub enum Started {
     Stream(Descriptor),
     StartPending,
     StopPending,
+    IdrReady { queued: bool },
 }
 
 pub struct Descriptor {
@@ -351,6 +352,15 @@ impl Backend for HostBackend {
                 self.stopping = Some(id);
                 self.starting = false;
                 Ok(Started::StopPending)
+            }
+            Operation::Idr => {
+                let relay = self
+                    .relay
+                    .as_mut()
+                    .ok_or_else(|| Box::new(Error::Unsupported))?;
+                Ok(Started::IdrReady {
+                    queued: relay.request_idr(Instant::now()),
+                })
             }
             op => {
                 self.management

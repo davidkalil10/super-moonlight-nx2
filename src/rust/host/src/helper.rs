@@ -100,7 +100,7 @@ impl Helper {
                 command.args(["cover", host, &app.to_string()]);
                 Duration::from_secs(40)
             }
-            Operation::Start { .. } | Operation::Stop => {
+            Operation::Start { .. } | Operation::Stop | Operation::Idr => {
                 return Err(StartError::UnsupportedOperation);
             }
         };

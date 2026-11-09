@@ -36,6 +36,7 @@ pub enum OperationName {
     Unpair,
     Quit,
     Stop,
+    Idr,
 }
 
 #[derive(Debug)]

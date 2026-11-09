@@ -86,6 +86,7 @@ pub enum Operation<'a> {
         options: StreamOptions,
     },
     Stop,
+    Idr,
 }
 
 impl Operation<'_> {
@@ -110,7 +111,7 @@ impl Operation<'_> {
                     && (1..=120).contains(&options.fps)
                     && (1..=1_000_000).contains(&options.bitrate_kbps)
             }
-            Self::Stop => true,
+            Self::Stop | Self::Idr => true,
         }
     }
 }
@@ -275,10 +276,13 @@ impl<B: Backend> Session<B> {
             return Err(Error::Busy);
         }
         match (self.state, operation) {
-            (State::Ready, Operation::Stop) | (State::Streaming, Operation::Start { .. }) => {
+            (State::Ready, Operation::Stop | Operation::Idr)
+            | (State::Streaming, Operation::Start { .. }) => {
                 return Err(Error::InvalidState);
             }
-            (State::Streaming, op) if op != Operation::Stop => return Err(Error::InvalidState),
+            (State::Streaming, op) if op != Operation::Stop && op != Operation::Idr => {
+                return Err(Error::InvalidState);
+            }
             _ => {}
         }
         if let Operation::Start { .. } = operation {
