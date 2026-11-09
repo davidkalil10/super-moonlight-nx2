@@ -138,6 +138,8 @@ fn distinct(indexes: impl Iterator<Item = usize>) -> bool {
 struct Controller<'a> {
     #[serde(rename = "type")]
     kind: &'static str,
+    /// Omitted for the primary pad, so its line stays what the C helper reads.
+    #[serde(skip_serializing_if = "is_primary")]
     index: usize,
     #[serde(flatten)]
     pad: &'a Pad,
@@ -299,6 +301,10 @@ impl Forwarder {
         self.stopped = true;
         Output { lines, stop: true }
     }
+}
+
+fn is_primary(index: &usize) -> bool {
+    *index == 0
 }
 
 fn controller_line(index: usize, pad: &Pad) -> Vec<u8> {
