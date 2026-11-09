@@ -85,9 +85,11 @@ pub mod item {
 
 /// Characters of the address keypad, by `item::KEY` offset.
 pub const KEYS: &[u8] = b"123456789.0";
-pub const NAME_KEYS: [&[u8]; 3] = [
-    b"ABCDEFGHIJKLMNOPQRSTUVWXYZ",
-    b"abcdefghijklmnopqrstuvwxyz",
+pub const NAME_KEYS: [&[u8]; 5] = [
+    b"ABCDEFGHIJKLM",
+    b"NOPQRSTUVWXYZ",
+    b"abcdefghijklm",
+    b"nopqrstuvwxyz",
     b"0123456789 -_.",
 ];
 
