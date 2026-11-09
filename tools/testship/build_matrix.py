@@ -47,6 +47,11 @@ def remote(host, command, logfile, timeout):
     return output(["ssh", host, command], logfile, timeout)
 
 
+def fetch(host, source, destination, logfile):
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    return output(["scp", f"{host}:{source}", str(destination)], logfile, 120)
+
+
 def quote(values):
     return " ".join(shlex.quote(str(value)) for value in values)
 
@@ -140,6 +145,10 @@ def main():
                     "--diagnostic", diagnostic]
         rust_line = f"{env} {quote(rust_cmd)}"
         rust_status = remote(args.m4, rust_line, root / f"m4-{diagnostic}-rust.log", args.timeout)
+        rust_receipt = root / "receipts" / "m4" / diagnostic / "rust"
+        for name in ("BUILD-INFO.json", "build.log"):
+            fetch(args.m4, f"{rust_dir}/{name}", rust_receipt / name,
+                  root / f"m4-{diagnostic}-rust-{name}.copy.log")
         if rust_status:
             record["targets"][diagnostic] = {"status": "FAIL", "stage": "rust", "exit_code": rust_status}
             print(f"FAIL {diagnostic} (rust)", flush=True)
@@ -159,10 +168,26 @@ def main():
                       "-v", f"{SDK}:/sdk:ro", "-v", f"{ALIAS}:/alias:ro",
                       DOCKER_IMAGE, "sh", "-c", shell]
         nro_status = remote(args.m4, quote(docker_cmd), root / f"m4-{diagnostic}-nro.log", args.timeout)
+        nro_receipt = root / "receipts" / "m4" / diagnostic / "nro"
+        for name in ("BUILD-INFO.json", "build.log", "moonlight-nx2-rust.nro"):
+            fetch(args.m4, f"{nro_dir}/{name}", nro_receipt / name,
+                  root / f"m4-{diagnostic}-nro-{name}.copy.log")
         status = "PASS" if nro_status == 0 else "FAIL"
-        record["targets"][diagnostic] = {"status": status,
-                                         "stage": None if nro_status == 0 else "nro",
-                                         "exit_code": nro_status}
+        artifact = None
+        info_path = nro_receipt / "BUILD-INFO.json"
+        if info_path.is_file():
+            info = json.loads(info_path.read_text())
+            artifact = info.get("artifact")
+        record["targets"][diagnostic] = {
+            "status": status,
+            "stage": None if nro_status == 0 else "nro",
+            "exit_code": nro_status,
+            "nro": artifact,
+            "receipts": {
+                "rust": str(rust_receipt.relative_to(root)),
+                "nro": str(nro_receipt.relative_to(root)),
+            },
+        }
         print(f"{status} {diagnostic}", flush=True)
 
     rig_source = f"{rigroot}/source"
