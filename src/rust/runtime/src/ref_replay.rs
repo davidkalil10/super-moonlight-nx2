@@ -308,8 +308,10 @@ impl<B: Backend> Backend for Checksummed<B> {
             config.display.height() as usize,
         );
         let chroma = stride * config.coded.height() as usize;
+        log(&format!("b2ar: CRC frame {} begin", self.frames));
+        let chroma_bytes = out.get(chroma..).ok_or(BackendError::Invalid)?;
         let luma = crc32(out, stride, width, height);
-        let chroma = crc32(&out[chroma..], stride, width, height / 2);
+        let chroma = crc32(chroma_bytes, stride, width, height / 2);
         log(&format!(
             "ref: {} frame {} pts_us={} y={luma:08x} uv={chroma:08x}",
             self.name,

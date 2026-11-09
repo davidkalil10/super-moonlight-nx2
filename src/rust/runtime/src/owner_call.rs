@@ -1,8 +1,18 @@
+extern crate alloc;
+
 use crate::sdk;
 use core::{ffi::c_void, mem::MaybeUninit};
 use moonlight_nx2_core::decoder::BackendError;
 
 pub(crate) fn call<F: FnOnce() -> R, R>(operation: F) -> Result<R, BackendError> {
+    call_inner(operation, false)
+}
+
+pub(crate) fn call_before_open<F: FnOnce() -> R, R>(operation: F) -> Result<R, BackendError> {
+    call_inner(operation, true)
+}
+
+fn call_inner<F: FnOnce() -> R, R>(operation: F, clean_refusal: bool) -> Result<R, BackendError> {
     struct Context<F, R> {
         operation: Option<F>,
         result: MaybeUninit<R>,
@@ -10,9 +20,10 @@ pub(crate) fn call<F: FnOnce() -> R, R>(operation: F) -> Result<R, BackendError>
     }
     unsafe extern "C" fn invoke<F: FnOnce() -> R, R>(context: *mut c_void) {
         let context = unsafe { &mut *context.cast::<Context<F, R>>() };
-        let operation = context.operation.take().unwrap();
-        context.result.write(operation());
-        context.called = true;
+        if let Some(operation) = context.operation.take() {
+            context.result.write(operation());
+            context.called = true;
+        }
     }
     unsafe extern "C" {
         fn moonlightNativeOwnerCall(
@@ -32,6 +43,14 @@ pub(crate) fn call<F: FnOnce() -> R, R>(operation: F) -> Result<R, BackendError>
         moonlightNativeOwnerCall(invoke::<F, R>, (&mut context as *mut Context<F, R>).cast())
     };
     if raw != 0 || !context.called || sdk::process_retired() {
+        crate::device::log(&alloc::format!(
+            "b2ar: owner call result={raw} callback={} retired={}",
+            context.called,
+            sdk::process_retired()
+        ));
+        if clean_refusal && !context.called && !sdk::process_retired() {
+            return Err(BackendError::Refused);
+        }
         sdk::retire_process();
         return Err(BackendError::Uncertain);
     }

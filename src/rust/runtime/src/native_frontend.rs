@@ -166,6 +166,7 @@ pub fn run(checked: bool) -> bool {
         "frontend: one-time authorization imported={} checked={checked}",
         authorization.is_ok()
     ));
+    log("b2ar: before renderer/GPU open; no explicit second gsvOpenGpu or nvOpen");
     let mut renderer = match Renderer::open(render_config()) {
         Ok(renderer) => renderer,
         Err(error) => {
@@ -173,6 +174,7 @@ pub fn run(checked: bool) -> bool {
             return false;
         }
     };
+    log("b2ar: renderer/GPU open returned success");
     #[cfg(feature = "diagnostic-ref-replay")]
     crate::ref_replay::run(&mut renderer);
     #[cfg(feature = "native-video")]

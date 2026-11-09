@@ -181,7 +181,8 @@ impl<'a, B: Backend> Decoder<'a, B> {
             Ok(images) => {
                 if images.contains(&0) || images[0] == images[1] {
                     decoder.fail(BackendError::Malformed);
-                    return Err(decoder.close().unwrap_err());
+                    let _ = decoder.close();
+                    return Err(Error::Uncertain);
                 }
                 decoder.images = images;
                 Ok(decoder)

@@ -104,10 +104,8 @@ pub struct NativeVideo {
     owner: ManuallyDrop<NativeOwner>,
     resources: ManuallyDrop<Resources>,
     resources_dropped: bool,
-    sync: sdk::Sync,
+    sync: Option<NonNull<sdk::Sync>>,
     transfer: sdk::TransferMemory,
-    root: bool,
-    sync_open: bool,
     context: Option<u32>,
     service: Option<u32>,
     precheck: bool,
@@ -130,10 +128,8 @@ impl NativeVideo {
             owner: ManuallyDrop::new(owner),
             resources: ManuallyDrop::new(Resources::default()),
             resources_dropped: false,
-            sync: sdk::Sync::default(),
+            sync: None,
             transfer: sdk::TransferMemory::default(),
-            root: false,
-            sync_open: false,
             context: None,
             service: None,
             precheck: false,
@@ -288,12 +284,22 @@ impl NativeVideo {
         _uncached: bool,
         config: Config,
     ) -> Result<(), BackendError> {
+        log(&format!("b2ar: before Vulkan allocation surface={index}"));
         self.resources.surfaces[index].memory = Some(self.owner.allocate(bytes, alignment)?);
-        let memory = self.resources.surfaces[index].memory.as_ref().unwrap();
+        log(&format!(
+            "b2ar: Vulkan allocation and metadata passed surface={index}"
+        ));
+        let Some(memory) = self.resources.surfaces[index].memory.as_ref() else {
+            log("b2ar: surface allocation missing");
+            return Err(self.unknown());
+        };
         let info = memory.info;
         log(&format!("native-video: surface{index} backing {info:?}"));
         unsafe { sdk::armDCacheFlush(memory.pointer(), bytes) };
         let mut memory_id = 0;
+        log(&format!(
+            "b2ar: before reserve image memory surface={index}"
+        ));
         let raw = owner_call::call(|| unsafe {
             sdk::gsvReserveImageMemory(3, bytes as u64, &mut memory_id)
         })?;
@@ -302,6 +308,9 @@ impl NativeVideo {
             return Err(self.unknown());
         }
         self.resources.surfaces[index].memory_id = Some(memory_id);
+        log(&format!(
+            "b2ar: before register image memory surface={index}"
+        ));
         let raw = owner_call::call(|| unsafe {
             sdk::gsvRegisterImageMemory(
                 memory_id,
@@ -334,12 +343,22 @@ impl NativeVideo {
             _ => return Err(BackendError::Unsupported),
         };
         self.resources.workspace = Some(Memory::new(bytes, 0x1000)?);
-        let pointer = self.resources.workspace.as_ref().unwrap().pointer();
+        let Some(workspace) = self.resources.workspace.as_ref() else {
+            log("b2ar: decoder workspace missing");
+            return Err(self.unknown());
+        };
+        let pointer = workspace.pointer();
+        log(&format!(
+            "b2ar: before transfer memory create bytes={bytes}"
+        ));
         let result = unsafe { sdk::tmemCreateFromMemory(&mut self.transfer, pointer, bytes, 0) };
         self.result("workspace transfer", result)?;
         self.transfer_open = true;
         self.donated = true;
-        let service = self.service.unwrap();
+        let Some(service) = self.service else {
+            log("b2ar: decoder service missing");
+            return Err(self.unknown());
+        };
         self.exchange(
             "decoder initialize",
             service,
@@ -365,7 +384,10 @@ impl NativeVideo {
             Message::configure(address, 10, config.coded).map_err(|_| BackendError::Invalid)?;
         self.exchange("decoder configure", service, message, 1, false)?;
         for index in 0..2 {
-            let image = self.resources.surfaces[index].image.unwrap();
+            let Some(image) = self.resources.surfaces[index].image else {
+                log("b2ar: decoder image missing");
+                return Err(self.unknown());
+            };
             let reply = self.exchange(
                 "register image",
                 service,
@@ -413,7 +435,11 @@ impl NativeVideo {
             self.transfer_open = false;
         }
         if self.donated {
-            let address = self.resources.workspace.as_ref().unwrap().address();
+            let Some(workspace) = self.resources.workspace.as_ref() else {
+                log("b2ar: donated workspace missing");
+                return Err(self.unknown());
+            };
+            let address = workspace.address();
             for _ in 0..100 {
                 let mut info = sdk::MemoryInfo::default();
                 let mut page = 0;
@@ -459,30 +485,54 @@ impl Backend for NativeVideo {
         }
         self.claimed = true;
         self.config = Some(config);
-        let result = unsafe { sdk::gsvInitialize() };
-        self.result("root initialize", result)?;
-        self.root = true;
-        let result = unsafe { sdk::gsvOpenSync(&mut self.sync) };
-        self.result("sync", result)?;
-        self.sync_open = true;
+        unsafe extern "C" {
+            fn moonlightNativeOwnerSync() -> *mut sdk::Sync;
+        }
+        log("b2ar: borrow renderer root and sync; no second GPU or sync open");
+        if self.root_handle().is_err() {
+            log("b2ar: renderer root unavailable");
+            return Err(BackendError::Refused);
+        }
+        let sync = owner_call::call_before_open(|| unsafe { moonlightNativeOwnerSync() })?;
+        let Some(sync) = NonNull::new(sync) else {
+            log("b2ar: renderer sync validation refused");
+            return Err(BackendError::Refused);
+        };
+        self.sync = Some(sync);
+        log("b2ar: renderer sync borrowed");
         let permitted = sdk::permitted_frame_mode().ok_or(BackendError::Invalid)?;
         if let FrameRegistration::Observed(mode) = config.frame_registration {
             if mode != permitted {
                 return Err(BackendError::Invalid);
             }
         }
+        log("b2ar: before decoder context; no nvOpen call");
         self.open_context()?;
+        log("b2ar: decoder context opened");
         let (bytes, alignment) = self.surface_sizes(config)?;
         for index in 0..2 {
+            log(&format!(
+                "b2ar: before backing surface={index} bytes={bytes} alignment={alignment}"
+            ));
             self.create_surface(index, bytes, alignment, permitted & 2 != 0, config)?;
+            log(&format!("b2ar: backing surface={index} registered"));
         }
         for index in 0..2 {
             self.resources.inputs[index] = Some(Memory::new(wire::INPUT_MAX as usize, 0x1000)?);
         }
+        log("b2ar: before decoder service initialize/configure/register/start");
         self.open_service(config)?;
-        Ok(core::array::from_fn(|index| {
-            self.resources.surfaces[index].image.unwrap()
-        }))
+        log("b2ar: decoder service started");
+        match (
+            self.resources.surfaces[0].image,
+            self.resources.surfaces[1].image,
+        ) {
+            (Some(first), Some(second)) => Ok([first, second]),
+            _ => {
+                log("b2ar: opened decoder is missing an image");
+                Err(self.unknown())
+            }
+        }
     }
 
     fn submit(&mut self, bytes: &[u8], pts_us: u64) -> Result<(), BackendError> {
@@ -493,14 +543,23 @@ impl Backend for NativeVideo {
         if self.in_flight == 2 {
             return Err(BackendError::Refused);
         }
-        let input = self.resources.inputs[self.next_input].as_mut().unwrap();
+        let Some(input) = self.resources.inputs[self.next_input].as_mut() else {
+            log("b2ar: decoder input buffer missing");
+            return Err(self.unknown());
+        };
         input.cpu_bytes_mut()[..bytes.len()].copy_from_slice(bytes);
         let address = input.address();
         unsafe { sdk::armDCacheFlush(input.pointer(), bytes.len()) };
         self.next_input = (self.next_input + 1) % 2;
         let message = Message::submit(address, bytes.len() as u32, pts_us, false)
             .map_err(|_| BackendError::Invalid)?;
-        self.exchange("submit", self.service.unwrap(), message, 1, false)?;
+        log(&format!(
+            "b2ar: before submit pts_us={pts_us} bytes={}",
+            bytes.len()
+        ));
+        let service = self.service.ok_or(BackendError::Invalid)?;
+        self.exchange("submit", service, message, 1, false)?;
+        log(&format!("b2ar: submitted pts_us={pts_us}"));
         self.in_flight += 1;
         Ok(())
     }
@@ -515,8 +574,9 @@ impl Backend for NativeVideo {
             .ok_or(BackendError::Invalid)?;
         let mut value = 0;
         let mut mode = 0;
+        let sync = self.sync.ok_or(BackendError::Invalid)?;
         let result = owner_call::call(|| unsafe {
-            sdk::gsvSyncReadCounter(&mut self.sync, fence.counter, &mut value, &mut mode)
+            sdk::gsvSyncReadCounter(sync.as_ptr(), fence.counter, &mut value, &mut mode)
         })?;
         self.result("read counter", result)?;
         if u32::from(mode) != fence.mode {
@@ -571,7 +631,10 @@ impl Backend for NativeVideo {
             Err(untile::Error::Unsupported) => return Err(BackendError::Unsupported),
             Err(untile::Error::Invalid) => return Err(self.unknown()),
         };
-        let memory = self.resources.surfaces[index].memory.as_ref().unwrap();
+        let Some(memory) = self.resources.surfaces[index].memory.as_ref() else {
+            log("b2ar: readback surface memory missing");
+            return Err(self.unknown());
+        };
         unsafe { sdk::armDCacheFlush(memory.pointer(), memory.bytes()) };
         let bytes = config.coded.width() as usize * config.coded.height() as usize;
         let (luma, chroma) = out[..config.coded.nv12_bytes()].split_at_mut(bytes);
@@ -645,17 +708,19 @@ impl Backend for NativeVideo {
                 return Ok(());
             }
             if self.started {
-                self.exchange("stop", self.service.unwrap(), Message::empty(223), 1, false)?;
+                let Some(service) = self.service else {
+                    log("b2ar: stop service missing");
+                    return Err(self.unknown());
+                };
+                self.exchange("stop", service, Message::empty(223), 1, false)?;
                 self.started = false;
             }
             if self.initialized {
-                self.exchange(
-                    "finalize",
-                    self.service.unwrap(),
-                    Message::empty(131),
-                    0,
-                    false,
-                )?;
+                let Some(service) = self.service else {
+                    log("b2ar: finalize service missing");
+                    return Err(self.unknown());
+                };
+                self.exchange("finalize", service, Message::empty(131), 0, false)?;
                 self.initialized = false;
             }
             for index in (0..2).rev() {
@@ -682,14 +747,7 @@ impl Backend for NativeVideo {
                 )?;
                 self.precheck = false;
             }
-            if self.sync_open {
-                unsafe { sdk::gsvSyncClose(&mut self.sync) };
-                self.sync_open = false;
-            }
-            if self.root {
-                unsafe { sdk::gsvExit() };
-                self.root = false;
-            }
+            self.sync = None;
             unsafe {
                 ManuallyDrop::drop(&mut self.resources);
                 ManuallyDrop::drop(&mut self.owner)

@@ -1,7 +1,9 @@
 extern crate alloc;
 
 use super::{Error, Renderer, allocator, sdk};
+use crate::device::log;
 use crate::{native_video::NativeVideo, sdk_backing};
+use alloc::format;
 use alloc::rc::Rc;
 use ash::vk::{self, Handle};
 use core::{cell::Cell, mem::ManuallyDrop, ptr::NonNull};
@@ -70,6 +72,7 @@ impl NativeOwner {
         let size = bytes
             .checked_add(alignment - 1)
             .ok_or(BackendError::Invalid)?;
+        log(&format!("b2ar: before vkAllocateMemory bytes={size}"));
         let memory = match unsafe {
             self.device.allocate_memory(
                 &vk::MemoryAllocateInfo::default()
@@ -79,10 +82,15 @@ impl NativeOwner {
             )
         } {
             Ok(memory) => memory,
-            Err(vk::Result::ERROR_OUT_OF_HOST_MEMORY | vk::Result::ERROR_OUT_OF_DEVICE_MEMORY) => {
+            Err(
+                error @ (vk::Result::ERROR_OUT_OF_HOST_MEMORY
+                | vk::Result::ERROR_OUT_OF_DEVICE_MEMORY),
+            ) => {
+                log(&format!("b2ar: vkAllocateMemory failed {error:?}"));
                 return Err(BackendError::NoMemory);
             }
-            Err(_) => {
+            Err(error) => {
+                log(&format!("b2ar: vkAllocateMemory uncertain {error:?}"));
                 sdk::retire_process();
                 return Err(BackendError::Uncertain);
             }
@@ -90,18 +98,25 @@ impl NativeOwner {
         if sdk::process_retired() {
             return Err(BackendError::Uncertain);
         }
+        log("b2ar: vkAllocateMemory passed; before vkMapMemory");
         let mapped = unsafe {
             self.device
                 .map_memory(memory, 0, size as u64, vk::MemoryMapFlags::empty())
         };
         let mapped = match mapped {
             Ok(pointer) if !pointer.is_null() => pointer,
-            _ => {
+            error => {
+                log(&format!("b2ar: vkMapMemory failed {error:?}"));
                 sdk::retire_process();
                 return Err(BackendError::Uncertain);
             }
         };
+        log("b2ar: vkMapMemory passed; before backing metadata query");
         let report = sdk_backing::query(memory.as_raw());
+        log(&format!(
+            "b2ar: backing metadata result={} lock={} metadata={}",
+            report.result, report.lock_status, report.metadata_status
+        ));
         let allocation = sdk_backing::Allocation {
             memory: memory.as_raw(),
             mapped: mapped as u64,
@@ -134,10 +149,15 @@ impl NativeOwner {
             return Err(BackendError::Uncertain);
         }
         info.requested_size = bytes as u64;
+        let Some(pointer) = NonNull::new(info.cpu_address as *mut u8) else {
+            log("b2ar: backing query returned a null CPU pointer");
+            sdk::retire_process();
+            return Err(BackendError::Uncertain);
+        };
         Ok(NativeMemory {
             device: self.device.clone(),
             memory,
-            pointer: NonNull::new(info.cpu_address as *mut u8).unwrap(),
+            pointer,
             bytes,
             info,
             closed: false,
@@ -148,8 +168,12 @@ impl NativeOwner {
 impl Drop for NativeOwner {
     fn drop(&mut self) {
         if !sdk::process_retired() {
-            self.children
-                .set(self.children.get().checked_sub(1).unwrap());
+            if let Some(count) = self.children.get().checked_sub(1) {
+                self.children.set(count);
+            } else {
+                log("b2ar: native owner count underflow");
+                sdk::retire_process();
+            }
         }
     }
 }
