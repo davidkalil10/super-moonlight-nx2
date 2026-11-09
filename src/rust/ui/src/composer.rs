@@ -1095,7 +1095,7 @@ impl Builder<'_> {
             cursor_home: 2,
             ..Default::default()
         });
-        let line = "Unpair makes the PC forget this console; Remove only drops it from this list";
+        let line = "Remove keeps pairing; unpair makes the PC forget this console";
         self.heading(
             "PC options",
             host_name(model).unwrap_or("PC"),
@@ -1103,7 +1103,7 @@ impl Builder<'_> {
             &heading_style(HEADING_STATUS),
         );
 
-        let width = 360;
+        let width = 300;
         self.button(item::UNPAIR, SIDE, BUTTON_Y, width, "Unpair", false);
         self.button(
             item::REMOVE_HOST,
@@ -1114,13 +1114,60 @@ impl Builder<'_> {
             false,
         );
         self.button(
-            item::CANCEL,
+            item::RENAME_HOST,
             SIDE + 2 * (width + BUTTON_GAP),
+            BUTTON_Y,
+            width,
+            "Rename PC",
+            false,
+        );
+        self.button(
+            item::CANCEL,
+            SIDE + 3 * (width + BUTTON_GAP),
             BUTTON_Y,
             width,
             "Cancel",
             false,
         );
+    }
+
+    fn rename_host_page(&mut self, model: &Model) {
+        self.horizon(&Frame {
+            background: COLOR_BACKGROUND,
+            ..Default::default()
+        });
+        let name = model.rename_entry();
+        self.heading(
+            "Rename PC",
+            if name.is_empty() { "_" } else { name },
+            Some("A: type  X: change keys  Y: erase  B: cancel"),
+            &heading_style(HEADING_Y),
+        );
+        let keys = model.name_keys();
+        for (i, key) in keys.iter().enumerate() {
+            let mut label = [0u8; 1];
+            label[0] = *key;
+            let text = if *key == b' ' {
+                "Space"
+            } else {
+                core::str::from_utf8(&label).unwrap_or("")
+            };
+            let x = SIDE + (i as u32 % 7) * 144;
+            let y = KEYPAD_Y + (i as u32 / 7) * 112;
+            self.button(item::KEY + i as u32, x, y, 132, text, false);
+        }
+        let x = SIDE + 7 * 144 + 48;
+        self.button(item::KEY_PAGE, x, KEYPAD_Y, 300, "Change keys", false);
+        self.button(item::ERASE, x, KEYPAD_Y + 112, 300, "Erase", false);
+        self.button(
+            item::SAVE_NAME,
+            x,
+            KEYPAD_Y + 224,
+            300,
+            "Save",
+            name.trim().is_empty(),
+        );
+        self.button(item::CANCEL, x, KEYPAD_Y + 336, 300, "Cancel", false);
     }
 
     fn cover_tile(&mut self, app: &App) -> Option<u64> {
@@ -1594,6 +1641,7 @@ impl Builder<'_> {
             Screen::Hosts => self.hosts_page(model),
             Screen::AddHost => self.add_host_page(model),
             Screen::HostMenu => self.host_menu_page(model),
+            Screen::RenameHost => self.rename_host_page(model),
             Screen::Unpairing => {
                 self.status(
                     model,

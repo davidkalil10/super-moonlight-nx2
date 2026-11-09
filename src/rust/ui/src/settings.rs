@@ -95,15 +95,16 @@ impl Size {
 pub enum Codec {
     H264,
     Av1,
+    Hevc,
 }
 
 impl Codec {
     pub fn name(self) -> &'static str {
-        ["h264", "av1"][self as usize]
+        ["h264", "av1", "hevc"][self as usize]
     }
 
     fn text(self) -> &'static str {
-        ["H.264", "AV1"][self as usize]
+        ["H.264", "AV1", "HEVC"][self as usize]
     }
 }
 
@@ -113,6 +114,8 @@ const RATES: [u32; 2] = [60, 120];
 pub struct Capabilities {
     pub h264: bool,
     pub av1: bool,
+    pub hevc: bool,
+    pub verified_modes: Option<[u8; 3]>,
     pub fps120: bool,
     pub docked_sizes: bool,
 }
@@ -121,19 +124,40 @@ impl Capabilities {
     pub const ALL: Capabilities = Capabilities {
         h264: true,
         av1: true,
+        hevc: true,
+        verified_modes: None,
         fps120: true,
         docked_sizes: true,
     };
 
     /// Nothing may launch until the console has proven a codec.
     pub fn launchable(&self) -> bool {
-        self.h264 || self.av1
+        self.h264 || self.av1 || self.hevc
+    }
+
+    pub fn verify_mode(&mut self, codec: Codec, size: Size, fps: u32) {
+        let Some(rate) = RATES.iter().position(|value| *value == fps) else {
+            return;
+        };
+        let modes = self.verified_modes.get_or_insert([0; 3]);
+        modes[codec as usize] |= 1 << (size as usize * 2 + rate);
+    }
+
+    fn mode(&self, codec: Codec, size: Size, fps: u32) -> bool {
+        let Some(rate) = RATES.iter().position(|value| *value == fps) else {
+            return false;
+        };
+        self.codec(codec)
+            && self
+                .verified_modes
+                .is_none_or(|modes| modes[codec as usize] & (1 << (size as usize * 2 + rate)) != 0)
     }
 
     fn codec(&self, codec: Codec) -> bool {
         match codec {
             Codec::H264 => self.h264,
             Codec::Av1 => self.av1,
+            Codec::Hevc => self.hevc,
         }
     }
 }
@@ -178,7 +202,7 @@ const ROWS: [Row; Setting::COUNT] = [
     },
     Row {
         reset_before: 4,
-        ..row("codec", "Codec", RowKind::Codec, 2, Codec::Av1 as u8)
+        ..row("codec", "Codec", RowKind::Codec, 3, Codec::Av1 as u8)
     },
     row("hostAudio", "Play audio on the PC", RowKind::Toggle, 2, 0),
     row("optimise", "Optimise game settings", RowKind::Toggle, 2, 0),
@@ -317,7 +341,7 @@ fn default_bitrate(size: Size, fps: u32, codec: Codec) -> u32 {
     let rate = linear / 30.0;
     let share = match codec {
         Codec::Av1 => 0.7,
-        Codec::H264 => 1.0,
+        Codec::H264 | Codec::Hevc => 1.0,
     };
     round_half_up(factor * rate * share) * 1000
 }
@@ -347,7 +371,8 @@ impl Settings {
     pub fn codec(&self) -> Codec {
         match self.value[Setting::Codec as usize] {
             0 => Codec::H264,
-            _ => Codec::Av1,
+            1 => Codec::Av1,
+            _ => Codec::Hevc,
         }
     }
 
@@ -441,14 +466,30 @@ impl Settings {
         let row = setting.row();
         let step = if direction > 0 { 1 } else { -1 };
         let mut index = self.value[setting as usize] as i32 + step;
-        while (0..row.count as i32).contains(&index) && !offered(row, index as u8, docked, caps) {
+        let current = self.in_use(docked, caps);
+        while (0..row.count as i32).contains(&index) {
+            let mut candidate = current;
+            candidate.value[setting as usize] = index as u8;
+            if setting == Setting::Size && candidate.size() == Size::P2160 {
+                candidate.value[Setting::Fps as usize] = 0;
+            }
+            let needs_mode = matches!(setting, Setting::Size | Setting::Fps | Setting::Codec);
+            let mode_ok =
+                !needs_mode || caps.mode(candidate.codec(), candidate.size(), candidate.fps());
+            if offered(row, index as u8, docked, caps) && mode_ok {
+                break;
+            }
             index += step;
         }
         if !(0..row.count as i32).contains(&index) {
             return None;
         }
 
-        let mut out = *self;
+        let mut out = if matches!(setting, Setting::Size | Setting::Fps | Setting::Codec) {
+            current
+        } else {
+            *self
+        };
         out.value[setting as usize] = index as u8;
         let to_4k = setting == Setting::Size && index == Size::P2160 as i32;
         let from_4k = setting == Setting::Size && self.size() == Size::P2160;
@@ -469,6 +510,7 @@ impl Settings {
         let mut out = *self;
         out.dock_fallback(docked && caps.docked_sizes);
         out.capability_fallback(caps);
+        out.mode_fallback(docked, caps);
         out
     }
 
@@ -494,6 +536,39 @@ impl Settings {
         }
         if *codec == Codec::H264 as u8 && !caps.h264 && caps.av1 {
             *codec = Codec::Av1 as u8;
+        }
+    }
+
+    fn mode_fallback(&mut self, docked: bool, caps: &Capabilities) {
+        if caps.verified_modes.is_none() || caps.mode(self.codec(), self.size(), self.fps()) {
+            return;
+        }
+        let mut best = None;
+        for codec in [Codec::H264, Codec::Av1, Codec::Hevc] {
+            for size in Size::ALL {
+                if size.docked_only() && !docked {
+                    continue;
+                }
+                for fps in RATES {
+                    if size == Size::P2160 && fps == 120 {
+                        continue;
+                    }
+                    if !caps.mode(codec, size, fps) {
+                        continue;
+                    }
+                    let score = u8::from(codec == self.codec()) * 4
+                        + u8::from(size == self.size()) * 2
+                        + u8::from(fps == self.fps());
+                    if best.is_none_or(|(old, _, _, _)| score > old) {
+                        best = Some((score, codec, size, fps));
+                    }
+                }
+            }
+        }
+        if let Some((_, codec, size, fps)) = best {
+            self.value[Setting::Codec as usize] = codec as u8;
+            self.value[Setting::Size as usize] = size as u8;
+            self.value[Setting::Fps as usize] = u8::from(fps == 120);
         }
     }
 
@@ -526,7 +601,9 @@ impl Settings {
         let saved = self.value[setting as usize];
         let in_use = used.value[setting as usize];
 
-        if setting == Setting::Codec && !caps.codec(used.codec()) {
+        if matches!(setting, Setting::Codec | Setting::Size | Setting::Fps)
+            && !caps.mode(used.codec(), used.size(), used.fps())
+        {
             let _ = write!(out, "{} unavailable", value_text(setting, self, saved));
             return out;
         }
@@ -652,7 +729,11 @@ impl Settings {
 }
 
 fn codec_at(value: u8) -> Codec {
-    if value == 0 { Codec::H264 } else { Codec::Av1 }
+    match value {
+        0 => Codec::H264,
+        1 => Codec::Av1,
+        _ => Codec::Hevc,
+    }
 }
 
 fn short_size(value: u8) -> &'static str {
@@ -672,7 +753,7 @@ fn match_value(value: Value<'_>, row: &Row) -> Option<u8> {
             .map(|i| i as u8),
         RowKind::Bitrate if value.string_is("auto") => Some(AUTO_BITRATE),
         RowKind::Bitrate => (1..row.count).find(|&i| number == Some(bitrate_mbps(i))),
-        RowKind::Codec => [Codec::H264, Codec::Av1]
+        RowKind::Codec => [Codec::H264, Codec::Av1, Codec::Hevc]
             .iter()
             .position(|c| value.string_is(c.name()))
             .map(|i| i as u8),
@@ -731,3 +812,62 @@ const SIZE_TEXT: [&str; 4] = [
     "2560 \u{d7} 1440 (docked)",
     "3840 \u{d7} 2160 (docked, 60 fps)",
 ];
+
+#[cfg(test)]
+mod verified_tests {
+    use super::*;
+
+    #[test]
+    fn mode_combinations_do_not_borrow_another_codec_or_resolution() {
+        let mut caps = Capabilities {
+            h264: true,
+            av1: true,
+            hevc: true,
+            fps120: true,
+            docked_sizes: true,
+            verified_modes: Some([0; 3]),
+        };
+        caps.verify_mode(Codec::H264, Size::P1080, 60);
+        caps.verify_mode(Codec::Av1, Size::P720, 120);
+        caps.verify_mode(Codec::Hevc, Size::P1080, 60);
+        let mut settings = Settings::default();
+        settings.value[Setting::Codec as usize] = Codec::H264 as u8;
+        assert!(settings.adjust(Setting::Fps, 1, false, &caps).is_none());
+        assert!(settings.adjust(Setting::Size, -1, false, &caps).is_none());
+        let hevc = settings.adjust(Setting::Codec, 1, false, &caps).unwrap();
+        assert_eq!(hevc.codec(), Codec::Hevc);
+        let parsed = Settings::from_json(hevc.to_json().as_str().as_bytes(), &mut Json::new());
+        assert_eq!(parsed.codec(), Codec::Hevc);
+        let auto = hevc.stream_options(false, &caps);
+        assert!(auto.bitrate_auto);
+        assert!(auto.bitrate_kbps > 0);
+        caps.hevc = false;
+        caps.h264 = false;
+        caps.av1 = false;
+        assert!(settings.adjust(Setting::Codec, 1, false, &caps).is_none());
+        assert!(
+            settings.rows(false, &caps)[Setting::Codec as usize]
+                .value
+                .as_str()
+                .contains("unavailable")
+        );
+    }
+
+    #[test]
+    fn restored_mode_uses_only_a_verified_combination() {
+        let mut caps = Capabilities {
+            h264: true,
+            fps120: true,
+            verified_modes: Some([0; 3]),
+            ..Capabilities::default()
+        };
+        caps.verify_mode(Codec::H264, Size::P720, 60);
+        let settings = Settings::default();
+        let used = settings.in_use(false, &caps);
+        assert_eq!(
+            (used.codec(), used.size(), used.fps()),
+            (Codec::H264, Size::P720, 60)
+        );
+        assert_eq!(settings.size(), Size::P1080);
+    }
+}

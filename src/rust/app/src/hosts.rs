@@ -78,7 +78,10 @@ impl Hosts {
         action: &Action,
         store: &mut Store<F>,
     ) -> Result<bool, Error> {
-        let host_action = matches!(action, Action::RememberHost(_) | Action::ForgetHost(_));
+        let host_action = matches!(
+            action,
+            Action::RememberHost(_) | Action::ForgetHost(_) | Action::RenameHost(_)
+        );
         if !host_action {
             return Ok(false);
         }
@@ -88,6 +91,7 @@ impl Hosts {
 
         let changed = match action {
             Action::RememberHost(host) => self.book.remember(host).map_err(Error::Book)?,
+            Action::RenameHost(host) => self.book.rename(host),
             Action::ForgetHost(host) => {
                 self.book.forget(host);
                 false

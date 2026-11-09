@@ -291,7 +291,9 @@ impl Driver {
     ) {
         match output {
             Output::Ui(notice) => self.notify(ui, &notice),
-            Output::Action(action @ (Action::RememberHost(_) | Action::ForgetHost(_))) => {
+            Output::Action(
+                action @ (Action::RememberHost(_) | Action::ForgetHost(_) | Action::RenameHost(_)),
+            ) => {
                 self.save_host(ui, store, &action, effect);
             }
             Output::Action(action) => {

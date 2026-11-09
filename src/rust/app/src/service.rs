@@ -129,6 +129,7 @@ pub enum Action {
     /// Save the host after a successful list (uniqueid filled from the list).
     RememberHost(Host),
     ForgetHost(Host),
+    RenameHost(Host),
     RefreshHosts,
     SaveSettings,
     PauseInput,
@@ -614,6 +615,7 @@ impl Service {
             IntentKind::CancelList => self.abandon(Op::List),
             IntentKind::CancelPair => self.cancel_pair(),
             IntentKind::RemoveHost => self.act(Action::ForgetHost(host)),
+            IntentKind::RenameHost => self.act(Action::RenameHost(host)),
             IntentKind::RefreshHosts => self.act(Action::RefreshHosts),
             IntentKind::SaveSettings => self.act(Action::SaveSettings),
             IntentKind::PauseInput => {
@@ -1827,6 +1829,7 @@ pub fn options_of(settings: &StreamOptions) -> Options {
     let codec = match settings.codec {
         settings::Codec::H264 => Codec::H264,
         settings::Codec::Av1 => Codec::Av1,
+        settings::Codec::Hevc => Codec::Hevc,
     };
 
     Options {

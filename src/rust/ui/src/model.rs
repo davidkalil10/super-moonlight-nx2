@@ -74,6 +74,9 @@ pub mod item {
     pub const ERASE: u32 = 13;
     pub const CONNECT: u32 = 14;
     pub const TOGGLE_STATS: u32 = 15;
+    pub const RENAME_HOST: u32 = 16;
+    pub const KEY_PAGE: u32 = 17;
+    pub const SAVE_NAME: u32 = 18;
     pub const HOST: u32 = 10000;
     pub const APP: u32 = 20000;
     pub const SETTING: u32 = 30000;
@@ -82,6 +85,11 @@ pub mod item {
 
 /// Characters of the address keypad, by `item::KEY` offset.
 pub const KEYS: &[u8] = b"123456789.0";
+pub const NAME_KEYS: [&[u8]; 3] = [
+    b"ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+    b"abcdefghijklmnopqrstuvwxyz",
+    b"0123456789 -_.",
+];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Screen {
@@ -89,6 +97,7 @@ pub enum Screen {
     Hosts,
     AddHost,
     HostMenu,
+    RenameHost,
     Connecting,
     Pairing,
     Apps,
@@ -110,6 +119,7 @@ impl Screen {
             "hosts",
             "addHost",
             "hostMenu",
+            "renameHost",
             "connecting",
             "pairing",
             "apps",
@@ -199,6 +209,7 @@ pub enum IntentKind {
     List,
     RefreshHosts,
     RemoveHost,
+    RenameHost,
     UnpairHost,
     Launch,
     QuitHost,
@@ -219,6 +230,7 @@ impl IntentKind {
             "list",
             "refreshHosts",
             "removeHost",
+            "renameHost",
             "unpairHost",
             "launch",
             "quitHost",
@@ -288,6 +300,8 @@ pub struct Model {
     pin: Option<Message>,
     url: Option<Message>,
     entry: Text<ENTRY_MAX>,
+    rename: Text<63>,
+    name_keys: usize,
     message: Option<Message>,
     back_apps: bool,
     from: Screen,
@@ -367,6 +381,8 @@ impl Model {
             pin: None,
             url: None,
             entry: Text::new(),
+            rename: Text::new(),
+            name_keys: 0,
             message: None,
             back_apps: false,
             from: Screen::Hosts,
@@ -432,6 +448,14 @@ impl Model {
     }
 
     /// The address typed so far on the add-host keypad.
+    pub fn rename_entry(&self) -> &str {
+        self.rename.as_str()
+    }
+
+    pub fn name_keys(&self) -> &[u8] {
+        NAME_KEYS[self.name_keys]
+    }
+
     pub fn entry(&self) -> &str {
         self.entry.as_str()
     }
@@ -696,6 +720,55 @@ impl Model {
                 step.add(IntentKind::UnpairHost, self.host);
             }
             item::REMOVE_HOST => self.remove_host(host, step),
+            item::RENAME_HOST => {
+                self.rename = Text::of(host.name.as_str());
+                self.name_keys = 0;
+                self.screen = Screen::RenameHost;
+                step.changed = true;
+            }
+            _ => {}
+        }
+    }
+
+    fn on_rename_host(&mut self, op: Op, item: u32, step: &mut Step) {
+        match (op, item) {
+            (Op::B, _) | (Op::A, item::CANCEL) => {
+                self.screen = Screen::HostMenu;
+                step.changed = true;
+            }
+            (Op::Y, _) | (Op::A, item::ERASE) => {
+                let current = self.rename.as_str();
+                let kept = current.char_indices().last().map_or(0, |(index, _)| index);
+                self.rename = Text::of(&current[..kept]);
+                step.changed = true;
+            }
+            (Op::X, _) | (Op::A, item::KEY_PAGE) => {
+                self.name_keys = (self.name_keys + 1) % NAME_KEYS.len();
+                step.changed = true;
+            }
+            (Op::A, item::SAVE_NAME) => {
+                let name = self.rename.as_str().trim();
+                if name.is_empty() {
+                    return;
+                }
+                if let Some(mut host) = self.host {
+                    host.name = Name::of(name);
+                    self.host = None;
+                    self.screen = Screen::Hosts;
+                    step.changed = true;
+                    step.add(IntentKind::RenameHost, Some(host));
+                }
+            }
+            (Op::A, _) => {
+                if let Some(&key) = item
+                    .checked_sub(item::KEY)
+                    .and_then(|i| self.name_keys().get(i as usize))
+                {
+                    self.rename
+                        .push_str(core::str::from_utf8(&[key]).unwrap_or(""));
+                    step.changed = true;
+                }
+            }
             _ => {}
         }
     }
@@ -939,6 +1012,7 @@ impl Model {
             Screen::Hosts => self.on_hosts(op, item, step),
             Screen::AddHost => self.on_add_host(op, item, step),
             Screen::HostMenu => self.on_host_menu(op, item, step),
+            Screen::RenameHost => self.on_rename_host(op, item, step),
             Screen::Connecting if op == Op::B => {
                 self.back_to_hosts(step);
                 step.add(IntentKind::CancelList, None);
@@ -1084,7 +1158,11 @@ impl Model {
             Event::Failed { message, back_apps } => {
                 let idle = matches!(
                     screen,
-                    Screen::Hosts | Screen::AddHost | Screen::HostMenu | Screen::Settings
+                    Screen::Hosts
+                        | Screen::AddHost
+                        | Screen::HostMenu
+                        | Screen::RenameHost
+                        | Screen::Settings
                 );
                 if !idle {
                     self.fail(message, back_apps.unwrap_or(self.host.is_some()), step);
@@ -1146,5 +1224,33 @@ mod stream_menu_tests {
         let quit = command(&mut model, Op::A, item::QUIT_HOST);
         assert!(quit.intents().any(|i| i.kind == IntentKind::StopStream));
         assert!(quit.intents().any(|i| i.kind == IntentKind::QuitHost));
+    }
+}
+
+#[cfg(test)]
+mod rename_ui_tests {
+    use super::*;
+
+    #[test]
+    fn rename_emits_only_a_local_host_update() {
+        let host = Host {
+            name: Name::of("PC"),
+            address: Address::of("192.168.1.4"),
+            ..Host::default()
+        };
+        let mut model = Model::new(&[host], Settings::default(), Capabilities::default());
+        model.screen = Screen::Hosts;
+        let run =
+            |model: &mut Model, op, item| model.reduce(&Event::Command { op, item, value: 0 });
+        run(&mut model, Op::Y, item::HOST);
+        run(&mut model, Op::A, item::RENAME_HOST);
+        assert_eq!(model.screen(), Screen::RenameHost);
+        run(&mut model, Op::A, item::KEY);
+        let step = run(&mut model, Op::A, item::SAVE_NAME);
+        let intents: alloc::vec::Vec<_> = step.intents().collect();
+        assert_eq!(intents.len(), 1);
+        assert_eq!(intents[0].kind, IntentKind::RenameHost);
+        assert_eq!(intents[0].host.unwrap().name.as_str(), "PCA");
+        assert_eq!(model.screen(), Screen::Hosts);
     }
 }

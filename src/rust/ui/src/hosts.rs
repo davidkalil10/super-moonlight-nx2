@@ -260,6 +260,23 @@ impl HostBook {
         Ok(true)
     }
 
+    pub fn rename(&mut self, host: &Host) -> bool {
+        let Some(entry) = self.hosts.iter_mut().find(|entry| {
+            same(
+                (&entry.address, &entry.uniqueid),
+                (&host.address, &host.uniqueid),
+            )
+        }) else {
+            return false;
+        };
+        if host.name.is_empty() || entry.name == host.name {
+            return false;
+        }
+        entry.name = host.name;
+        self.dirty = true;
+        true
+    }
+
     /// Hosts mDNS found are appended unless they are the same PC as a saved or removed one
     /// (merge in src/streamer/ui/discover.js); saved entries stay unchanged. True when added.
     pub fn discovered(&mut self, found: &[Host]) -> Result<bool, Error> {
@@ -347,5 +364,30 @@ impl HostBook {
         (0..=self.removed.len())
             .map(|dropped| self.write(&self.removed[dropped..]))
             .find(|text| text.len() <= MAX_BYTES)
+    }
+}
+
+#[cfg(test)]
+mod rename_tests {
+    use super::*;
+
+    #[test]
+    fn renamed_host_is_saved_and_discovery_does_not_overwrite_it() {
+        let mut json = Json::new();
+        let mut book = HostBook::parse(
+            br#"[{"name":"Old","address":"192.168.0.5","uniqueid":"one"}]"#,
+            &mut json,
+        )
+        .unwrap();
+        let mut renamed = book.hosts()[0];
+        renamed.name = Name::of("Game PC");
+        assert!(book.rename(&renamed));
+        let saved = book.to_json().unwrap();
+        let mut restored = HostBook::parse(saved.as_bytes(), &mut json).unwrap();
+        assert_eq!(restored.hosts()[0].name.as_str(), "Game PC");
+        let mut discovered = renamed;
+        discovered.name = Name::of("Other name");
+        assert!(!restored.discovered(&[discovered]).unwrap());
+        assert_eq!(restored.hosts()[0].name.as_str(), "Game PC");
     }
 }

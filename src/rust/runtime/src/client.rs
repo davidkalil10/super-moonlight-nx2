@@ -116,10 +116,20 @@ pub struct Client<F> {
 
 fn ui_capabilities(context: &moonlight_nx2_app::policy::Context) -> Capabilities {
     use moonlight_nx2_app::{request, stream};
-    let mut result = Capabilities::default();
+    let mut result = Capabilities {
+        verified_modes: Some([0; 3]),
+        ..Capabilities::default()
+    };
     for (width, height) in [(1280, 720), (1920, 1080), (2560, 1440), (3840, 2160)] {
         for fps in [60, 120] {
-            for codec in [request::Codec::H264, request::Codec::Av1] {
+            if height == 2160 && fps == 120 {
+                continue;
+            }
+            for codec in [
+                request::Codec::H264,
+                request::Codec::Av1,
+                request::Codec::Hevc,
+            ] {
                 let options = request::Options {
                     width,
                     height,
@@ -136,10 +146,23 @@ fn ui_capabilities(context: &moonlight_nx2_app::policy::Context) -> Capabilities
                 {
                     continue;
                 }
+                let ui_codec = match codec {
+                    request::Codec::H264 => moonlight_nx2_ui::settings::Codec::H264,
+                    request::Codec::Av1 => moonlight_nx2_ui::settings::Codec::Av1,
+                    request::Codec::Hevc => moonlight_nx2_ui::settings::Codec::Hevc,
+                };
+                let size = match height {
+                    720 => moonlight_nx2_ui::settings::Size::P720,
+                    1080 => moonlight_nx2_ui::settings::Size::P1080,
+                    1440 => moonlight_nx2_ui::settings::Size::P1440,
+                    _ => moonlight_nx2_ui::settings::Size::P2160,
+                };
+                result.verify_mode(ui_codec, size, fps);
                 result.h264 |= codec == request::Codec::H264;
+                result.hevc |= codec == request::Codec::Hevc;
                 result.av1 |= codec == request::Codec::Av1;
                 result.fps120 |= fps == 120;
-                result.docked_sizes |= codec == request::Codec::Av1 && width > 1920;
+                result.docked_sizes |= width > 1920;
             }
         }
     }
