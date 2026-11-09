@@ -54,15 +54,15 @@ impl Cache {
             return Err(Error::InvalidRequest);
         }
         validate_png(&bytes)?;
-        if offset >= bytes.len() {
-            return Err(Error::InvalidRequest);
-        }
         let key = Key {
             host: host.into(),
             app,
         };
         if offset != 0 && self.history.get(&key).is_some_and(|old| old != &sha256) {
             return Err(Error::BackendFailed);
+        }
+        if offset >= bytes.len() {
+            return Err(Error::InvalidRequest);
         }
         if !self.history.contains_key(&key) && self.history.len() == MAX_HISTORY_ENTRIES {
             return Err(Error::BackendFailed);
@@ -270,6 +270,27 @@ mod tests {
             Err(Error::BackendFailed)
         );
         cache.insert("pc", 2, 1, png(33), [2; 32]).unwrap();
+    }
+
+    #[test]
+    fn shortened_evicted_cover_requests_restart_instead_of_disabling_covers() {
+        let mut cache = Cache::new();
+        cache.insert("pc", 1, 0, png(100), [1; 32]).unwrap();
+        for app in 2..=9 {
+            cache
+                .insert("pc", app, 0, png(33), [app as u8; 32])
+                .unwrap();
+        }
+        assert!(!cache.contains("pc", 1));
+        assert_eq!(
+            cache.insert("pc", 1, 50, png(33), [9; 32]),
+            Err(Error::BackendFailed)
+        );
+        assert_eq!(
+            cache.insert("pc", 1, 50, png(33), [1; 32]),
+            Err(Error::InvalidRequest)
+        );
+        cache.insert("pc", 1, 0, png(33), [9; 32]).unwrap();
     }
 
     #[test]
