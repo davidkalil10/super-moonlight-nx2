@@ -482,7 +482,8 @@ impl Service {
             self.phase,
             Phase::Starting | Phase::Opening | Phase::Streaming
         );
-        if !live && !(self.phase == Phase::Stopping && relaunching) {
+        let relaunch_pending = self.phase == Phase::Stopping && relaunching;
+        if !live && !relaunch_pending {
             return;
         }
         let (Some(host), Some(app)) = (self.stream_host, self.stream_app) else {

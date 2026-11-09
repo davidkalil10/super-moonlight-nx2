@@ -57,8 +57,8 @@ type UdpSession =
     Session<'static, Decoder, NetSocket, Audout, Receiver<'static, NetSocket, UdpSocket>, SURFACES>;
 
 enum Active {
-    Tcp(TcpSession),
-    Udp(UdpSession),
+    Tcp(Box<TcpSession>),
+    Udp(Box<UdpSession>),
 }
 
 struct Buffers {
@@ -221,10 +221,10 @@ impl Stream {
         let mut connector = PeerConnector::new(peer);
         let session = if descriptor.video.transport == Transport::UdpV1 {
             UdpMedia::open_udp(&mut connector, descriptor, media, audio, now_ms)
-                .map(|media| Active::Udp(Session::new(video, media)))
+                .map(|media| Active::Udp(Box::new(Session::new(video, media))))
         } else {
             Media::open(&mut connector, descriptor, media, audio, now_ms)
-                .map(|media| Active::Tcp(Session::new(video, media)))
+                .map(|media| Active::Tcp(Box::new(Session::new(video, media))))
         };
         match session {
             Ok(session) => Ok(Running {

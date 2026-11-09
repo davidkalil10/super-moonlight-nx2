@@ -190,31 +190,38 @@ pub fn run(checked: bool) -> bool {
     if sdk::process_retired() {
         return false;
     }
-    let result = execute(
-        &mut renderer,
+    let launch = Launch {
         files,
-        authorization.ok(),
+        authorization: authorization.ok(),
         authorization_error,
-        &mut connections,
         checked,
         verified,
         start,
-    );
+    };
+    let result = execute(&mut renderer, &mut connections, launch);
     let closed = renderer.close();
     log(&format!("frontend: renderer close {closed:?}"));
     result && closed.is_ok()
 }
 
-fn execute(
-    renderer: &mut Renderer,
+struct Launch {
     files: Directory,
     authorization: Option<Session>,
     authorization_error: Option<AuthError>,
-    connections: &mut NativeConnections,
     checked: bool,
     verified: bool,
     start: u64,
-) -> bool {
+}
+
+fn execute(renderer: &mut Renderer, connections: &mut NativeConnections, launch: Launch) -> bool {
+    let Launch {
+        files,
+        authorization,
+        authorization_error,
+        checked,
+        verified,
+        start,
+    } = launch;
     const ATLAS: &[u8] = include_bytes!("../../../streamer/ui/fonts/glyphs.bin");
     let mut snapshot = renderer.display().ok();
     let docked = snapshot.is_some_and(|display| display.operation_mode == 1);
@@ -315,7 +322,7 @@ fn execute(
                     let peer = app.peer();
                     stream.open(
                         &mut app.client,
-                        descriptor,
+                        *descriptor,
                         peer,
                         now_ms,
                         #[cfg(feature = "native-video")]
@@ -330,11 +337,11 @@ fn execute(
         app.client
             .update_native_stats(crate::stream_stats::latest());
         let compute = app.client.needs_ui_compute(&input, &frame);
-        if let Err(error) = renderer.present(compute) {
-            if error != crate::render::Error::Busy {
-                failed = true;
-                break;
-            }
+        if let Err(error) = renderer.present(compute)
+            && error != crate::render::Error::Busy
+        {
+            failed = true;
+            break;
         }
         let screen = app.screen();
         if now.saturating_sub(polled) >= 250_000_000 {

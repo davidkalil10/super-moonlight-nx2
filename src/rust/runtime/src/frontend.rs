@@ -82,7 +82,7 @@ pub struct Stats {
 }
 
 pub enum MediaRequest {
-    Open(Descriptor),
+    Open(Box<Descriptor>),
     Close,
 }
 
@@ -522,7 +522,7 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
                 }
                 Effect::Action(Action::OpenMedia(descriptor)) => {
                     self.stats.media_opened += 1;
-                    self.media.push(MediaRequest::Open(descriptor));
+                    self.media.push(MediaRequest::Open(Box::new(descriptor)));
                 }
                 Effect::Action(Action::CloseMedia) => {
                     crate::hid::stop_rumble();

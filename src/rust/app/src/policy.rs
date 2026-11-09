@@ -851,7 +851,7 @@ pub fn stream_info_text(options: &Options) -> metrics::Line {
         options.fps,
         tenths / 10
     );
-    if tenths % 10 != 0 {
+    if !tenths.is_multiple_of(10) {
         let _ = write!(text, ".{}", tenths % 10);
     }
     let _ = write!(text, " Mbps");

@@ -91,7 +91,6 @@ fn core_check() -> bool {
     if media.consume().is_err() || media.end().is_err() {
         return false;
     }
-    drop(media);
     log("media: frame and u64 timestamp PASS");
 
     let pad = input::map_pad(true, (1 << 0) | (1 << 8), [i32::MIN, i32::MAX, 0, -1]);

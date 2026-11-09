@@ -569,10 +569,10 @@ impl Backend<RING> for NativeVideo {
         self.sync = Some(sync);
         log("b2ar: renderer sync borrowed");
         let permitted = sdk::permitted_frame_mode().ok_or(BackendError::Invalid)?;
-        if let FrameRegistration::Observed(mode) = config.frame_registration {
-            if mode != permitted {
-                return Err(BackendError::Invalid);
-            }
+        if let FrameRegistration::Observed(mode) = config.frame_registration
+            && mode != permitted
+        {
+            return Err(BackendError::Invalid);
         }
         log("b2ar: before decoder context; no nvOpen call");
         self.open_context()?;

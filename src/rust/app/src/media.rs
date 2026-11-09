@@ -197,9 +197,9 @@ impl<S: Socket, U: Datagram> VideoChannel for Receiver<'_, S, U> {
         header: &[u8; HEADER_BYTES],
         input: &[u8],
     ) -> Result<bool, Failure> {
-        if !self
+        if self
             .peek()
-            .is_some_and(|unit| unit.header.encode() == *header)
+            .is_none_or(|unit| unit.header.encode() != *header)
         {
             return Err(Failure::Udp(udp::Error::Invalid));
         }
@@ -402,7 +402,7 @@ impl<'a, S: Socket, D: Device, U: Datagram> UdpMedia<'a, S, D, U> {
         let room = (video.max_payload as usize).checked_mul(udp::UNIT_SLOTS);
         if video.max_payload == 0
             || video.max_payload > crate::stream::MAX_VIDEO_PAYLOAD
-            || !room.is_some_and(|room| memory.video.len() >= room)
+            || room.is_none_or(|room| memory.video.len() < room)
         {
             return Err((
                 Failure::Invalid,
