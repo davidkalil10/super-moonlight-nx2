@@ -206,6 +206,7 @@ mod device {
             {
                 return Err(Error::Invalid);
             }
+            crate::stream_stats::input_sampled(crate::render_platform::now_ns());
             FrameInput::decode(input)
         }
     }

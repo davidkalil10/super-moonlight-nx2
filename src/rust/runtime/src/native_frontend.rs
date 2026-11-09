@@ -439,14 +439,20 @@ fn render_config() -> Config {
             at_60hz: 60,
             vrr: false,
         }),
+        present: PRESENT_MODE,
         ..Config::default()
     }
 }
 
 #[cfg(not(feature = "diagnostic-frontend"))]
 fn render_config() -> Config {
-    Config::default()
+    Config {
+        present: PRESENT_MODE,
+        ..Config::default()
+    }
 }
+
+const PRESENT_MODE: crate::render::PresentMode = crate::render::PresentMode::Fifo;
 
 /// Hands the operation mode and the display modes verified for it to the client; a live stream
 /// restarts in the new context.

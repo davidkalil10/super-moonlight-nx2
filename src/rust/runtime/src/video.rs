@@ -1,11 +1,9 @@
-#[cfg(feature = "diagnostic-native-decode")]
 extern crate alloc;
 
 use crate::{
     render::{self, Renderer},
     render_platform as platform,
 };
-#[cfg(feature = "diagnostic-native-decode")]
 use alloc::format;
 use core::cell::Cell;
 use moonlight_nx2_core::{
@@ -13,6 +11,7 @@ use moonlight_nx2_core::{
     decoder::{self, Backend, Decoder, FrameInfo, FrameToken, SURFACES},
     frame::{Frame, Matrix, Plane},
     media::Header,
+    stats::StreamStats,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -51,11 +50,9 @@ pub struct Presentation {
 struct Arrival {
     pts_us: u64,
     received_us: Option<u64>,
-    #[cfg(feature = "diagnostic-native-decode")]
     submitted_ns: u64,
 }
 
-#[cfg(feature = "diagnostic-native-decode")]
 #[derive(Default)]
 struct Timing {
     window_ns: u64,
@@ -67,9 +64,11 @@ struct Timing {
     latency_max_us: u64,
     last_present_ns: u64,
     interval_max_us: u64,
+    dropped_start: u64,
 }
 
-#[cfg(feature = "diagnostic-native-decode")]
+const LOG_TIMING: bool = cfg!(feature = "diagnostic-native-decode");
+
 impl Timing {
     fn record(&mut self, pts_us: u64, submitted: u64, decoded: u64, started: u64, returned: u64) {
         let decode_us = decoded.saturating_sub(submitted) / 1000;
@@ -79,7 +78,7 @@ impl Timing {
         } else {
             returned.saturating_sub(self.last_present_ns) / 1000
         };
-        if self.logged < 120 {
+        if LOG_TIMING && self.logged < 120 {
             self.logged += 1;
             platform::log(&format!(
                 "video-timing: pts_us={pts_us} present_return_ns={returned} submit_to_readback_us={decode_us} present_call_us={} submit_to_present_return_us={latency_us}",
@@ -97,7 +96,7 @@ impl Timing {
 
     fn summarize(&mut self, now: u64, stats: &Stats) {
         if self.window_ns == 0 {
-            self.window_ns = now;
+            self.restart(now, stats);
             return;
         }
         let elapsed = now.saturating_sub(self.window_ns);
@@ -105,6 +104,25 @@ impl Timing {
             return;
         }
         let frames = self.frames.max(1);
+        let (input_mean_us, input_max_us) = crate::stream_stats::take_input();
+        let clamp = |value: u64| u32::try_from(value).unwrap_or(u32::MAX);
+        crate::stream_stats::publish(StreamStats {
+            window_ms: clamp(elapsed / 1_000_000),
+            fps_x10: clamp(self.frames * 10_000_000_000 / elapsed),
+            decode_mean_us: clamp(self.decode_us / frames),
+            decode_max_us: clamp(self.decode_max_us),
+            latency_mean_us: clamp(self.latency_us / frames),
+            latency_max_us: clamp(self.latency_max_us),
+            input_mean_us,
+            input_max_us,
+            presented: clamp(self.frames),
+            dropped: clamp(stats.dropped.saturating_sub(self.dropped_start)),
+            zero_copy: stats.zero_copy != 0,
+        });
+        if !LOG_TIMING {
+            self.restart(now, stats);
+            return;
+        }
         platform::log(&format!(
             "video-pace: window_ms={} presented={} fps_x10={} decode_mean_us={} decode_max_us={} latency_mean_us={} latency_max_us={} interval_max_us={} zero_copy_total={} dropped_total={}",
             elapsed / 1_000_000,
@@ -118,10 +136,15 @@ impl Timing {
             stats.zero_copy,
             stats.dropped
         ));
+        self.restart(now, stats);
+    }
+
+    fn restart(&mut self, now: u64, stats: &Stats) {
         *self = Self {
             window_ns: now,
             logged: self.logged,
             last_present_ns: self.last_present_ns,
+            dropped_start: stats.dropped,
             ..Self::default()
         };
     }
@@ -137,9 +160,7 @@ pub struct Video<'a, B: Backend<N>, const N: usize = SURFACES> {
     arrivals: [Option<Arrival>; decoder::UNITS],
     bound: [Option<FrameToken>; N],
     pending_arrival: Option<u64>,
-    #[cfg(feature = "diagnostic-native-decode")]
     pending_timing: Option<(u64, u64, u64)>,
-    #[cfg(feature = "diagnostic-native-decode")]
     timing: Timing,
     presentation: Option<Presentation>,
 }
@@ -187,9 +208,7 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
             arrivals: [None; decoder::UNITS],
             bound: [None; N],
             pending_arrival: None,
-            #[cfg(feature = "diagnostic-native-decode")]
             pending_timing: None,
-            #[cfg(feature = "diagnostic-native-decode")]
             timing: Timing::default(),
             presentation: None,
         })
@@ -251,7 +270,6 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
         if header.payload_bytes as usize != bytes.len() {
             return Err(self.fail(Error::Decoder(decoder::Error::Invalid)));
         }
-        #[cfg(feature = "diagnostic-native-decode")]
         let submitted_ns = platform::now_ns();
         match self.decoder.submit(bytes, header.pts_us) {
             Ok(()) => {
@@ -261,7 +279,6 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
                 self.arrivals[index] = Some(Arrival {
                     pts_us: header.pts_us,
                     received_us,
-                    #[cfg(feature = "diagnostic-native-decode")]
                     submitted_ns,
                 });
                 self.stats.accepted_units += 1;
@@ -370,9 +387,7 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
             return Err(self.fail(Error::Decoder(decoder::Error::Invalid)));
         };
         let arrival = self.arrivals[index].unwrap().received_us;
-        #[cfg(feature = "diagnostic-native-decode")]
         let submitted_ns = self.arrivals[index].unwrap().submitted_ns;
-        #[cfg(feature = "diagnostic-native-decode")]
         let decoded_ns = platform::now_ns();
         self.stats.dropped += index as u64;
         self.arrivals.rotate_left(index + 1);
@@ -390,10 +405,7 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
         }
         self.pending = true;
         self.pending_arrival = arrival;
-        #[cfg(feature = "diagnostic-native-decode")]
-        {
-            self.pending_timing = Some((info.pts_us, submitted_ns, decoded_ns));
-        }
+        self.pending_timing = Some((info.pts_us, submitted_ns, decoded_ns));
         Ok(true)
     }
 
@@ -403,7 +415,6 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
         interactive: bool,
     ) -> Result<bool, Error> {
         self.active()?;
-        #[cfg(feature = "diagnostic-native-decode")]
         let present_start_ns = platform::now_ns();
         match renderer.present(interactive) {
             Ok(()) => {
@@ -411,7 +422,6 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
                 self.pending = false;
                 self.stats.presented += u64::from(presented);
                 if presented {
-                    #[cfg(feature = "diagnostic-native-decode")]
                     if let Some((pts, submitted, decoded)) = self.pending_timing.take() {
                         let returned = platform::now_ns();
                         self.timing
@@ -422,7 +432,6 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
                         presented_us: platform::now_ns() / 1000,
                     });
                 }
-                #[cfg(feature = "diagnostic-native-decode")]
                 self.timing.summarize(platform::now_ns(), &self.stats);
                 Ok(presented)
             }
@@ -459,10 +468,8 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
         self.arrivals.fill(None);
         self.bound.fill(None);
         self.pending_arrival = None;
-        #[cfg(feature = "diagnostic-native-decode")]
-        {
-            self.pending_timing = None;
-        }
+        self.pending_timing = None;
+        crate::stream_stats::clear();
         Ok(())
     }
 

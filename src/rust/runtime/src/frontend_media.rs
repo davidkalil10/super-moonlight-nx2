@@ -5,11 +5,11 @@ use crate::{
     render::Renderer,
 };
 use moonlight_nx2_app::{
-    media::VideoChannel,
+    media::{InputSource, VideoChannel},
     policy::{Epoch, Observation},
 };
 use moonlight_nx2_core::decoder::Backend;
-use moonlight_nx2_io::{audio::Device, socket::Socket};
+use moonlight_nx2_io::{audio::Device, media::MAX_INPUT_BYTES, socket::Socket};
 use moonlight_nx2_ui::store::Files;
 
 #[derive(Clone, Copy)]
@@ -24,6 +24,18 @@ pub enum Error {
     Stale,
     Media(media_session::Error),
     ObservationOverflow,
+}
+
+struct Timed<I>(I);
+
+impl<I: InputSource> InputSource for Timed<I> {
+    fn take(&mut self, out: &mut [u8; MAX_INPUT_BYTES]) -> usize {
+        let length = self.0.take(out);
+        if length != 0 {
+            crate::stream_stats::input_sent(crate::render_platform::now_ns());
+        }
+        length
+    }
 }
 
 pub fn pump_network<
@@ -73,7 +85,7 @@ pub fn step<
     let mut count = 0;
     let mut overflow = false;
     let result = {
-        let mut input = client.input(input);
+        let mut input = Timed(client.input(input));
         session.step_observed(
             renderer,
             &mut input,

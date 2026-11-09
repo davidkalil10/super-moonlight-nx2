@@ -114,6 +114,13 @@ pub enum UiShader {
     Text,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum PresentMode {
+    #[default]
+    Fifo,
+    LowLatency,
+}
+
 #[derive(Clone, Copy)]
 pub struct Config {
     pub width: u32,
@@ -126,6 +133,7 @@ pub struct Config {
     pub ui_shader: UiShader,
     pub window_mode: crate::display::WindowMode,
     pub frame_rates: Option<crate::display::FrameRates>,
+    pub present: PresentMode,
 }
 
 impl Default for Config {
@@ -141,6 +149,7 @@ impl Default for Config {
             ui_shader: UiShader::Text,
             window_mode: crate::display::WindowMode::Fixed,
             frame_rates: None,
+            present: PresentMode::Fifo,
         }
     }
 }
@@ -151,6 +160,7 @@ pub struct Info {
     pub width: u32,
     pub height: u32,
     pub swapchain_images: usize,
+    pub present_mode: i32,
     pub storage_path: bool,
     pub presented: u64,
     pub busy_uploads: u64,
@@ -360,8 +370,11 @@ impl Renderer {
             return Err(error);
         }
         log(&format!(
-            "render: ready ui_shader={:?} cache={:?}",
-            config.ui_shader, renderer.objects.info.cache
+            "render: ready ui_shader={:?} cache={:?} present={:?} mode={}",
+            config.ui_shader,
+            renderer.objects.info.cache,
+            config.present,
+            renderer.objects.info.present_mode
         ));
         Ok(renderer)
     }
@@ -1262,7 +1275,13 @@ impl Objects {
             if self.extent.width == 0 || self.extent.height == 0 {
                 return Err(Error::Busy);
             }
-            let images = caps.min_image_count.max(2);
+            let mode = self.present_mode()?;
+            let minimum = if mode == vk::PresentModeKHR::MAILBOX {
+                3
+            } else {
+                2
+            };
+            let images = caps.min_image_count.max(minimum);
             let images = if caps.max_image_count == 0 {
                 images
             } else {
@@ -1293,7 +1312,7 @@ impl Objects {
                 .image_sharing_mode(vk::SharingMode::EXCLUSIVE)
                 .pre_transform(caps.current_transform)
                 .composite_alpha(alpha)
-                .present_mode(vk::PresentModeKHR::FIFO)
+                .present_mode(mode)
                 .clipped(true)
                 .old_swapchain(self.swapchain);
             let swapchain = create!(self.swapchain_api().create_swapchain(&info, allocator()))?;
@@ -1369,6 +1388,24 @@ impl Objects {
             self.storage_path
         ));
         Ok(())
+    }
+
+    fn present_mode(&mut self) -> Result<vk::PresentModeKHR, Error> {
+        let mode = match self.config.present {
+            PresentMode::Fifo => vk::PresentModeKHR::FIFO,
+            PresentMode::LowLatency => {
+                let modes = unsafe {
+                    self.surface_api()
+                        .get_physical_device_surface_present_modes(self.physical, self.surface)?
+                };
+                [vk::PresentModeKHR::MAILBOX, vk::PresentModeKHR::IMMEDIATE]
+                    .into_iter()
+                    .find(|mode| modes.contains(mode))
+                    .unwrap_or(vk::PresentModeKHR::FIFO)
+            }
+        };
+        self.info.present_mode = mode.as_raw();
+        Ok(mode)
     }
 
     fn free_slot(&self) -> Option<usize> {
@@ -1819,6 +1856,9 @@ impl Objects {
         }
         let flight = self.next_flight;
         self.wait_flight(flight, WAIT_NS)?;
+        if self.info.present_mode != vk::PresentModeKHR::FIFO.as_raw() {
+            self.wait_flight((flight + 1) % 2, WAIT_NS)?;
+        }
         let result = unsafe {
             self.swapchain_api().acquire_next_image(
                 self.swapchain,

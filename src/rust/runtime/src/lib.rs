@@ -140,6 +140,8 @@ pub mod sdk;
 pub mod sdk_backing;
 #[cfg(all(target_os = "none", feature = "diagnostic-sdk-backing"))]
 mod sdk_backing_diagnostic;
+#[cfg(any(target_os = "none", feature = "host-renderer"))]
+pub mod stream_stats;
 #[cfg(any(feature = "diagnostic-ui", feature = "host-renderer"))]
 pub mod ui_diagnostic;
 #[cfg(any(target_os = "none", feature = "host-renderer"))]
