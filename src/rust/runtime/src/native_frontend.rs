@@ -123,7 +123,8 @@ impl Drop for NativeConnections {
     }
 }
 
-pub fn run(checked: bool) -> bool {
+pub fn run() -> bool {
+    let checked = cfg!(feature = "diagnostic-frontend-check");
     let stack = unsafe { moonlightPlatformStackAvailable() };
     log(&format!(
         "frontend: stack available={stack} required=786432"
@@ -146,7 +147,11 @@ pub fn run(checked: bool) -> bool {
         Directory::open(&directory)
     };
     let Some(files) = files else {
-        log("frontend: namespace refused; no existing directory was reused by the check");
+        log(if checked {
+            "frontend: namespace refused; no existing directory was reused by the check"
+        } else {
+            "frontend: cannot open the app directory on the SD card"
+        });
         return false;
     };
     log(&format!(
@@ -168,6 +173,7 @@ pub fn run(checked: bool) -> bool {
         "frontend: one-time authorization imported={} checked={checked}",
         authorization.is_ok()
     ));
+    #[cfg(feature = "diagnostic-native-decode")]
     log("b2ar: before renderer/GPU open; no explicit second gsvOpenGpu or nvOpen");
     let (_, saved_settings) = Store::new(files.clone()).load(&mut Box::new(Json::new()));
     let low_latency = saved_settings.on(moonlight_nx2_ui::settings::Setting::LowLatency);
@@ -178,6 +184,7 @@ pub fn run(checked: bool) -> bool {
             return false;
         }
     };
+    #[cfg(feature = "diagnostic-native-decode")]
     log("b2ar: renderer/GPU open returned success");
     #[cfg(feature = "diagnostic-ref-replay")]
     crate::ref_replay::run(&mut renderer);

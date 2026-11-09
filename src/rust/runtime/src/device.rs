@@ -331,7 +331,7 @@ pub extern "C" fn main() -> i32 {
     )))]
     let passed = true;
     #[cfg(feature = "frontend")]
-    let passed = passed && crate::native_frontend::run(cfg!(feature = "diagnostic-frontend-check"));
+    let passed = passed && crate::native_frontend::run();
     #[cfg(feature = "diagnostic-renderer")]
     let passed = passed && renderer_check();
     #[cfg(feature = "diagnostic-io")]
