@@ -35,8 +35,13 @@ use moonlight_nx2_ui::store::Files;
 
 #[cfg(not(feature = "diagnostic-frontend"))]
 type Decoder = crate::gsv::GsvBackend;
-#[cfg(feature = "diagnostic-frontend")]
+#[cfg(all(
+    feature = "diagnostic-frontend",
+    not(feature = "diagnostic-native-decode")
+))]
 type Decoder = crate::video_sink::VideoSink;
+#[cfg(feature = "diagnostic-native-decode")]
+type Decoder = crate::native_video::NativeVideo;
 
 const MEDIA_SILENCE_MS: u64 = 10_000;
 
@@ -106,13 +111,21 @@ impl Stream {
         mut descriptor: Descriptor,
         peer: Option<[u8; 4]>,
         now_ms: u64,
+        #[cfg(feature = "diagnostic-native-decode")] renderer: &mut Renderer,
     ) -> bool {
         let Some(epoch) = client.session_epoch() else {
             descriptor.wipe();
             return false;
         };
         let opened = match peer {
-            Some(peer) if self.running.is_none() => self.start(&descriptor, peer, epoch, now_ms),
+            Some(peer) if self.running.is_none() => self.start(
+                &descriptor,
+                peer,
+                epoch,
+                now_ms,
+                #[cfg(feature = "diagnostic-native-decode")]
+                renderer,
+            ),
             _ => Err("no peer or a stream is already open"),
         };
         descriptor.wipe();
@@ -136,7 +149,12 @@ impl Stream {
         peer: [u8; 4],
         epoch: Epoch,
         now_ms: u64,
+        #[cfg(feature = "diagnostic-native-decode")] renderer: &mut Renderer,
     ) -> Result<Running, &'static str> {
+        #[cfg(feature = "diagnostic-native-decode")]
+        if core_codec(descriptor.codec) != moonlight_nx2_core::codec::Codec::H264 {
+            return Err("native diagnostic supports H.264 only");
+        }
         let display = Size::new(descriptor.width, descriptor.height).ok_or("invalid size")?;
         let coded = Size::new(
             descriptor.width.next_multiple_of(16),
@@ -148,18 +166,32 @@ impl Stream {
                 codec: core_codec(descriptor.codec),
                 coded,
                 display,
-                timeout_ms: 0,
+                timeout_ms: if cfg!(feature = "diagnostic-native-decode") {
+                    2000
+                } else {
+                    0
+                },
                 frame_registration: FrameRegistration::Register,
-                backing: Backing::CpuReference,
+                backing: if cfg!(feature = "diagnostic-native-decode") {
+                    Backing::NativeGpu
+                } else {
+                    Backing::CpuReference
+                },
             },
             fps: descriptor.fps,
             matrix: Matrix::Bt709,
         };
+        #[cfg(feature = "diagnostic-native-decode")]
+        let backend = renderer
+            .native_decoder()
+            .map_err(|_| "native renderer owner")?;
+        #[cfg(not(feature = "diagnostic-native-decode"))]
+        let backend = Decoder::new();
         let buffers = Box::into_raw(Buffers::new(coded));
         let memory = unsafe { &mut *buffers };
         let [first, second] = &mut memory.frames;
         let video = Video::open(
-            Decoder::new(),
+            backend,
             config,
             &self.capabilities,
             self.retired,
@@ -201,7 +233,9 @@ impl Stream {
             }),
             Err((failure, closed)) => {
                 log(&format!("stream: media open failed {failure:?}"));
-                if self.reclaim(closed) {
+                if self.reclaim(closed)
+                    && (!cfg!(feature = "diagnostic-native-decode") || !self.retired.get())
+                {
                     drop(unsafe { Box::from_raw(buffers) });
                 }
                 Err("media")

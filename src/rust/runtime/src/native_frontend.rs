@@ -270,7 +270,14 @@ fn execute(
             match request {
                 MediaRequest::Open(descriptor) => {
                     let peer = app.peer();
-                    stream.open(&mut app.client, descriptor, peer, now_ms);
+                    stream.open(
+                        &mut app.client,
+                        descriptor,
+                        peer,
+                        now_ms,
+                        #[cfg(feature = "diagnostic-native-decode")]
+                        renderer,
+                    );
                 }
                 MediaRequest::Close => stream.begin_close(&mut app.client, now_ms),
             }
@@ -410,11 +417,16 @@ fn display_context(
         .client
         .context_changed(moonlight_nx2_app::policy::Context {
             docked,
-            decoder: crate::video_sink::capabilities(),
+            decoder: stream_capabilities(),
             display,
         });
+    #[cfg(not(feature = "diagnostic-native-decode"))]
     log(&format!(
         "display: context docked={docked} accepted={accepted}; video sink receives and discards up to 1440p120 and 4K60"
+    ));
+    #[cfg(feature = "diagnostic-native-decode")]
+    log(&format!(
+        "display: context docked={docked} accepted={accepted}; H.264 native diagnostic up to 1080p60"
     ));
 }
 
@@ -424,9 +436,28 @@ fn display_context(app: &mut Frontend<Directory, NetSocket>, docked: bool, _: Di
     app.client.event(&Event::OperationMode { docked });
 }
 
-#[cfg(feature = "diagnostic-frontend")]
+#[cfg(all(
+    feature = "diagnostic-frontend",
+    not(feature = "diagnostic-native-decode")
+))]
 fn stream_capabilities() -> Capabilities {
     crate::video_sink::capabilities()
+}
+
+#[cfg(feature = "diagnostic-native-decode")]
+fn stream_capabilities() -> Capabilities {
+    use moonlight_nx2_core::codec::{Codec, Depth, Evidence, Mode, Size};
+    let mut capabilities = Capabilities::default();
+    capabilities.record(
+        Mode {
+            codec: Codec::H264,
+            depth: Depth::Eight,
+            maximum: Size::new(1920, 1080).unwrap(),
+            fps: 60,
+        },
+        Evidence::PixelsAndCloseVerified,
+    );
+    capabilities
 }
 
 #[cfg(not(feature = "diagnostic-frontend"))]

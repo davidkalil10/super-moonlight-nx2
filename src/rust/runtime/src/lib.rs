@@ -91,7 +91,11 @@ mod nvdec_access;
 mod ref_replay;
 #[cfg(all(target_os = "none", feature = "diagnostic-udp"))]
 mod udp_diagnostic;
-#[cfg(all(target_os = "none", feature = "diagnostic-frontend"))]
+#[cfg(all(
+    target_os = "none",
+    feature = "diagnostic-frontend",
+    not(feature = "diagnostic-native-decode")
+))]
 mod video_sink;
 
 #[cfg(any(target_os = "none", feature = "host-renderer"))]
@@ -126,7 +130,11 @@ pub mod render;
 mod render_platform;
 #[cfg(target_os = "none")]
 pub mod sdk;
-#[cfg(any(feature = "host-renderer", feature = "diagnostic-sdk-backing", feature = "diagnostic-native-decode"))]
+#[cfg(any(
+    feature = "host-renderer",
+    feature = "diagnostic-sdk-backing",
+    feature = "diagnostic-native-decode"
+))]
 pub mod sdk_backing;
 #[cfg(all(target_os = "none", feature = "diagnostic-sdk-backing"))]
 mod sdk_backing_diagnostic;
