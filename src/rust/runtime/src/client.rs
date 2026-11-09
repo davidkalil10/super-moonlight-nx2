@@ -199,8 +199,12 @@ impl<F: Files + Clone> Client<F> {
         &'a mut self,
         frame: &'a crate::hid::FrameInput,
     ) -> moonlight_nx2_app::driver::FrameInput<'a> {
-        self.driver
-            .input(&View(&mut self.bridge), &frame.pad, Some(&frame.touches))
+        self.driver.input(
+            &View(&mut self.bridge),
+            &frame.pad,
+            Some(&frame.extra),
+            Some(&frame.touches),
+        )
     }
 
     pub fn needs_ui_compute(&mut self, input: &crate::hid::FrameInput, frame: &Frame) -> bool {

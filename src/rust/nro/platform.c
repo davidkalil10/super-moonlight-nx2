@@ -14,8 +14,23 @@
 
 #define LOG_DIRECTORY "sdmc:/switch/moonlight-nx2/rust"
 
+#define EXTRA_PADS 7
+#define EXTRA_OFFSET 1024
+#define SLOT_BYTES 32
+#define MOTION_OFFSET (EXTRA_OFFSET + EXTRA_PADS * SLOT_BYTES)
+#define EXTENDED_BYTES (MOTION_OFFSET + (EXTRA_PADS + 1) * SLOT_BYTES)
+
 static FILE *report;
 static PadState input_pad;
+static PadState extra_pads[EXTRA_PADS];
+
+/* Six-axis handles per player, made for the style the controller had when first read. */
+typedef struct {
+    uint32_t style;
+    HidSixAxisSensorHandle handles[2];
+    int count;
+} Motion;
+static Motion motion[EXTRA_PADS + 1];
 
 _Static_assert(sizeof(GsvSync) == 8, "GsvSync ABI");
 _Static_assert(sizeof(GsvGpu) == 8, "GsvGpu ABI");
@@ -44,9 +59,95 @@ void moonlightPlatformNetStop(void) { socketExit(); }
 
 void moonlightPlatformInputStart(void)
 {
-    padConfigureInput(1, HidNpadStyleSet_NpadStandard);
+    padConfigureInput(1 + EXTRA_PADS, HidNpadStyleSet_NpadStandard);
     padInitializeDefault(&input_pad);
+    for (int slot = 0; slot < EXTRA_PADS; slot++)
+        padInitialize(&extra_pads[slot], (HidNpadIdType)(HidNpadIdType_No2 + slot));
     hidInitializeTouchScreen();
+}
+
+static void stop_motion(Motion *entry)
+{
+    for (int i = 0; i < entry->count; i++)
+        hidStopSixAxisSensor(entry->handles[i]);
+    entry->count = 0;
+    entry->style = 0;
+}
+
+/* One motion sample in 1/1000 m/s^2 and 1/1000 deg/s; false when the player has no sensor. */
+static bool read_motion(int index, HidNpadIdType id, int32_t out[6])
+{
+    Motion *entry = &motion[index];
+    uint32_t styles = hidGetNpadStyleSet(id);
+    uint32_t style = styles & HidNpadStyleTag_NpadFullKey     ? HidNpadStyleTag_NpadFullKey
+                     : styles & HidNpadStyleTag_NpadHandheld  ? HidNpadStyleTag_NpadHandheld
+                     : styles & HidNpadStyleTag_NpadJoyDual   ? HidNpadStyleTag_NpadJoyDual
+                     : styles & HidNpadStyleTag_NpadJoyRight  ? HidNpadStyleTag_NpadJoyRight
+                     : styles & HidNpadStyleTag_NpadJoyLeft   ? HidNpadStyleTag_NpadJoyLeft
+                                                              : 0;
+    if (style != entry->style) {
+        stop_motion(entry);
+        if (!style)
+            return false;
+        int count = style == HidNpadStyleTag_NpadJoyDual ? 2 : 1;
+        if (R_FAILED(hidGetSixAxisSensorHandles(entry->handles, count, id, (HidNpadStyleTag)style)))
+            return false;
+        for (int i = 0; i < count; i++)
+            hidStartSixAxisSensor(entry->handles[i]);
+        entry->count = count;
+        entry->style = style;
+    }
+    /* A dual Joy-Con pair reports the right controller, which holds the face buttons. */
+    HidSixAxisSensorState state = {0};
+    if (hidGetSixAxisSensorStates(entry->handles[entry->count - 1], &state, 1) == 0)
+        return false;
+    const float standard_gravity = 9.80665f, degrees_per_turn = 360.0f;
+    float values[6] = {
+        state.acceleration.x * standard_gravity, state.acceleration.y * standard_gravity,
+        state.acceleration.z * standard_gravity, state.angular_velocity.x * degrees_per_turn,
+        state.angular_velocity.y * degrees_per_turn, state.angular_velocity.z * degrees_per_turn,
+    };
+    for (int i = 0; i < 6; i++)
+        out[i] = (int32_t)(values[i] * 1000.0f);
+    return true;
+}
+
+static void write_pad(uint8_t *slot, PadState *pad)
+{
+    uint64_t buttons = padGetButtons(pad);
+    HidAnalogStickState sticks[2] = {padGetStickPos(pad, 0), padGetStickPos(pad, 1)};
+    int32_t axes[4] = {sticks[0].x, sticks[0].y, sticks[1].x, sticks[1].y};
+    uint32_t attributes = padIsConnected(pad) ? 1 : 0;
+    memset(slot, 0, SLOT_BYTES);
+    memcpy(slot, &buttons, sizeof(buttons));
+    memcpy(slot + 8, axes, sizeof(axes));
+    memcpy(slot + 24, &attributes, sizeof(attributes));
+}
+
+static void write_motion(uint8_t *slot, int index, HidNpadIdType id, bool connected)
+{
+    int32_t values[6];
+    uint32_t valid = connected && read_motion(index, id, values);
+    if (!connected)
+        stop_motion(&motion[index]);
+    memset(slot, 0, SLOT_BYTES);
+    if (valid)
+        memcpy(slot, values, sizeof(values));
+    memcpy(slot + 24, &valid, sizeof(valid));
+}
+
+/* Players 2 to 8 and every player's motion, above the block the publish shader reads. */
+static void read_extended(uint8_t *input)
+{
+    bool handheld = hidGetNpadStyleSet(HidNpadIdType_Handheld) & HidNpadStyleTag_NpadHandheld;
+    write_motion(input + MOTION_OFFSET, 0, handheld ? HidNpadIdType_Handheld : HidNpadIdType_No1,
+                 padIsConnected(&input_pad));
+    for (int slot = 0; slot < EXTRA_PADS; slot++) {
+        padUpdate(&extra_pads[slot]);
+        write_pad(input + EXTRA_OFFSET + slot * SLOT_BYTES, &extra_pads[slot]);
+        write_motion(input + MOTION_OFFSET + (slot + 1) * SLOT_BYTES, slot + 1,
+                     (HidNpadIdType)(HidNpadIdType_No2 + slot), padIsConnected(&extra_pads[slot]));
+    }
 }
 
 uint64_t moonlightPlatformStackAvailable(void)
@@ -113,6 +214,8 @@ bool moonlightPlatformInputRead(uint64_t sample, uint8_t *input, size_t bytes)
     HidTouchScreenState touch = {0};
     hidGetTouchScreenStates(&touch, 1);
     memcpy(input + 128, &touch, sizeof(touch));
+    if (bytes >= EXTENDED_BYTES)
+        read_extended(input);
     return true;
 }
 

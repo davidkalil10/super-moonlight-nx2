@@ -5,6 +5,10 @@ use moonlight_nx2_core::input::{Pad, map_pad, map_pad_with_start_chord, stop_hel
 use moonlight_nx2_io::media::MAX_INPUT_BYTES;
 
 pub const VERSION: u32 = 1;
+/// Records carrying more players, motion or mouse touches; a v1 host never receives them.
+pub const VERSION_EXTENDED: u32 = 2;
+/// Players 2 to 8, beyond the primary pad.
+pub const EXTRA_PADS: usize = 7;
 pub const MAX_POINTS: usize = 16;
 pub const PANEL_WIDTH: f64 = 1280.0;
 pub const PANEL_HEIGHT: f64 = 720.0;
@@ -32,6 +36,36 @@ pub struct PadState {
     pub connected: bool,
     pub buttons: u32,
     pub sticks: [i32; 4],
+}
+
+/// One motion sample: acceleration in 1/1000 m/s^2, angular velocity in 1/1000 deg/s, on the
+/// host gamepad's axes.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct Motion {
+    pub accel: [i32; 3],
+    pub gyro: [i32; 3],
+}
+
+/// What a frame reads besides the primary pad and the touches: players 2 to 8 and one motion
+/// sample per player (index 0 is the primary pad).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Extra {
+    pub pads: [PadState; EXTRA_PADS],
+    pub motion: [Option<Motion>; EXTRA_PADS + 1],
+}
+
+/// The extended part of one record.
+#[derive(Default)]
+struct Extended {
+    pads: [Option<Pad>; EXTRA_PADS],
+    motion: [Option<Motion>; EXTRA_PADS + 1],
+    mouse: bool,
+}
+
+impl Extended {
+    fn any_input(&self) -> bool {
+        self.pads.iter().any(Option::is_some) || self.motion.iter().any(Option::is_some)
+    }
 }
 
 /// One touch point, positions in 1/10000 of the panel (four decimals, as touch.js rounds).
@@ -253,6 +287,8 @@ pub struct Recorder {
     forwarded: Tracker,
     last_pad: Option<Pad>,
     held_across_gate: u32,
+    last_extra: [Option<Pad>; EXTRA_PADS],
+    held_extra: [u32; EXTRA_PADS],
     stopped: bool,
     start_chord: u64,
 }
@@ -277,6 +313,8 @@ impl Recorder {
             forwarded: Tracker::new(),
             last_pad: None,
             held_across_gate: 0,
+            last_extra: [None; EXTRA_PADS],
+            held_extra: [0; EXTRA_PADS],
             stopped: false,
             start_chord: chord,
         }
@@ -296,24 +334,31 @@ impl Recorder {
         allowed: bool,
         out: &mut [u8; MAX_INPUT_BYTES],
     ) -> Result<usize, Error> {
-        self.record_inner(pad, touch, allowed, false, out)
+        self.record_inner(pad, None, touch, false, allowed, false, out)
     }
 
-    /// Driver gates release forwarded fingers even if this frame has no touch read.
+    /// Driver gates release forwarded fingers even if this frame has no touch read. `extra`
+    /// adds players 2 to 8 and motion; `touch_mouse` asks the host to drive its mouse.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn record_frame(
         &mut self,
         pad: &PadState,
+        extra: Option<&Extra>,
         touch: Option<&Touches>,
+        touch_mouse: bool,
         allowed: bool,
         out: &mut [u8; MAX_INPUT_BYTES],
     ) -> Result<usize, Error> {
-        self.record_inner(pad, touch, allowed, true, out)
+        self.record_inner(pad, extra, touch, touch_mouse, allowed, true, out)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn record_inner(
         &mut self,
         pad: &PadState,
+        extra: Option<&Extra>,
         touch: Option<&Touches>,
+        touch_mouse: bool,
         allowed: bool,
         release_without_touch: bool,
         out: &mut [u8; MAX_INPUT_BYTES],
@@ -344,6 +389,10 @@ impl Recorder {
             map_pad(pad.connected, 0, [0; 4])
         };
         let changed = self.changed(mapped);
+        let mut extended = match extra {
+            Some(extra) => self.extend(extra, pad.connected, allowed),
+            None => Extended::default(),
+        };
 
         let mut events = Events::new();
         if let Some(touches) = touch {
@@ -359,10 +408,49 @@ impl Recorder {
             self.forwarded.flush(&mut events);
         }
 
-        if changed.is_none() && events.count == 0 {
+        if changed.is_none() && events.count == 0 && !extended.any_input() {
             return Ok(0);
         }
-        write_record(false, changed.as_ref(), events.as_slice(), out)
+        extended.mouse = touch_mouse && events.count > 0;
+        write_record(false, changed.as_ref(), &extended, events.as_slice(), out)
+    }
+
+    /// Players 2 to 8 that changed, mapped like the primary pad without the start chord, and
+    /// the motion of every connected player. Gated frames release the pads and send no motion.
+    fn extend(&mut self, extra: &Extra, primary: bool, allowed: bool) -> Extended {
+        let mut extended = Extended::default();
+        for (slot, state) in extra.pads.iter().enumerate() {
+            let buttons = if state.connected { state.buttons } else { 0 };
+            self.held_extra[slot] = if allowed {
+                self.held_extra[slot] & buttons
+            } else {
+                buttons
+            };
+            let mapped = if allowed {
+                map_pad(
+                    state.connected,
+                    u64::from(buttons & !self.held_extra[slot]),
+                    state.sticks,
+                )
+            } else {
+                map_pad(state.connected, 0, [0; 4])
+            };
+            let last = &mut self.last_extra[slot];
+            if *last != Some(mapped) && (state.connected || last.is_some()) {
+                *last = Some(mapped);
+                extended.pads[slot] = Some(mapped);
+            }
+        }
+        if allowed {
+            for (index, motion) in extra.motion.iter().enumerate() {
+                let connected = match index {
+                    0 => primary,
+                    _ => extra.pads[index - 1].connected,
+                };
+                extended.motion[index] = motion.filter(|_| connected);
+            }
+        }
+        extended
     }
 
     fn changed(&mut self, pad: Pad) -> Option<Pad> {
@@ -396,19 +484,30 @@ impl Recorder {
         let released = self.changed(map_pad(connected, 0, [0; 4]));
         let mut lifted = Events::new();
         self.forwarded.flush(&mut lifted);
-        write_record(true, released.as_ref(), lifted.as_slice(), out)
+        write_record(
+            true,
+            released.as_ref(),
+            &Extended::default(),
+            lifted.as_slice(),
+            out,
+        )
     }
 }
 
 fn write_record(
     stop: bool,
     pad: Option<&Pad>,
+    extended: &Extended,
     touch: &[TouchEvent],
     out: &mut [u8],
 ) -> Result<usize, Error> {
     let mut writer = Writer { out, used: 0 };
     writer.text("{\"v\":")?;
-    writer.unsigned(VERSION)?;
+    writer.unsigned(if extended.any_input() || extended.mouse {
+        VERSION_EXTENDED
+    } else {
+        VERSION
+    })?;
     if stop {
         writer.text(",\"stop\":true")?;
     }
@@ -418,6 +517,45 @@ fn write_record(
         writer.pad(pad)?;
     }
 
+    if extended.pads.iter().any(Option::is_some) {
+        writer.text(",\"pads\":[")?;
+        let mut first = true;
+        for (slot, pad) in extended.pads.iter().enumerate() {
+            let Some(pad) = pad else { continue };
+            if !first {
+                writer.text(",")?;
+            }
+            first = false;
+            writer.text("{\"index\":")?;
+            writer.unsigned(slot as u32 + 1)?;
+            writer.text(",\"pad\":")?;
+            writer.pad(pad)?;
+            writer.text("}")?;
+        }
+        writer.text("]")?;
+    }
+    if extended.motion.iter().any(Option::is_some) {
+        writer.text(",\"motion\":[")?;
+        let mut first = true;
+        for (index, motion) in extended.motion.iter().enumerate() {
+            let Some(motion) = motion else { continue };
+            if !first {
+                writer.text(",")?;
+            }
+            first = false;
+            writer.text("{\"index\":")?;
+            writer.unsigned(index as u32)?;
+            writer.text(",\"accel\":")?;
+            writer.triple(motion.accel)?;
+            writer.text(",\"gyro\":")?;
+            writer.triple(motion.gyro)?;
+            writer.text("}")?;
+        }
+        writer.text("]")?;
+    }
+    if extended.mouse {
+        writer.text(",\"mouse\":true")?;
+    }
     if !touch.is_empty() {
         writer.text(",\"touch\":[")?;
         for (index, event) in touch.iter().enumerate() {
@@ -494,6 +632,16 @@ impl Writer<'_> {
 
         self.text("0.")?;
         self.bytes(&digits[..length])
+    }
+
+    fn triple(&mut self, values: [i32; 3]) -> Result<(), Error> {
+        self.text("[")?;
+        self.signed(values[0])?;
+        self.text(",")?;
+        self.signed(values[1])?;
+        self.text(",")?;
+        self.signed(values[2])?;
+        self.text("]")
     }
 
     fn pad(&mut self, pad: &Pad) -> Result<(), Error> {

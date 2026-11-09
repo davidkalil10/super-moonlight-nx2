@@ -1,9 +1,17 @@
 use crate::render::Error;
-use moonlight_nx2_app::input::{PadState, Touches};
+use moonlight_nx2_app::input::{EXTRA_PADS, Extra, Motion, PadState, Touches};
 
 pub const TOUCH_OFFSET: usize = 128;
 pub const TOUCH_BYTES: usize = 656;
 pub const REQUIRED_BYTES: usize = TOUCH_OFFSET + TOUCH_BYTES;
+/// Players 2 to 8, 32 bytes each: u64 buttons, i32 sticks[4], u32 attributes (bit 0 connected).
+/// Above the words the publish shader reads (it ends at byte 800).
+pub const EXTRA_OFFSET: usize = 1024;
+const SLOT_BYTES: usize = 32;
+/// Motion for players 1 to 8, 32 bytes each: i32 accel[3] (1/1000 m/s^2), i32 gyro[3]
+/// (1/1000 deg/s), u32 valid.
+pub const MOTION_OFFSET: usize = EXTRA_OFFSET + EXTRA_PADS * SLOT_BYTES;
+pub const EXTENDED_BYTES: usize = MOTION_OFFSET + (EXTRA_PADS + 1) * SLOT_BYTES;
 
 #[derive(Default)]
 pub struct InputGate {
@@ -55,6 +63,7 @@ pub struct FrameInput {
     pub sampling_number: u64,
     pub raw_buttons: u64,
     pub pad: PadState,
+    pub extra: Extra,
     pub touches: Touches,
 }
 
@@ -78,9 +87,37 @@ impl FrameInput {
                     word(28) as i32,
                 ],
             },
+            extra: decode_extra(input),
             touches: Touches::parse(&input[TOUCH_OFFSET..REQUIRED_BYTES]),
         })
     }
+}
+
+/// Players 2 to 8 and motion; empty when the platform wrote no extended block.
+fn decode_extra(input: &[u8]) -> Extra {
+    let mut extra = Extra::default();
+    if input.len() < EXTENDED_BYTES {
+        return extra;
+    }
+    let word = |offset: usize| u32::from_le_bytes(input[offset..offset + 4].try_into().unwrap());
+    for (slot, pad) in extra.pads.iter_mut().enumerate() {
+        let base = EXTRA_OFFSET + slot * SLOT_BYTES;
+        *pad = PadState {
+            connected: word(base + 24) & 1 != 0,
+            buttons: word(base),
+            sticks: core::array::from_fn(|axis| word(base + 8 + axis * 4) as i32),
+        };
+    }
+    for (index, motion) in extra.motion.iter_mut().enumerate() {
+        let base = MOTION_OFFSET + index * SLOT_BYTES;
+        if word(base + 24) & 1 != 0 {
+            *motion = Some(Motion {
+                accel: core::array::from_fn(|axis| word(base + axis * 4) as i32),
+                gyro: core::array::from_fn(|axis| word(base + 12 + axis * 4) as i32),
+            });
+        }
+    }
+    extra
 }
 
 #[cfg(target_os = "none")]

@@ -2,7 +2,7 @@
 //! The runtime keeps SDK objects and media; it receives only the `Effect`s it must carry out.
 
 use crate::hosts::Hosts;
-use crate::input::{PadState, Recorder, Touches};
+use crate::input::{Extra, PadState, Recorder, Touches};
 use crate::link::Link;
 use crate::media::InputSource;
 use crate::policy::{self, Context, Epoch, Feedback, Observation, RemoteSnapshot};
@@ -265,13 +265,16 @@ impl Driver {
         &'a mut self,
         ui: &U,
         pad: &'a PadState,
+        extra: Option<&'a Extra>,
         touches: Option<&'a Touches>,
     ) -> FrameInput<'a> {
         let streaming = self.service.phase() == crate::stream::Phase::Streaming;
         FrameInput {
             recorder: &mut self.recorder,
             pad,
+            extra,
             touches,
+            touch_mouse: streaming && ui.stream_options().touch_mouse,
             allowed: streaming && ui.allow_input(),
             failed: false,
         }
@@ -454,7 +457,9 @@ impl Driver {
 pub struct FrameInput<'a> {
     recorder: &'a mut Recorder,
     pad: &'a PadState,
+    extra: Option<&'a Extra>,
     touches: Option<&'a Touches>,
+    touch_mouse: bool,
     allowed: bool,
     failed: bool,
 }
@@ -468,10 +473,14 @@ impl FrameInput<'_> {
 
 impl InputSource for FrameInput<'_> {
     fn take(&mut self, out: &mut [u8; MAX_INPUT_BYTES]) -> usize {
-        match self
-            .recorder
-            .record_frame(self.pad, self.touches, self.allowed, out)
-        {
+        match self.recorder.record_frame(
+            self.pad,
+            self.extra,
+            self.touches,
+            self.touch_mouse,
+            self.allowed,
+            out,
+        ) {
             Ok(length) => length,
             Err(_) => {
                 self.failed = true;
