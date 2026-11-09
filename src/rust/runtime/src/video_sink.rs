@@ -1,5 +1,4 @@
 use crate::sdk;
-use moonlight_nx2_app::policy::{DisplayCapabilities, DisplayEvidence, DisplayMode};
 use moonlight_nx2_core::{
     codec::{Capabilities, Codec, Depth, Evidence, Mode, Size},
     decoder::{Backend, BackendError, Config, SURFACES},
@@ -10,7 +9,7 @@ const LUMA: u8 = 0x40;
 const CHROMA: u8 = 0x80;
 const WIDTH: u32 = 1920;
 const HEIGHT: u32 = 1080;
-const FPS: u32 = 60;
+const FPS: u32 = 120;
 
 /// A decoder stand-in for streaming without video decode: every access unit is accepted and
 /// answered with a flat grey frame, so the media, input, audio and present paths run.
@@ -94,25 +93,18 @@ impl Backend for VideoSink {
     }
 }
 
-/// The modes the sink stands in for: 1080p60 H.264 and AV1 on the verified 1080p60 display.
-pub fn capabilities() -> (Capabilities, DisplayCapabilities) {
-    let size = Size::new(WIDTH, HEIGHT).unwrap();
+/// The modes the sink stands in for: H.264 and AV1 up to 1080p120. Frames stay at 1080p because
+/// the presenter's upload slots are sized for it; the display side decides what is offered.
+pub fn capabilities() -> Capabilities {
     let mut decoder = Capabilities::default();
     for codec in [Codec::H264, Codec::Av1] {
         let mode = Mode {
             codec,
             depth: Depth::Eight,
-            maximum: size,
+            maximum: Size::new(WIDTH, HEIGHT).unwrap(),
             fps: FPS,
         };
         decoder.record(mode, Evidence::PixelsAndCloseVerified);
     }
-    let mut display = DisplayCapabilities::default();
-    let mode = DisplayMode {
-        width: WIDTH,
-        height: HEIGHT,
-        fps: FPS,
-    };
-    display.record(mode, DisplayEvidence::PresentedAndCloseVerified);
-    (decoder, display)
+    decoder
 }

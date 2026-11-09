@@ -106,3 +106,89 @@ pub(crate) fn observe() -> Option<Snapshot> {
         unsafe { sdk::vi2QueryDisplayBufferMaxResolution(display, &mut result.resolution_level) };
     Some(result)
 }
+
+/// Stream sizes a layer can show, largest first; a layer shows any of them up to its own size.
+const SIZES: [(u32, u32); 4] = [(3840, 2160), (2560, 1440), (1920, 1080), (1280, 720)];
+
+/// The per-second present rate and the display modes it verified, one set per operation mode.
+/// A mode counts as verified once a full second presented on pace at the layer's size; the set
+/// of the other operation mode is kept, so docking back reuses what was already shown.
+pub struct Probe {
+    docked: bool,
+    verified: [moonlight_nx2_app::policy::DisplayCapabilities; 2],
+    best: [(u32, u32, u32); 2],
+    second_ns: u64,
+    presented: u64,
+    rate: u32,
+}
+
+impl Probe {
+    pub fn new(docked: bool, now_ns: u64, presented: u64) -> Self {
+        Self {
+            docked,
+            verified: Default::default(),
+            best: [(0, 0, 0); 2],
+            second_ns: now_ns,
+            presented,
+            rate: 0,
+        }
+    }
+
+    pub fn set_docked(&mut self, docked: bool) {
+        self.docked = docked;
+    }
+
+    pub fn capabilities(&self) -> moonlight_nx2_app::policy::DisplayCapabilities {
+        self.verified[usize::from(self.docked)]
+    }
+
+    /// Closes a second of presents; returns the rate once at least a second has elapsed.
+    pub fn second(&mut self, now_ns: u64, presented: u64) -> Option<u32> {
+        let elapsed = now_ns.saturating_sub(self.second_ns);
+        if elapsed < 1_000_000_000 {
+            return None;
+        }
+        let frames = presented.saturating_sub(self.presented);
+        self.rate = (frames * 1_000_000_000 / elapsed) as u32;
+        self.second_ns = now_ns;
+        self.presented = presented;
+        Some(self.rate)
+    }
+
+    /// Records the layer's mode when the last second kept pace with `hz` (120 or 60 Hz, within
+    /// 10%). Returns true when the verified set for the current operation mode grew.
+    pub fn verify(&mut self, width: u32, height: u32, hz: u32) -> bool {
+        use moonlight_nx2_app::policy::{DisplayEvidence, DisplayMode};
+        let Some(fps) = [120, 60]
+            .into_iter()
+            .find(|&fps| fps <= hz.max(60) && self.rate >= fps * 9 / 10)
+        else {
+            return false;
+        };
+        let index = usize::from(self.docked);
+        let (best_width, best_height, best_fps) = self.best[index];
+        if width <= best_width && height <= best_height && fps <= best_fps {
+            return false;
+        }
+        let mut grew = false;
+        for (size_width, size_height) in SIZES {
+            if size_width <= width && size_height <= height {
+                let mode = DisplayMode {
+                    width: size_width,
+                    height: size_height,
+                    fps,
+                };
+                grew |=
+                    self.verified[index].record(mode, DisplayEvidence::PresentedAndCloseVerified);
+            }
+        }
+        if grew {
+            self.best[index] = (
+                width.max(best_width),
+                height.max(best_height),
+                fps.max(best_fps),
+            );
+        }
+        grew
+    }
+}

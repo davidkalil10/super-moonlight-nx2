@@ -4,6 +4,7 @@ use crate::{
     client_session::Session,
     control_link::Access,
     device::log,
+    display::Probe,
     files::Directory,
     frontend::{AuthError, Connections, Frontend, MediaRequest},
     frontend_stream::Stream,
@@ -14,6 +15,7 @@ use crate::{
 };
 use alloc::{boxed::Box, ffi::CString, format};
 use core::ffi::{CStr, c_char};
+use moonlight_nx2_app::{dock::Monitor, policy::DisplayCapabilities};
 use moonlight_nx2_core::codec::Capabilities;
 use moonlight_nx2_ui::{
     json::Json,
@@ -144,7 +146,7 @@ pub fn run(checked: bool) -> bool {
         "frontend: one-time authorization imported={} checked={checked}; native codecs disabled; Start denied before wire",
         authorization.is_ok()
     ));
-    let mut renderer = match Renderer::open(Config::default()) {
+    let mut renderer = match Renderer::open(render_config()) {
         Ok(renderer) => renderer,
         Err(error) => {
             log(&format!("frontend: renderer open failed {error:?}"));
@@ -175,10 +177,8 @@ fn execute(
     start: u64,
 ) -> bool {
     const ATLAS: &[u8] = include_bytes!("../../../streamer/ui/fonts/glyphs.bin");
-    let docked = renderer
-        .display()
-        .ok()
-        .is_some_and(|display| display.operation_mode == 1);
+    let mut snapshot = renderer.display().ok();
+    let docked = snapshot.is_some_and(|display| display.operation_mode == 1);
     let mut app = match renderer.storage_mut().ok().and_then(|bytes| {
         Frontend::<_, NetSocket>::new(
             bytes,
@@ -214,7 +214,11 @@ fn execute(
     let (mut last_screen, mut listed_at, mut failed, mut blocked_start) =
         (None, None, false, false);
     let mut input_gate = InputGate::default();
-    let mut stream = Stream::new(decoder_capabilities(&mut app, docked));
+    let mut dock = Monitor::new(docked);
+    let mut probe = Probe::new(docked, unsafe { sdk::moonlightNowNs() }, 0);
+    let (mut polled, mut last_mode, mut pending) = (start, None, false);
+    display_context(&mut app, docked, probe.capabilities());
+    let mut stream = Stream::new(stream_capabilities());
     let mut second = start;
     while unsafe { sdk::appletMainLoop() } && !app.exiting() && !sdk::process_retired() {
         let now = unsafe { sdk::moonlightNowNs() };
@@ -268,6 +272,53 @@ fn execute(
             }
         }
         let screen = app.screen();
+        if now.saturating_sub(polled) >= 250_000_000 {
+            polled = now;
+            if let Ok(display) = renderer.display() {
+                snapshot = Some(display);
+                if let Some(docked) = dock.sample(display.operation_mode(), now_ms) {
+                    log(&format!("display: dock change docked={docked}"));
+                    probe.set_docked(docked);
+                    display_context(&mut app, docked, probe.capabilities());
+                    pending = false;
+                }
+            }
+        }
+        if let Ok(info) = renderer.info()
+            && let Some(rate) = probe.second(now, info.presented)
+        {
+            let hz = snapshot.map_or(0, |display| display.nominal_hz);
+            pending |= probe.verify(info.width, info.height, hz);
+            if pending && screen != Screen::Streaming {
+                display_context(&mut app, dock.current(), probe.capabilities());
+                pending = false;
+            }
+            let mode = (info.width, info.height, hz, dock.current());
+            if last_mode != Some(mode)
+                && let Some(display) = snapshot
+            {
+                log(&format!(
+                    "display: mode {}x{}@{hz} docked={} window={}x{} vrr={} interval={}/{} level={} caps=0x{:x}",
+                    info.width,
+                    info.height,
+                    dock.current(),
+                    display.width,
+                    display.height,
+                    display.vrr,
+                    display.interval_numerator,
+                    display.interval_denominator,
+                    display.resolution_level,
+                    display.capabilities.refresh_rates
+                ));
+                last_mode = Some(mode);
+            }
+            log(&format!(
+                "display: presents={rate}/s {}x{}@{hz} docked={}",
+                info.width,
+                info.height,
+                dock.current()
+            ));
+        }
         if last_screen != Some(screen) {
             log(&format!("frontend: screen {}", screen.name()));
             last_screen = Some(screen);
@@ -312,20 +363,60 @@ fn execute(
                 && blocked_start))
 }
 
+/// The sink build presents at up to 120 Hz and asks for a 4K layer when docked.
 #[cfg(feature = "diagnostic-frontend")]
-fn decoder_capabilities(app: &mut Frontend<Directory, NetSocket>, docked: bool) -> Capabilities {
-    use moonlight_nx2_app::policy::Context;
-    let (decoder, display) = crate::video_sink::capabilities();
-    app.client.context_changed(Context {
-        docked,
-        decoder,
-        display,
-    });
-    log("frontend: video sink; 1080p60 H.264/AV1 video is received and discarded");
-    crate::video_sink::capabilities().0
+fn render_config() -> Config {
+    Config {
+        window_mode: crate::display::WindowMode::PerMode {
+            docked_width: 3840,
+            docked_height: 2160,
+        },
+        frame_rates: Some(crate::display::FrameRates {
+            at_120hz: 120,
+            at_60hz: 60,
+            vrr: false,
+        }),
+        ..Config::default()
+    }
 }
 
 #[cfg(not(feature = "diagnostic-frontend"))]
-fn decoder_capabilities(_: &mut Frontend<Directory, NetSocket>, _: bool) -> Capabilities {
+fn render_config() -> Config {
+    Config::default()
+}
+
+/// Hands the operation mode and the display modes verified for it to the client; a live stream
+/// restarts in the new context.
+#[cfg(feature = "diagnostic-frontend")]
+fn display_context(
+    app: &mut Frontend<Directory, NetSocket>,
+    docked: bool,
+    display: DisplayCapabilities,
+) {
+    let accepted = app
+        .client
+        .context_changed(moonlight_nx2_app::policy::Context {
+            docked,
+            decoder: crate::video_sink::capabilities(),
+            display,
+        });
+    log(&format!(
+        "display: context docked={docked} accepted={accepted}; video sink receives and discards up to 1080p120"
+    ));
+}
+
+/// Without a decoder nothing can be offered; only the operation mode reaches the model.
+#[cfg(not(feature = "diagnostic-frontend"))]
+fn display_context(app: &mut Frontend<Directory, NetSocket>, docked: bool, _: DisplayCapabilities) {
+    app.client.event(&Event::OperationMode { docked });
+}
+
+#[cfg(feature = "diagnostic-frontend")]
+fn stream_capabilities() -> Capabilities {
+    crate::video_sink::capabilities()
+}
+
+#[cfg(not(feature = "diagnostic-frontend"))]
+fn stream_capabilities() -> Capabilities {
     Capabilities::default()
 }
