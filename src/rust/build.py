@@ -45,6 +45,10 @@ def sources():
                 or record["shader"]["bytes"] != shader.stat().st_size
                 or record["shader"]["sha256"] != digest(shader)):
             raise ValueError("Rust UI shader differs from its manifest")
+    interop = APP / "tools/testship/sdk-interop"
+    for path in sorted(interop.rglob("*")):
+        if path.is_file() and "__pycache__" not in path.parts:
+            result[str(Path("../../tools/testship/sdk-interop") / path.relative_to(interop))] = digest(path)
     return result
 
 
@@ -163,11 +167,9 @@ def build(args):
                      f"BUILD_DIR={directory}", f"RUST_LIBRARY={library}",
                      "NACP_TITLE=" + nacp_title(args.diagnostic)]]
         if args.diagnostic == "sdk-backing":
-            if args.sdk_backing_library_dir is None or not args.sdk_backing_library_dir.is_absolute():
-                raise ValueError("SDK backing mode requires an absolute qualified alias library directory")
-            alias = args.sdk_backing_library_dir / "libouncevk.a"
-            if digest(alias) != "b33546d8f616e135257a27b5606992a2b8a9708dc8d11e8343b55faa34176531":
-                raise ValueError("Unexpected SDK backing alias archive")
+            alias_directory = args.sdk_backing_library_dir or directory / "sdk-interop/alias"
+            if not alias_directory.is_absolute():
+                raise ValueError("SDK backing alias library directory must be absolute")
             backing_inputs = {
                 args.devkitpro / "portlibs/switch2/lib/libouncevk.a": "9b8d1de4d5d6c64de7ab737e940a05650544823ea46cd04f60c76d7a2d93621f",
                 args.devkitpro / "libounce/lib/libounce.a": "1a914c2d1e3c7bb12878ace59d77d570017beee8a1bd366fa596b194bc41efd9",
@@ -178,8 +180,8 @@ def build(args):
                 if digest(path) != expected:
                     raise ValueError(f"SDK backing input differs: {path.name}")
             info["sdk_backing_inputs"] = {str(path): digest(path) for path in backing_inputs}
-            info["sdk_backing_alias_sha256"] = digest(alias)
-            commands[0].extend(["SDK_BACKING=1", f"SDK_BACKING_LIBRARY_DIR={args.sdk_backing_library_dir}"])
+            info["sdk_backing_library_dir"] = str(alias_directory)
+            commands[0].extend(["SDK_BACKING=1", f"SDK_BACKING_LIBRARY_DIR={alias_directory}"])
         artifact = directory / "moonlight-nx2-rust.nro"
 
     directory.mkdir(parents=True, exist_ok=False)
@@ -187,6 +189,11 @@ def build(args):
         with (directory / "build.log").open("w") as log:
             for command in commands:
                 run(command, env, log, info["commands"])
+        if args.stage == "nro" and args.diagnostic == "sdk-backing":
+            alias = Path(info["sdk_backing_library_dir"]) / "libouncevk.a"
+            if digest(alias) != "b33546d8f616e135257a27b5606992a2b8a9708dc8d11e8343b55faa34176531":
+                raise ValueError("Unexpected SDK backing alias archive")
+            info["sdk_backing_alias_sha256"] = digest(alias)
         if sources() != info["sources"]:
             raise ValueError("Rust source changed during the build")
         if artifact:

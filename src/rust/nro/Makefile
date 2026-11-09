@@ -24,11 +24,30 @@ LIBS := -L$(DEVKITPRO)/portlibs/switch2/lib -L$(LIBNX)/lib -lvulkan -lnx -lm
 OBJECTS := $(BUILD_DIR)/platform.o $(BUILD_DIR)/io_adapter.o
 
 ifeq ($(SDK_BACKING),1)
+SDK_INTEROP_TOOLS := $(abspath $(SOURCE_DIR)/../../../tools/testship/sdk-interop)
+SDK_BACKING_LIBRARY_DIR ?= $(BUILD_DIR)/sdk-interop/alias
 ifeq ($(strip $(SDK_BACKING_LIBRARY_DIR)),)
-$(error SDK_BACKING_LIBRARY_DIR must name the qualified alias archive directory)
+$(error SDK_BACKING_LIBRARY_DIR must name an alias archive directory)
 endif
+SDK_BACKING_ARCHIVE := $(SDK_BACKING_LIBRARY_DIR)/libouncevk.a
 OBJECTS += $(BUILD_DIR)/sdk_backing.o
-LIBS := -L$(SDK_BACKING_LIBRARY_DIR) $(LIBS)
+LIBS := -L"$(SDK_BACKING_LIBRARY_DIR)" $(LIBS)
+
+$(SDK_BACKING_ARCHIVE):
+	sh "$(SDK_INTEROP_TOOLS)/prepare-alias-archive.sh" --devkitpro "$(DEVKITPRO)" --out "$(SDK_BACKING_LIBRARY_DIR)"
+
+$(OUTPUT).elf: $(SDK_BACKING_ARCHIVE)
+
+.PHONY: sdk-backing-verify
+sdk-backing-verify: $(OUTPUT).elf
+	python3 -B $(SDK_INTEROP_TOOLS)/verify-final-elf.py \
+		--tool-prefix $(DEVKITPRO)/devkitA64/bin/aarch64-none-elf \
+		--sdk-archive $(DEVKITPRO)/portlibs/switch2/lib/libouncevk.a \
+		--alias-archive $(SDK_BACKING_ARCHIVE) --map $(OUTPUT).map \
+		--elf $(OUTPUT).elf $(BUILD_DIR)/sdk_backing.o > $(BUILD_DIR)/sdk-backing-verify.log 2>&1 \
+		|| { cat $(BUILD_DIR)/sdk-backing-verify.log; exit 1; }
+
+$(OUTPUT).nro: sdk-backing-verify
 endif
 
 .PHONY: all
