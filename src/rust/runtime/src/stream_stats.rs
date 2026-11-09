@@ -1,9 +1,10 @@
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use moonlight_nx2_core::stats::StreamStats;
 
-const FIELDS: usize = 10;
+const FIELDS: usize = 12;
 
 static VALID: AtomicBool = AtomicBool::new(false);
+static IDR_WANTED: AtomicBool = AtomicBool::new(false);
 static ZERO_COPY: AtomicBool = AtomicBool::new(false);
 static LATEST: [AtomicU32; FIELDS] = [const { AtomicU32::new(0) }; FIELDS];
 static SAMPLED_NS: AtomicU64 = AtomicU64::new(0);
@@ -28,6 +29,8 @@ pub fn latest() -> Option<StreamStats> {
         presented: field(8),
         dropped: field(9),
         zero_copy: ZERO_COPY.load(Ordering::Relaxed),
+        idr_requests: field(10),
+        frames_skipped: field(11),
     })
 }
 
@@ -43,6 +46,8 @@ pub fn publish(stats: StreamStats) {
         stats.input_max_us,
         stats.presented,
         stats.dropped,
+        stats.idr_requests,
+        stats.frames_skipped,
     ];
     for (slot, value) in LATEST.iter().zip(fields) {
         slot.store(value, Ordering::Relaxed);
@@ -53,6 +58,7 @@ pub fn publish(stats: StreamStats) {
 
 pub fn clear() {
     VALID.store(false, Ordering::Release);
+    IDR_WANTED.store(false, Ordering::Release);
     take_input();
 }
 
@@ -77,4 +83,12 @@ pub fn take_input() -> (u32, u32) {
     let max = INPUT_MAX_US.swap(0, Ordering::Relaxed);
     let mean = sum.checked_div(u64::from(count)).unwrap_or(0);
     (u32::try_from(mean).unwrap_or(u32::MAX), max)
+}
+
+pub fn request_idr() {
+    IDR_WANTED.store(true, Ordering::Release);
+}
+
+pub fn take_idr_request() -> bool {
+    IDR_WANTED.swap(false, Ordering::AcqRel)
 }

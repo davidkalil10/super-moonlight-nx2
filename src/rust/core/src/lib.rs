@@ -11,6 +11,7 @@ pub mod frame_registration;
 pub mod input;
 pub mod media;
 pub mod nv_access;
+pub mod recovery;
 pub mod stats;
 pub mod untile;
 pub mod video_wire;

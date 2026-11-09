@@ -7,10 +7,11 @@ use crate::{
 use alloc::format;
 use core::cell::Cell;
 use moonlight_nx2_core::{
-    codec::{Capabilities, Depth},
+    codec::{Capabilities, Codec, Depth},
     decoder::{self, Backend, Decoder, FrameInfo, FrameToken, SURFACES},
     frame::{Frame, Matrix, Plane},
     media::Header,
+    recovery::{self, Decision, Recovery},
     stats::StreamStats,
 };
 
@@ -94,7 +95,7 @@ impl Timing {
         self.interval_max_us = self.interval_max_us.max(interval_us);
     }
 
-    fn summarize(&mut self, now: u64, stats: &Stats) {
+    fn summarize(&mut self, now: u64, stats: &Stats, recovery: recovery::Counters) {
         if self.window_ns == 0 {
             self.restart(now, stats);
             return;
@@ -118,13 +119,15 @@ impl Timing {
             presented: clamp(self.frames),
             dropped: clamp(stats.dropped.saturating_sub(self.dropped_start)),
             zero_copy: stats.zero_copy != 0,
+            idr_requests: clamp(recovery.idr_requests),
+            frames_skipped: clamp(recovery.frames_skipped),
         });
         if !LOG_TIMING {
             self.restart(now, stats);
             return;
         }
         platform::log(&format!(
-            "video-pace: window_ms={} presented={} fps_x10={} decode_mean_us={} decode_max_us={} latency_mean_us={} latency_max_us={} interval_max_us={} zero_copy_total={} dropped_total={}",
+            "video-pace: window_ms={} presented={} fps_x10={} decode_mean_us={} decode_max_us={} latency_mean_us={} latency_max_us={} interval_max_us={} zero_copy_total={} dropped_total={} idr_requests={} frames_skipped={}",
             elapsed / 1_000_000,
             self.frames,
             self.frames * 10_000_000_000 / elapsed,
@@ -134,7 +137,9 @@ impl Timing {
             self.latency_max_us,
             self.interval_max_us,
             stats.zero_copy,
-            stats.dropped
+            stats.dropped,
+            recovery.idr_requests,
+            recovery.frames_skipped
         ));
         self.restart(now, stats);
     }
@@ -152,6 +157,8 @@ impl Timing {
 
 pub struct Video<'a, B: Backend<N>, const N: usize = SURFACES> {
     decoder: Decoder<'a, B, N>,
+    codec: Codec,
+    recovery: Recovery,
     matrix: Matrix,
     failure: Option<Error>,
     pending: bool,
@@ -200,6 +207,8 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
         );
         Ok(Self {
             decoder,
+            codec: config.decoder.codec,
+            recovery: Recovery::default(),
             matrix: config.matrix,
             failure: None,
             pending: false,
@@ -271,6 +280,17 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
             return Err(self.fail(Error::Decoder(decoder::Error::Invalid)));
         }
         let submitted_ns = platform::now_ns();
+        let keyframe = recovery::keyframe(self.codec, bytes);
+        let decision = self.recovery.unit(
+            header.sequence,
+            keyframe,
+            header.pts_us,
+            submitted_ns / 1_000_000,
+        );
+        self.forward_idr_request();
+        if decision == Decision::Skip {
+            return Ok(());
+        }
         match self.decoder.submit(bytes, header.pts_us) {
             Ok(()) => {
                 let Some(index) = self.arrivals.iter().position(Option::is_none) else {
@@ -288,6 +308,20 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
             Err(decoder::Error::Again) => Err(Error::Decoder(decoder::Error::Again)),
             Err(error) => Err(self.fail(Error::Decoder(error))),
         }
+    }
+
+    fn forward_idr_request(&mut self) {
+        if self.recovery.take_request() {
+            crate::stream_stats::request_idr();
+            platform::log(&format!(
+                "video-recovery: idr request {:?}",
+                self.recovery.counters()
+            ));
+        }
+    }
+
+    pub fn recovery(&self) -> recovery::Counters {
+        self.recovery.counters()
     }
 
     fn release_bound(&mut self, renderer: &mut Renderer) -> Result<(), Error> {
@@ -367,6 +401,8 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
     pub fn poll_upload(&mut self, renderer: &mut Renderer) -> Result<bool, Error> {
         self.active()?;
         self.release_bound(renderer)?;
+        self.recovery.tick(platform::now_ns() / 1_000_000);
+        self.forward_idr_request();
         let frame = self
             .decoder
             .poll()
@@ -390,11 +426,21 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
         let submitted_ns = self.arrivals[index].unwrap().submitted_ns;
         let decoded_ns = platform::now_ns();
         self.stats.dropped += index as u64;
+        if index != 0 {
+            self.recovery.lose(decoded_ns / 1_000_000);
+            self.forward_idr_request();
+        }
         self.arrivals.rotate_left(index + 1);
         for entry in self.arrivals.iter_mut().skip(decoder::UNITS - index - 1) {
             *entry = None;
         }
 
+        if !self.recovery.presentable(info.pts_us) {
+            self.decoder
+                .release(info.token)
+                .map_err(|error| self.fail(Error::Decoder(error)))?;
+            return Ok(false);
+        }
         if !self.upload(renderer, &info)? {
             self.stats.dropped += 1;
             return Ok(false);
@@ -432,7 +478,8 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
                         presented_us: platform::now_ns() / 1000,
                     });
                 }
-                self.timing.summarize(platform::now_ns(), &self.stats);
+                self.timing
+                    .summarize(platform::now_ns(), &self.stats, self.recovery.counters());
                 Ok(presented)
             }
             Err(render::Error::Busy) => Ok(false),
