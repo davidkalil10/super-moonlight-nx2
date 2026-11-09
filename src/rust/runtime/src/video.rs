@@ -1,7 +1,12 @@
+#[cfg(feature = "diagnostic-native-decode")]
+extern crate alloc;
+
 use crate::{
     render::{self, Renderer},
     render_platform as platform,
 };
+#[cfg(feature = "diagnostic-native-decode")]
+use alloc::format;
 use core::cell::Cell;
 use moonlight_nx2_core::{
     codec::{Capabilities, Depth},
@@ -45,6 +50,8 @@ pub struct Presentation {
 struct Arrival {
     pts_us: u64,
     received_us: Option<u64>,
+    #[cfg(feature = "diagnostic-native-decode")]
+    submitted_ns: u64,
 }
 
 pub struct Video<'a, B: Backend> {
@@ -56,6 +63,8 @@ pub struct Video<'a, B: Backend> {
     stats: Stats,
     arrivals: [Option<Arrival>; decoder::SURFACES],
     pending_arrival: Option<u64>,
+    #[cfg(feature = "diagnostic-native-decode")]
+    pending_timing: Option<(u64, u64, u64)>,
     presentation: Option<Presentation>,
 }
 
@@ -97,6 +106,8 @@ impl<'a, B: Backend> Video<'a, B> {
             stats: Stats::default(),
             arrivals: [None; decoder::SURFACES],
             pending_arrival: None,
+            #[cfg(feature = "diagnostic-native-decode")]
+            pending_timing: None,
             presentation: None,
         })
     }
@@ -153,6 +164,8 @@ impl<'a, B: Backend> Video<'a, B> {
         if header.payload_bytes as usize != bytes.len() {
             return Err(self.fail(Error::Decoder(decoder::Error::Invalid)));
         }
+        #[cfg(feature = "diagnostic-native-decode")]
+        let submitted_ns = platform::now_ns();
         match self.decoder.submit(bytes, header.pts_us) {
             Ok(()) => {
                 let Some(index) = self.arrivals.iter().position(Option::is_none) else {
@@ -161,6 +174,8 @@ impl<'a, B: Backend> Video<'a, B> {
                 self.arrivals[index] = Some(Arrival {
                     pts_us: header.pts_us,
                     received_us,
+                    #[cfg(feature = "diagnostic-native-decode")]
+                    submitted_ns,
                 });
                 self.stats.accepted_units += 1;
                 self.stats.accepted_bytes += bytes.len() as u64;
@@ -187,6 +202,10 @@ impl<'a, B: Backend> Video<'a, B> {
                 return Err(self.fail(Error::Decoder(decoder::Error::Invalid)));
             };
             let arrival = self.arrivals[index].unwrap().received_us;
+            #[cfg(feature = "diagnostic-native-decode")]
+            let submitted_ns = self.arrivals[index].unwrap().submitted_ns;
+            #[cfg(feature = "diagnostic-native-decode")]
+            let decoded_ns = platform::now_ns();
             self.stats.dropped += index as u64;
             self.arrivals.rotate_left(index + 1);
             for entry in self.arrivals.iter_mut().skip(decoder::SURFACES - index - 1) {
@@ -229,6 +248,10 @@ impl<'a, B: Backend> Video<'a, B> {
                     }
                     self.pending = true;
                     self.pending_arrival = arrival;
+                    #[cfg(feature = "diagnostic-native-decode")]
+                    {
+                        self.pending_timing = Some((info.pts_us, submitted_ns, decoded_ns));
+                    }
                     return Ok(true);
                 }
                 Err(render::Error::Busy) => self.stats.dropped += 1,
@@ -244,12 +267,24 @@ impl<'a, B: Backend> Video<'a, B> {
         interactive: bool,
     ) -> Result<bool, Error> {
         self.active()?;
+        #[cfg(feature = "diagnostic-native-decode")]
+        let present_start_ns = platform::now_ns();
         match renderer.present(interactive) {
             Ok(()) => {
                 let presented = self.pending;
                 self.pending = false;
                 self.stats.presented += u64::from(presented);
                 if presented {
+                    #[cfg(feature = "diagnostic-native-decode")]
+                    if let Some((pts, submitted, decoded)) = self.pending_timing.take() {
+                        let returned = platform::now_ns();
+                        platform::log(&format!(
+                            "video-timing: pts_us={pts} present_return_ns={returned} submit_to_readback_us={} present_call_us={} submit_to_present_return_us={}",
+                            decoded.saturating_sub(submitted) / 1000,
+                            returned.saturating_sub(present_start_ns) / 1000,
+                            returned.saturating_sub(submitted) / 1000
+                        ));
+                    }
                     self.presentation = Some(Presentation {
                         received_us: self.pending_arrival.take(),
                         presented_us: platform::now_ns() / 1000,
@@ -282,6 +317,10 @@ impl<'a, B: Backend> Video<'a, B> {
         self.closed = true;
         self.arrivals.fill(None);
         self.pending_arrival = None;
+        #[cfg(feature = "diagnostic-native-decode")]
+        {
+            self.pending_timing = None;
+        }
         Ok(())
     }
 
