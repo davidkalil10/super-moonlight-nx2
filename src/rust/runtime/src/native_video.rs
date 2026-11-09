@@ -117,6 +117,8 @@ pub struct NativeVideo {
     uncertain: bool,
     in_flight: usize,
     config: Option<Config>,
+    #[cfg(feature = "diagnostic-native-decode")]
+    descriptor_reported: bool,
     next_input: usize,
     reply: [u8; 256],
     not_send: PhantomData<*mut ()>,
@@ -141,6 +143,8 @@ impl NativeVideo {
             uncertain: false,
             in_flight: 0,
             config: None,
+            #[cfg(feature = "diagnostic-native-decode")]
+            descriptor_reported: false,
             next_input: 0,
             reply: [0; 256],
             not_send: PhantomData,
@@ -488,7 +492,23 @@ impl NativeVideo {
             ));
             self.resources.surfaces[index].descriptor = descriptor;
         }
-        match untile::Image::decode(&descriptor) {
+        let decoded = untile::Image::decode(&descriptor);
+        #[cfg(feature = "diagnostic-native-decode")]
+        if !self.descriptor_reported {
+            self.descriptor_reported = true;
+            let codec = self.config.map(|config| config.codec);
+            let allocation = self.resources.surfaces[index]
+                .memory
+                .as_ref()
+                .map(NativeMemory::diagnostic_allocation);
+            log(&format!(
+                "x3b: codec={codec:?} surface={index} descriptor_raw={descriptor:02x?}"
+            ));
+            log(&format!(
+                "x3b: codec={codec:?} surface={index} layout={decoded:?} allocation=(surface_bytes,allocated_bytes,alignment,shift)={allocation:?}"
+            ));
+        }
+        match decoded {
             Ok(layout) => Ok(layout),
             Err(untile::Error::Unsupported) => Err(BackendError::Unsupported),
             Err(untile::Error::Invalid) => Err(self.unknown()),

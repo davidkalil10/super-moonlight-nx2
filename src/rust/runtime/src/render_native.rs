@@ -138,6 +138,10 @@ pub(crate) struct NativeMemory {
     buffer: vk::Buffer,
     surface: Option<(usize, Rc<Shared>)>,
     shift: u64,
+    #[cfg(feature = "diagnostic-native-decode")]
+    allocation_size: usize,
+    #[cfg(feature = "diagnostic-native-decode")]
+    allocation_alignment: usize,
     pointer: NonNull<u8>,
     bytes: usize,
     pub(crate) info: sdk_backing::Info,
@@ -516,6 +520,10 @@ impl NativeOwner {
             buffer: vk::Buffer::null(),
             surface: None,
             shift: shift as u64,
+            #[cfg(feature = "diagnostic-native-decode")]
+            allocation_size: size,
+            #[cfg(feature = "diagnostic-native-decode")]
+            allocation_alignment: alignment,
             pointer,
             bytes,
             info,
@@ -610,6 +618,16 @@ impl Drop for NativeOwner {
 }
 
 impl NativeMemory {
+    #[cfg(feature = "diagnostic-native-decode")]
+    pub(crate) fn diagnostic_allocation(&self) -> (usize, usize, usize, u64) {
+        (
+            self.bytes,
+            self.allocation_size,
+            self.allocation_alignment,
+            self.shift,
+        )
+    }
+
     pub(crate) fn pointer(&self) -> *mut core::ffi::c_void {
         self.pointer.as_ptr().cast()
     }
