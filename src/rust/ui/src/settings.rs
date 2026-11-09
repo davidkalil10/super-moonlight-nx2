@@ -5,7 +5,7 @@ use core::fmt::Write;
 use crate::json::{Json, Kind, Value};
 use crate::text::Text;
 
-pub const VERSION: u32 = 7;
+pub const VERSION: u32 = 8;
 pub const JSON_BYTES: usize = 512;
 pub const ROW_TEXT_BYTES: usize = 96;
 
@@ -26,10 +26,11 @@ pub enum Setting {
     StreamInfo,
     FrameCounter,
     TouchMouse,
+    LowLatency,
 }
 
 impl Setting {
-    pub const COUNT: usize = 11;
+    pub const COUNT: usize = 12;
     pub const ALL: [Setting; Self::COUNT] = [
         Setting::Size,
         Setting::Fps,
@@ -42,6 +43,7 @@ impl Setting {
         Setting::StreamInfo,
         Setting::FrameCounter,
         Setting::TouchMouse,
+        Setting::LowLatency,
     ];
 
     pub fn from_index(index: usize) -> Option<Self> {
@@ -217,6 +219,7 @@ const ROWS: [Row; Setting::COUNT] = [
     row("streamInfo", "Stream info badge", RowKind::Toggle, 2, 0),
     row("frameCounter", "Frame counter", RowKind::Toggle, 2, 0),
     row("touchMouse", "Touch as mouse", RowKind::Toggle, 2, 0),
+    row("lowLatency", "Low latency (restart)", RowKind::Toggle, 2, 0),
 ];
 
 fn bitrate_mbps(index: u8) -> f64 {
@@ -911,5 +914,59 @@ mod verified_tests {
             (Codec::H264, Size::P720, 60)
         );
         assert_eq!(settings.size(), Size::P1080);
+    }
+}
+
+#[cfg(test)]
+mod low_latency_tests {
+    use super::*;
+
+    #[test]
+    fn low_latency_is_off_by_default_and_round_trips() {
+        let mut json = Json::new();
+        let legacy = Settings::from_json(br#"{"version":7,"touchMouse":true}"#, &mut json);
+        assert!(!legacy.on(Setting::LowLatency));
+        assert!(legacy.on(Setting::TouchMouse));
+        let enabled = legacy
+            .adjust(Setting::LowLatency, 1, false, &Capabilities::default())
+            .unwrap();
+        assert!(enabled.on(Setting::LowLatency));
+        let loaded = Settings::from_json(enabled.to_json().as_str().as_bytes(), &mut json);
+        assert!(loaded.on(Setting::LowLatency));
+        assert!(loaded.on(Setting::TouchMouse));
+    }
+    #[derive(Default)]
+    struct MemoryFiles {
+        slots: [Option<alloc::vec::Vec<u8>>; 2],
+    }
+
+    impl crate::store::Files for MemoryFiles {
+        fn read(&mut self, name: &str, output: &mut [u8]) -> Option<usize> {
+            let index = crate::store::SLOTS.iter().position(|slot| *slot == name)?;
+            let bytes = self.slots[index].as_ref()?;
+            output.get_mut(..bytes.len())?.copy_from_slice(bytes);
+            Some(bytes.len())
+        }
+
+        fn write(&mut self, name: &str, bytes: &[u8]) -> bool {
+            let Some(index) = crate::store::SLOTS.iter().position(|slot| *slot == name) else {
+                return false;
+            };
+            self.slots[index] = Some(bytes.into());
+            true
+        }
+    }
+
+    #[test]
+    fn low_latency_survives_settings_store_reload() {
+        let mut store = crate::store::Store::new(MemoryFiles::default());
+        let mut json = Json::new();
+        let enabled = Settings::default()
+            .adjust(Setting::LowLatency, 1, false, &Capabilities::default())
+            .unwrap();
+        assert!(store.save(&enabled, &mut json));
+        let (source, loaded) = store.load(&mut json);
+        assert_eq!(source, crate::store::Source::Loaded);
+        assert!(loaded.on(Setting::LowLatency));
     }
 }

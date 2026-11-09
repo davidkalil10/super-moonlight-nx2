@@ -169,7 +169,9 @@ pub fn run(checked: bool) -> bool {
         authorization.is_ok()
     ));
     log("b2ar: before renderer/GPU open; no explicit second gsvOpenGpu or nvOpen");
-    let mut renderer = match Renderer::open(render_config()) {
+    let (_, saved_settings) = Store::new(files.clone()).load(&mut Box::new(Json::new()));
+    let low_latency = saved_settings.on(moonlight_nx2_ui::settings::Setting::LowLatency);
+    let mut renderer = match Renderer::open(render_config(low_latency)) {
         Ok(renderer) => renderer,
         Err(error) => {
             log(&format!("frontend: renderer open failed {error:?}"));
@@ -439,7 +441,7 @@ fn execute(renderer: &mut Renderer, connections: &mut NativeConnections, launch:
 
 /// The sink build presents at up to 120 Hz and asks for a 4K layer when docked.
 #[cfg(feature = "diagnostic-frontend")]
-fn render_config() -> Config {
+fn render_config(low_latency: bool) -> Config {
     Config {
         window_mode: crate::display::WindowMode::PerMode {
             docked_width: 3840,
@@ -450,20 +452,26 @@ fn render_config() -> Config {
             at_60hz: 60,
             vrr: false,
         }),
-        present: PRESENT_MODE,
+        present: present_mode(low_latency),
         ..Config::default()
     }
 }
 
 #[cfg(not(feature = "diagnostic-frontend"))]
-fn render_config() -> Config {
+fn render_config(low_latency: bool) -> Config {
     Config {
-        present: PRESENT_MODE,
+        present: present_mode(low_latency),
         ..Config::default()
     }
 }
 
-const PRESENT_MODE: crate::render::PresentMode = crate::render::PresentMode::Fifo;
+fn present_mode(low_latency: bool) -> crate::render::PresentMode {
+    if low_latency {
+        crate::render::PresentMode::LowLatency
+    } else {
+        crate::render::PresentMode::Fifo
+    }
+}
 
 /// Hands the operation mode and the display modes verified for it to the client; a live stream
 /// restarts in the new context.
