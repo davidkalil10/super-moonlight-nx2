@@ -169,7 +169,7 @@ def build(args):
                      f"BUILD_DIR={directory}", f"RUST_LIBRARY={library}",
                      "NACP_TITLE=" + nacp_title(args.diagnostic),
                      "NACP_VERSION=" + args.nacp_version]]
-        if args.diagnostic == "sdk-backing":
+        if args.diagnostic in ("sdk-backing", "native-decode"):
             alias_directory = args.sdk_backing_library_dir or directory / "sdk-interop/alias"
             if not alias_directory.is_absolute():
                 raise ValueError("SDK backing alias library directory must be absolute")
@@ -185,6 +185,8 @@ def build(args):
             info["sdk_backing_inputs"] = {str(path): digest(path) for path in backing_inputs}
             info["sdk_backing_library_dir"] = str(alias_directory)
             commands[0].extend(["SDK_BACKING=1", f"SDK_BACKING_LIBRARY_DIR={alias_directory}"])
+            if args.diagnostic == "native-decode":
+                commands[0].append("NATIVE_DECODE=1")
         artifact = directory / "moonlight-nx2-rust.nro"
 
     directory.mkdir(parents=True, exist_ok=False)
@@ -192,7 +194,7 @@ def build(args):
         with (directory / "build.log").open("w") as log:
             for command in commands:
                 run(command, env, log, info["commands"])
-        if args.stage == "nro" and args.diagnostic == "sdk-backing":
+        if args.stage == "nro" and args.diagnostic in ("sdk-backing", "native-decode"):
             alias = Path(info["sdk_backing_library_dir"]) / "libouncevk.a"
             if digest(alias) != "b33546d8f616e135257a27b5606992a2b8a9708dc8d11e8343b55faa34176531":
                 raise ValueError("Unexpected SDK backing alias archive")
@@ -221,7 +223,7 @@ def main():
     parser.add_argument("--revision")
     parser.add_argument("--branch")
     parser.add_argument("--nacp-version", default="0.1.0")
-    parser.add_argument("--diagnostic", choices=("core", "renderer", "display", "display120", "coexist", "io", "udp", "nvdec", "sdk-backing", "ui", "ui-order", "ui-data", "ui-alpha", "ui-text", "ui-text-apps", "ui-text-overlay", "ui-text-interactive", "control", "control-default", "frontend", "frontend-check", "ref-replay", "production"), default="core")
+    parser.add_argument("--diagnostic", choices=("core", "renderer", "display", "display120", "coexist", "io", "udp", "nvdec", "sdk-backing", "native-decode", "ui", "ui-order", "ui-data", "ui-alpha", "ui-text", "ui-text-apps", "ui-text-overlay", "ui-text-interactive", "control", "control-default", "frontend", "frontend-check", "ref-replay", "production"), default="core")
     parser.add_argument("--sdk-backing-library-dir", type=Path)
     parser.add_argument("--rust-directory", type=Path)
     parser.add_argument("--cargo-home", type=Path)

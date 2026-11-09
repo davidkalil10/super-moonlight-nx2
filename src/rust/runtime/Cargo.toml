@@ -31,6 +31,7 @@ frontend = []
 diagnostic-frontend = ["frontend"]
 diagnostic-frontend-check = ["frontend"]
 diagnostic-ref-replay = ["diagnostic-frontend"]
+diagnostic-native-decode = ["diagnostic-ref-replay"]
 host-renderer = []
 
 [dependencies]

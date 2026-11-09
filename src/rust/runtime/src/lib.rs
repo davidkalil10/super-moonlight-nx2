@@ -109,7 +109,7 @@ pub mod render;
 mod render_platform;
 #[cfg(target_os = "none")]
 pub mod sdk;
-#[cfg(any(feature = "host-renderer", feature = "diagnostic-sdk-backing"))]
+#[cfg(any(feature = "host-renderer", feature = "diagnostic-sdk-backing", feature = "diagnostic-native-decode"))]
 pub mod sdk_backing;
 #[cfg(all(target_os = "none", feature = "diagnostic-sdk-backing"))]
 mod sdk_backing_diagnostic;
@@ -136,3 +136,8 @@ pub extern "C" fn map_pad(
 pub extern "C" fn stop_held(buttons: u64) -> bool {
     input::stop_held(buttons)
 }
+
+#[cfg(all(target_os = "none", feature = "diagnostic-native-decode"))]
+pub mod native_video;
+#[cfg(all(target_os = "none", feature = "diagnostic-native-decode"))]
+mod owner_call;

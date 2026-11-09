@@ -22,10 +22,13 @@ use moonlight_nx2_core::{
     video_wire::Output,
 };
 
+#[cfg(not(feature = "diagnostic-native-decode"))]
 const CLIPS: [(&str, &[u8]); 2] = [
     ("h264", include_bytes!("../refclip/h264.mlrc")),
     ("av1", include_bytes!("../refclip/av1.mlrc")),
 ];
+#[cfg(feature = "diagnostic-native-decode")]
+const CLIPS: [(&str, &[u8]); 1] = [("h264", include_bytes!("../refclip/h264.mlrc"))];
 /// Presents per decoded frame: about half a second at 60 Hz, a quarter at 120 Hz.
 const HOLD_PRESENTS: u32 = 30;
 /// Presents the last frame of each clip stays up, for a still HDMI capture.
@@ -35,10 +38,18 @@ const DECODE_WAIT_NS: u64 = 2_000_000_000;
 /// The backend under test. The sink answers grey frames, so its sums never match; it proves
 /// the plumbing. A real decoder gates these two behind its feature (`diagnostic-native-decode`)
 /// and adds its own constructor and `BACKING` next to them.
+#[cfg(not(feature = "diagnostic-native-decode"))]
 fn backend(_: &mut Renderer) -> Option<crate::video_sink::VideoSink> {
     Some(crate::video_sink::VideoSink::new())
 }
+#[cfg(not(feature = "diagnostic-native-decode"))]
 const BACKING: Backing = Backing::CpuReference;
+#[cfg(feature = "diagnostic-native-decode")]
+fn backend(renderer: &mut Renderer) -> Option<crate::native_video::NativeVideo> {
+    renderer.native_decoder().ok()
+}
+#[cfg(feature = "diagnostic-native-decode")]
+const BACKING: Backing = Backing::NativeGpu;
 
 /// Replays every embedded clip; true when each one decoded, uploaded and closed cleanly.
 pub fn run(renderer: &mut Renderer) -> bool {
@@ -89,7 +100,7 @@ pub fn replay<B: Backend>(
             codec: clip.codec,
             coded,
             display,
-            timeout_ms: 0,
+            timeout_ms: DECODE_WAIT_NS / 1_000_000,
             frame_registration: FrameRegistration::Register,
             backing,
         },

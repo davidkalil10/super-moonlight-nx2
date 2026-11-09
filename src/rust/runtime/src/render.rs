@@ -252,7 +252,13 @@ struct Objects {
     info: Info,
 }
 
+#[cfg(all(target_os = "none", feature = "diagnostic-native-decode"))]
+#[path = "render_native.rs"]
+pub(crate) mod native;
+
 pub struct Renderer {
+    #[cfg(all(target_os = "none", feature = "diagnostic-native-decode"))]
+    native_children: alloc::rc::Rc<core::cell::Cell<u32>>,
     objects: ManuallyDrop<Box<Objects>>,
     closed: bool,
     not_send: PhantomData<*mut ()>,
@@ -339,6 +345,8 @@ impl Renderer {
                 info: Info::default(),
             })),
             closed: false,
+            #[cfg(all(target_os = "none", feature = "diagnostic-native-decode"))]
+            native_children: alloc::rc::Rc::new(core::cell::Cell::new(0)),
             not_send: PhantomData,
         };
         let result = renderer.objects.initialize();
@@ -522,6 +530,10 @@ impl Renderer {
         if self.objects.retained || sdk::process_retired() {
             self.objects.retain();
             return Err(Error::Retained);
+        }
+        #[cfg(all(target_os = "none", feature = "diagnostic-native-decode"))]
+        if self.native_children.get() != 0 {
+            return Err(self.objects.retain());
         }
         self.objects.destroy()?;
         unsafe { ManuallyDrop::drop(&mut self.objects) };
