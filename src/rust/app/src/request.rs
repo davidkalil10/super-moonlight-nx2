@@ -4,7 +4,7 @@
 pub const MAX_HOST_BYTES: usize = 255;
 pub const MAX_APP_BYTES: usize = 1024;
 pub const MAX_REQUEST_BYTES: usize = 3072;
-pub const DEFAULT_PAIR_TIMEOUT_S: u32 = 600;
+pub const DEFAULT_PAIR_TIMEOUT_S: u32 = 290;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Error {

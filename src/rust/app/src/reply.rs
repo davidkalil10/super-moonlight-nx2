@@ -82,7 +82,7 @@ impl Code {
         }
     }
 
-    /// Console wording; the host's message text is never shown.
+    /// Console wording. Only pairing shows the host's own text (`Reply::Failure`).
     pub fn message(self) -> &'static str {
         match self {
             Code::InvalidRequest => "the PC refused the request",
@@ -298,7 +298,11 @@ pub enum Reply<'a> {
     UpstreamStatus(UpstreamStatus),
     /// ID 0: the PC rumbled `player` (0 = player 1, up to 7); 0/0 stops the motors.
     Rumble(Rumble),
-    Failure(Code),
+    /// `message` is the host's text: empty when absent, oversized or not plain text.
+    Failure {
+        code: Code,
+        message: Message,
+    },
 }
 
 /// Motor strengths for one player, 0 to 65535 each.
@@ -550,18 +554,25 @@ fn quit(value: Value<'_>) -> Result<Quit, Error> {
 
 fn failure(root: Value<'_>) -> Result<Reply<'_>, Error> {
     exact_keys(root, &["code", "message"])?;
-    let message_ok = root
+    let message = root
         .member("message")
-        .is_some_and(|message| message.kind() == Kind::String);
+        .filter(|message| message.kind() == Kind::String)
+        .ok_or(Error::Shape)?;
     let code = root
         .member("code")
         .and_then(|code| code.as_plain_str())
-        .and_then(Code::from_name);
+        .and_then(Code::from_name)
+        .ok_or(Error::Shape)?;
 
-    match (message_ok, code) {
-        (true, Some(code)) => Ok(Reply::Failure(code)),
-        _ => Err(Error::Shape),
-    }
+    let mut buffer = [0; 255];
+    let text = string(message, &mut buffer)
+        .ok()
+        .filter(|text| crate::request::valid_text(text, 255))
+        .unwrap_or("");
+    Ok(Reply::Failure {
+        code,
+        message: Message::of(text),
+    })
 }
 
 fn descriptor(root: Value<'_>) -> Result<Descriptor, Error> {

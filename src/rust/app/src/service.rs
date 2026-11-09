@@ -24,6 +24,8 @@ pub const FRAMES_PER_POLL: usize = 8;
 /// Client deadlines: the helper limits from service.js plus a margin for the PC side.
 pub const LIST_TIMEOUT_MS: u64 = 55_000;
 pub const UNPAIR_TIMEOUT_MS: u64 = 40_000;
+/// Lets the host's own pairing timeout reply arrive before the console gives up.
+pub const PAIR_REPLY_MARGIN_MS: u64 = 10_000;
 pub const QUIT_TIMEOUT_MS: u64 = 70_000;
 pub const START_TIMEOUT_MS: u64 = 30_000;
 pub const STOP_TIMEOUT_MS: u64 = 15_000;
@@ -1303,7 +1305,7 @@ impl Service {
             }
             Reply::UpstreamStatus(status) => Outcome::Upstream(status),
             Reply::Rumble(rumble) => Outcome::Owned(Reply::Rumble(rumble)),
-            Reply::Failure(code) => Outcome::Owned(Reply::Failure(code)),
+            Reply::Failure { code, message } => Outcome::Owned(Reply::Failure { code, message }),
         }
     }
 
@@ -1423,11 +1425,22 @@ impl Service {
             (Op::Unpair, Reply::Unpaired { .. }) => self.notify(Notice::Unpaired),
             (Op::Quit, Reply::Quit(quit)) => self.quit_done(quit),
             (Op::Stop, Reply::Stopped) => self.stopped(),
-            (Op::List, Reply::Failure(Code::NotPaired)) => {
+            (
+                Op::List,
+                Reply::Failure {
+                    code: Code::NotPaired,
+                    ..
+                },
+            ) => {
                 self.quit_outcome = None;
                 self.notify(Notice::NotPaired);
             }
-            (_, Reply::Failure(code)) => {
+            (Op::Pair, Reply::Failure { message, .. }) if !message.as_str().is_empty() => self
+                .fail(
+                    Some(false),
+                    format_args!("Pairing failed: {}", message.as_str()),
+                ),
+            (_, Reply::Failure { code, .. }) => {
                 let uncertain =
                     matches!(code, Code::Timeout | Code::BackendFailed | Code::Cancelled);
                 self.operation_failed(pending, code.message(), uncertain)
@@ -1820,7 +1833,7 @@ fn timeout_ms(op: Op) -> u64 {
         Op::List => LIST_TIMEOUT_MS,
         Op::Unpair => UNPAIR_TIMEOUT_MS,
         Op::Quit => QUIT_TIMEOUT_MS,
-        Op::Pair => u64::from(request::DEFAULT_PAIR_TIMEOUT_S) * 1000,
+        Op::Pair => u64::from(request::DEFAULT_PAIR_TIMEOUT_S) * 1000 + PAIR_REPLY_MARGIN_MS,
         Op::Start => START_TIMEOUT_MS,
         Op::Stop => STOP_TIMEOUT_MS,
     }
