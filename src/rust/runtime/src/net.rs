@@ -25,6 +25,13 @@ struct Status {
 const _: () = assert!(size_of::<Status>() == 16);
 
 unsafe extern "C" {
+    fn setsockopt(
+        fd: i32,
+        level: i32,
+        name: i32,
+        value: *const core::ffi::c_void,
+        length: u32,
+    ) -> i32;
     fn moonlightIoSocketOpen(address: *const [u8; 4], port: u16, status: *mut Status);
     fn moonlightIoDatagramOpen(address: *const [u8; 4], port: u16, status: *mut Status);
     fn moonlightIoSocketPollConnect(fd: i32, status: *mut Status);
@@ -183,6 +190,43 @@ impl DiscoverySocket {
             }),
             _ => Err(io_error(&status)),
         }
+    }
+
+    /// Send one Wake-on-LAN packet. The SDK uses BSD SOL_SOCKET/SO_BROADCAST values.
+    pub fn wake(mac: [u8; 6]) -> Result<(), IoError> {
+        let mut socket = Self::open()?;
+        let enable: i32 = 1;
+        let packet = moonlight_nx2_ui::model::Mac(mac).magic_packet();
+        let configured = unsafe {
+            setsockopt(
+                socket.socket.fd,
+                0xffff,
+                0x20,
+                (&enable as *const i32).cast(),
+                4,
+            )
+        } == 0;
+        let result = if configured {
+            let mut status = Status::default();
+            unsafe {
+                moonlightIoDiscoverySend(
+                    socket.socket.fd,
+                    &[255; 4],
+                    9,
+                    packet.as_ptr(),
+                    packet.len(),
+                    &mut status,
+                );
+            }
+            match socket.socket.transfer(&status, packet.len()) {
+                Ok(count) if count == packet.len() => Ok(()),
+                _ => Err(IoError::Failed),
+            }
+        } else {
+            Err(IoError::Failed)
+        };
+        socket.close()?;
+        result
     }
 }
 

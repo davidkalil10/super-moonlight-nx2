@@ -7,6 +7,7 @@
 
 pub mod bitrate;
 pub mod dock;
+pub mod covers;
 pub mod driver;
 pub mod hosts;
 pub mod input;

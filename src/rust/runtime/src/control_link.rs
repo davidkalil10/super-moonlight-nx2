@@ -173,7 +173,7 @@ impl<S: Socket + 'static> Link for Control<S> {
         let op = parsed.and_then(|value| value.member("op"));
         let list = op.is_some_and(|op| op.string_is("list"));
         let allowed = op.is_some_and(|op| {
-            ["list", "pair", "unpair", "quit", "stop"]
+            ["list", "pair", "unpair", "quit", "stop", "cover"]
                 .iter()
                 .any(|name| op.string_is(name))
         });

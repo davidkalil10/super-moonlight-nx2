@@ -1,6 +1,6 @@
 extern crate alloc;
 
-use alloc::{ffi::CString, format};
+use alloc::{ffi::CString, format, vec::Vec};
 use core::{
     ffi::{CStr, c_char, c_int, c_void},
     ptr::NonNull,
@@ -109,6 +109,84 @@ impl Directory {
             return None;
         }
         CString::new(format!("{}/{name}{suffix}", self.path.to_str().ok()?)).ok()
+    }
+}
+
+/// Private application cover cache, separate from settings and host persistence.
+pub struct CoverDirectory(Directory);
+
+impl CoverDirectory {
+    pub fn open(path: &CStr) -> Option<Self> {
+        Directory::open(path).map(Self)
+    }
+
+    fn path(
+        &self,
+        host: &moonlight_nx2_ui::model::Host,
+        app: u32,
+        suffix: &str,
+    ) -> Option<CString> {
+        let valid = |name: &str| {
+            !name.is_empty()
+                && name != "."
+                && name != ".."
+                && name
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
+        };
+        let id = host.uniqueid.as_str();
+        let id = if valid(id) { id } else { host.address.as_str() };
+        if !valid(id) || app == 0 {
+            return None;
+        }
+        CString::new(format!(
+            "{}/{id}-{app}.png{suffix}",
+            self.0.path.to_str().ok()?
+        ))
+        .ok()
+    }
+
+    pub fn read(&self, host: &moonlight_nx2_ui::model::Host, app: u32) -> Option<Vec<u8>> {
+        let path = self.path(host, app, "")?;
+        let mut file = File::open(&path, c"rb")?;
+        let limit = moonlight_nx2_app::covers::MAX_BYTES + 1;
+        let mut bytes = Vec::new();
+        bytes.try_reserve_exact(limit).ok()?;
+        bytes.resize(limit, 0);
+        let count = unsafe { fread(bytes.as_mut_ptr().cast(), 1, bytes.len(), file.pointer()) };
+        let good =
+            count > 0 && count < limit && unsafe { ferror(file.pointer()) } == 0 && file.close();
+        if !good {
+            return None;
+        }
+        bytes.truncate(count);
+        Some(bytes)
+    }
+
+    pub fn write(&self, host: &moonlight_nx2_ui::model::Host, app: u32, bytes: &[u8]) -> bool {
+        if bytes.is_empty() || bytes.len() > moonlight_nx2_app::covers::MAX_BYTES {
+            return false;
+        }
+        let Some(path) = self.path(host, app, "") else {
+            return false;
+        };
+        let Some(temporary) = self.path(host, app, ".part") else {
+            return false;
+        };
+        let Some(mut file) = File::open(&temporary, c"wb") else {
+            return false;
+        };
+        let written = unsafe { fwrite(bytes.as_ptr().cast(), 1, bytes.len(), file.pointer()) }
+            == bytes.len()
+            && unsafe { fflush(file.pointer()) } == 0;
+        let closed = file.close();
+        if written && closed && unsafe { rename(temporary.as_ptr(), path.as_ptr()) } == 0 {
+            return true;
+        }
+        unsafe {
+            remove(temporary.as_ptr());
+        }
+        false
     }
 }
 

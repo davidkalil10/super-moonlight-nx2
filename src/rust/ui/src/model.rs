@@ -16,6 +16,47 @@ pub type Name = Text<127>;
 pub type Address = Text<63>;
 pub type Message = Text<255>;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Mac(pub [u8; 6]);
+
+impl Mac {
+    pub fn parse(text: &str) -> Option<Self> {
+        let bytes = text.as_bytes();
+        if bytes.len() != 17 {
+            return None;
+        }
+        let hex = |c: u8| match c {
+            b'0'..=b'9' => Some(c - b'0'),
+            b'a'..=b'f' => Some(c - b'a' + 10),
+            _ => None,
+        };
+        let mut out = [0; 6];
+        for (i, item) in out.iter_mut().enumerate() {
+            let at = i * 3;
+            if i != 0 && bytes[at - 1] != b':' {
+                return None;
+            }
+            *item = hex(bytes[at])? * 16 + hex(bytes[at + 1])?;
+        }
+        (out != [0; 6] && out[0] & 1 == 0).then_some(Self(out))
+    }
+
+    pub fn text(&self) -> Text<17> {
+        let mut out = Text::new();
+        let [a, b, c, d, e, f] = self.0;
+        let _ = write!(out, "{a:02x}:{b:02x}:{c:02x}:{d:02x}:{e:02x}:{f:02x}");
+        out
+    }
+
+    pub fn magic_packet(self) -> [u8; 102] {
+        let mut packet = [0xff; 102];
+        for chunk in packet[6..].chunks_exact_mut(6) {
+            chunk.copy_from_slice(&self.0);
+        }
+        packet
+    }
+}
+
 /// Item ids the composer gives to selectable things on a page.
 pub mod item {
     pub const BACK: u32 = 1;
@@ -100,6 +141,7 @@ pub struct Host {
     pub name: Name,
     pub address: Address,
     pub uniqueid: Address,
+    pub mac: Option<Mac>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -616,6 +658,7 @@ impl Model {
             name: Name::of(address.as_str()),
             address,
             uniqueid: Address::new(),
+            mac: None,
         };
         self.open_host(typed, self.host_index, step);
     }

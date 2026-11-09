@@ -15,6 +15,7 @@ pub mod inflate;
 pub mod json;
 pub mod model;
 pub mod page;
+pub mod png;
 pub mod settings;
 pub mod store;
 pub mod text;

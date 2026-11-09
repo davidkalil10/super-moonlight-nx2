@@ -170,6 +170,11 @@ impl<F: Files> Bridge<F> {
         bridge
     }
 
+    /// Recomposes the page on the next publish (e.g. box art arrived).
+    pub fn invalidate(&mut self) {
+        self.revision += 1;
+    }
+
     pub fn model(&self) -> &Model {
         &self.model
     }

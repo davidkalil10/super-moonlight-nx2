@@ -113,7 +113,13 @@ pub struct Composer {
     clock: u64,
     serial: u64,
     graveyard: Vec<Entry>,
+    /// Box art tiles by app id, with the stamp that keys their cache entry.
+    covers: Vec<(u32, u64, Bitmap)>,
+    cover_stamp: u64,
 }
+
+/// Box art tiles kept at once (two pages of the apps grid and some spare).
+pub const MAX_COVERS: usize = 32;
 
 #[derive(Clone, Copy)]
 struct Placed {
@@ -354,8 +360,35 @@ impl Composer {
             clock: 0,
             serial: 0,
             graveyard: Vec::new(),
+            covers: Vec::new(),
+            cover_stamp: 0,
         }
     }
+
+    /// Box art for `app` (an RGBA tile of the cover size); it replaces the letter tile. The
+    /// oldest cover goes when more than `MAX_COVERS` are held.
+    pub fn set_cover(&mut self, app: u32, tile: Bitmap) {
+        if tile.width != COVER_WIDTH || tile.height != COVER_HEIGHT || tile.channels != 4 {
+            return;
+        }
+        self.covers.retain(|(id, _, _)| *id != app);
+        if self.covers.len() >= MAX_COVERS {
+            self.covers.remove(0);
+        }
+        self.cover_stamp += 1;
+        self.covers.push((app, self.cover_stamp, tile));
+    }
+
+    pub fn has_cover(&self, app: u32) -> bool {
+        self.covers.iter().any(|(id, _, _)| *id == app)
+    }
+
+    /// Drops all box art (another PC's apps are shown).
+    pub fn clear_covers(&mut self) {
+        self.covers.clear();
+    }
+
+    pub const COVER_SIZE: (u32, u32) = (COVER_WIDTH, COVER_HEIGHT);
 
     pub fn cached_bytes(&self) -> usize {
         self.bytes
@@ -1091,6 +1124,26 @@ impl Builder<'_> {
     }
 
     fn cover_tile(&mut self, app: &App) -> Option<u64> {
+        let art = self
+            .composer
+            .covers
+            .iter()
+            .find(|(id, _, _)| *id == app.id)
+            .map(|(_, stamp, _)| *stamp);
+        if let Some(stamp) = art {
+            let key = format!("p\x1f{stamp}");
+            if let Some(serial) = self.composer.lookup(&key) {
+                return Some(serial);
+            }
+            let (_, _, tile) = self
+                .composer
+                .covers
+                .iter()
+                .find(|(id, _, _)| *id == app.id)?;
+            let tile = tile.clone();
+            let bytes = tile.bytes.len();
+            return Some(self.composer.store_sized(key, tile, 0, 0, bytes));
+        }
         let key = format!("c\x1f{}", app.name);
         if let Some(serial) = self.composer.lookup(&key) {
             return Some(serial);

@@ -32,6 +32,27 @@ pub const LINK_OPEN_TIMEOUT_MS: u64 = 10_000;
 pub const FIRST_FRAME_TIMEOUT_MS: u64 = 20_000;
 pub const MEDIA_CLOSE_TIMEOUT_MS: u64 = 10_000;
 
+#[cfg(test)]
+mod wake_tests {
+    use super::*;
+
+    #[test]
+    fn wake_wait_extends_an_already_started_open_and_cancellation_closes_it() {
+        let mut service = Service::new();
+        service.link_opening = true;
+        service.check_wait(100);
+        service.set_link_timeout(100, 25_000);
+        service.check_wait(10_101);
+        assert!(service.link_opening);
+        service.cancel_empty_open();
+        assert!(!service.link_opening);
+        assert!(matches!(
+            service.next_output(),
+            Some(Output::Action(Action::CloseControl))
+        ));
+    }
+}
+
 /// Owned UI notifications; `Service::ui_event` turns one into a `ui::model::Event`.
 #[derive(Clone, Copy, Debug)]
 pub enum Notice {
@@ -195,6 +216,7 @@ pub struct Service {
     link_up: bool,
     control_generation: u64,
     link_opening: bool,
+    link_timeout_ms: u64,
     pending: Option<Pending>,
     queue: [Option<Queued>; QUEUE],
     catalog: Catalog,
@@ -252,6 +274,7 @@ impl Service {
             link_up: false,
             control_generation: 0,
             link_opening: false,
+            link_timeout_ms: LINK_OPEN_TIMEOUT_MS,
             pending: None,
             queue: [None; QUEUE],
             catalog: Catalog::new(),
@@ -297,6 +320,22 @@ impl Service {
 
     pub fn phase(&self) -> Phase {
         self.phase
+    }
+
+    /// No request pending or queued and no stream: a side request (box art) may use the link.
+    pub fn idle(&self) -> bool {
+        self.link_up
+            && self.phase == Phase::Idle
+            && self.pending.is_none()
+            && self.superseded.is_none()
+            && self.queue[0].is_none()
+    }
+
+    pub fn set_link_timeout(&mut self, now_ms: u64, timeout_ms: u64) {
+        self.link_timeout_ms = timeout_ms.max(LINK_OPEN_TIMEOUT_MS);
+        if self.wait == Wait::Link {
+            self.wait_deadline_ms = now_ms.saturating_add(self.link_timeout_ms);
+        }
     }
 
     pub fn catalog(&self) -> &Catalog {
@@ -601,6 +640,7 @@ impl Service {
     }
 
     fn link_opened(&mut self) {
+        self.link_timeout_ms = LINK_OPEN_TIMEOUT_MS;
         self.discard_upstream();
         self.telemetry_negotiated = false;
         let Some(generation) = self.control_generation.checked_add(1) else {
@@ -623,6 +663,7 @@ impl Service {
     }
 
     fn link_failed(&mut self) {
+        self.link_timeout_ms = LINK_OPEN_TIMEOUT_MS;
         if !self.link_opening {
             return;
         }
@@ -660,7 +701,11 @@ impl Service {
         let wait = self.current_wait();
         if wait != self.wait {
             self.wait = wait;
-            self.wait_deadline_ms = now_ms.saturating_add(wait_limit_ms(wait));
+            self.wait_deadline_ms = now_ms.saturating_add(if wait == Wait::Link {
+                self.link_timeout_ms
+            } else {
+                wait_limit_ms(wait)
+            });
             return;
         }
         if wait == Wait::None || now_ms < self.wait_deadline_ms {
@@ -988,6 +1033,7 @@ impl Service {
 
     fn abandon(&mut self, op: Op) {
         self.drop_queued(op);
+        self.cancel_empty_open();
         if op == Op::List {
             self.quit_outcome = None;
         }
@@ -1001,6 +1047,7 @@ impl Service {
     /// Pairing has no cancel request; closing control cancels it on the PC.
     fn cancel_pair(&mut self) {
         self.drop_queued(Op::Pair);
+        self.cancel_empty_open();
         let pairing = self.pending.is_some_and(|pending| pending.op == Op::Pair);
         if !pairing {
             return;
@@ -1009,6 +1056,14 @@ impl Service {
         self.pending = None;
         self.close_control();
         self.fail_queue("pairing was cancelled");
+    }
+
+    fn cancel_empty_open(&mut self) {
+        if self.link_opening && self.queue.iter().all(Option::is_none) {
+            self.link_opening = false;
+            self.link_timeout_ms = LINK_OPEN_TIMEOUT_MS;
+            self.act(Action::CloseControl);
+        }
     }
 
     fn send_next<L: Link>(&mut self, link: &mut L, now_ms: u64) {
@@ -1269,6 +1324,9 @@ impl Service {
         let uniqueid = self.catalog.uniqueid();
         if !uniqueid.is_empty() {
             host.uniqueid = moonlight_nx2_ui::model::Address::of(uniqueid);
+        }
+        if let Some(mac) = self.catalog.mac() {
+            host.mac = Some(mac);
         }
         self.act(Action::RememberHost(host));
 

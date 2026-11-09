@@ -72,11 +72,13 @@ impl Scene {
                 name: Name::of("Desk"),
                 address: Address::of("192.168.8.245"),
                 uniqueid: Address::of("A1B2"),
+                mac: None,
             },
             Host {
                 name: Name::of("Living room"),
                 address: Address::of("10.0.0.7"),
                 uniqueid: Address::default(),
+                mac: None,
             },
         ];
         let mut bridge = Box::new(Bridge::new(

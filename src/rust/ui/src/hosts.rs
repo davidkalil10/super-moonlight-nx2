@@ -6,7 +6,7 @@ use alloc::vec::Vec;
 use core::fmt::Write;
 
 use crate::json::{Json, Kind, Value};
-use crate::model::{Address, Host, MAX_HOSTS, Name};
+use crate::model::{Address, Host, MAX_HOSTS, Mac, Name};
 
 pub const FILE: &str = "hosts.json";
 
@@ -18,6 +18,35 @@ pub const MAX_BYTES: usize = crate::json::MAX_TEXT;
 pub struct Removed {
     pub address: Address,
     pub uniqueid: Address,
+}
+
+#[cfg(test)]
+mod mac_tests {
+    use super::*;
+
+    #[test]
+    fn first_mac_survives_host_roundtrip_and_old_updates() {
+        let mut json = Json::new();
+        let mut book = HostBook::parse(
+            br#"[{"name":"PC","address":"192.168.0.2","mac":"02:12:34:56:78:9a"}]"#,
+            &mut json,
+        )
+        .unwrap();
+        let mac = Mac::parse("02:12:34:56:78:9a").unwrap();
+        let packet = mac.magic_packet();
+        assert_eq!(&packet[..6], &[0xff; 6]);
+        assert!(packet[6..].chunks_exact(6).all(|chunk| chunk == mac.0));
+        assert_eq!(book.hosts()[0].mac, Some(mac));
+        let mut host = book.hosts()[0];
+        host.mac = None;
+        host.uniqueid = Address::of("new-id");
+        assert!(book.remember(&host).unwrap());
+        let encoded = book.to_json().unwrap();
+        let read = HostBook::parse(encoded.as_bytes(), &mut json).unwrap();
+        assert_eq!(read.hosts()[0].mac, Some(mac));
+        assert!(Mac::parse("ff:ff:ff:ff:ff:ff").is_none());
+        assert!(Mac::parse("02:12:34:56:78:9A").is_none());
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -143,6 +172,7 @@ impl HostBook {
                 name: Name::of(name.unwrap_or(host.address.as_str())),
                 address: host.address,
                 uniqueid: host.uniqueid,
+                mac: string(value.member("mac")).and_then(Mac::parse),
             });
         }
         book.removed = entries(removed).into_iter().map(|(_, host)| host).collect();
@@ -201,7 +231,8 @@ impl HostBook {
 
         let entry = self.hosts[target];
         let moved = entry.address != host.address;
-        let learned = !host.uniqueid.is_empty() && entry.uniqueid != host.uniqueid;
+        let learned = (!host.uniqueid.is_empty() && entry.uniqueid != host.uniqueid)
+            || (host.mac.is_some() && entry.mac != host.mac);
         if !moved && !learned {
             return Ok(false);
         }
@@ -210,6 +241,9 @@ impl HostBook {
         updated.address = host.address;
         if !host.uniqueid.is_empty() {
             updated.uniqueid = host.uniqueid;
+        }
+        if host.mac.is_some() {
+            updated.mac = host.mac;
         }
         let hosts = core::mem::take(&mut self.hosts);
         self.hosts = hosts
@@ -286,6 +320,10 @@ impl HostBook {
             out.push_str(",\"address\":");
             quote(&mut out, host.address.as_str());
             put_uniqueid(&mut out, &host.uniqueid);
+            if let Some(mac) = host.mac {
+                out.push_str(",\"mac\":");
+                quote(&mut out, mac.text().as_str());
+            }
             out.push('}');
         }
         out.push_str("],\"removed\":[");

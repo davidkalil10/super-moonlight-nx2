@@ -190,6 +190,7 @@ impl Answers {
                 name: Name::of(label),
                 address: text,
                 uniqueid: Address::new(),
+                mac: None,
             });
         }
         hosts

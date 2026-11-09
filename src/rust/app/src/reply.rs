@@ -7,11 +7,33 @@ use crate::policy::{RemoteQuality, RemoteRtt};
 use crate::request::{Codec, Op, Transport};
 use moonlight_nx2_core::control::Kind as FrameKind;
 use moonlight_nx2_core::media::TOKEN_BYTES;
-use moonlight_nx2_ui::model::{Address, App, MAX_APPS, Message, Name};
+use moonlight_nx2_ui::model::{Address, App, MAX_APPS, Mac, Message, Name};
 
 pub const PIN_BYTES: usize = 4;
 pub const MAX_URL_BYTES: usize = 255;
 pub const MAX_UNIQUEID_BYTES: usize = 63;
+
+#[cfg(test)]
+mod mac_tests {
+    use super::*;
+
+    #[test]
+    fn list_records_only_first_valid_mac_and_accepts_old_helpers() {
+        let mut catalog = Catalog::new();
+        let value = json::parse(
+            br#"{"apps":[],"currentGame":0,"macs":["02:12:34:56:78:9a","04:11:22:33:44:55"]}"#,
+        )
+        .unwrap();
+        catalog.decode(value).unwrap();
+        assert_eq!(catalog.mac(), Mac::parse("02:12:34:56:78:9a"));
+        let old = json::parse(br#"{"apps":[],"currentGame":0}"#).unwrap();
+        catalog.decode(old).unwrap();
+        assert_eq!(catalog.mac(), None);
+        let invalid =
+            json::parse(br#"{"apps":[],"currentGame":0,"macs":["ff:ff:ff:ff:ff:ff"]}"#).unwrap();
+        assert!(catalog.decode(invalid).is_err());
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Error {
@@ -781,6 +803,7 @@ pub struct Catalog {
     count: usize,
     current_game: u32,
     uniqueid: Address,
+    mac: Option<Mac>,
 }
 
 impl Default for Catalog {
@@ -800,6 +823,7 @@ impl Catalog {
             count: 0,
             current_game: 0,
             uniqueid: Address::new(),
+            mac: None,
         }
     }
 
@@ -832,17 +856,23 @@ impl Catalog {
         self.uniqueid.as_str()
     }
 
+    pub fn mac(&self) -> Option<Mac> {
+        self.mac
+    }
+
     /// Replaces the catalog from a list value. On error the previous catalog is cleared.
     pub fn decode(&mut self, value: Value<'_>) -> Result<(), Error> {
         self.count = 0;
         self.current_game = 0;
         self.uniqueid.clear();
+        self.mac = None;
 
         let result = self.fill(value);
         if result.is_err() {
             self.count = 0;
             self.current_game = 0;
             self.uniqueid.clear();
+            self.mac = None;
         }
         result
     }
@@ -864,6 +894,24 @@ impl Catalog {
                 return Err(Error::TooLarge);
             }
             self.uniqueid = Address::of(text);
+        }
+
+        if let Some(macs) = value.member("macs") {
+            if macs.kind() != Kind::Array {
+                return Err(Error::Shape);
+            }
+            for (index, item) in macs.elements().enumerate() {
+                if index >= 64 {
+                    return Err(Error::TooLarge);
+                }
+                let mac = item
+                    .as_plain_str()
+                    .and_then(Mac::parse)
+                    .ok_or(Error::Shape)?;
+                if index == 0 {
+                    self.mac = Some(mac);
+                }
+            }
         }
 
         for app in apps.elements() {

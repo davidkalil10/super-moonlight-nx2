@@ -197,6 +197,24 @@ impl<F: Files + Clone> Client<F> {
         self.bridge.set_status(text);
     }
 
+    pub fn has_cover(&self, app: u32) -> bool {
+        self.composer.has_cover(app)
+    }
+
+    pub fn clear_covers(&mut self) {
+        self.composer.clear_covers();
+        self.bridge.invalidate();
+    }
+
+    pub fn install_cover(&mut self, app: u32, png: &[u8]) -> bool {
+        let Some(tile) = moonlight_nx2_ui::png::tile(png, 240, 135) else {
+            return false;
+        };
+        self.composer.set_cover(app, tile);
+        self.bridge.invalidate();
+        true
+    }
+
     pub fn runtime(&mut self, event: RuntimeEvent) {
         self.driver.service_mut().runtime(event);
     }

@@ -1,5 +1,8 @@
 extern crate alloc;
 
+#[path = "cover_fetch.rs"]
+mod cover_fetch;
+
 use crate::{
     client::{self, Client},
     client_session::Session,
@@ -38,6 +41,9 @@ pub trait Connections {
     type Socket: Socket + 'static;
     fn authorization(&mut self) -> Result<Session, AuthError>;
     fn connect(&mut self, address: [u8; 4], port: u16) -> Result<Self::Socket, IoError>;
+    fn wake(&mut self, _mac: [u8; 6]) -> Result<(), IoError> {
+        Err(IoError::Failed)
+    }
     /// An unconnected UDP socket for one mDNS query; none where the platform has no network.
     fn discovery(&mut self) -> Result<Box<dyn Datagram>, IoError> {
         Err(IoError::Failed)
@@ -51,6 +57,14 @@ struct Discovery {
     answers: Answers,
     /// Started by the user (Find hosts / Y), not at start-up: an empty result is reported.
     asked: bool,
+}
+
+struct WakeConnect<S> {
+    authorization: Session,
+    socket: Option<S>,
+    deadline_ms: u64,
+    attempt_deadline_ms: u64,
+    next_attempt_ms: u64,
 }
 
 /// Datagrams read per frame, so a flood cannot stall the UI.
@@ -75,6 +89,7 @@ pub enum MediaRequest {
 pub struct Frontend<F, S: Socket + 'static> {
     pub client: Client<F>,
     control: Option<Control<S>>,
+    wake_connect: Option<WakeConnect<S>>,
     peer: Option<[u8; 4]>,
     media: Vec<MediaRequest>,
     authorization: Option<Session>,
@@ -84,6 +99,9 @@ pub struct Frontend<F, S: Socket + 'static> {
     message: Option<&'static str>,
     stats: Stats,
     discovery: Option<Discovery>,
+    covers: cover_fetch::Fetcher,
+    cover_host: Option<moonlight_nx2_ui::model::Host>,
+    cover_cache: Option<crate::files::CoverDirectory>,
     /// The first frame runs discovery once, as the Civ7 service does on attach.
     discover_at_start: bool,
 }
@@ -155,6 +173,7 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
         Ok(Self {
             client,
             control: None,
+            wake_connect: None,
             peer: None,
             media: Vec::new(),
             authorization,
@@ -164,6 +183,9 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
             message,
             stats: Stats::default(),
             discovery: None,
+            covers: cover_fetch::Fetcher::default(),
+            cover_host: None,
+            cover_cache: None,
             discover_at_start: true,
         })
     }
@@ -263,7 +285,21 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
         self.message = Some(text);
     }
 
+    pub fn set_cover_cache(&mut self, cache: crate::files::CoverDirectory) {
+        self.cover_cache = Some(cache);
+    }
+
     pub fn close_control(&mut self) -> bool {
+        self.covers.reset();
+        self.cover_host = None;
+        self.client.clear_covers();
+        if let Some(mut pending) = self.wake_connect.take()
+            && let Some(mut socket) = pending.socket.take()
+            && socket.close().is_err()
+        {
+            crate::render_platform::retire_process();
+            return false;
+        }
         let Some(mut control) = self.control.take() else {
             return true;
         };
@@ -279,7 +315,7 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
     }
 
     fn open<C: Connections<Socket = S>>(&mut self, connections: &mut C, now_ms: u64) {
-        if self.control.is_some() {
+        if self.control.is_some() || self.wake_connect.is_some() {
             self.client.runtime(RuntimeEvent::LinkFailed);
             return;
         }
@@ -298,6 +334,26 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
             });
             return;
         };
+        if let Some(mac) = self.client.bridge.model().host().and_then(|host| host.mac) {
+            let _ = connections.wake(mac.0);
+            if crate::render_platform::process_retired() {
+                self.exit = true;
+                self.client.runtime(RuntimeEvent::LinkFailed);
+                return;
+            }
+            self.client
+                .driver
+                .service_mut()
+                .set_link_timeout(now_ms, 25_000);
+            self.wake_connect = Some(WakeConnect {
+                authorization,
+                socket: None,
+                deadline_ms: now_ms.saturating_add(20_000),
+                attempt_deadline_ms: now_ms,
+                next_attempt_ms: now_ms,
+            });
+            return;
+        }
         let socket = match connections.connect(authorization.address, authorization.port) {
             Ok(socket) => socket,
             Err(_) => {
@@ -323,6 +379,71 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
         }
     }
 
+    fn poll_wake_connect<C: Connections<Socket = S>>(&mut self, connections: &mut C, now_ms: u64) {
+        let Some(mut pending) = self.wake_connect.take() else {
+            return;
+        };
+        if now_ms >= pending.deadline_ms {
+            if let Some(mut socket) = pending.socket.take()
+                && socket.close().is_err()
+            {
+                crate::render_platform::retire_process();
+                self.exit = true;
+            }
+            self.client.runtime(RuntimeEvent::LinkFailed);
+            self.message = Some("PC connection timed out after wake");
+            return;
+        }
+        if pending.socket.is_none() && now_ms >= pending.next_attempt_ms {
+            pending.socket = connections
+                .connect(pending.authorization.address, pending.authorization.port)
+                .ok();
+            if crate::render_platform::process_retired() {
+                self.exit = true;
+                self.client.runtime(RuntimeEvent::LinkFailed);
+                return;
+            }
+            pending.attempt_deadline_ms = now_ms.saturating_add(2_000);
+            pending.next_attempt_ms = now_ms.saturating_add(500);
+        }
+        if let Some(socket) = pending.socket.as_mut() {
+            match socket.poll_connect() {
+                Ok(true) => {
+                    let socket = pending.socket.take().unwrap();
+                    let token = core::mem::replace(&mut pending.authorization.token, [0; 64]);
+                    match Control::open(socket, token, self.access, now_ms) {
+                        Ok(control) => {
+                            self.control = Some(control);
+                            self.peer = Some(pending.authorization.address);
+                            self.stats.opened += 1;
+                        }
+                        Err(error) => {
+                            self.client.runtime(RuntimeEvent::LinkFailed);
+                            self.message =
+                                Some("PC connection failed; import a new connection to retry");
+                            if error.retained {
+                                self.exit = true;
+                            }
+                        }
+                    }
+                    return;
+                }
+                Ok(false) | Err(IoError::WouldBlock | IoError::Interrupted)
+                    if now_ms < pending.attempt_deadline_ms => {}
+                _ => {
+                    let mut socket = pending.socket.take().unwrap();
+                    if socket.close().is_err() {
+                        crate::render_platform::retire_process();
+                        self.exit = true;
+                        self.client.runtime(RuntimeEvent::LinkFailed);
+                        return;
+                    }
+                }
+            }
+        }
+        self.wake_connect = Some(pending);
+    }
+
     pub fn frame<C: Connections<Socket = S>>(
         &mut self,
         bytes: &mut [u8],
@@ -330,6 +451,7 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
         now_ms: u64,
     ) -> Result<client::Frame, client::Error> {
         let message = self.message.take();
+        self.poll_wake_connect(connections, now_ms);
         let mut disconnected = false;
         if let Some(control) = self.control.as_mut() {
             match control.pump(now_ms) {
@@ -341,12 +463,39 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
                 self.stats.authenticated += 1;
                 self.client.runtime(RuntimeEvent::LinkOpened);
             }
+            if let Some((app, png)) = self.covers.poll(control)
+                && let Some(host) = self.cover_host
+                && self
+                    .client
+                    .bridge
+                    .model()
+                    .host()
+                    .is_some_and(|selected| selected.address == host.address)
+            {
+                if self.client.install_cover(app, &png) {
+                    if let Some(cache) = self.cover_cache.as_ref() {
+                        let _ = cache.write(&host, app, &png);
+                    }
+                } else {
+                    self.covers.mark_attempted(app);
+                }
+            }
+            if self.covers.failed() || self.covers.expired(now_ms) {
+                disconnected = true;
+            }
         }
         let mut effects = Vec::new();
         let frame = match self.control.as_mut() {
-            Some(control) => self
-                .client
-                .frame(bytes, control, now_ms, &mut |effect| effects.push(effect))?,
+            Some(control) => {
+                let mut guard = cover_fetch::Guard {
+                    link: control,
+                    waiting: self.covers.waiting_id(),
+                };
+                self.client
+                    .frame(bytes, &mut guard, now_ms, &mut |effect| {
+                        effects.push(effect)
+                    })?
+            }
             None => self
                 .client
                 .frame(bytes, &mut Offline, now_ms, &mut |effect| {
@@ -396,6 +545,55 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
             }
             self.client.runtime(RuntimeEvent::LinkFailed);
             self.message = Some("PC disconnected; import a new connection to reconnect");
+        }
+        if !disconnected
+            && self.access == Access::User
+            && self.authenticated
+            && self.client.bridge.model().screen() == Screen::Apps
+            && self.client.driver.service().idle()
+            && let Some(host) = self.client.bridge.model().host().copied()
+        {
+            if self
+                .cover_host
+                .is_none_or(|old| old.address != host.address || old.uniqueid != host.uniqueid)
+                && self.covers.waiting_id().is_none()
+            {
+                self.covers.reset();
+                self.client.clear_covers();
+                self.cover_host = Some(host);
+            }
+            if self
+                .cover_host
+                .is_some_and(|old| old.address == host.address)
+            {
+                if !self.covers.busy() {
+                    let model = self.client.bridge.model();
+                    let start =
+                        model.app_page() as usize * moonlight_nx2_ui::model::APPS_PER_PAGE as usize;
+                    let next = model
+                        .apps()
+                        .iter()
+                        .skip(start)
+                        .take(moonlight_nx2_ui::model::APPS_PER_PAGE as usize)
+                        .map(|app| app.id)
+                        .find(|id| !self.client.has_cover(*id) && !self.covers.attempted(*id));
+                    if let Some(app) = next {
+                        let cached = self
+                            .cover_cache
+                            .as_ref()
+                            .and_then(|cache| cache.read(&host, app));
+                        if !cached
+                            .as_ref()
+                            .is_some_and(|png| self.client.install_cover(app, png))
+                        {
+                            self.covers.begin(app);
+                        }
+                    }
+                }
+                if let Some(control) = self.control.as_mut() {
+                    self.covers.request(control, host.address.as_str(), now_ms);
+                }
+            }
         }
         if let Some(message) = message {
             self.client.set_status(Some(message));
