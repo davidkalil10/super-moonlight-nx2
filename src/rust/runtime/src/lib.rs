@@ -66,16 +66,16 @@ mod gpu_coexist;
 mod io_diagnostic;
 #[cfg(all(target_os = "none", feature = "frontend"))]
 mod native_frontend;
-#[cfg(all(target_os = "none", feature = "diagnostic-frontend"))]
-mod video_sink;
-#[cfg(all(target_os = "none", feature = "diagnostic-ref-replay"))]
-mod ref_replay;
 #[cfg(target_os = "none")]
 pub mod net;
 #[cfg(all(target_os = "none", feature = "diagnostic-nvdec"))]
 mod nvdec_access;
+#[cfg(all(target_os = "none", feature = "diagnostic-ref-replay"))]
+mod ref_replay;
 #[cfg(all(target_os = "none", feature = "diagnostic-udp"))]
 mod udp_diagnostic;
+#[cfg(all(target_os = "none", feature = "diagnostic-frontend"))]
+mod video_sink;
 
 #[cfg(any(target_os = "none", feature = "host-renderer"))]
 mod cache_file;
