@@ -118,7 +118,7 @@ pub mod files;
 pub mod frontend;
 #[cfg(any(target_os = "none", feature = "host-renderer"))]
 pub mod frontend_media;
-#[cfg(target_os = "none")]
+#[cfg(all(target_os = "none", not(feature = "native-video")))]
 pub mod gsv;
 #[cfg(any(target_os = "none", feature = "host-renderer"))]
 pub mod hid;
