@@ -27,6 +27,10 @@ impl VideoSink {
 }
 
 impl Backend for VideoSink {
+    fn capabilities() -> Capabilities {
+        capabilities()
+    }
+
     fn open(&mut self, config: Config) -> Result<[u32; SURFACES], BackendError> {
         self.config = Some(config);
         Ok([1, 2])

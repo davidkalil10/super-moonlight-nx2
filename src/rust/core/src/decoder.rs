@@ -76,6 +76,13 @@ pub struct Config {
 }
 
 pub trait Backend {
+    fn capabilities() -> crate::codec::Capabilities
+    where
+        Self: Sized,
+    {
+        crate::codec::Capabilities::default()
+    }
+
     fn open(&mut self, config: Config) -> Result<[u32; SURFACES], BackendError>;
     fn submit(&mut self, bytes: &[u8], pts_us: u64) -> Result<(), BackendError>;
     fn ready(&mut self, surface: usize) -> Result<bool, BackendError>;

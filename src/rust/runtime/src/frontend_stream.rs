@@ -43,6 +43,11 @@ type Decoder = crate::video_sink::VideoSink;
 #[cfg(feature = "diagnostic-native-decode")]
 type Decoder = crate::native_video::NativeVideo;
 
+#[cfg(feature = "diagnostic-frontend")]
+pub(crate) fn decoder_capabilities() -> Capabilities {
+    <Decoder as decoder::Backend>::capabilities()
+}
+
 const MEDIA_SILENCE_MS: u64 = 10_000;
 
 type TcpSession = Session<'static, Decoder, NetSocket, Audout, Channel<'static, NetSocket>>;
@@ -151,10 +156,6 @@ impl Stream {
         now_ms: u64,
         #[cfg(feature = "diagnostic-native-decode")] renderer: &mut Renderer,
     ) -> Result<Running, &'static str> {
-        #[cfg(feature = "diagnostic-native-decode")]
-        if core_codec(descriptor.codec) != moonlight_nx2_core::codec::Codec::H264 {
-            return Err("native diagnostic supports H.264 only");
-        }
         let display = Size::new(descriptor.width, descriptor.height).ok_or("invalid size")?;
         let coded = Size::new(
             descriptor.width.next_multiple_of(16),

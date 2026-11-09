@@ -434,6 +434,21 @@ impl NativeVideo {
 }
 
 impl Backend for NativeVideo {
+    fn capabilities() -> moonlight_nx2_core::codec::Capabilities {
+        use moonlight_nx2_core::codec::{Capabilities, Depth, Evidence, Mode, Size};
+        let mut capabilities = Capabilities::default();
+        capabilities.record(
+            Mode {
+                codec: Codec::H264,
+                depth: Depth::Eight,
+                maximum: Size::new(1920, 1080).unwrap(),
+                fps: 60,
+            },
+            Evidence::PixelsAndCloseVerified,
+        );
+        capabilities
+    }
+
     fn open(&mut self, config: Config) -> Result<[u32; 2], BackendError> {
         if !matches!(config.codec, Codec::H264 | Codec::Av1) || config.backing != Backing::NativeGpu
         {

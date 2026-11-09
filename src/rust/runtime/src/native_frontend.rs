@@ -91,6 +91,15 @@ impl Connections for NativeConnections {
         }
         NetSocket::connect(address, port)
     }
+    fn wake(&mut self, mac: [u8; 6]) -> Result<(), moonlight_nx2_io::socket::IoError> {
+        if !self.network {
+            self.network = unsafe { moonlightPlatformNetStart() };
+            if !self.network {
+                return Err(moonlight_nx2_io::socket::IoError::Failed);
+            }
+        }
+        crate::net::DiscoverySocket::wake(mac)
+    }
     fn discovery(
         &mut self,
     ) -> Result<Box<dyn moonlight_nx2_io::udp::Datagram>, moonlight_nx2_io::socket::IoError> {
@@ -436,28 +445,9 @@ fn display_context(app: &mut Frontend<Directory, NetSocket>, docked: bool, _: Di
     app.client.event(&Event::OperationMode { docked });
 }
 
-#[cfg(all(
-    feature = "diagnostic-frontend",
-    not(feature = "diagnostic-native-decode")
-))]
+#[cfg(feature = "diagnostic-frontend")]
 fn stream_capabilities() -> Capabilities {
-    crate::video_sink::capabilities()
-}
-
-#[cfg(feature = "diagnostic-native-decode")]
-fn stream_capabilities() -> Capabilities {
-    use moonlight_nx2_core::codec::{Codec, Depth, Evidence, Mode, Size};
-    let mut capabilities = Capabilities::default();
-    capabilities.record(
-        Mode {
-            codec: Codec::H264,
-            depth: Depth::Eight,
-            maximum: Size::new(1920, 1080).unwrap(),
-            fps: 60,
-        },
-        Evidence::PixelsAndCloseVerified,
-    );
-    capabilities
+    crate::frontend_stream::decoder_capabilities()
 }
 
 #[cfg(not(feature = "diagnostic-frontend"))]
