@@ -58,6 +58,7 @@ const BACKING: Backing = Backing::NativeGpu;
 pub fn run(renderer: &mut Renderer) -> bool {
     let mut passed = true;
     for (name, bytes) in CLIPS {
+        log(&format!("b2ar: codec={name} begin"));
         let Some(clip) = Clip::parse(bytes) else {
             log(&format!("ref: {name} clip malformed"));
             passed = false;
@@ -68,7 +69,9 @@ pub fn run(renderer: &mut Renderer) -> bool {
             passed = false;
             continue;
         };
-        passed &= replay(renderer, backend, BACKING, name, &clip);
+        let result = replay(renderer, backend, BACKING, name, &clip);
+        log(&format!("b2ar: codec={name} replay={result}"));
+        passed &= result;
         if sdk::process_retired() || !unsafe { sdk::appletMainLoop() } {
             return false;
         }
