@@ -4,6 +4,7 @@ use moonlight_nx2_core::media::HEADER_BYTES;
 
 pub const SLOTS: usize = 16;
 pub const SLOT_BYTES: usize = 0x1000;
+const ACK_CAPACITY: usize = SLOTS * 2;
 
 /// Media memory the device reads from. Returned to the caller only when the device has
 /// provably let go of it.
@@ -123,9 +124,10 @@ pub struct Output<D: Device> {
     queue: Queue,
     slots: [Slot; SLOTS],
     entry_of: [Option<usize>; SLOTS],
-    entries: [Entry; SLOTS],
+    entries: [Entry; ACK_CAPACITY],
     entry_head: usize,
     entry_count: usize,
+    overflow_drops: u64,
     fade: [u8; SLOT_BYTES],
     fade_bytes: usize,
     fade_pending: bool,
@@ -224,9 +226,10 @@ impl<D: Device> Output<D> {
             entries: [Entry {
                 header: [0; HEADER_BYTES],
                 done: false,
-            }; SLOTS],
+            }; ACK_CAPACITY],
             entry_head: 0,
             entry_count: 0,
+            overflow_drops: 0,
             fade: [0; SLOT_BYTES],
             fade_bytes: config.fade_frames as usize * config.channels as usize * 2,
             fade_pending: false,
@@ -259,8 +262,8 @@ impl<D: Device> Output<D> {
         unsafe { &mut *slot_ptr(self.memory, slot) }
     }
 
-    /// Copies one PCM record into a free slot. `Again` when no slot is free or 16 records
-    /// await acknowledgement; the caller keeps the record and retries after a pump.
+    /// Copies PCM into a free slot, or drops it while preserving ordered acknowledgement.
+    /// `Again` means the bounded acknowledgement queue is full; the caller keeps the record.
     pub fn push(&mut self, header: &[u8; HEADER_BYTES], payload: &[u8]) -> Result<(), Error> {
         if self.failed {
             return Err(Error::Failed);
@@ -268,28 +271,30 @@ impl<D: Device> Output<D> {
         if payload.len() != self.config.chunk_bytes {
             return Err(Error::Invalid);
         }
-        if self.entry_count == SLOTS {
+        if self.entry_count == ACK_CAPACITY {
             return Err(Error::Again);
         }
-        let slot = match self.slots.iter().position(|state| *state == Slot::Free) {
-            Some(slot) => slot,
-            None => return Err(Error::Again),
+        let slot = self.slots.iter().position(|state| *state == Slot::Free);
+        let position = (self.entry_head + self.entry_count) % ACK_CAPACITY;
+        self.entries[position] = Entry {
+            header: *header,
+            done: slot.is_none(),
+        };
+        self.entry_count += 1;
+        self.stats.received += 1;
+        let Some(slot) = slot else {
+            self.overflow_drops += 1;
+            self.stats.dropped += 1;
+            return Ok(());
         };
 
         self.slot_mut(slot)[..payload.len()].copy_from_slice(payload);
-        let position = (self.entry_head + self.entry_count) % SLOTS;
-        self.entries[position] = Entry {
-            header: *header,
-            done: false,
-        };
-        self.entry_count += 1;
         self.entry_of[slot] = Some(position);
         self.slots[slot] = Slot::Waiting;
         if !self.queue.push(slot as u8) {
             self.failed = true;
             return Err(Error::Failed);
         }
-        self.stats.received += 1;
         Ok(())
     }
 
@@ -406,7 +411,7 @@ impl<D: Device> Output<D> {
 
     fn copy_queue_stats(&mut self) {
         let queue: audio::Stats = self.queue.stats();
-        self.stats.dropped = queue.dropped;
+        self.stats.dropped = queue.dropped + self.overflow_drops;
         self.stats.cuts = queue.cuts;
         self.stats.depth_ms = (queue.depth_us / 1000) as u32;
         self.stats.max_depth_ms = (queue.max_depth_us / 1000) as u32;
@@ -443,7 +448,7 @@ impl<D: Device> Output<D> {
             return None;
         }
         let header = self.entries[self.entry_head].header;
-        self.entry_head = (self.entry_head + 1) % SLOTS;
+        self.entry_head = (self.entry_head + 1) % ACK_CAPACITY;
         self.entry_count -= 1;
         self.stats.acknowledged += 1;
         Some(header)
