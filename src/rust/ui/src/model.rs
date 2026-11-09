@@ -187,9 +187,11 @@ pub enum Event<'a> {
         current_game: u32,
         message: Option<&'a str>,
     },
+    /// `timeout_s`: how long the PC accepts this PIN.
     Pin {
         pin: Option<&'a str>,
         url: Option<&'a str>,
+        timeout_s: u32,
     },
     Stage {
         message: Option<&'a str>,
@@ -301,6 +303,8 @@ pub struct Model {
     host_index: u32,
     pin: Option<Message>,
     url: Option<Message>,
+    pin_timeout_s: u32,
+    pin_left_s: Option<u32>,
     entry: Text<ENTRY_MAX>,
     rename: Text<63>,
     name_keys: usize,
@@ -382,6 +386,8 @@ impl Model {
             host_index: 0,
             pin: None,
             url: None,
+            pin_timeout_s: 0,
+            pin_left_s: None,
             entry: Text::new(),
             rename: Text::new(),
             name_keys: 0,
@@ -447,6 +453,24 @@ impl Model {
 
     pub fn url(&self) -> Option<&str> {
         self.url.as_ref().map(Message::as_str)
+    }
+
+    pub fn pin_timeout_s(&self) -> u32 {
+        self.pin_timeout_s
+    }
+
+    /// Seconds before the PC gives up on the shown PIN, once the bridge started counting.
+    pub fn pin_left_s(&self) -> Option<u32> {
+        self.pin_left_s.filter(|_| self.pin.is_some())
+    }
+
+    /// True when the shown countdown changed.
+    pub fn set_pin_left(&mut self, left: Option<u32>) -> bool {
+        if self.pin_left_s == left {
+            return false;
+        }
+        self.pin_left_s = left;
+        self.screen == Screen::Pairing
     }
 
     /// The address typed so far on the add-host keypad.
@@ -1120,9 +1144,15 @@ impl Model {
                 step.changed = true;
                 step.add(IntentKind::Pair, self.host);
             }
-            Event::Pin { pin, url } if screen == Screen::Pairing => {
+            Event::Pin {
+                pin,
+                url,
+                timeout_s,
+            } if screen == Screen::Pairing => {
                 self.pin = message(pin);
                 self.url = message(url);
+                self.pin_timeout_s = timeout_s;
+                self.pin_left_s = None;
                 step.changed = true;
             }
             Event::Paired if screen == Screen::Pairing => {

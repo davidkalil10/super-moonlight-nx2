@@ -1360,7 +1360,7 @@ impl Builder<'_> {
         self.heading(
             "Pairing",
             pin,
-            Some("Enter this PIN in Sunshine; waiting for the PC"),
+            Some("Enter this PIN in Sunshine within 5 minutes"),
             &style,
         );
         if let Some(url) = model.url().filter(|u| !u.is_empty()) {
@@ -1368,6 +1368,21 @@ impl Builder<'_> {
                 SIDE,
                 HEADING_STATUS + 196,
                 url,
+                26,
+                CONTENT_WIDTH,
+                COLOR_GREY,
+                Align::Left,
+                500,
+                0.0,
+                0,
+            );
+        }
+        if let Some(left) = model.pin_left_s() {
+            let countdown = format!("{}:{:02} left", left / 60, left % 60);
+            self.text(
+                SIDE,
+                HEADING_STATUS + 240,
+                &countdown,
                 26,
                 CONTENT_WIDTH,
                 COLOR_GREY,

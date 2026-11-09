@@ -112,6 +112,7 @@ pub struct Bridge<F> {
     intents: Vec<Intent>,
     dropped_intents: u32,
     composed_revision: Option<u64>,
+    pin_deadline_ns: Option<u64>,
     placed: [Option<Placement>; 2],
 }
 
@@ -161,6 +162,7 @@ impl<F: Files> Bridge<F> {
             intents: Vec::with_capacity(MAX_QUEUED),
             dropped_intents: 0,
             composed_revision: None,
+            pin_deadline_ns: None,
             placed: [None, None],
         };
         if bridge.store.is_some() && source != Source::Loaded {
@@ -405,10 +407,29 @@ impl<F: Files> Bridge<F> {
     /// state and takes its command.
     pub fn poll(&mut self, storage: &mut Storage, now_ns: u64) {
         self.watch(storage, now_ns);
+        self.follow_pin(now_ns);
         self.follow_edit(storage);
         self.consume_command(storage);
         self.follow_overlay(storage);
         self.sync_applied(storage);
+    }
+
+    fn follow_pin(&mut self, now_ns: u64) {
+        let shown = self.model.screen() == Screen::Pairing
+            && self.model.pin().is_some_and(|pin| !pin.is_empty());
+        if !shown {
+            self.pin_deadline_ns = None;
+            self.model.set_pin_left(None);
+            return;
+        }
+        let timeout_ns = u64::from(self.model.pin_timeout_s()) * 1_000_000_000;
+        let deadline = *self
+            .pin_deadline_ns
+            .get_or_insert(now_ns.saturating_add(timeout_ns));
+        let left = deadline.saturating_sub(now_ns).div_ceil(1_000_000_000);
+        if self.model.set_pin_left(Some(left as u32)) {
+            self.revision += 1;
+        }
     }
 
     /// Composes the model into the buffer not shown and shows it, when the model changed since

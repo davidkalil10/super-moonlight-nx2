@@ -581,6 +581,10 @@ impl Service {
             Notice::Pin(pin) => Event::Pin {
                 pin: Some(pin.digits()),
                 url: Some(pin.url.as_str()),
+                timeout_s: pin
+                    .timeout_s
+                    .unwrap_or(request::DEFAULT_PAIR_TIMEOUT_S)
+                    .min(request::DEFAULT_PAIR_TIMEOUT_S),
             },
             Notice::Listed { message } => Event::Listed {
                 apps: self.catalog.apps(),
