@@ -4,6 +4,8 @@ extern crate alloc;
 
 #[path = "cover_fetch.rs"]
 mod cover_fetch;
+#[path = "idr_request.rs"]
+mod idr_request;
 
 use crate::{
     client::{self, Client},
@@ -102,6 +104,7 @@ pub struct Frontend<F, S: Socket + 'static> {
     stats: Stats,
     discovery: Option<Discovery>,
     covers: cover_fetch::Fetcher,
+    idr: idr_request::Requester,
     cover_host: Option<moonlight_nx2_ui::model::Host>,
     cover_cache: Option<crate::files::CoverDirectory>,
     /// The first frame runs discovery once, as the Civ7 service does on attach.
@@ -186,6 +189,7 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
             stats: Stats::default(),
             discovery: None,
             covers: cover_fetch::Fetcher::default(),
+            idr: idr_request::Requester::default(),
             cover_host: None,
             cover_cache: None,
             discover_at_start: true,
@@ -299,6 +303,7 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
 
     pub fn close_control(&mut self) -> bool {
         self.covers.reset();
+        self.idr.reset();
         self.cover_host = None;
         self.client.clear_covers();
         if let Some(mut pending) = self.wake_connect.take()
@@ -494,13 +499,28 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
             if self.covers.failed() || self.covers.expired(now_ms) {
                 disconnected = true;
             }
+            match self.idr.poll(control) {
+                Some(Ok(reply)) => crate::render_platform::log(&alloc::format!(
+                    "video-recovery: host idr {reply:?}"
+                )),
+                Some(Err(_)) => disconnected = true,
+                None => {}
+            }
+            let wanted = crate::stream_stats::take_idr_request();
+            let idle = self.covers.waiting_id().is_none();
+            if wanted && !(idle && self.idr.request(control, true, now_ms)) {
+                crate::stream_stats::request_idr();
+            }
+            if self.idr.expired(now_ms) {
+                disconnected = true;
+            }
         }
         let mut effects = Vec::new();
         let frame = match self.control.as_mut() {
             Some(control) => {
                 let mut guard = cover_fetch::Guard {
                     link: control,
-                    waiting: self.covers.waiting_id(),
+                    waiting: self.covers.waiting_id().or(self.idr.waiting_id()),
                 };
                 self.client
                     .frame(bytes, &mut guard, now_ms, &mut |effect| {
@@ -608,7 +628,9 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
                         }
                     }
                 }
-                if let Some(control) = self.control.as_mut() {
+                if let Some(control) = self.control.as_mut()
+                    && self.idr.waiting_id().is_none()
+                {
                     self.covers.request(control, host.address.as_str(), now_ms);
                 }
             }
