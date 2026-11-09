@@ -73,6 +73,7 @@ pub mod item {
     pub const REMOVE_HOST: u32 = 12;
     pub const ERASE: u32 = 13;
     pub const CONNECT: u32 = 14;
+    pub const TOGGLE_STATS: u32 = 15;
     pub const HOST: u32 = 10000;
     pub const APP: u32 = 20000;
     pub const SETTING: u32 = 30000;
@@ -291,6 +292,7 @@ pub struct Model {
     back_apps: bool,
     from: Screen,
     overlay: bool,
+    stream_stats: Message,
     settings: Settings,
     docked: bool,
     editing: Option<Setting>,
@@ -369,6 +371,7 @@ impl Model {
             back_apps: false,
             from: Screen::Hosts,
             overlay: false,
+            stream_stats: Message::of("FPS --   Bitrate --   Latency --"),
             settings,
             docked: false,
             editing: None,
@@ -457,6 +460,19 @@ impl Model {
 
     /// The in-stream menu is open.
     pub fn overlay(&self) -> bool {
+        self.overlay
+    }
+
+    pub fn stream_stats(&self) -> &str {
+        self.stream_stats.as_str()
+    }
+
+    pub fn set_stream_stats(&mut self, text: &str) -> bool {
+        let next = Message::of(text);
+        if self.stream_stats.as_str() == next.as_str() {
+            return false;
+        }
+        self.stream_stats = next;
         self.overlay
     }
 
@@ -843,7 +859,7 @@ impl Model {
 
     fn on_streaming(&mut self, op: Op, item: u32, step: &mut Step) {
         if op == Op::Chord {
-            if self.settings.index(Setting::MenuChord) == 0 {
+            if self.overlay {
                 return;
             }
             self.overlay = true;
@@ -861,16 +877,32 @@ impl Model {
             return;
         }
 
-        let return_pressed = op == Op::A && item == item::RETURN_TO_APPS;
-        let quit_on_return = return_pressed && self.settings.index(Setting::QuitOnReturn) != 0;
-        if return_pressed && !quit_on_return {
+        if op == Op::A && item == item::TOGGLE_STATS {
+            let direction = if self.settings.on(Setting::FrameCounter) {
+                -1
+            } else {
+                1
+            };
+            if let Some(settings) = self.settings.adjust(
+                Setting::FrameCounter,
+                direction,
+                self.docked,
+                &self.capabilities,
+            ) {
+                self.settings = settings;
+                step.changed = true;
+                step.add(IntentKind::SaveSettings, None);
+            }
+            return;
+        }
+        if op == Op::A && item == item::RETURN_TO_APPS {
             self.screen = Screen::Connecting;
             self.overlay = false;
             step.changed = true;
             step.add(IntentKind::StopStream, None);
             return;
         }
-        if quit_on_return || (op == Op::A && item == item::QUIT_HOST) {
+        if op == Op::A && item == item::QUIT_HOST {
             self.screen = Screen::Quitting;
             self.overlay = false;
             step.changed = true;
@@ -1069,5 +1101,50 @@ impl Model {
             }
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod stream_menu_tests {
+    use super::*;
+
+    fn command(model: &mut Model, op: Op, item: u32) -> Step {
+        model.reduce(&Event::Command { op, item, value: 0 })
+    }
+
+    #[test]
+    fn menu_pauses_and_actions_are_distinct() {
+        let mut model = Model::new(&[], Settings::default(), Capabilities::default());
+        model.screen = Screen::Streaming;
+        let opened = command(&mut model, Op::Chord, 0);
+        assert!(model.overlay());
+        assert!(opened.intents().any(|i| i.kind == IntentKind::PauseInput));
+        assert!(!model.allow_input());
+        let before = model.settings().on(Setting::FrameCounter);
+        let toggle = command(&mut model, Op::A, item::TOGGLE_STATS);
+        assert_ne!(before, model.settings().on(Setting::FrameCounter));
+        assert!(toggle.intents().any(|i| i.kind == IntentKind::SaveSettings));
+        let closed = command(&mut model, Op::B, 0);
+        assert!(closed.intents().any(|i| i.kind == IntentKind::ResumeInput));
+        assert!(model.allow_input());
+        command(&mut model, Op::Chord, 0);
+        if !model.settings.on(Setting::QuitOnReturn) {
+            model.settings = model
+                .settings
+                .adjust(Setting::QuitOnReturn, 1, model.docked, &model.capabilities)
+                .unwrap();
+        }
+        let disconnect = command(&mut model, Op::A, item::RETURN_TO_APPS);
+        assert!(
+            disconnect
+                .intents()
+                .any(|i| i.kind == IntentKind::StopStream)
+        );
+        assert!(!disconnect.intents().any(|i| i.kind == IntentKind::QuitHost));
+        model.screen = Screen::Streaming;
+        command(&mut model, Op::Chord, 0);
+        let quit = command(&mut model, Op::A, item::QUIT_HOST);
+        assert!(quit.intents().any(|i| i.kind == IntentKind::StopStream));
+        assert!(quit.intents().any(|i| i.kind == IntentKind::QuitHost));
     }
 }

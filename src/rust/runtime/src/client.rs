@@ -109,6 +109,8 @@ pub struct Client<F> {
     composer: Composer,
     hosts: Store<F>,
     ui_schedule: crate::hid::UiSchedule,
+    menu_chord: crate::hid::MenuChord,
+    stats_epoch: Option<moonlight_nx2_app::policy::Epoch>,
     badge: crate::policy_badge::Badge,
 }
 
@@ -179,6 +181,8 @@ impl<F: Files + Clone> Client<F> {
             composer: Composer::new(Glyphs::new(atlas).ok_or(Error::Atlas)?, 0),
             hosts,
             ui_schedule: crate::hid::UiSchedule::default(),
+            menu_chord: crate::hid::MenuChord::default(),
+            stats_epoch: None,
             badge: crate::policy_badge::Badge::default(),
         })
     }
@@ -231,6 +235,32 @@ impl<F: Files + Clone> Client<F> {
         )
     }
 
+    pub fn menu_input(
+        &mut self,
+        input: &crate::hid::FrameInput,
+        now_ms: u64,
+        bytes: &mut [u8],
+    ) -> Result<(), Error> {
+        let epoch = self.driver.session_epoch();
+        if self.stats_epoch != epoch {
+            self.stats_epoch = epoch;
+            self.bridge
+                .set_stream_stats("FPS --   Bitrate --   Latency --");
+        }
+        let storage = storage(bytes)?;
+        let active = self.bridge.model().screen() == Screen::Streaming
+            && self.driver.service().phase() == moonlight_nx2_app::stream::Phase::Streaming
+            && self.bridge.overlay_ready(storage);
+        if self.menu_chord.update(input, active, now_ms) && self.bridge.show_overlay(storage) {
+            self.event(&Event::Command {
+                op: moonlight_nx2_ui::model::Op::Chord,
+                item: 0,
+                value: 0,
+            });
+        }
+        Ok(())
+    }
+
     pub fn needs_ui_compute(&mut self, input: &crate::hid::FrameInput, frame: &Frame) -> bool {
         let enabled = View(&mut self.bridge).stream_options().menu_chord;
         self.ui_schedule
@@ -279,6 +309,35 @@ impl<F: Files + Clone> Client<F> {
         bytes: &mut [u8],
         feedback: moonlight_nx2_app::policy::Feedback,
     ) -> Result<bool, Error> {
+        if let moonlight_nx2_app::policy::Feedback::Metrics { epoch, report } = feedback
+            && self.driver.session_epoch() == Some(epoch)
+        {
+            let second = report.second;
+            let (fps, kbps) = if second.elapsed_us == 0 {
+                (
+                    alloc::string::String::from("--"),
+                    alloc::string::String::from("--"),
+                )
+            } else {
+                (
+                    alloc::format!(
+                        "{}",
+                        u128::from(second.presented) * 1_000_000 / u128::from(second.elapsed_us)
+                    ),
+                    alloc::format!(
+                        "{}",
+                        u128::from(second.bytes) * 8_000 / u128::from(second.elapsed_us)
+                    ),
+                )
+            };
+            let latency = second
+                .receive_to_present
+                .map(|value| alloc::format!("{} ms", value.mean_ms()))
+                .unwrap_or_else(|| alloc::string::String::from("--"));
+            self.bridge.set_stream_stats(&alloc::format!(
+                "FPS {fps}   Bitrate {kbps} kbps   Receive to present {latency}"
+            ));
+        }
         let storage = badge_storage(bytes)?;
         Ok(self.badge.apply(
             self.composer.glyphs_mut(),

@@ -285,6 +285,15 @@ fn execute(
                 break;
             }
         };
+        if renderer
+            .storage_mut()
+            .ok()
+            .and_then(|bytes| app.client.menu_input(&input, now / 1_000_000, bytes).ok())
+            .is_none()
+        {
+            failed = true;
+            break;
+        }
         if input.raw_buttons & (1 << 10) != 0 && app.screen() != Screen::Streaming {
             app.client.event(&Event::AppGone);
         }

@@ -39,6 +39,33 @@ impl InputGate {
     }
 }
 
+const MENU_CHORD: u64 = (3 << 6) | (3 << 10);
+
+#[derive(Default)]
+pub struct MenuChord {
+    since: Option<u64>,
+    fired: bool,
+}
+
+impl MenuChord {
+    pub fn update(&mut self, input: &FrameInput, active: bool, now_ms: u64) -> bool {
+        if !active || !input.pad.connected || input.raw_buttons & MENU_CHORD != MENU_CHORD {
+            self.since = None;
+            self.fired = false;
+            return false;
+        }
+        let since = self.since.get_or_insert(now_ms);
+        if now_ms < *since {
+            *since = now_ms;
+        }
+        if !self.fired && now_ms - *since >= 1_000 {
+            self.fired = true;
+            return true;
+        }
+        false
+    }
+}
+
 #[derive(Default)]
 pub struct UiSchedule {
     chord_active: bool,
@@ -49,10 +76,9 @@ impl UiSchedule {
         &mut self,
         input: &FrameInput,
         page_interactive: bool,
-        menu_enabled: bool,
+        _menu_enabled: bool,
     ) -> bool {
-        const CHORD: u64 = (1 << 6) | (1 << 7);
-        let active = menu_enabled && input.pad.connected && input.raw_buttons & CHORD == CHORD;
+        let active = input.pad.connected && input.raw_buttons & MENU_CHORD == MENU_CHORD;
         let needed = page_interactive || active || self.chord_active;
         self.chord_active = active;
         needed
@@ -200,3 +226,28 @@ pub fn rumble(_player: u8, _low: u16, _high: u16) {}
 
 #[cfg(not(target_os = "none"))]
 pub fn stop_rumble() {}
+
+#[cfg(test)]
+mod menu_tests {
+    use super::*;
+
+    #[test]
+    fn chord_fires_once_after_one_second_and_rearms() {
+        let mut sample = [0u8; REQUIRED_BYTES];
+        sample[8..16].copy_from_slice(&MENU_CHORD.to_le_bytes());
+        sample[32..36].copy_from_slice(&1u32.to_le_bytes());
+        let mut input = FrameInput::decode(&sample).unwrap();
+        let mut chord = MenuChord::default();
+        assert!(!chord.update(&input, true, 10));
+        assert!(!chord.update(&input, true, 1009));
+        assert!(chord.update(&input, true, 1010));
+        assert!(!chord.update(&input, true, 2500));
+        input.pad.connected = false;
+        assert!(!chord.update(&input, true, 2600));
+        input.pad.connected = true;
+        assert!(!chord.update(&input, true, 3000));
+        assert!(!chord.update(&input, true, 2000));
+        assert!(chord.update(&input, true, 3000));
+        assert!(!chord.update(&input, false, 4000));
+    }
+}

@@ -1493,8 +1493,7 @@ impl Builder<'_> {
 
     fn overlay_page(&mut self, model: &Model) {
         let keys: Keys = &[("A", "Choose"), ("B", "Hide")];
-        let chord = model.settings().on(Setting::MenuChord);
-        let flags = page::FLAG_OVERLAY | if chord { 0 } else { page::FLAG_NO_CHORD };
+        let flags = page::FLAG_OVERLAY | page::FLAG_NO_CHORD;
         self.horizon(&Frame {
             background: COLOR_CLEAR,
             flags,
@@ -1503,7 +1502,7 @@ impl Builder<'_> {
 
         let width = 2 * OVERLAY_BUTTON + BUTTON_GAP;
         let top = HEADING_STATUS - 40;
-        let bottom = BUTTON_Y + CARD_HEIGHT + 40;
+        let bottom = BUTTON_Y + 2 * CARD_HEIGHT + 64;
         self.panel(SIDE - 40, top, width + 80, bottom - top, COLOR_BACKGROUND);
         self.panel(
             SIDE - 40,
@@ -1521,12 +1520,21 @@ impl Builder<'_> {
             host_name(model),
             &heading_style(HEADING_STATUS),
         );
+        self.plain(
+            SIDE,
+            560,
+            model.stream_stats(),
+            26,
+            width,
+            COLOR_SOFT,
+            Align::Left,
+        );
         self.button(
             item::RETURN_TO_APPS,
             SIDE,
             BUTTON_Y,
             OVERLAY_BUTTON,
-            "Return to apps",
+            "Disconnect",
             false,
         );
         let quit_x = SIDE + OVERLAY_BUTTON + BUTTON_GAP;
@@ -1535,7 +1543,15 @@ impl Builder<'_> {
             quit_x,
             BUTTON_Y,
             OVERLAY_BUTTON,
-            "Quit host app",
+            "Quit app",
+            false,
+        );
+        self.button(
+            item::TOGGLE_STATS,
+            SIDE,
+            BUTTON_Y + CARD_HEIGHT + 24,
+            OVERLAY_BUTTON,
+            "Toggle stats",
             false,
         );
     }

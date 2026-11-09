@@ -290,6 +290,7 @@ pub struct Recorder {
     last_extra: [Option<Pad>; EXTRA_PADS],
     held_extra: [u32; EXTRA_PADS],
     stopped: bool,
+    stop_chord_enabled: bool,
     start_chord: u64,
 }
 
@@ -316,8 +317,14 @@ impl Recorder {
             last_extra: [None; EXTRA_PADS],
             held_extra: [0; EXTRA_PADS],
             stopped: false,
+            stop_chord_enabled: true,
             start_chord: chord,
         }
+    }
+
+    /// Reserve the stop chord for the local in-stream menu.
+    pub fn reserve_menu_chord(&mut self) {
+        self.stop_chord_enabled = false;
     }
 
     /// True after the stop chord; every later call records nothing.
@@ -368,7 +375,7 @@ impl Recorder {
         }
 
         let buttons = if pad.connected { pad.buttons } else { 0 };
-        if pad.connected && stop_held(u64::from(buttons)) {
+        if self.stop_chord_enabled && pad.connected && stop_held(u64::from(buttons)) {
             self.stopped = true;
             return self.stop_record(pad.connected, out);
         }
@@ -378,10 +385,15 @@ impl Recorder {
         } else {
             buttons
         };
+        let reserved = if !self.stop_chord_enabled && stop_held(u64::from(buttons)) {
+            (3 << 6) | (3 << 10)
+        } else {
+            0
+        };
         let mapped = if allowed {
             map_pad_with_start_chord(
                 pad.connected,
-                u64::from(buttons & !self.held_across_gate),
+                u64::from(buttons & !self.held_across_gate & !reserved),
                 pad.sticks,
                 self.start_chord,
             )
@@ -680,5 +692,26 @@ impl Writer<'_> {
         self.text(",\"y\":")?;
         self.unit(event.y)?;
         self.text(",\"pressure\":0}")
+    }
+}
+
+#[cfg(test)]
+mod menu_tests {
+    use super::*;
+
+    #[test]
+    fn reserved_menu_chord_does_not_stop_stream() {
+        let mut recorder = Recorder::new();
+        recorder.reserve_menu_chord();
+        let pad = PadState {
+            connected: true,
+            buttons: (3 << 6) | (3 << 10),
+            sticks: [0; 4],
+        };
+        let mut out = [0; MAX_INPUT_BYTES];
+        recorder.record(&pad, None, true, &mut out).unwrap();
+        assert!(!recorder.stopped());
+        recorder.record(&pad, None, false, &mut out).unwrap();
+        assert!(!recorder.stopped());
     }
 }

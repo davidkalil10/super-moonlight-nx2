@@ -179,6 +179,26 @@ impl<F: Files> Bridge<F> {
         &self.model
     }
 
+    pub fn set_stream_stats(&mut self, text: &str) {
+        if self.model.set_stream_stats(text) {
+            self.revision += 1;
+        }
+    }
+
+    pub fn overlay_ready(&self, storage: &Storage) -> bool {
+        self.shown_is(Screen::Streaming)
+            && self.header.is_some()
+            && word(storage, APPLIED) == self.sequence
+    }
+
+    pub fn show_overlay(&mut self, storage: &mut Storage) -> bool {
+        if !self.overlay_ready(storage) {
+            return false;
+        }
+        put(storage, OVERLAY, 1);
+        true
+    }
+
     pub fn set_capabilities(&mut self, capabilities: Capabilities) {
         if self.model.set_capabilities(capabilities) {
             self.revision += 1;
