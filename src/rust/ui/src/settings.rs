@@ -150,6 +150,7 @@ impl Capabilities {
             return false;
         };
         self.codec(codec)
+            && (fps != 120 || self.fps120)
             && self
                 .verified_modes
                 .is_none_or(|modes| modes[codec as usize] & (1 << (size as usize * 2 + rate)) != 0)
@@ -968,5 +969,27 @@ mod low_latency_tests {
         let (source, loaded) = store.load(&mut json);
         assert_eq!(source, crate::store::Source::Loaded);
         assert!(loaded.on(Setting::LowLatency));
+    }
+}
+
+#[cfg(test)]
+mod legacy_capability_tests {
+    use super::*;
+
+    #[test]
+    fn leaving_4k_does_not_restore_unavailable_120fps() {
+        let mut json = Json::new();
+        let settings = Settings::from_json(
+            br#"{"version":8,"size":"3840x2160","fps":60,"fpsBefore4k":120,"codec":"h264"}"#,
+            &mut json,
+        );
+        let caps = Capabilities {
+            h264: true,
+            fps120: false,
+            ..Capabilities::default()
+        };
+        let changed = settings.adjust(Setting::Size, -1, false, &caps).unwrap();
+        assert_eq!(changed.fps(), 60);
+        assert_eq!(changed.fps_before_4k(), 0);
     }
 }
