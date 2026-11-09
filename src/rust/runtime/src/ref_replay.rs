@@ -28,9 +28,10 @@ const CLIPS: [(&str, &[u8]); 2] = [
     ("av1", include_bytes!("../refclip/av1.mlrc")),
 ];
 #[cfg(feature = "diagnostic-native-decode")]
-const CLIPS: [(&str, &[u8]); 2] = [
+const CLIPS: [(&str, &[u8]); 3] = [
     ("h264", include_bytes!("../refclip/h264.mlrc")),
     ("hevc", include_bytes!("../refclip/hevc.mlrc")),
+    ("av1", include_bytes!("../refclip/av1.mlrc")),
 ];
 /// Presents per decoded frame: about half a second at 60 Hz, a quarter at 120 Hz.
 const HOLD_PRESENTS: u32 = 30;

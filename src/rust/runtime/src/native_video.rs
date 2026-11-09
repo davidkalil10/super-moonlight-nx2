@@ -464,6 +464,7 @@ impl NativeVideo {
 /// Enable only in a commit citing successful native pixel and clean-close evidence.
 pub const NATIVE_H264_VERIFIED: bool = false;
 pub const NATIVE_HEVC_MAIN_VERIFIED: bool = false;
+pub const NATIVE_AV1_MAIN_VERIFIED: bool = false;
 
 impl NativeVideo {
     fn layout(&mut self, index: usize) -> Result<untile::Image, BackendError> {
@@ -506,7 +507,11 @@ impl NativeVideo {
 
 impl Backend<RING> for NativeVideo {
     fn capabilities() -> moonlight_nx2_core::codec::Capabilities {
-        crate::native_gate::capabilities(NATIVE_H264_VERIFIED, NATIVE_HEVC_MAIN_VERIFIED)
+        crate::native_gate::capabilities(
+            NATIVE_H264_VERIFIED,
+            NATIVE_HEVC_MAIN_VERIFIED,
+            NATIVE_AV1_MAIN_VERIFIED,
+        )
     }
 
     fn open(&mut self, config: Config) -> Result<[u32; RING], BackendError> {
