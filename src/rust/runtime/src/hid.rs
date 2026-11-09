@@ -133,6 +133,21 @@ mod device {
     unsafe extern "C" {
         fn moonlightPlatformInputStart();
         fn moonlightPlatformInputRead(sample: u64, input: *mut u8, bytes: usize) -> bool;
+        fn moonlightPlatformRumble(player: u32, low: u16, high: u16);
+        fn moonlightPlatformRumbleStop();
+    }
+
+    /// Drives player `player` (0 = player 1) while the sampler owns input; else ignored.
+    pub fn rumble(player: u8, low: u16, high: u16) {
+        if ACTIVE.load(Ordering::Acquire) {
+            unsafe { moonlightPlatformRumble(u32::from(player), low, high) };
+        }
+    }
+
+    pub fn stop_rumble() {
+        if ACTIVE.load(Ordering::Acquire) {
+            unsafe { moonlightPlatformRumbleStop() };
+        }
     }
 
     pub struct Sampler {
@@ -171,10 +186,17 @@ mod device {
 
     impl Drop for Sampler {
         fn drop(&mut self) {
+            unsafe { moonlightPlatformRumbleStop() };
             ACTIVE.store(false, Ordering::Release);
         }
     }
 }
 
 #[cfg(target_os = "none")]
-pub use device::Sampler;
+pub use device::{Sampler, rumble, stop_rumble};
+
+#[cfg(not(target_os = "none"))]
+pub fn rumble(_player: u8, _low: u16, _high: u16) {}
+
+#[cfg(not(target_os = "none"))]
+pub fn stop_rumble() {}

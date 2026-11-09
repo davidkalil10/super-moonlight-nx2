@@ -65,6 +65,9 @@ pub enum Action {
     SaveSettings,
     PauseInput,
     ResumeInput,
+    /// Drive one player's motors (0/0 stops them). Only sent while streaming with input live;
+    /// the runtime stops every motor itself on PauseInput, CloseMedia and CloseControl.
+    Rumble(reply::Rumble),
     /// Open video/audio channels for this accepted descriptor; report back with `runtime`.
     OpenMedia(Descriptor),
     /// Drain then close media (`Media::begin_drain`, step until drained or `DrainTimeout`,
@@ -224,6 +227,8 @@ pub struct Service {
     media_open: bool,
     media_closing: bool,
     upstream: bool,
+    /// The overlay paused stream input; PC rumble is dropped until it resumes.
+    input_paused: bool,
     streamed: bool,
     quit_outcome: Option<QuitOutcome>,
     capabilities: Capabilities,
@@ -278,6 +283,7 @@ impl Service {
             media_open: false,
             media_closing: false,
             upstream: false,
+            input_paused: false,
             streamed: false,
             quit_outcome: None,
             capabilities: Capabilities::default(),
@@ -524,8 +530,14 @@ impl Service {
             IntentKind::RemoveHost => self.act(Action::ForgetHost(host)),
             IntentKind::RefreshHosts => self.act(Action::RefreshHosts),
             IntentKind::SaveSettings => self.act(Action::SaveSettings),
-            IntentKind::PauseInput => self.act(Action::PauseInput),
-            IntentKind::ResumeInput => self.act(Action::ResumeInput),
+            IntentKind::PauseInput => {
+                self.input_paused = true;
+                self.act(Action::PauseInput)
+            }
+            IntentKind::ResumeInput => {
+                self.input_paused = false;
+                self.act(Action::ResumeInput)
+            }
             IntentKind::Exit => self.act(Action::Exit),
             IntentKind::Covers => {}
         }
@@ -1113,6 +1125,10 @@ impl Service {
                     Ok(Reply::UpstreamStatus(status)) => Outcome::Upstream(status),
                     _ => Outcome::InvalidAdvisory,
                 },
+                EventClass::Rumble => match decoded {
+                    Ok(Reply::Rumble(rumble)) => Outcome::Owned(Reply::Rumble(rumble)),
+                    _ => Outcome::InvalidAdvisory,
+                },
                 EventClass::Unknown => Outcome::IgnoredEvent,
                 EventClass::Lifecycle | EventClass::Unclassifiable
                     if decoded.is_err() && self.telemetry_negotiated() =>
@@ -1180,6 +1196,7 @@ impl Service {
                 Outcome::DescriptorEcho(descriptor, echo)
             }
             Reply::UpstreamStatus(status) => Outcome::Upstream(status),
+            Reply::Rumble(rumble) => Outcome::Owned(Reply::Rumble(rumble)),
             Reply::Failure(code) => Outcome::Owned(Reply::Failure(code)),
         }
     }
@@ -1415,6 +1432,7 @@ impl Service {
         self.telemetry_live = self.telemetry_negotiated;
         self.prepared_at_us = now_ms.checked_mul(1000);
         self.media_open = true;
+        self.input_paused = false;
         self.act(Action::OpenMedia(*descriptor));
     }
 
@@ -1461,6 +1479,10 @@ impl Service {
             }
             Reply::Ended => self.host_ended(),
             Reply::StreamFailed { start_id, code } => self.stream_failed(start_id, code),
+            Reply::Rumble(rumble) if self.phase == Phase::Streaming && !self.input_paused => {
+                self.act(Action::Rumble(rumble))
+            }
+            Reply::Rumble(_) => self.stats.stale += 1,
             _ => self.stats.malformed += 1,
         }
     }

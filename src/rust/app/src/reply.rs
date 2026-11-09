@@ -203,6 +203,7 @@ pub struct UpstreamStatus {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum EventClass {
     UpstreamStatus,
+    Rumble,
     Lifecycle,
     Unknown,
     Unclassifiable,
@@ -233,6 +234,8 @@ pub fn classify_event(payload: &[u8]) -> EventClass {
     };
     if event.string_is("upstream_status") {
         EventClass::UpstreamStatus
+    } else if event.string_is("rumble") {
+        EventClass::Rumble
     } else if ["connected", "stopped", "stream_failed"]
         .iter()
         .any(|name| event.string_is(name))
@@ -271,8 +274,21 @@ pub enum Reply<'a> {
         echo: TelemetryEcho,
     },
     UpstreamStatus(UpstreamStatus),
+    /// ID 0: the PC rumbled `player` (0 = player 1, up to 7); 0/0 stops the motors.
+    Rumble(Rumble),
     Failure(Code),
 }
+
+/// Motor strengths for one player, 0 to 65535 each.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Rumble {
+    pub player: u8,
+    pub low: u16,
+    pub high: u16,
+}
+
+/// Players a rumble event may address.
+pub const RUMBLE_PLAYERS: u8 = 8;
 
 /// Decodes one frame's payload. `request_id` 0 selects the session lifecycle events.
 pub fn decode(kind: FrameKind, request_id: u32, payload: &[u8]) -> Result<Reply<'_>, Error> {
@@ -321,6 +337,9 @@ fn lifecycle(root: Value<'_>) -> Result<Reply<'_>, Error> {
     if event.string_is("upstream_status") {
         return upstream_status(root).map(Reply::UpstreamStatus);
     }
+    if event.string_is("rumble") {
+        return rumble(root).map(Reply::Rumble);
+    }
     if event.string_is("stream_failed") {
         exact_keys(root, &["event", "start_id", "code", "message"])?;
         let start_id = number(root, "start_id")?;
@@ -355,6 +374,20 @@ fn lifecycle(root: Value<'_>) -> Result<Reply<'_>, Error> {
         return Ok(Reply::Ended);
     }
     Err(Error::Shape)
+}
+
+fn rumble(root: Value<'_>) -> Result<Rumble, Error> {
+    exact_keys(root, &["event", "controller", "low", "high"])?;
+    let motor = |key| u16::try_from(number(root, key)?).map_err(|_| Error::Shape);
+    let player = number(root, "controller")?;
+    if player >= u32::from(RUMBLE_PLAYERS) {
+        return Err(Error::Shape);
+    }
+    Ok(Rumble {
+        player: player as u8,
+        low: motor("low")?,
+        high: motor("high")?,
+    })
 }
 
 fn upstream_status(root: Value<'_>) -> Result<UpstreamStatus, Error> {

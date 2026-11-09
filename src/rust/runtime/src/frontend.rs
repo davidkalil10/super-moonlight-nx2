@@ -267,6 +267,7 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
             match effect {
                 Effect::Action(Action::OpenControl) => self.open(connections, now_ms),
                 Effect::Action(Action::CloseControl) => {
+                    crate::hid::stop_rumble();
                     if !self.close_control() {
                         self.exit = true;
                     }
@@ -275,7 +276,13 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
                     self.stats.media_opened += 1;
                     self.media.push(MediaRequest::Open(descriptor));
                 }
-                Effect::Action(Action::CloseMedia) => self.media.push(MediaRequest::Close),
+                Effect::Action(Action::CloseMedia) => {
+                    crate::hid::stop_rumble();
+                    self.media.push(MediaRequest::Close)
+                }
+                Effect::Action(Action::Rumble(rumble)) => {
+                    crate::hid::rumble(rumble.player, rumble.low, rumble.high)
+                }
                 Effect::Action(Action::Exit) => self.exit = true,
                 Effect::Action(Action::RetireProcess) => {
                     crate::render_platform::retire_process();
@@ -284,12 +291,14 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
                 Effect::Action(Action::RefreshHosts) => {
                     self.message = Some("Add the PC by address to connect")
                 }
-                Effect::Action(Action::PauseInput | Action::ResumeInput) => {}
+                Effect::Action(Action::PauseInput) => crate::hid::stop_rumble(),
+                Effect::Action(Action::ResumeInput) => {}
                 Effect::HostsError(message) => self.message = Some(message),
                 Effect::Action(_) => {}
             }
         }
         if disconnected {
+            crate::hid::stop_rumble();
             if !self.close_control() {
                 self.exit = true;
             }

@@ -32,6 +32,15 @@ typedef struct {
 } Motion;
 static Motion motion[EXTRA_PADS + 1];
 
+/* Vibration handles per player, remade when the controller style changes. */
+typedef struct {
+    uint32_t style;
+    HidVibrationDeviceHandle handles[2];
+    int count;
+    bool moving;
+} Vibration;
+static Vibration vibration[EXTRA_PADS + 1];
+
 _Static_assert(sizeof(GsvSync) == 8, "GsvSync ABI");
 _Static_assert(sizeof(GsvGpu) == 8, "GsvGpu ABI");
 _Static_assert(sizeof(Event) == 12, "Event ABI");
@@ -148,6 +157,62 @@ static void read_extended(uint8_t *input)
         write_motion(input + MOTION_OFFSET + (slot + 1) * SLOT_BYTES, slot + 1,
                      (HidNpadIdType)(HidNpadIdType_No2 + slot), padIsConnected(&extra_pads[slot]));
     }
+}
+
+static uint32_t vibration_style(HidNpadIdType id)
+{
+    uint32_t styles = hidGetNpadStyleSet(id);
+    return styles & HidNpadStyleTag_NpadFullKey     ? HidNpadStyleTag_NpadFullKey
+           : styles & HidNpadStyleTag_NpadHandheld  ? HidNpadStyleTag_NpadHandheld
+           : styles & HidNpadStyleTag_NpadJoyDual   ? HidNpadStyleTag_NpadJoyDual
+           : styles & HidNpadStyleTag_NpadJoyRight  ? HidNpadStyleTag_NpadJoyRight
+           : styles & HidNpadStyleTag_NpadJoyLeft   ? HidNpadStyleTag_NpadJoyLeft
+                                                    : 0;
+}
+
+static void send_vibration(Vibration *entry, uint16_t low, uint16_t high)
+{
+    HidVibrationValue value = {
+        .amp_low = low / 65535.0f,
+        .freq_low = 160.0f,
+        .amp_high = high / 65535.0f,
+        .freq_high = 320.0f,
+    };
+    HidVibrationValue values[2] = {value, value};
+    if (entry->count > 0 && R_SUCCEEDED(hidSendVibrationValues(entry->handles, values, entry->count)))
+        entry->moving = low || high;
+}
+
+/* Player 0 is player 1 (handheld when the console is in handheld mode), up to player 8. */
+void moonlightPlatformRumble(uint32_t player, uint16_t low, uint16_t high)
+{
+    if (player > EXTRA_PADS)
+        return;
+    HidNpadIdType id = (HidNpadIdType)(HidNpadIdType_No1 + player);
+    if (player == 0 && hidGetNpadStyleSet(HidNpadIdType_Handheld) & HidNpadStyleTag_NpadHandheld)
+        id = HidNpadIdType_Handheld;
+    Vibration *entry = &vibration[player];
+    uint32_t style = vibration_style(id);
+    if (style != entry->style) {
+        if (entry->moving)
+            send_vibration(entry, 0, 0);
+        entry->style = style;
+        entry->count = 0;
+        entry->moving = false;
+        int count = style & (HidNpadStyleTag_NpadJoyLeft | HidNpadStyleTag_NpadJoyRight) ? 1 : 2;
+        if (style && R_SUCCEEDED(hidInitializeVibrationDevices(entry->handles, count, id,
+                                                               (HidNpadStyleTag)style)))
+            entry->count = count;
+    }
+    if (entry->moving || low || high)
+        send_vibration(entry, low, high);
+}
+
+void moonlightPlatformRumbleStop(void)
+{
+    for (int player = 0; player <= EXTRA_PADS; player++)
+        if (vibration[player].moving)
+            send_vibration(&vibration[player], 0, 0);
 }
 
 uint64_t moonlightPlatformStackAvailable(void)
