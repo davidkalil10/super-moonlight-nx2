@@ -1,3 +1,6 @@
+//! Video loss recovery: after a sequence gap or a decoder-dropped unit, units are skipped and
+//! frames hidden until the next keyframe, with IDR requests limited to one per `IDR_RETRY_MS`.
+
 use crate::codec::Codec;
 
 pub const IDR_RETRY_MS: u64 = 500;

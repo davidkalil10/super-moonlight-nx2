@@ -1,3 +1,6 @@
+//! Decoder session over a `Backend`: bounded submission, a surface ring of N images, and frames
+//! either read back into caller memory or bound in place for the presenter.
+
 use crate::{
     codec::{Codec, Size},
     untile,

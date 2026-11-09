@@ -1,3 +1,6 @@
+//! Renderer side of native decode: the decoder's surface memory, storage buffers over it and the
+//! pipeline that samples decoded NV12 in place.
+
 extern crate alloc;
 
 use super::{Error, Renderer, allocator, sdk, shaders};

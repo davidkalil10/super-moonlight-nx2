@@ -1,3 +1,5 @@
+//! Per-second stream pacing shared between the runtime and the in-stream overlay.
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct StreamStats {
     pub window_ms: u32,

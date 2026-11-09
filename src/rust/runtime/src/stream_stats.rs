@@ -1,3 +1,6 @@
+//! Latest `StreamStats`, input age and the pending IDR request, published by the video path for
+//! the frontend to read each frame.
+
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use moonlight_nx2_core::stats::StreamStats;
 

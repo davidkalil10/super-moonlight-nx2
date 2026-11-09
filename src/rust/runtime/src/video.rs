@@ -1,3 +1,6 @@
+//! Stream video: decoder submission, loss recovery, presentation of decoded frames (bound in
+//! place or copied) and pacing statistics.
+
 extern crate alloc;
 
 use crate::{
