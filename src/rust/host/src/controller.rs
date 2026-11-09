@@ -535,6 +535,9 @@ impl Controller {
                 }
                 management::Event::Complete { result, .. } => {
                     let pending = self.management_output.take().expect("management output");
+                    if pending.operation == management::OperationName::Pair {
+                        eprintln!("pair worker completion: {result:?}");
+                    }
                     let code = match result {
                         management::Completion::Exited(status)
                             if status.success()

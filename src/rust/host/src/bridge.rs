@@ -50,6 +50,9 @@ impl Pending {
             bytes = &bytes[used..];
             if self.stderr.peek().map_err(|_| ())?.is_some() {
                 self.not_paired |= self.stderr.is_not_paired();
+                if self.operation == OperationName::Pair {
+                    log_pair_stderr(self.stderr.line().ok_or(())?);
+                }
                 self.stderr.consume().map_err(|_| ())?;
             } else if used == 0 {
                 return Err(());
@@ -57,6 +60,50 @@ impl Pending {
         }
         Ok(())
     }
+}
+
+fn log_pair_stderr(line: &[u8]) {
+    const RESULT: &[u8] = b"moonlight-worker gs_pair_return=";
+    if let Some(code) = line.strip_prefix(RESULT)
+        && let Ok(code) = std::str::from_utf8(code)
+        && let Ok(code) = code.parse::<i32>()
+    {
+        eprintln!("pair: gs_pair returned {code}");
+        return;
+    }
+    eprintln!("pair worker stderr: {}", redact_pair_line(line));
+}
+
+fn redact_pair_line(line: &[u8]) -> String {
+    let mut out = String::new();
+    let mut index = 0;
+    while index < line.len() && index < 1024 {
+        if line[index].is_ascii_hexdigit() {
+            let end = index
+                + line[index..]
+                    .iter()
+                    .take_while(|b| b.is_ascii_hexdigit())
+                    .count();
+            if end - index >= 64 {
+                out.push_str("[redacted]");
+                index = end;
+                continue;
+            }
+        }
+        let byte = line[index];
+        out.push(if byte.is_ascii_digit() {
+            '*'
+        } else if byte.is_ascii_graphic() || byte == b' ' {
+            char::from(byte)
+        } else {
+            '?'
+        });
+        index += 1;
+    }
+    if index < line.len() {
+        out.push_str("...[truncated]");
+    }
+    out
 }
 
 pub struct Bridge {
@@ -158,6 +205,9 @@ impl Bridge {
             }
             management::Event::Complete { result, .. } => {
                 let mut pending = self.pending.take().expect("pending request");
+                if pending.operation == OperationName::Pair {
+                    eprintln!("pair worker completion: {result:?}");
+                }
                 if !pending.buffer.is_empty() {
                     return Ok(Some(Event::Failure {
                         request_id: pending.request_id,
@@ -220,6 +270,21 @@ impl Bridge {
         self.session.close().map_err(Error::Session)?;
         self.pending = None;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod pair_log_tests {
+    use super::redact_pair_line;
+
+    #[test]
+    fn removes_pin_tokens_and_control_bytes() {
+        let token = "a".repeat(64);
+        let line = format!("pair PIN=1234 token={token} code=13\r");
+        let logged = redact_pair_line(line.as_bytes());
+        assert!(!logged.contains("1234"));
+        assert!(!logged.contains(&token));
+        assert_eq!(logged, "pair PIN=**** token=[redacted] code=**?");
     }
 }
 

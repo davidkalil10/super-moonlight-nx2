@@ -56,6 +56,9 @@ impl Lines {
             && serde_json::from_slice::<NotPairedStatus>(&self.buffer)
                 .is_ok_and(|status| status.event == "error" && status.message == "not paired")
     }
+    pub(crate) fn line(&self) -> Option<&[u8]> {
+        self.ready.then_some(self.buffer.as_slice())
+    }
     pub(crate) fn telemetry_observation(&self) -> Option<crate::telemetry::Observation> {
         self.ready
             .then(|| crate::telemetry::parse(&self.buffer))

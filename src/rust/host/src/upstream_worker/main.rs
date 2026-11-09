@@ -182,6 +182,7 @@ fn pair(server: &mut native::SERVER_DATA, host: &CStr, timeout: u32) -> WorkerRe
         let _deadline = Deadline::new(timeout);
         unsafe { native::gs_pair(server, pin.as_ptr().cast_mut()) }
     };
+    eprintln!("moonlight-worker gs_pair_return={result}");
     if result != 0 {
         return Err(WorkerError::Failed);
     }
