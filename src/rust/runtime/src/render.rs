@@ -252,12 +252,12 @@ struct Objects {
     info: Info,
 }
 
-#[cfg(all(target_os = "none", feature = "diagnostic-native-decode"))]
+#[cfg(all(target_os = "none", feature = "native-video"))]
 #[path = "render_native.rs"]
 pub(crate) mod native;
 
 pub struct Renderer {
-    #[cfg(all(target_os = "none", feature = "diagnostic-native-decode"))]
+    #[cfg(all(target_os = "none", feature = "native-video"))]
     native_children: alloc::rc::Rc<core::cell::Cell<u32>>,
     objects: ManuallyDrop<Box<Objects>>,
     closed: bool,
@@ -345,7 +345,7 @@ impl Renderer {
                 info: Info::default(),
             })),
             closed: false,
-            #[cfg(all(target_os = "none", feature = "diagnostic-native-decode"))]
+            #[cfg(all(target_os = "none", feature = "native-video"))]
             native_children: alloc::rc::Rc::new(core::cell::Cell::new(0)),
             not_send: PhantomData,
         };
@@ -531,7 +531,7 @@ impl Renderer {
             self.objects.retain();
             return Err(Error::Retained);
         }
-        #[cfg(all(target_os = "none", feature = "diagnostic-native-decode"))]
+        #[cfg(all(target_os = "none", feature = "native-video"))]
         if self.native_children.get() != 0 {
             return Err(self.objects.retain());
         }

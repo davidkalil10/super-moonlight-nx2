@@ -33,17 +33,14 @@ use moonlight_nx2_io::{
 };
 use moonlight_nx2_ui::store::Files;
 
-#[cfg(not(feature = "diagnostic-frontend"))]
+#[cfg(not(any(feature = "diagnostic-frontend", feature = "native-video")))]
 type Decoder = crate::gsv::GsvBackend;
-#[cfg(all(
-    feature = "diagnostic-frontend",
-    not(feature = "diagnostic-native-decode")
-))]
+#[cfg(all(feature = "diagnostic-frontend", not(feature = "native-video")))]
 type Decoder = crate::video_sink::VideoSink;
-#[cfg(feature = "diagnostic-native-decode")]
+#[cfg(feature = "native-video")]
 type Decoder = crate::native_video::NativeVideo;
 
-#[cfg(feature = "diagnostic-frontend")]
+#[cfg(any(feature = "diagnostic-frontend", feature = "native-video"))]
 pub(crate) fn decoder_capabilities() -> Capabilities {
     <Decoder as decoder::Backend>::capabilities()
 }
@@ -116,10 +113,11 @@ impl Stream {
         mut descriptor: Descriptor,
         peer: Option<[u8; 4]>,
         now_ms: u64,
-        #[cfg(feature = "diagnostic-native-decode")] renderer: &mut Renderer,
+        #[cfg(feature = "native-video")] renderer: &mut Renderer,
     ) -> bool {
         let Some(epoch) = client.session_epoch() else {
             descriptor.wipe();
+            client.runtime(moonlight_nx2_app::service::RuntimeEvent::MediaFailed);
             return false;
         };
         let opened = match peer {
@@ -128,7 +126,7 @@ impl Stream {
                 peer,
                 epoch,
                 now_ms,
-                #[cfg(feature = "diagnostic-native-decode")]
+                #[cfg(feature = "native-video")]
                 renderer,
             ),
             _ => Err("no peer or a stream is already open"),
@@ -154,7 +152,7 @@ impl Stream {
         peer: [u8; 4],
         epoch: Epoch,
         now_ms: u64,
-        #[cfg(feature = "diagnostic-native-decode")] renderer: &mut Renderer,
+        #[cfg(feature = "native-video")] renderer: &mut Renderer,
     ) -> Result<Running, &'static str> {
         let display = Size::new(descriptor.width, descriptor.height).ok_or("invalid size")?;
         let coded = Size::new(
@@ -167,13 +165,13 @@ impl Stream {
                 codec: core_codec(descriptor.codec),
                 coded,
                 display,
-                timeout_ms: if cfg!(feature = "diagnostic-native-decode") {
+                timeout_ms: if cfg!(feature = "native-video") {
                     2000
                 } else {
                     0
                 },
                 frame_registration: FrameRegistration::Register,
-                backing: if cfg!(feature = "diagnostic-native-decode") {
+                backing: if cfg!(feature = "native-video") {
                     Backing::NativeGpu
                 } else {
                     Backing::CpuReference
@@ -182,11 +180,11 @@ impl Stream {
             fps: descriptor.fps,
             matrix: Matrix::Bt709,
         };
-        #[cfg(feature = "diagnostic-native-decode")]
+        #[cfg(feature = "native-video")]
         let backend = renderer
             .native_decoder()
             .map_err(|_| "native renderer owner")?;
-        #[cfg(not(feature = "diagnostic-native-decode"))]
+        #[cfg(not(feature = "native-video"))]
         let backend = Decoder::new();
         let buffers = Box::into_raw(Buffers::new(coded));
         let memory = unsafe { &mut *buffers };
@@ -234,8 +232,7 @@ impl Stream {
             }),
             Err((failure, closed)) => {
                 log(&format!("stream: media open failed {failure:?}"));
-                if self.reclaim(closed)
-                    && (!cfg!(feature = "diagnostic-native-decode") || !self.retired.get())
+                if self.reclaim(closed) && (!cfg!(feature = "native-video") || !self.retired.get())
                 {
                     drop(unsafe { Box::from_raw(buffers) });
                 }
@@ -254,7 +251,12 @@ impl Stream {
     pub fn begin_close<F: Files + Clone>(&mut self, client: &mut Client<F>, now_ms: u64) {
         let Some(running) = self.running.as_mut() else {
             if let Some(epoch) = client.session_epoch() {
-                client.observe(epoch, Observation::Closed { retained: false });
+                client.observe(
+                    epoch,
+                    Observation::Closed {
+                        retained: self.retired.get() || crate::render_platform::process_retired(),
+                    },
+                );
             }
             return;
         };

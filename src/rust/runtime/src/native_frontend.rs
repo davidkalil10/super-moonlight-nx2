@@ -163,7 +163,7 @@ pub fn run(checked: bool) -> bool {
     let authorization = connections.authorization();
     let authorization_error = authorization.as_ref().err().copied();
     log(&format!(
-        "frontend: one-time authorization imported={} checked={checked}; native codecs disabled; Start denied before wire",
+        "frontend: one-time authorization imported={} checked={checked}",
         authorization.is_ok()
     ));
     let mut renderer = match Renderer::open(render_config()) {
@@ -175,6 +175,19 @@ pub fn run(checked: bool) -> bool {
     };
     #[cfg(feature = "diagnostic-ref-replay")]
     crate::ref_replay::run(&mut renderer);
+    #[cfg(feature = "native-video")]
+    let verified = stream_capabilities().supports(
+        moonlight_nx2_core::codec::Codec::H264,
+        moonlight_nx2_core::codec::Depth::Eight,
+        moonlight_nx2_core::codec::Size::new(1920, 1080).unwrap(),
+        60,
+    );
+    #[cfg(not(feature = "native-video"))]
+    let verified = false;
+    log(&format!("frontend: native decoder verified={verified}"));
+    if sdk::process_retired() {
+        return false;
+    }
     let result = execute(
         &mut renderer,
         files,
@@ -182,6 +195,7 @@ pub fn run(checked: bool) -> bool {
         authorization_error,
         &mut connections,
         checked,
+        verified,
         start,
     );
     let closed = renderer.close();
@@ -196,6 +210,7 @@ fn execute(
     authorization_error: Option<AuthError>,
     connections: &mut NativeConnections,
     checked: bool,
+    verified: bool,
     start: u64,
 ) -> bool {
     const ATLAS: &[u8] = include_bytes!("../../../streamer/ui/fonts/glyphs.bin");
@@ -209,6 +224,8 @@ fn execute(
             authorization,
             if checked {
                 Access::SingleList
+            } else if verified {
+                Access::Streaming
             } else {
                 Access::User
             },
@@ -290,7 +307,7 @@ fn execute(
                         descriptor,
                         peer,
                         now_ms,
-                        #[cfg(feature = "diagnostic-native-decode")]
+                        #[cfg(feature = "native-video")]
                         renderer,
                     );
                 }
@@ -422,7 +439,7 @@ fn render_config() -> Config {
 
 /// Hands the operation mode and the display modes verified for it to the client; a live stream
 /// restarts in the new context.
-#[cfg(feature = "diagnostic-frontend")]
+#[cfg(any(feature = "diagnostic-frontend", feature = "native-video"))]
 fn display_context(
     app: &mut Frontend<Directory, NetSocket>,
     docked: bool,
@@ -435,28 +452,28 @@ fn display_context(
             decoder: stream_capabilities(),
             display,
         });
-    #[cfg(not(feature = "diagnostic-native-decode"))]
+    #[cfg(not(feature = "native-video"))]
     log(&format!(
         "display: context docked={docked} accepted={accepted}; video sink receives and discards up to 1440p120 and 4K60"
     ));
-    #[cfg(feature = "diagnostic-native-decode")]
+    #[cfg(feature = "native-video")]
     log(&format!(
-        "display: context docked={docked} accepted={accepted}; H.264 native diagnostic up to 1080p60"
+        "display: context docked={docked} accepted={accepted}; native decoder capability is runtime gated"
     ));
 }
 
 /// Without a decoder nothing can be offered; only the operation mode reaches the model.
-#[cfg(not(feature = "diagnostic-frontend"))]
+#[cfg(not(any(feature = "diagnostic-frontend", feature = "native-video")))]
 fn display_context(app: &mut Frontend<Directory, NetSocket>, docked: bool, _: DisplayCapabilities) {
     app.client.event(&Event::OperationMode { docked });
 }
 
-#[cfg(feature = "diagnostic-frontend")]
+#[cfg(any(feature = "diagnostic-frontend", feature = "native-video"))]
 fn stream_capabilities() -> Capabilities {
     crate::frontend_stream::decoder_capabilities()
 }
 
-#[cfg(not(feature = "diagnostic-frontend"))]
+#[cfg(not(any(feature = "diagnostic-frontend", feature = "native-video")))]
 fn stream_capabilities() -> Capabilities {
     Capabilities::default()
 }

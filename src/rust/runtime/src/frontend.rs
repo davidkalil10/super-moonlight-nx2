@@ -547,7 +547,7 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
             self.message = Some("PC disconnected; import a new connection to reconnect");
         }
         if !disconnected
-            && self.access == Access::User
+            && self.access != Access::SingleList
             && self.authenticated
             && self.client.bridge.model().screen() == Screen::Apps
             && self.client.driver.service().idle()

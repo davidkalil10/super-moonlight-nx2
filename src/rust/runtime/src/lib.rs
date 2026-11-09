@@ -60,6 +60,8 @@ compile_error!("Audio cue is a separate diagnostic mode");
 
 use moonlight_nx2_core::input::{self, Pad};
 
+pub mod native_gate;
+
 #[cfg(not(any(target_os = "none", feature = "host-renderer")))]
 use ash as _;
 #[cfg(not(any(target_os = "none", feature = "host-renderer")))]
@@ -94,7 +96,7 @@ mod udp_diagnostic;
 #[cfg(all(
     target_os = "none",
     feature = "diagnostic-frontend",
-    not(feature = "diagnostic-native-decode")
+    not(feature = "native-video")
 ))]
 mod video_sink;
 
@@ -133,7 +135,7 @@ pub mod sdk;
 #[cfg(any(
     feature = "host-renderer",
     feature = "diagnostic-sdk-backing",
-    feature = "diagnostic-native-decode"
+    feature = "native-video"
 ))]
 pub mod sdk_backing;
 #[cfg(all(target_os = "none", feature = "diagnostic-sdk-backing"))]
@@ -162,7 +164,7 @@ pub extern "C" fn stop_held(buttons: u64) -> bool {
     input::stop_held(buttons)
 }
 
-#[cfg(all(target_os = "none", feature = "diagnostic-native-decode"))]
+#[cfg(all(target_os = "none", feature = "native-video"))]
 pub mod native_video;
-#[cfg(all(target_os = "none", feature = "diagnostic-native-decode"))]
+#[cfg(all(target_os = "none", feature = "native-video"))]
 mod owner_call;

@@ -121,7 +121,7 @@ def build(args):
                          "--package", "moonlight-nx2-runtime", "--target", TARGET, "--release", "--locked",
                          "-Zbuild-std=core,alloc", "-Zbuild-std-features="]]
             if args.diagnostic == "production":
-                commands[0].extend(["--features", "frontend"])
+                commands[0].extend(["--features", "frontend,native-video"])
             elif args.diagnostic != "core":
                 commands[0].extend(["--features", f"diagnostic-{args.diagnostic}"])
             artifact = directory / "cargo" / TARGET / "release/libmoonlight_nx2_runtime.a"
@@ -169,7 +169,7 @@ def build(args):
                      f"BUILD_DIR={directory}", f"RUST_LIBRARY={library}",
                      "NACP_TITLE=" + nacp_title(args.diagnostic),
                      "NACP_VERSION=" + args.nacp_version]]
-        if args.diagnostic in ("sdk-backing", "native-decode"):
+        if args.diagnostic in ("sdk-backing", "native-decode", "production"):
             alias_directory = args.sdk_backing_library_dir or directory / "sdk-interop/alias"
             if not alias_directory.is_absolute():
                 raise ValueError("SDK backing alias library directory must be absolute")
@@ -185,7 +185,7 @@ def build(args):
             info["sdk_backing_inputs"] = {str(path): digest(path) for path in backing_inputs}
             info["sdk_backing_library_dir"] = str(alias_directory)
             commands[0].extend(["SDK_BACKING=1", f"SDK_BACKING_LIBRARY_DIR={alias_directory}"])
-            if args.diagnostic == "native-decode":
+            if args.diagnostic in ("native-decode", "production"):
                 commands[0].append("NATIVE_DECODE=1")
         artifact = directory / "moonlight-nx2-rust.nro"
 
@@ -194,7 +194,7 @@ def build(args):
         with (directory / "build.log").open("w") as log:
             for command in commands:
                 run(command, env, log, info["commands"])
-        if args.stage == "nro" and args.diagnostic in ("sdk-backing", "native-decode"):
+        if args.stage == "nro" and args.diagnostic in ("sdk-backing", "native-decode", "production"):
             alias = Path(info["sdk_backing_library_dir"]) / "libouncevk.a"
             if digest(alias) != "b33546d8f616e135257a27b5606992a2b8a9708dc8d11e8343b55faa34176531":
                 raise ValueError("Unexpected SDK backing alias archive")

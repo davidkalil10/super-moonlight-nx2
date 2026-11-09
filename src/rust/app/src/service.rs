@@ -50,6 +50,54 @@ mod wake_tests {
             Some(Output::Action(Action::CloseControl))
         ));
     }
+
+    #[test]
+    fn unverified_start_is_refused_and_open_failure_reports_apps_error() {
+        let mut service = Service::new();
+        service.link_up = true;
+        let options = Options {
+            width: 1920,
+            height: 1080,
+            fps: 60,
+            bitrate_kbps: 20_000,
+            codec: Codec::H264,
+            sops: false,
+            local_audio: false,
+            quit_on_stop: false,
+            transport: None,
+        };
+        service.start_stream(
+            Host::default(),
+            moonlight_nx2_ui::model::App::default(),
+            options,
+            None,
+        );
+        assert!(service.queue.iter().all(Option::is_none));
+        assert!(matches!(
+            service.next_output(),
+            Some(Output::Ui(Notice::Failed {
+                back_apps: Some(true),
+                ..
+            }))
+        ));
+
+        service.phase = Phase::Opening;
+        service.media_open = true;
+        service.media_failed();
+        let mut failed = false;
+        let mut close = false;
+        while let Some(output) = service.next_output() {
+            failed |= matches!(
+                output,
+                Output::Ui(Notice::Failed {
+                    back_apps: Some(true),
+                    ..
+                })
+            );
+            close |= matches!(output, Output::Action(Action::CloseMedia));
+        }
+        assert!(failed && close);
+    }
 }
 
 /// Owned UI notifications; `Service::ui_event` turns one into a `ui::model::Event`.

@@ -12,6 +12,7 @@ use moonlight_nx2_io::{
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Access {
     User,
+    Streaming,
     SingleList,
 }
 
@@ -176,6 +177,7 @@ impl<S: Socket + 'static> Link for Control<S> {
             ["list", "pair", "unpair", "quit", "stop", "cover"]
                 .iter()
                 .any(|name| op.string_is(name))
+                || (self.access == Access::Streaming && op.string_is("start"))
         });
         if !allowed
             || self.rejected
@@ -199,5 +201,43 @@ impl<S: Socket + 'static> Link for Control<S> {
 impl<S: Socket + 'static> Drop for Control<S> {
     fn drop(&mut self) {
         self.close();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use moonlight_nx2_io::socket::IoError;
+
+    struct SocketStub;
+    impl Socket for SocketStub {
+        fn poll_connect(&mut self) -> Result<bool, IoError> {
+            Ok(true)
+        }
+        fn send(&mut self, _: &[u8]) -> Result<usize, IoError> {
+            panic!("no network send expected")
+        }
+        fn recv(&mut self, _: &mut [u8]) -> Result<usize, IoError> {
+            Err(IoError::WouldBlock)
+        }
+        fn close(&mut self) -> Result<(), IoError> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn start_requires_streaming_access_before_any_network_io() {
+        let mut refused = Control::open(SocketStub, [b'0'; 64], Access::User, 0).unwrap();
+        assert_eq!(
+            refused.request(br#"{"op":"start"}"#),
+            Err(LinkError::Closed)
+        );
+        assert!(refused.rejected());
+        let mut permitted = Control::open(SocketStub, [b'0'; 64], Access::Streaming, 0).unwrap();
+        assert_eq!(
+            permitted.request(br#"{"op":"start"}"#),
+            Err(LinkError::Again)
+        );
+        assert!(!permitted.rejected());
     }
 }

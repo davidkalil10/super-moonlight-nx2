@@ -433,20 +433,12 @@ impl NativeVideo {
     }
 }
 
+/// Enable only in a commit citing successful native pixel and clean-close evidence.
+pub const NATIVE_H264_VERIFIED: bool = false;
+
 impl Backend for NativeVideo {
     fn capabilities() -> moonlight_nx2_core::codec::Capabilities {
-        use moonlight_nx2_core::codec::{Capabilities, Depth, Evidence, Mode, Size};
-        let mut capabilities = Capabilities::default();
-        capabilities.record(
-            Mode {
-                codec: Codec::H264,
-                depth: Depth::Eight,
-                maximum: Size::new(1920, 1080).unwrap(),
-                fps: 60,
-            },
-            Evidence::PixelsAndCloseVerified,
-        );
-        capabilities
+        crate::native_gate::capabilities(NATIVE_H264_VERIFIED)
     }
 
     fn open(&mut self, config: Config) -> Result<[u32; 2], BackendError> {
