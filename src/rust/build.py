@@ -48,6 +48,14 @@ def sources():
     return result
 
 
+def nacp_title(diagnostic):
+    if diagnostic == "production":
+        return "Moonlight NX2"
+    if diagnostic == "frontend":
+        return "Moonlight NX2 Rust"
+    return f"Moonlight NX2 Rust {diagnostic}"
+
+
 def helpers():
     spec = importlib.util.spec_from_file_location("native_builder", APP / "build-native.py")
     module = importlib.util.module_from_spec(spec)
@@ -108,7 +116,9 @@ def build(args):
             commands = [["cargo", "build", "--manifest-path", str(ROOT / "Cargo.toml"),
                          "--package", "moonlight-nx2-runtime", "--target", TARGET, "--release", "--locked",
                          "-Zbuild-std=core,alloc", "-Zbuild-std-features="]]
-            if args.diagnostic != "core":
+            if args.diagnostic == "production":
+                commands[0].extend(["--features", "frontend"])
+            elif args.diagnostic != "core":
                 commands[0].extend(["--features", f"diagnostic-{args.diagnostic}"])
             artifact = directory / "cargo" / TARGET / "release/libmoonlight_nx2_runtime.a"
         else:
@@ -151,7 +161,7 @@ def build(args):
         env["PATH"] = str(args.devkitpro / "tools/bin") + os.pathsep + env.get("PATH", "")
         commands = [["make", "--no-print-directory", "-f", str(ROOT / "nro/Makefile"),
                      f"BUILD_DIR={directory}", f"RUST_LIBRARY={library}",
-                     "NACP_TITLE=" + ("Moonlight NX2 Rust" if args.diagnostic == "frontend" else f"Moonlight NX2 Rust {args.diagnostic}")]]
+                     "NACP_TITLE=" + nacp_title(args.diagnostic)]]
         if args.diagnostic == "sdk-backing":
             if args.sdk_backing_library_dir is None or not args.sdk_backing_library_dir.is_absolute():
                 raise ValueError("SDK backing mode requires an absolute qualified alias library directory")
@@ -200,7 +210,7 @@ def main():
     parser.add_argument("--directory", type=Path, required=True)
     parser.add_argument("--revision")
     parser.add_argument("--branch")
-    parser.add_argument("--diagnostic", choices=("core", "renderer", "display", "display120", "coexist", "io", "udp", "nvdec", "sdk-backing", "ui", "ui-order", "ui-data", "ui-alpha", "ui-text", "ui-text-apps", "ui-text-overlay", "ui-text-interactive", "control", "control-default", "frontend", "frontend-check"), default="core")
+    parser.add_argument("--diagnostic", choices=("core", "renderer", "display", "display120", "coexist", "io", "udp", "nvdec", "sdk-backing", "ui", "ui-order", "ui-data", "ui-alpha", "ui-text", "ui-text-apps", "ui-text-overlay", "ui-text-interactive", "control", "control-default", "frontend", "frontend-check", "production"), default="core")
     parser.add_argument("--sdk-backing-library-dir", type=Path)
     parser.add_argument("--rust-directory", type=Path)
     parser.add_argument("--cargo-home", type=Path)
