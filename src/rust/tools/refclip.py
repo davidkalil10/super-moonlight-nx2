@@ -133,9 +133,9 @@ def compare_capture(capture, reference, codec, threshold):
         result = run(["ffmpeg", "-v", "info", "-nostats", "-i", str(capture),
                       "-f", "rawvideo", "-pix_fmt", "nv12", "-s", f"{WIDTH}x{HEIGHT}",
                       "-ss", "0", "-i", str(frames),
-                      "-lavfi", f"[1:v]select=eq(n\\,{index})[r];"
+                      "-lavfi", f"[1:v]select=eq(n\\,{index}),setpts=PTS-STARTPTS[r];"
                                 f"[0:v]scale={WIDTH}:{HEIGHT}:out_color_matrix=bt709:out_range=tv,"
-                                f"format=nv12[c];[c][r]psnr",
+                                f"format=nv12,setpts=PTS-STARTPTS[c];[c][r]psnr",
                       "-frames:v", "1", "-f", "null", "-"], capture_output=True, text=True)
         match = re.search(r"PSNR y:([\d.inf]+)", result.stderr)
         if match:
