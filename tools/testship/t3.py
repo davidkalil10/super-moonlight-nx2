@@ -267,9 +267,9 @@ def serve(args):
             args.socket.unlink(missing_ok=True)
 
 
-def request(socket_path, message):
+def request(socket_path, message, timeout=600):
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as channel:
-        channel.settimeout(600)
+        channel.settimeout(timeout)
         channel.connect(str(socket_path))
         channel.sendall((json.dumps(message) + "\n").encode())
         with channel.makefile("rb") as stream:

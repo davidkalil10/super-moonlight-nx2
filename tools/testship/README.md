@@ -93,6 +93,33 @@ repeat the R-held launch once that outcome is observed. Hbmenu should then
 show the staged Moonlight compatibility NRO. Run it, inspect its report, and
 press + to verify return to hbmenu.
 
+## Bounded NRO run
+
+`dut_run.py` stages one hash-pinned NRO as `/switch/00-dut.nro`, verifies its
+FTP readback, returns from FTpd to hbmenu with the T3 socket, and launches it
+once after checking the `/switch` screen and top selection. It captures HDMI
+through the run, then collects only new `runtime-*.log` files. It retains the
+staged NRO between runs; pass `--remove-staged` to remove it after collection.
+The empty `/switch/.00-dut.nro.star` marker is created once and retained. It
+keeps the candidate starred at the first hbmenu position, so the runner checks
+the selected title and does not move the cursor with a guessed input. Later
+runs replace only `/switch/00-dut.nro`.
+
+```sh
+python3 -B dut_run.py --nro /path/to/moonlight.nro --sha256 NRO_SHA256 \
+  --ftp-host SWITCH_IP --socket /run/moonlight-t3.sock \
+  --capture-url http://127.0.0.1:8765/frame.jpg \
+  --evidence /path/to/new-run-evidence --tesseract /usr/bin/tesseract \
+  --menu-marker 'Moonlight NX2'
+```
+
+The optional `--before-a-command` plus repeated `--before-a-arg` starts a
+fixture/host helper just before the single launch. The helper must print the
+configured ready marker (default `READY`) and stay alive until the run ends.
+Evidence uses a new directory and contains `run.json`, `collection.json`,
+`cleanup.json`, `RESULT.json`, numbered HDMI captures, OCR text, and collected
+runtime logs. The wrapper never retries an uncertain controller command.
+
 The supplied testship HEN and hbloader have no outbound diagnostic/file RPC.
 Use the acquisition logs and HDMI observations; do not start the older
 `hen-diagnostic-server.cjs` expecting this HEN to connect.

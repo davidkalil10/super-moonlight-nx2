@@ -88,7 +88,7 @@ def prepare(args):
     shutil.copy2(ROOT / "t3switch/SOURCE.json", control / "SOURCE.json")
     shutil.copy2(args.controller, control / "t3control")
     (control / "t3control").chmod(0o755)
-    for name in ("t3.py", "launch.py", "bootstrap.py", "trace-hello.cjs", "README.md", "ocr.sh", "OCR.Dockerfile"):
+    for name in ("t3.py", "launch.py", "dut_run.py", "bootstrap.py", "trace-hello.cjs", "README.md", "ocr.sh", "OCR.Dockerfile"):
         shutil.copy2(ROOT / name, directory / name)
     (directory / "ocr.sh").chmod(0o755)
     runtime = directory / "node/bin"
