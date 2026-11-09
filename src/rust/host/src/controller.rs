@@ -627,11 +627,12 @@ impl Controller {
                     } else {
                         None
                     };
-                    if let Some((code, worker_code)) = pair_failure {
+                    if let Some((code, worker_code, busy_app)) = pair_failure {
                         return Ok(Some(Event::Management(crate::bridge::Event::PairFailure {
                             request_id: pending.request_id,
                             code,
                             worker_code,
+                            busy_app,
                         })));
                     }
                     let code = match result {

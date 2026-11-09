@@ -30,6 +30,7 @@ pub enum Event {
         request_id: u32,
         code: crate::response::Code,
         worker_code: i64,
+        busy_app: Option<u32>,
     },
 }
 
@@ -45,7 +46,7 @@ pub(crate) struct Pending {
 }
 
 impl Pending {
-    pub(crate) fn pair_failure(&self) -> Option<(crate::response::Code, i64)> {
+    pub(crate) fn pair_failure(&self) -> Option<(crate::response::Code, i64, Option<u32>)> {
         let value = self.value.as_ref()?;
         if self.operation != OperationName::Pair || value.get("event")?.as_str()? != "failed" {
             return None;
@@ -55,7 +56,17 @@ impl Pending {
         } else {
             crate::response::Code::BackendFailed
         };
-        Some((code, value.get("code")?.as_i64()?))
+        let worker_code = value.get("code")?.as_i64()?;
+        let busy_app = if value.get("reason")?.as_str()? == "pc_busy" && worker_code == -4 {
+            value
+                .get("app")
+                .and_then(Value::as_u64)
+                .and_then(|id| u32::try_from(id).ok())
+                .filter(|id| *id != 0)
+        } else {
+            None
+        };
+        Some((code, worker_code, busy_app))
     }
 
     pub(crate) fn confirmed_not_paired(&self, status: std::process::ExitStatus) -> bool {
@@ -237,12 +248,13 @@ impl Bridge {
                     }));
                 }
                 if matches!(result, Completion::Exited(_))
-                    && let Some((code, worker_code)) = pending.pair_failure()
+                    && let Some((code, worker_code, busy_app)) = pending.pair_failure()
                 {
                     return Ok(Some(Event::PairFailure {
                         request_id: pending.request_id,
                         code,
                         worker_code,
+                        busy_app,
                     }));
                 }
                 let code = match result {

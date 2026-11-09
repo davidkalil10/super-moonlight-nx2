@@ -276,8 +276,9 @@ impl<'a> Connection<'a> {
                 request_id,
                 code,
                 worker_code,
+                busy_app,
             }) => self.enqueue(now, |out| {
-                response::pair_failure(request_id, code, worker_code, out)
+                response::pair_failure(request_id, code, worker_code, busy_app, out)
             }),
             controller::Event::Connected => self.enqueue(now, |out| {
                 response::encode(Kind::Event, 0, &json!({"event":"connected"}), out)

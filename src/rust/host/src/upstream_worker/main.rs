@@ -114,7 +114,7 @@ fn run() -> WorkerResult {
         if !(1..=600).contains(&value) {
             return Err(WorkerError::Failed);
         }
-        value
+        value.min(moonlight_nx2_host::helper::PAIR_TIMEOUT_MAX_SECONDS)
     } else {
         0
     };
@@ -203,6 +203,12 @@ fn output(value: &serde_json::Value) -> WorkerResult {
 fn pair(server: &mut native::SERVER_DATA, host: &CStr, timeout: u32) -> WorkerResult {
     if server.paired {
         return output(&serde_json::json!({"event":"paired", "already":true}));
+    }
+    if server.currentGame != 0 {
+        output(
+            &serde_json::json!({"event":"failed", "reason":"pc_busy", "code":-4, "app":server.currentGame}),
+        )?;
+        return Err(WorkerError::PairReported);
     }
     let mut random = [0u8; 4];
     std::fs::File::open("/dev/urandom")

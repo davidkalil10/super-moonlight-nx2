@@ -178,7 +178,13 @@ pub fn failure(id: u32, code: Code, out: &mut [u8]) -> Result<usize, Error> {
     encode(Kind::Error, id, &Failure { code, message }, out)
 }
 
-pub fn pair_failure(id: u32, code: Code, worker_code: i64, out: &mut [u8]) -> Result<usize, Error> {
+pub fn pair_failure(
+    id: u32,
+    code: Code,
+    worker_code: i64,
+    busy_app: Option<u32>,
+    out: &mut [u8],
+) -> Result<usize, Error> {
     if id == 0 {
         return Err(Error::InvalidId);
     }
@@ -187,7 +193,13 @@ pub fn pair_failure(id: u32, code: Code, worker_code: i64, out: &mut [u8]) -> Re
     } else {
         "Pairing request failed"
     };
-    let message = format!("{reason} (worker code {worker_code})");
+    let message = match busy_app {
+        Some(app) => format!("The PC is busy with app {app}; close it in Sunshine first"),
+        None if worker_code == -4 => {
+            "Pairing failed because the PC state changed; retry after checking Sunshine".to_owned()
+        }
+        None => format!("{reason} (worker code {worker_code})"),
+    };
     encode(
         Kind::Error,
         id,

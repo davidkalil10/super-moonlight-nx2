@@ -12,6 +12,7 @@ const OUTPUT_CHUNKS: usize = 128;
 pub const OPERATION_TIMEOUT_EXIT_CODE: i32 = 3;
 pub const OUTPUT_TOO_LARGE_EXIT_CODE: i32 = 4;
 pub const NOT_PAIRED_EXIT_CODE: i32 = 5;
+pub const PAIR_TIMEOUT_MAX_SECONDS: u32 = 290;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Stream {
@@ -81,6 +82,7 @@ impl Helper {
                 host,
                 timeout_seconds,
             } => {
+                let timeout_seconds = timeout_seconds.min(PAIR_TIMEOUT_MAX_SECONDS);
                 command.args(["pair", host, "--timeout", &timeout_seconds.to_string()]);
                 Duration::from_secs(u64::from(timeout_seconds) + 20)
             }
