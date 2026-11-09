@@ -401,7 +401,7 @@ fn display_context(
             display,
         });
     log(&format!(
-        "display: context docked={docked} accepted={accepted}; video sink receives and discards up to 1080p120"
+        "display: context docked={docked} accepted={accepted}; video sink receives and discards up to 1440p120 and 4K60"
     ));
 }
 

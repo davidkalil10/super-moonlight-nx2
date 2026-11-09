@@ -7,9 +7,8 @@ use moonlight_nx2_core::{
 
 const LUMA: u8 = 0x40;
 const CHROMA: u8 = 0x80;
-const WIDTH: u32 = 1920;
-const HEIGHT: u32 = 1080;
-const FPS: u32 = 120;
+/// Largest size and rate per tier; the presenter's upload slots hold up to 3840x2176 NV12.
+const MODES: [(u32, u32, u32); 3] = [(1920, 1080, 120), (2560, 1440, 120), (3840, 2160, 60)];
 
 /// A decoder stand-in for streaming without video decode: every access unit is accepted and
 /// answered with a flat grey frame, so the media, input, audio and present paths run.
@@ -93,18 +92,21 @@ impl Backend for VideoSink {
     }
 }
 
-/// The modes the sink stands in for: H.264 and AV1 up to 1080p120. Frames stay at 1080p because
-/// the presenter's upload slots are sized for it; the display side decides what is offered.
+/// The modes the sink stands in for: H.264 and AV1 up to 1440p120 and 4K60. What is offered is
+/// further limited to the display modes the probe verified, so 1440p and 4K appear only docked
+/// on a layer that presented at that size.
 pub fn capabilities() -> Capabilities {
     let mut decoder = Capabilities::default();
     for codec in [Codec::H264, Codec::Av1] {
-        let mode = Mode {
-            codec,
-            depth: Depth::Eight,
-            maximum: Size::new(WIDTH, HEIGHT).unwrap(),
-            fps: FPS,
-        };
-        decoder.record(mode, Evidence::PixelsAndCloseVerified);
+        for (width, height, fps) in MODES {
+            let mode = Mode {
+                codec,
+                depth: Depth::Eight,
+                maximum: Size::new(width, height).unwrap(),
+                fps,
+            };
+            decoder.record(mode, Evidence::PixelsAndCloseVerified);
+        }
     }
     decoder
 }
