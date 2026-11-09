@@ -465,44 +465,78 @@ impl Settings {
 
         let row = setting.row();
         let step = if direction > 0 { 1 } else { -1 };
-        let mut index = self.value[setting as usize] as i32 + step;
         let current = self.in_use(docked, caps);
+        let mode_setting = matches!(setting, Setting::Size | Setting::Fps | Setting::Codec);
+        let mut index = if mode_setting {
+            current.value[setting as usize]
+        } else {
+            self.value[setting as usize]
+        } as i32
+            + step;
+        let mut selected = None;
         while (0..row.count as i32).contains(&index) {
-            let mut candidate = current;
-            candidate.value[setting as usize] = index as u8;
-            if setting == Setting::Size && candidate.size() == Size::P2160 {
-                candidate.value[Setting::Fps as usize] = 0;
-            }
-            let needs_mode = matches!(setting, Setting::Size | Setting::Fps | Setting::Codec);
-            let mode_ok =
-                !needs_mode || caps.mode(candidate.codec(), candidate.size(), candidate.fps());
-            if offered(row, index as u8, docked, caps) && mode_ok {
-                break;
+            if offered(row, index as u8, docked, caps) {
+                let mut candidate = if mode_setting { current } else { *self };
+                candidate.value[setting as usize] = index as u8;
+                if !mode_setting {
+                    selected = Some(candidate);
+                } else {
+                    selected = candidate.compatible_mode(setting, docked, caps, &current);
+                }
+                if selected.is_some() {
+                    break;
+                }
             }
             index += step;
         }
-        if !(0..row.count as i32).contains(&index) {
-            return None;
-        }
-
-        let mut out = if matches!(setting, Setting::Size | Setting::Fps | Setting::Codec) {
-            current
-        } else {
-            *self
-        };
-        out.value[setting as usize] = index as u8;
+        let mut out = selected?;
         let to_4k = setting == Setting::Size && index == Size::P2160 as i32;
         let from_4k = setting == Setting::Size && self.size() == Size::P2160;
         if to_4k {
             out.fps_before_4k = self.fps();
             out.value[Setting::Fps as usize] = 0;
         } else if from_4k {
-            if known_rate(self.fps_before_4k as f64) {
+            if known_rate(self.fps_before_4k as f64)
+                && caps.mode(out.codec(), out.size(), self.fps_before_4k)
+            {
                 out.value[Setting::Fps as usize] = u8::from(self.fps_before_4k == 120);
             }
             out.fps_before_4k = 0;
         }
         Some(out)
+    }
+
+    fn compatible_mode(
+        &self,
+        changed: Setting,
+        docked: bool,
+        caps: &Capabilities,
+        previous: &Settings,
+    ) -> Option<Settings> {
+        let mut best: Option<(u8, Settings)> = None;
+        for size in Size::ALL {
+            if (size.docked_only() && (!docked || !caps.docked_sizes))
+                || (changed == Setting::Size && size != self.size())
+            {
+                continue;
+            }
+            for fps in RATES {
+                if (size == Size::P2160 && fps == 120)
+                    || (changed == Setting::Fps && fps != self.fps())
+                    || !caps.mode(self.codec(), size, fps)
+                {
+                    continue;
+                }
+                let score = u8::from(size == previous.size()) * 2 + u8::from(fps == previous.fps());
+                if best.is_none_or(|(old, _)| score > old) {
+                    let mut result = *self;
+                    result.value[Setting::Size as usize] = size as u8;
+                    result.value[Setting::Fps as usize] = u8::from(fps == 120);
+                    best = Some((score, result));
+                }
+            }
+        }
+        best.map(|(_, settings)| settings)
     }
 
     /// The settings a stream would use on this console right now.
@@ -834,8 +868,16 @@ mod verified_tests {
         settings.value[Setting::Codec as usize] = Codec::H264 as u8;
         assert!(settings.adjust(Setting::Fps, 1, false, &caps).is_none());
         assert!(settings.adjust(Setting::Size, -1, false, &caps).is_none());
-        let hevc = settings.adjust(Setting::Codec, 1, false, &caps).unwrap();
-        assert_eq!(hevc.codec(), Codec::Hevc);
+        let av1 = settings.adjust(Setting::Codec, 1, false, &caps).unwrap();
+        assert_eq!(
+            (av1.codec(), av1.size(), av1.fps()),
+            (Codec::Av1, Size::P720, 120)
+        );
+        let hevc = av1.adjust(Setting::Codec, 1, false, &caps).unwrap();
+        assert_eq!(
+            (hevc.codec(), hevc.size(), hevc.fps()),
+            (Codec::Hevc, Size::P1080, 60)
+        );
         let parsed = Settings::from_json(hevc.to_json().as_str().as_bytes(), &mut Json::new());
         assert_eq!(parsed.codec(), Codec::Hevc);
         let auto = hevc.stream_options(false, &caps);
