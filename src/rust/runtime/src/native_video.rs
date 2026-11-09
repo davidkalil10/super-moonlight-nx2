@@ -339,7 +339,7 @@ impl NativeVideo {
 
     fn open_service(&mut self, config: Config) -> Result<(), BackendError> {
         let bytes = match config.codec {
-            Codec::H264 => 64 * 1024 * 1024,
+            Codec::H264 | Codec::Hevc => 64 * 1024 * 1024,
             Codec::Av1 => wire::av1_workspace_bytes(config.display) as usize,
             _ => return Err(BackendError::Unsupported),
         };
@@ -366,23 +366,24 @@ impl NativeVideo {
             Message::initialize(
                 self.transfer.handle,
                 bytes as u64,
-                if config.codec == Codec::H264 { 0 } else { 3 },
+                if config.codec == Codec::Av1 { 3 } else { 0 },
             ),
             1,
             false,
         )?;
         self.initialized = true;
         let mut mime = Memory::new(0x1000, 0x1000)?;
-        let mime_bytes: &[u8] = if config.codec == Codec::H264 {
-            b"video/avc\0"
-        } else {
-            b"video/av1\0"
+        let mime_bytes: &[u8] = match config.codec {
+            Codec::H264 => b"video/avc\0",
+            Codec::Hevc => b"video/hevc\0",
+            Codec::Av1 => b"video/av1\0",
+            Codec::Vp9 => return Err(BackendError::Unsupported),
         };
         mime.cpu_bytes_mut()[..mime_bytes.len()].copy_from_slice(mime_bytes);
         let address = mime.address();
         self.resources.mime = Some(mime);
-        let message =
-            Message::configure(address, 10, config.coded).map_err(|_| BackendError::Invalid)?;
+        let message = Message::configure(address, mime_bytes.len() as u32, config.coded)
+            .map_err(|_| BackendError::Invalid)?;
         self.exchange("decoder configure", service, message, 1, false)?;
         for index in 0..RING {
             let Some(image) = self.resources.surfaces[index].image else {
@@ -462,6 +463,7 @@ impl NativeVideo {
 
 /// Enable only in a commit citing successful native pixel and clean-close evidence.
 pub const NATIVE_H264_VERIFIED: bool = false;
+pub const NATIVE_HEVC_MAIN_VERIFIED: bool = false;
 
 impl NativeVideo {
     fn layout(&mut self, index: usize) -> Result<untile::Image, BackendError> {
@@ -504,11 +506,12 @@ impl NativeVideo {
 
 impl Backend<RING> for NativeVideo {
     fn capabilities() -> moonlight_nx2_core::codec::Capabilities {
-        crate::native_gate::capabilities(NATIVE_H264_VERIFIED)
+        crate::native_gate::capabilities(NATIVE_H264_VERIFIED, NATIVE_HEVC_MAIN_VERIFIED)
     }
 
     fn open(&mut self, config: Config) -> Result<[u32; RING], BackendError> {
-        if !matches!(config.codec, Codec::H264 | Codec::Av1) || config.backing != Backing::NativeGpu
+        if !matches!(config.codec, Codec::H264 | Codec::Hevc | Codec::Av1)
+            || config.backing != Backing::NativeGpu
         {
             return Err(BackendError::Unsupported);
         }

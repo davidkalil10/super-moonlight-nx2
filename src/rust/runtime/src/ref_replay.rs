@@ -28,7 +28,10 @@ const CLIPS: [(&str, &[u8]); 2] = [
     ("av1", include_bytes!("../refclip/av1.mlrc")),
 ];
 #[cfg(feature = "diagnostic-native-decode")]
-const CLIPS: [(&str, &[u8]); 1] = [("h264", include_bytes!("../refclip/h264.mlrc"))];
+const CLIPS: [(&str, &[u8]); 2] = [
+    ("h264", include_bytes!("../refclip/h264.mlrc")),
+    ("hevc", include_bytes!("../refclip/hevc.mlrc")),
+];
 /// Presents per decoded frame: about half a second at 60 Hz, a quarter at 120 Hz.
 const HOLD_PRESENTS: u32 = 30;
 /// Presents the last frame of each clip stays up, for a still HDMI capture.
@@ -216,6 +219,7 @@ impl<'a> Clip<'a> {
         let codec = match word(8)? {
             0 => Codec::H264,
             1 => Codec::Av1,
+            2 => Codec::Hevc,
             _ => return None,
         };
         let clip = Self {

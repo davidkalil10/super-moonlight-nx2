@@ -8,7 +8,7 @@ generate: encodes a short 1080p60 testsrc2 clip (moving pattern with a frame clo
 compare:  checks the 'ref:' lines of a DUT log against the sums, and optionally an HDMI
           capture (any image ffmpeg reads) against the reference frames by PSNR.
 
-.mlrc layout (little endian): b"MLRC", u32 version=1, u32 codec (0 H.264, 1 AV1), u32 width,
+.mlrc layout (little endian): b"MLRC", u32 version=1, u32 codec (0 H.264, 1 AV1, 2 HEVC Main), u32 width,
 u32 height, u32 fps, u32 units; then per access unit u32 bytes, u64 pts_us, bytes.
 """
 
@@ -25,6 +25,9 @@ WIDTH, HEIGHT, FPS, FRAMES = 1920, 1080, 60, 16
 CODECS = {
     "h264": (0, "h264", ["-c:v", "libx264", "-preset", "medium", "-profile:v", "high",
                          "-bf", "0", "-g", str(FRAMES), "-crf", "28", "-f", "h264"]),
+    "hevc": (2, "hevc", ["-c:v", "libx265", "-preset", "medium", "-profile:v", "main",
+                          "-x265-params", "pools=1:frame-threads=1:log-level=error",
+                          "-bf", "0", "-g", str(FRAMES), "-crf", "28", "-f", "hevc"]),
     "av1": (1, "obu", ["-c:v", "libsvtav1", "-preset", "8", "-crf", "40", "-g", str(FRAMES),
                        "-svtav1-params", "pred-struct=1", "-f", "obu"]),
 }
@@ -50,13 +53,15 @@ def sums(frame):
     return zlib.crc32(luma), zlib.crc32(chroma)
 
 
-def generate(out):
+def generate(out, only=None):
     out.mkdir(parents=True, exist_ok=True)
     source = ["-f", "lavfi", "-i", f"testsrc2=size={WIDTH}x{HEIGHT}:rate={FPS}",
               "-frames:v", str(FRAMES), "-pix_fmt", "yuv420p",
               "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709",
               "-color_range", "tv"]
     for name, (codec, suffix, encoder) in CODECS.items():
+        if only and name != only:
+            continue
         stream = out / f"{name}.{suffix}"
         run(["ffmpeg", "-v", "error", "-y", *source, *encoder, str(stream)])
         raw = stream.read_bytes()
@@ -93,7 +98,7 @@ def load_sums(path):
 LOG_LINE = re.compile(r"ref: (\w+) frame (\d+) pts_us=(\d+) y=([0-9a-f]{8}) uv=([0-9a-f]{8})")
 
 
-def compare_log(log, reference):
+def compare_log(log, reference, required=()):
     passed = True
     seen = {}
     for match in LOG_LINE.finditer(log.read_text(errors="replace")):
@@ -102,6 +107,10 @@ def compare_log(log, reference):
     if not seen:
         print("log: no 'ref:' frame lines")
         return False
+    for codec in required:
+        if codec not in seen:
+            print(f"{codec}: no frame lines")
+            passed = False
     for codec, frames in seen.items():
         path = reference / f"{codec}.sums"
         if not path.exists():
@@ -118,7 +127,8 @@ def compare_log(log, reference):
                 detail = "missing" if want is None else f"want y={want[1]} uv={want[2]}"
                 luma = " (luma matches)" if want and want[1] == y else ""
                 print(f"{codec} frame {index}: y={y} uv={uv} {detail}{luma}")
-        complete = len(frames) == len(expected)
+        indices = [frame[0] for frame in frames]
+        complete = len(frames) == len(expected) and set(indices) == set(expected)
         print(f"{codec}: {good}/{len(expected)} frames match"
               + ("" if complete else f", {len(frames)} logged"))
         passed &= complete and good == len(expected)
@@ -152,20 +162,22 @@ def main():
     commands = parser.add_subparsers(dest="command", required=True)
     make = commands.add_parser("generate")
     make.add_argument("--out", type=Path, required=True)
+    make.add_argument("--codec", choices=CODECS)
     check = commands.add_parser("compare")
     check.add_argument("--reference", type=Path, required=True,
                        help="directory written by generate")
     check.add_argument("--log", type=Path)
     check.add_argument("--capture", type=Path, help="HDMI capture frame of the replay")
     check.add_argument("--codec", choices=CODECS, default="h264")
+    check.add_argument("--expect-codec", choices=CODECS, action="append", default=[])
     check.add_argument("--psnr", type=float, default=30.0)
     args = parser.parse_args()
     if args.command == "generate":
-        generate(args.out)
+        generate(args.out, args.codec)
         return 0
     passed = True
     if args.log:
-        passed &= compare_log(args.log, args.reference)
+        passed &= compare_log(args.log, args.reference, args.expect_codec)
     if args.capture:
         passed &= compare_capture(args.capture, args.reference, args.codec, args.psnr)
     print("PASS" if passed else "FAIL")
