@@ -91,24 +91,6 @@ impl Connections for NativeConnections {
         }
         NetSocket::connect(address, port)
     }
-    fn wake(&mut self, mac: [u8; 6]) -> Result<(), moonlight_nx2_io::socket::IoError> {
-        if !self.network {
-            self.network = unsafe { moonlightPlatformNetStart() };
-            if !self.network {
-                return Err(moonlight_nx2_io::socket::IoError::Failed);
-            }
-        }
-        crate::net::DiscoverySocket::wake(mac)
-    }
-    fn wake(&mut self, mac: [u8; 6]) -> Result<(), moonlight_nx2_io::socket::IoError> {
-        if !self.network {
-            self.network = unsafe { moonlightPlatformNetStart() };
-            if !self.network {
-                return Err(moonlight_nx2_io::socket::IoError::Failed);
-            }
-        }
-        crate::net::DiscoverySocket::wake(mac)
-    }
     fn discovery(
         &mut self,
     ) -> Result<Box<dyn moonlight_nx2_io::udp::Datagram>, moonlight_nx2_io::socket::IoError> {
