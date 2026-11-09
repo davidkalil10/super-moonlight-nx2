@@ -288,8 +288,10 @@ fn announce(index: u8, active: u16) {
         | native::LS_CLK_FLAG
         | native::RS_CLK_FLAG
         | native::SPECIAL_FLAG;
-    let capabilities =
-        native::LI_CCAP_ANALOG_TRIGGERS | native::LI_CCAP_ACCEL | native::LI_CCAP_GYRO;
+    let capabilities = native::LI_CCAP_ANALOG_TRIGGERS
+        | native::LI_CCAP_RUMBLE
+        | native::LI_CCAP_ACCEL
+        | native::LI_CCAP_GYRO;
     unsafe {
         native::LiSendControllerArrivalEvent(
             index,

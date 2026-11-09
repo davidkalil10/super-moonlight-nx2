@@ -276,6 +276,15 @@ impl<'a> Connection<'a> {
             controller::Event::Stopped { request_id: None } => self.enqueue(now, |out| {
                 response::encode(Kind::Event, 0, &json!({"event":"stopped"}), out)
             }),
+            controller::Event::Rumble(rumble) => self.enqueue(now, |out| {
+                let value = json!({
+                    "event": "rumble",
+                    "controller": rumble.controller,
+                    "low": rumble.low,
+                    "high": rumble.high,
+                });
+                response::encode(Kind::Event, 0, &value, out)
+            }),
         }
     }
     pub fn close(&mut self) -> Result<(), Error> {

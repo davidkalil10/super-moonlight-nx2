@@ -383,6 +383,8 @@ pub enum Event {
     Stopped {
         request_id: Option<u32>,
     },
+    /// The PC rumbled a player; sent as an ID-0 event that older clients ignore.
+    Rumble(relay::Rumble),
 }
 
 pub struct Controller {
@@ -615,6 +617,7 @@ impl Controller {
                     backend.starting = false;
                     return Ok(Some(Event::Connected));
                 }
+                Ok(Some(relay::Event::Rumble(rumble))) => return Ok(Some(Event::Rumble(rumble))),
                 Ok(Some(relay::Event::Stopped)) => {
                     let id = backend.stopping.take().filter(|id| *id != 0);
                     backend.relay = None;

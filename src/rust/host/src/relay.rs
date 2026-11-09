@@ -41,6 +41,47 @@ pub enum Error {
 pub enum Event {
     Connected,
     Stopped,
+    Rumble(Rumble),
+}
+
+/// Players the client rumbles (1 to 8 as controllers 0 to 7).
+pub const RUMBLE_PLAYERS: usize = 8;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Rumble {
+    pub controller: u8,
+    pub low: u16,
+    pub high: u16,
+}
+
+impl Rumble {
+    /// Reads a worker `{"event":"rumble","controller":N,"low":L,"high":H}` status line.
+    pub fn parse(value: &serde_json::Value) -> Option<Self> {
+        if value.get("event")?.as_str()? != "rumble" {
+            return None;
+        }
+        let field = |key| value.get(key)?.as_u64();
+        let controller = u8::try_from(field("controller")?).ok()?;
+        if usize::from(controller) >= RUMBLE_PLAYERS {
+            return None;
+        }
+        Some(Self {
+            controller,
+            low: u16::try_from(field("low")?).ok()?,
+            high: u16::try_from(field("high")?).ok()?,
+        })
+    }
+}
+
+/// Latest rumble per controller, in arrival order; a newer value replaces a queued one.
+fn queue_rumble(queue: &mut VecDeque<Rumble>, rumble: Rumble) {
+    match queue
+        .iter_mut()
+        .find(|queued| queued.controller == rumble.controller)
+    {
+        Some(queued) => *queued = rumble,
+        None => queue.push_back(rumble),
+    }
 }
 
 pub struct Config {
@@ -85,6 +126,7 @@ pub struct Relay {
     status_offset: usize,
     input: input::Forwarder,
     pending_input: VecDeque<Vec<u8>>,
+    rumble: VecDeque<Rumble>,
     input_inflight: bool,
     stopping: bool,
     stop_started: bool,
@@ -186,6 +228,7 @@ impl Relay {
             status_offset: 0,
             input: input::Forwarder::new(),
             pending_input: VecDeque::new(),
+            rumble: VecDeque::new(),
             input_inflight: false,
             stopping: false,
             stop_started: false,
@@ -456,7 +499,10 @@ impl Relay {
             self.finished = true;
             return Ok(Some(Event::Stopped));
         }
-        Ok(None)
+        if self.stopping {
+            self.rumble.clear();
+        }
+        Ok(self.rumble.pop_front().map(Event::Rumble))
     }
     pub fn stop(&mut self) {
         self.await_stop_request = false;
@@ -625,10 +671,17 @@ impl Relay {
                         self.connected = true;
                         return Ok(Some(Event::Connected));
                     }
+                    if self.connected
+                        && !self.stopping
+                        && let Some(rumble) = Rumble::parse(&value)
+                    {
+                        queue_rumble(&mut self.rumble, rumble);
+                    }
                     if value.get("event").and_then(|v| v.as_str()) == Some("terminated")
                         && !self.stop_started
                     {
                         self.stopping = true;
+                        self.rumble.clear();
                         self.shutdown_deadline = Some(Instant::now() + Duration::from_secs(10));
                         self.pending_input.clear();
                         self.input_inflight = false;
@@ -894,4 +947,45 @@ impl Relay {
 
 pub fn media_deadline(now: Instant) -> Instant {
     now + Duration::from_secs(15)
+}
+
+#[cfg(test)]
+mod rumble_tests {
+    use super::{Rumble, VecDeque, queue_rumble};
+    use serde_json::json;
+
+    #[test]
+    fn parses_worker_rumble_lines() {
+        let line = json!({"event":"rumble","controller":1,"low":65535,"high":0});
+        assert_eq!(
+            Rumble::parse(&line),
+            Some(Rumble {
+                controller: 1,
+                low: 65535,
+                high: 0
+            })
+        );
+        for bad in [
+            json!({"event":"rumble","controller":8,"low":1,"high":1}),
+            json!({"event":"rumble","controller":0,"low":65536,"high":1}),
+            json!({"event":"rumble","controller":0,"low":1}),
+            json!({"event":"connected"}),
+        ] {
+            assert_eq!(Rumble::parse(&bad), None);
+        }
+    }
+
+    #[test]
+    fn queued_rumble_keeps_the_latest_per_controller() {
+        let mut queue = VecDeque::new();
+        let rumble = |controller, low| Rumble {
+            controller,
+            low,
+            high: 0,
+        };
+        queue_rumble(&mut queue, rumble(0, 1));
+        queue_rumble(&mut queue, rumble(1, 2));
+        queue_rumble(&mut queue, rumble(0, 0));
+        assert_eq!(queue, [rumble(0, 0), rumble(1, 2)]);
+    }
 }

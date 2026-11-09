@@ -1,10 +1,12 @@
 use super::native;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 
 const MAX_EVENTS: usize = 32;
 static USED: AtomicBool = AtomicBool::new(false);
 static ACTIVE: Mutex<Option<Arc<State>>> = Mutex::new(None);
+/// Players the client can rumble; higher controller numbers are dropped.
+pub const RUMBLE_PLAYERS: usize = 8;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Event {
@@ -18,6 +20,17 @@ struct State {
     open: AtomicBool,
     overflow: AtomicBool,
     sender: mpsc::SyncSender<Event>,
+    /// Latest motor values per player (low << 16 | high); `rumble_dirty` marks unread ones.
+    /// Kept out of the bounded event queue: rumble bursts coalesce instead of overflowing it.
+    rumble: [AtomicU32; RUMBLE_PLAYERS],
+    rumble_dirty: AtomicU16,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Rumble {
+    pub controller: u16,
+    pub low: u16,
+    pub high: u16,
 }
 
 pub struct ListenerOwner {
@@ -32,6 +45,21 @@ impl ListenerMonitor {
     pub fn overflowed(&self) -> bool {
         self.state.overflow.load(Ordering::Acquire)
     }
+
+    /// The latest rumble of each player changed since the last call, in player order.
+    pub fn take_rumble(&self, mut sink: impl FnMut(Rumble)) {
+        let dirty = self.state.rumble_dirty.swap(0, Ordering::AcqRel);
+        for (index, value) in self.state.rumble.iter().enumerate() {
+            if dirty & (1 << index) != 0 {
+                let value = value.load(Ordering::Acquire);
+                sink(Rumble {
+                    controller: index as u16,
+                    low: (value >> 16) as u16,
+                    high: value as u16,
+                });
+            }
+        }
+    }
 }
 
 impl ListenerOwner {
@@ -44,6 +72,8 @@ impl ListenerOwner {
             open: AtomicBool::new(true),
             overflow: AtomicBool::new(false),
             sender,
+            rumble: Default::default(),
+            rumble_dirty: AtomicU16::new(0),
         });
         *ACTIVE.lock().map_err(|_| ())? = Some(Arc::clone(&state));
         Ok((Self { state }, receiver))
@@ -56,6 +86,7 @@ impl ListenerOwner {
         callbacks.connectionStarted = Some(connected);
         callbacks.connectionTerminated = Some(terminated);
         callbacks.connectionStatusUpdate = Some(status);
+        callbacks.rumble = Some(rumble);
         callbacks
     }
 
@@ -79,12 +110,15 @@ impl Drop for ListenerOwner {
     }
 }
 
-fn emit(event: Event) {
-    let Some(state) = ACTIVE
+fn active() -> Option<Arc<State>> {
+    ACTIVE
         .lock()
         .ok()
         .and_then(|active| active.as_ref().cloned())
-    else {
+}
+
+fn emit(event: Event) {
+    let Some(state) = active() else {
         return;
     };
     if state.open.load(Ordering::Acquire) && state.sender.try_send(event).is_err() {
@@ -106,4 +140,16 @@ unsafe extern "C" fn terminated(code: i32) {
 
 unsafe extern "C" fn status(value: i32) {
     emit(Event::Status(value));
+}
+
+unsafe extern "C" fn rumble(controller: u16, low: u16, high: u16) {
+    let Some(state) = active() else {
+        return;
+    };
+    let index = usize::from(controller);
+    if !state.open.load(Ordering::Acquire) || index >= RUMBLE_PLAYERS {
+        return;
+    }
+    state.rumble[index].store(u32::from(low) << 16 | u32::from(high), Ordering::Release);
+    state.rumble_dirty.fetch_or(1 << index, Ordering::AcqRel);
 }

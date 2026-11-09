@@ -270,6 +270,14 @@ pub fn run(args: &[String]) -> WorkerResult {
                 }
             }
         }
+        if announced && stopping.is_none() {
+            monitor.take_rumble(|rumble| {
+                eprintln!(
+                    "{{\"event\":\"rumble\",\"controller\":{},\"low\":{},\"high\":{}}}",
+                    rumble.controller, rumble.low, rumble.high
+                );
+            });
+        }
         if let Some(event) = lifecycle.poll() {
             match event {
                 LifecycleEvent::Started => started = true,
@@ -301,8 +309,10 @@ pub fn run(args: &[String]) -> WorkerResult {
                     1,
                     native::LI_CTYPE_XBOX as u8,
                     buttons,
-                    (native::LI_CCAP_ANALOG_TRIGGERS | native::LI_CCAP_ACCEL | native::LI_CCAP_GYRO)
-                        as u16,
+                    (native::LI_CCAP_ANALOG_TRIGGERS
+                        | native::LI_CCAP_RUMBLE
+                        | native::LI_CCAP_ACCEL
+                        | native::LI_CCAP_GYRO) as u16,
                 )
             };
             announced = true;
