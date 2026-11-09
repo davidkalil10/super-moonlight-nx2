@@ -23,6 +23,7 @@ typedef enum {
     MOONLIGHT_SETTING_MENU_CHORD,
     MOONLIGHT_SETTING_STREAM_INFO,
     MOONLIGHT_SETTING_FRAME_COUNTER,
+    MOONLIGHT_SETTING_TOUCH_MOUSE,
     MOONLIGHT_SETTING_COUNT,
 } MoonlightSettingId;
 
@@ -73,6 +74,7 @@ typedef struct {
     bool menu_chord;
     bool stream_info;
     bool frame_counter;
+    bool touch_mouse;
     bool launchable;
 } MoonlightStreamOptions;
 

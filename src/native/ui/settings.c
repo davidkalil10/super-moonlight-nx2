@@ -54,6 +54,7 @@ static const Row ROWS[MOONLIGHT_SETTING_COUNT] = {
     {"menuChord", "Hold L+R for menu", KIND_TOGGLE, 2, 1, 0, -1},
     {"streamInfo", "Stream info badge", KIND_TOGGLE, 2, 0, 0, -1},
     {"frameCounter", "Frame counter", KIND_TOGGLE, 2, 0, 0, -1},
+    {"touchMouse", "Touch as mouse", KIND_TOGGLE, 2, 0, 0, -1},
 };
 
 static double bitrate_mbps(uint8_t index)
@@ -488,6 +489,7 @@ void moonlightSettingsStreamOptions(const MoonlightSettings *settings, bool dock
         .menu_chord = used.value[MOONLIGHT_SETTING_MENU_CHORD],
         .stream_info = used.value[MOONLIGHT_SETTING_STREAM_INFO],
         .frame_counter = used.value[MOONLIGHT_SETTING_FRAME_COUNTER],
+        .touch_mouse = used.value[MOONLIGHT_SETTING_TOUCH_MOUSE],
     };
     options->launchable = codec_available(capabilities_or_all(capabilities), codec);
     if (bitrate == AUTO_BITRATE)
