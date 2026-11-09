@@ -16,6 +16,8 @@ include $(DEVKITPRO)/libounce/switch2_rules
 
 OUTPUT := $(BUILD_DIR)/moonlight-nx2-rust
 NACP_TITLE ?= Moonlight NX2 Rust core
+NACP_VERSION ?= 0.1.0
+ICON_PATH ?= $(SOURCE_DIR)/icon.png
 ARCH := -march=armv8-a+crc+crypto -mtune=cortex-a57 -mtp=soft -fPIE
 CPPFLAGS += -I$(LIBNX)/include
 CFLAGS := $(ARCH) -std=gnu11 -O2 -g -Wall -Wextra -Werror -ffunction-sections -fdata-sections
@@ -66,10 +68,10 @@ $(OUTPUT).elf: $(OBJECTS) $(RUST_LIBRARY)
 	$(CC) $(LDFLAGS) $(OBJECTS) $(RUST_LIBRARY) $(LIBS) -o $@
 
 $(OUTPUT).nacp:
-	nacptool --create "$(NACP_TITLE)" "Azkali" "0.1.0" $@
+	nacptool --create "$(NACP_TITLE)" "Azkali" "$(NACP_VERSION)" $@
 
-$(OUTPUT).nro: $(OUTPUT).elf $(OUTPUT).nacp
-	elf2nro $< $@ --nacp=$(OUTPUT).nacp
+$(OUTPUT).nro: $(OUTPUT).elf $(OUTPUT).nacp $(ICON_PATH)
+	elf2nro $< $@ --nacp=$(OUTPUT).nacp --icon="$(ICON_PATH)"
 
 -include $(BUILD_DIR)/platform.d
 -include $(BUILD_DIR)/io_adapter.d

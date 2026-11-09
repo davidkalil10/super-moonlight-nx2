@@ -146,6 +146,8 @@ def build(args):
     else:
         if args.rust_directory is None or not args.rust_directory.is_absolute():
             raise ValueError("NRO stage needs an absolute --rust-directory")
+        if not 0 < len(args.nacp_version) <= 15:
+            raise ValueError("NACP version must fit its 15-byte version field")
         rust = json.loads((args.rust_directory / "BUILD-INFO.json").read_text())
         if rust["status"] != "built" or rust["stage"] != "rust" or rust["target"] != TARGET:
             raise ValueError("Expected a completed device Rust build")
@@ -165,7 +167,8 @@ def build(args):
         env["PATH"] = str(args.devkitpro / "tools/bin") + os.pathsep + env.get("PATH", "")
         commands = [["make", "--no-print-directory", "-f", str(ROOT / "nro/Makefile"),
                      f"BUILD_DIR={directory}", f"RUST_LIBRARY={library}",
-                     "NACP_TITLE=" + nacp_title(args.diagnostic)]]
+                     "NACP_TITLE=" + nacp_title(args.diagnostic),
+                     "NACP_VERSION=" + args.nacp_version]]
         if args.diagnostic == "sdk-backing":
             alias_directory = args.sdk_backing_library_dir or directory / "sdk-interop/alias"
             if not alias_directory.is_absolute():
@@ -217,6 +220,7 @@ def main():
     parser.add_argument("--directory", type=Path, required=True)
     parser.add_argument("--revision")
     parser.add_argument("--branch")
+    parser.add_argument("--nacp-version", default="0.1.0")
     parser.add_argument("--diagnostic", choices=("core", "renderer", "display", "display120", "coexist", "io", "udp", "nvdec", "sdk-backing", "ui", "ui-order", "ui-data", "ui-alpha", "ui-text", "ui-text-apps", "ui-text-overlay", "ui-text-interactive", "control", "control-default", "frontend", "frontend-check", "production"), default="core")
     parser.add_argument("--sdk-backing-library-dir", type=Path)
     parser.add_argument("--rust-directory", type=Path)
