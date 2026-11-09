@@ -60,6 +60,7 @@ impl Drop for Memory {
     }
 }
 
+#[cfg_attr(not(feature = "diagnostic-native-decode"), derive(Default))]
 struct Surface {
     memory: Option<NativeMemory>,
     memory_id: Option<u32>,
@@ -70,6 +71,7 @@ struct Surface {
     consumed: bool,
 }
 
+#[cfg(feature = "diagnostic-native-decode")]
 impl Default for Surface {
     fn default() -> Self {
         Self {
