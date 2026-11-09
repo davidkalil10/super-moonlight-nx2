@@ -38,6 +38,8 @@ type Decoder = crate::gsv::GsvBackend;
 #[cfg(feature = "diagnostic-frontend")]
 type Decoder = crate::video_sink::VideoSink;
 
+const MEDIA_SILENCE_MS: u64 = 10_000;
+
 type TcpSession = Session<'static, Decoder, NetSocket, Audout, Channel<'static, NetSocket>>;
 type UdpSession =
     Session<'static, Decoder, NetSocket, Audout, Receiver<'static, NetSocket, UdpSocket>>;
@@ -74,6 +76,8 @@ struct Running {
     buffers: *mut Buffers,
     epoch: Epoch,
     draining: bool,
+    last_record_ms: Option<u64>,
+    silent: bool,
 }
 
 /// Device media for the composed frontend, driven by the controller's OpenMedia and
@@ -192,6 +196,8 @@ impl Stream {
                 buffers,
                 epoch,
                 draining: false,
+                last_record_ms: None,
+                silent: false,
             }),
             Err((failure, closed)) => {
                 log(&format!("stream: media open failed {failure:?}"));
@@ -261,6 +267,21 @@ impl Stream {
             Active::Tcp(session) => frontend_media::step(session, client, renderer, input, tick),
             Active::Udp(session) => frontend_media::step(session, client, renderer, input, tick),
         };
+        if let Ok(step) = &result
+            && step.progress.video_records + step.progress.pcm_records > 0
+        {
+            running.last_record_ms = Some(now_ms);
+        }
+        let quiet = running
+            .last_record_ms
+            .is_some_and(|last| now_ms.saturating_sub(last) > MEDIA_SILENCE_MS);
+        if quiet && !running.draining && !running.silent {
+            running.silent = true;
+            log(&format!(
+                "stream: no media for {MEDIA_SILENCE_MS} ms; failing"
+            ));
+            client.observe(running.epoch, Observation::Failed);
+        }
         let finished = match result {
             Ok(step) => running.draining && step.progress.drained,
             Err(frontend_media::Error::Media(media_session::Error::Media(_))) => running.draining,
