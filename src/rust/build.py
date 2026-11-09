@@ -223,7 +223,7 @@ def main():
     parser.add_argument("--revision")
     parser.add_argument("--branch")
     parser.add_argument("--nacp-version", default="0.1.0")
-    parser.add_argument("--diagnostic", choices=("core", "renderer", "display", "display120", "coexist", "io", "udp", "nvdec", "sdk-backing", "native-decode", "ui", "ui-order", "ui-data", "ui-alpha", "ui-text", "ui-text-apps", "ui-text-overlay", "ui-text-interactive", "control", "control-default", "frontend", "frontend-check", "ref-replay", "production"), default="core")
+    parser.add_argument("--diagnostic", choices=("core", "renderer", "display", "display120", "coexist", "io", "audio-cue", "udp", "nvdec", "sdk-backing", "native-decode", "ui", "ui-order", "ui-data", "ui-alpha", "ui-text", "ui-text-apps", "ui-text-overlay", "ui-text-interactive", "control", "control-default", "frontend", "frontend-check", "ref-replay", "production"), default="core")
     parser.add_argument("--sdk-backing-library-dir", type=Path)
     parser.add_argument("--rust-directory", type=Path)
     parser.add_argument("--cargo-home", type=Path)

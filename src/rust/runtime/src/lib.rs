@@ -43,6 +43,21 @@ compile_error!("select one device diagnostic mode");
 ))]
 compile_error!("SDK backing metadata is a separate diagnostic mode");
 
+#[cfg(all(
+    feature = "diagnostic-audio-cue",
+    any(
+        feature = "diagnostic-renderer",
+        feature = "diagnostic-io",
+        feature = "diagnostic-udp",
+        feature = "diagnostic-nvdec",
+        feature = "diagnostic-sdk-backing",
+        feature = "diagnostic-ui",
+        feature = "diagnostic-control",
+        feature = "frontend"
+    )
+))]
+compile_error!("Audio cue is a separate diagnostic mode");
+
 use moonlight_nx2_core::input::{self, Pad};
 
 #[cfg(not(any(target_os = "none", feature = "host-renderer")))]
@@ -54,6 +69,8 @@ use moonlight_nx2_io as _;
 #[cfg(not(any(feature = "diagnostic-ui", feature = "host-renderer")))]
 use moonlight_nx2_ui as _;
 
+#[cfg(all(target_os = "none", feature = "diagnostic-audio-cue"))]
+mod audio_cue_diagnostic;
 #[cfg(target_os = "none")]
 pub mod audio_device;
 #[cfg(target_os = "none")]

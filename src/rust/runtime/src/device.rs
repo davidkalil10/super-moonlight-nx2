@@ -307,6 +307,8 @@ pub extern "C" fn main() -> i32 {
     let passed = passed && renderer_check();
     #[cfg(feature = "diagnostic-io")]
     let passed = passed && crate::io_diagnostic::io_check();
+    #[cfg(feature = "diagnostic-audio-cue")]
+    let passed = passed && crate::audio_cue_diagnostic::check();
     #[cfg(feature = "diagnostic-udp")]
     let passed = passed && crate::udp_diagnostic::check();
     #[cfg(feature = "diagnostic-nvdec")]
