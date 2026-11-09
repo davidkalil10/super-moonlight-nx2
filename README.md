@@ -49,7 +49,7 @@ Open **Settings** in Moonlight before launching a game.
 | Optimise game settings | Request host resolution matching; requires host display automation |
 | Quit host app on return | On / Off |
 | Stream info badge | On / Off |
-| Frame counter | On / Off: presented, skipped and dropped frames each second |
+| Frame counter | On / Off: presented, skipped and dropped frames each second, and `console N ms`, the console's mean time from a frame arriving to its present (decode and display, not the network or the PC) |
 
 Selecting 4K remembers your previous frame rate and restores it at smaller resolutions.
 After choosing 1440p or 4K, fully close and reopen the console app once.

@@ -63,9 +63,16 @@ at. Tests: `src/streamer/ui/test/` in moonlight-nx2-dev.
   Stream info on keeps "1080p120 · AV1 · 30 Mbps" (plus any fallback note) on the top
   right badge for the whole stream at every layer size; off, the badge shows fallbacks for 4 s.
   Frame counter on (no save version change; a save without it loads it off) adds a line under
-  it, or a badge of its own, with each civ7-stats second: "58 fps · 2 skipped · 0 dropped"
-  (presented, caughtUp, dropped that second). Only the counter rows are rewritten, about 77 KB
-  in one write, and only when a number changes.
+  it, or a badge of its own, with each civ7-stats second: "58 fps · 2 skipped · 0 dropped ·
+  console 24 ms" (presented, caughtUp, dropped that second, then the console loop block's
+  `receiveToPresentMs.mean`). The console figure is the mean, over the frames presented that
+  second, from the last datagram of a unit arriving on the console to its present returning:
+  decode and present only, no capture, encode, network or scanout. A second without a loop
+  block keeps the last figure (the block and the PC second are not in phase); one that presented
+  nothing shows "-". No network figure is shown: the ack round trip (`window.rttP90Ms`) runs from
+  the PC's send to the console's ack after present, so it holds this console time too. Only the
+  counter rows are rewritten, about 112 KB in one write (77 KB before the console figure), and
+  only when a number changes.
   Left out: surround (helper and console audio are stereo), touch as mouse (the helper sends
   touch events only) and pacing toggles (the deferred wait is automatic).
 - Hosts (`hosts.json`, `{hosts, removed}`; an older plain array still loads): a typed or found

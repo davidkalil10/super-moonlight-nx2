@@ -34,8 +34,10 @@ const ACCENT = [64, 217, 230];
  *   counter?: {from: number, top: number}}} Badge
  */
 /**
- * One civ7-stats second (stream.js): `dropped` counts the whole stream.
- * @typedef {{type: 'civ7-stats', presented: number, caughtUp?: number, dropped?: number}} CounterStats
+ * One civ7-stats second (stream.js): `dropped` counts the whole stream, `console` is the
+ * console's loop block of that second, null when none arrived in it.
+ * @typedef {{type: 'civ7-stats', presented: number, caughtUp?: number, dropped?: number,
+ *   console?: {receiveToPresentMs: {mean: number} | null} | null}} CounterStats
  */
 /**
  * @typedef {{text: (text: string, size: number, width: number, align?: 'left' | 'center' | 'right',
@@ -77,16 +79,18 @@ export function rateChangeText(from, to) {
 
 /**
  * The frame counter line: frames presented in the last second, then those decoded but skipped
- * to catch up and those dropped before decode.
- * @param {{presented: number | string, caughtUp: number | string, dropped: number | string}} counts
+ * to catch up, those dropped before decode and the console's mean ms from a unit's arrival to
+ * its present (ui/CLAUDE.md).
+ * @param {{presented: number | string, caughtUp: number | string, dropped: number | string,
+ *   consoleMs?: number | string}} counts
  */
-export function counterText({presented, caughtUp, dropped}) {
-  return `${presented} fps · ${caughtUp} skipped · ${dropped} dropped`;
+export function counterText({presented, caughtUp, dropped, consoleMs = '-'}) {
+  return `${presented} fps · ${caughtUp} skipped · ${dropped} dropped · console ${consoleMs} ms`;
 }
 
 /** The counter line before the first second, and the widest one, which sets the badge width. */
 const COUNTER_START = counterText({presented: '-', caughtUp: '-', dropped: '-'});
-const COUNTER_WIDEST = counterText({presented: 888, caughtUp: 888, dropped: 888});
+const COUNTER_WIDEST = counterText({presented: 888, caughtUp: 888, dropped: 888, consoleMs: 888});
 
 /**
  * Calls `note` with TOUCH_NOTE the first time the helper reports that the host takes no touch
@@ -229,6 +233,8 @@ export function createQuadBadge(rpc, {text, raster, storage, durationMs = BADGE_
   let shown = null;
   let counted = COUNTER_START;
   let dropped = 0;
+  /** @type {number | string} */
+  let consoleMs = '-';
   let writing = Promise.resolve();
   /** @type {NodeJS.Timeout | undefined} */
   let restore;
@@ -284,8 +290,9 @@ export function createQuadBadge(rpc, {text, raster, storage, durationMs = BADGE_
   function observe(event) {
     if (!counter || !('type' in event) || event.type !== 'civ7-stats') return writing;
 
-    const {presented, caughtUp = 0, dropped: total = 0} = /** @type {CounterStats} */ (event);
-    const line = counterText({presented, caughtUp, dropped: Math.max(0, total - dropped)});
+    const {presented, caughtUp = 0, dropped: total = 0, console: loop} = /** @type {CounterStats} */ (event);
+    if (loop) consoleMs = loop.receiveToPresentMs ? Math.round(loop.receiveToPresentMs.mean) : '-';
+    const line = counterText({presented, caughtUp, dropped: Math.max(0, total - dropped), consoleMs});
     dropped = total;
     if (line === counted) return writing;
 
