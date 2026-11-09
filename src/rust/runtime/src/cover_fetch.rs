@@ -103,9 +103,7 @@ impl Fetcher {
     pub fn poll<L: Link>(&mut self, link: &mut L, now_ms: u64) -> Option<(u32, Vec<u8>)> {
         let pending = self.pending.as_mut()?;
         let id = pending.request?;
-        let Some(frame) = link.peek() else {
-            return None;
-        };
+        let frame = link.peek()?;
         if frame.header.request_id != id {
             return None;
         }

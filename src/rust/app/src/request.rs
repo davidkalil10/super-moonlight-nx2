@@ -93,8 +93,8 @@ pub struct Options {
 impl Options {
     /// The wire bounds; device capabilities are checked separately.
     pub fn is_valid(&self) -> bool {
-        let width_ok = self.width % 2 == 0 && (2..=3840).contains(&self.width);
-        let height_ok = self.height % 2 == 0 && (2..=2160).contains(&self.height);
+        let width_ok = self.width.is_multiple_of(2) && (2..=3840).contains(&self.width);
+        let height_ok = self.height.is_multiple_of(2) && (2..=2160).contains(&self.height);
         let rate_ok = (1..=120).contains(&self.fps) && (1..=1_000_000).contains(&self.bitrate_kbps);
         width_ok && height_ok && rate_ok
     }

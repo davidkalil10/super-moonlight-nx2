@@ -124,7 +124,8 @@ impl Cover {
 }
 
 fn decode_base64(text: &[u8]) -> Result<Vec<u8>, Error> {
-    if text.is_empty() || text.len() % 4 != 0 || text.len() > CHUNK_BYTES.div_ceil(3) * 4 {
+    if text.is_empty() || !text.len().is_multiple_of(4) || text.len() > CHUNK_BYTES.div_ceil(3) * 4
+    {
         return Err(Error::Malformed);
     }
     let mut out = Vec::new();
