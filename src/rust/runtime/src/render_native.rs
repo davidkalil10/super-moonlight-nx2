@@ -412,12 +412,22 @@ impl NativeOwner {
         bytes: usize,
         alignment: usize,
     ) -> Result<NativeMemory, BackendError> {
+        self.allocate_at_least(bytes, alignment, 0)
+    }
+
+    fn allocate_at_least(
+        &self,
+        bytes: usize,
+        alignment: usize,
+        minimum: usize,
+    ) -> Result<NativeMemory, BackendError> {
         if sdk::process_retired() || bytes == 0 || !alignment.is_power_of_two() {
             return Err(BackendError::Invalid);
         }
         let size = bytes
             .checked_add(alignment - 1)
-            .ok_or(BackendError::Invalid)?;
+            .ok_or(BackendError::Invalid)?
+            .max(minimum);
         log(&format!("b2ar: before vkAllocateMemory bytes={size}"));
         let memory = match unsafe {
             self.device.allocate_memory(
@@ -519,37 +529,45 @@ impl NativeOwner {
         bytes: usize,
         alignment: usize,
     ) -> Result<NativeMemory, BackendError> {
-        let mut memory = self.allocate(bytes, alignment)?;
-        let Some(shared) = self.shared.as_ref() else {
-            return Ok(memory);
+        let Some(shared) = self.shared.as_ref().filter(|_| surface < RING) else {
+            return self.allocate(bytes, alignment);
         };
-        if surface >= RING {
-            return Ok(memory);
-        }
-        let size = memory.shift + bytes as u64;
-        if size > self.storage_range {
+        let span = bytes
+            .checked_add(alignment - 1)
+            .ok_or(BackendError::Invalid)? as u64;
+        if span > self.storage_range {
             log(&format!(
-                "render: surface{surface} {size} bytes exceeds storage range; copy path"
+                "render: surface{surface} {span} bytes exceeds storage range; copy path"
             ));
-            return Ok(memory);
+            return self.allocate(bytes, alignment);
         }
         let buffer = match unsafe {
             self.device.create_buffer(
                 &vk::BufferCreateInfo::default()
-                    .size(size)
+                    .size(span)
                     .usage(vk::BufferUsageFlags::STORAGE_BUFFER)
                     .sharing_mode(vk::SharingMode::EXCLUSIVE),
                 allocator(),
             )
         } {
             Ok(buffer) => buffer,
-            Err(_) => return Ok(memory),
+            Err(_) => return self.allocate(bytes, alignment),
         };
         let requirements = unsafe { self.device.get_buffer_memory_requirements(buffer) };
-        let fits = requirements.memory_type_bits & (1 << self.memory_type) != 0
-            && requirements.size <= size.next_multiple_of(requirements.alignment.max(1));
-        let bound =
-            fits && unsafe { self.device.bind_buffer_memory(buffer, memory.memory, 0) }.is_ok();
+        let required = usize::try_from(requirements.size).ok();
+        let usable = requirements.memory_type_bits & (1 << self.memory_type) != 0;
+        let Some(required) = required.filter(|_| usable) else {
+            unsafe { self.device.destroy_buffer(buffer, allocator()) };
+            return self.allocate(bytes, alignment);
+        };
+        let mut memory = match self.allocate_at_least(bytes, alignment, required) {
+            Ok(memory) => memory,
+            Err(error) => {
+                unsafe { self.device.destroy_buffer(buffer, allocator()) };
+                return Err(error);
+            }
+        };
+        let bound = unsafe { self.device.bind_buffer_memory(buffer, memory.memory, 0) }.is_ok();
         if !bound {
             unsafe { self.device.destroy_buffer(buffer, allocator()) };
             return Ok(memory);
