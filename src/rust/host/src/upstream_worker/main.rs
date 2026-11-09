@@ -27,8 +27,16 @@ use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::DirBuilderExt;
 use std::path::PathBuf;
 use std::ptr;
+use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
+
+static PAIR_ACTIVE: AtomicBool = AtomicBool::new(false);
+static PAIR_OUTPUT: AtomicI32 = AtomicI32::new(libc::STDOUT_FILENO);
 
 fn main() {
+    PAIR_ACTIVE.store(
+        std::env::args().nth(1).as_deref() == Some("pair"),
+        Ordering::Relaxed,
+    );
     if unsafe { libc::signal(libc::SIGALRM, on_timeout as *const () as libc::sighandler_t) }
         == libc::SIG_ERR
     {
@@ -40,13 +48,29 @@ fn main() {
             WorkerError::Failed => 1,
             WorkerError::TooLarge => 4,
             WorkerError::NotPaired => moonlight_nx2_host::helper::NOT_PAIRED_EXIT_CODE,
+            WorkerError::PairReported => 1,
         };
+        if PAIR_ACTIVE.load(Ordering::Relaxed) && !matches!(error, WorkerError::PairReported) {
+            let _ = output(
+                &serde_json::json!({"event":"failed", "reason":"worker failed", "code":code}),
+            );
+        }
         eprintln!("upstream worker failed");
         std::process::exit(code);
     }
 }
 
 extern "C" fn on_timeout(_: libc::c_int) {
+    if PAIR_ACTIVE.load(Ordering::Relaxed) {
+        let message = b"{\"event\":\"failed\",\"reason\":\"pairing timed out\",\"code\":3}\n";
+        unsafe {
+            libc::write(
+                PAIR_OUTPUT.load(Ordering::Relaxed),
+                message.as_ptr().cast(),
+                message.len(),
+            )
+        };
+    }
     unsafe { libc::_exit(3) }
 }
 
@@ -54,6 +78,7 @@ enum WorkerError {
     Failed,
     TooLarge,
     NotPaired,
+    PairReported,
 }
 
 impl From<()> for WorkerError {
@@ -136,6 +161,7 @@ fn connect(host: &CStr, keys: &CStr) -> Result<native::SERVER_DATA, ()> {
     if saved < 0 {
         return Err(());
     }
+    PAIR_OUTPUT.store(saved, Ordering::Relaxed);
     if unsafe { libc::dup2(libc::STDERR_FILENO, libc::STDOUT_FILENO) } < 0 {
         unsafe { libc::close(saved) };
         return Err(());
@@ -155,6 +181,7 @@ fn connect(host: &CStr, keys: &CStr) -> Result<native::SERVER_DATA, ()> {
     };
     unsafe { libc::fflush(ptr::null_mut()) };
     let restored = unsafe { libc::dup2(saved, libc::STDOUT_FILENO) };
+    PAIR_OUTPUT.store(libc::STDOUT_FILENO, Ordering::Relaxed);
     unsafe { libc::close(saved) };
     if restored < 0 || result != 0 {
         return Err(());
@@ -200,7 +227,10 @@ fn pair(server: &mut native::SERVER_DATA, host: &CStr, timeout: u32) -> WorkerRe
     };
     eprintln!("moonlight-worker gs_pair_return={result}");
     if result != 0 {
-        return Err(WorkerError::Failed);
+        output(
+            &serde_json::json!({"event":"failed", "reason":"pairing request failed", "code":result}),
+        )?;
+        return Err(WorkerError::PairReported);
     }
     output(&serde_json::json!({"event":"paired", "already":false}))
 }

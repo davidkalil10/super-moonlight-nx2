@@ -26,6 +26,11 @@ pub enum Event {
         request_id: u32,
         code: crate::response::Code,
     },
+    PairFailure {
+        request_id: u32,
+        code: crate::response::Code,
+        worker_code: i64,
+    },
 }
 
 pub(crate) struct Pending {
@@ -40,6 +45,19 @@ pub(crate) struct Pending {
 }
 
 impl Pending {
+    pub(crate) fn pair_failure(&self) -> Option<(crate::response::Code, i64)> {
+        let value = self.value.as_ref()?;
+        if self.operation != OperationName::Pair || value.get("event")?.as_str()? != "failed" {
+            return None;
+        }
+        let code = if value.get("reason")?.as_str()? == "pairing timed out" {
+            crate::response::Code::Timeout
+        } else {
+            crate::response::Code::BackendFailed
+        };
+        Some((code, value.get("code")?.as_i64()?))
+    }
+
     pub(crate) fn confirmed_not_paired(&self, status: std::process::ExitStatus) -> bool {
         matches!(self.operation, OperationName::List | OperationName::Quit)
             && (status.code() == Some(crate::helper::NOT_PAIRED_EXIT_CODE)
@@ -218,6 +236,15 @@ impl Bridge {
                         code: crate::response::Code::BackendFailed,
                     }));
                 }
+                if matches!(result, Completion::Exited(_))
+                    && let Some((code, worker_code)) = pending.pair_failure()
+                {
+                    return Ok(Some(Event::PairFailure {
+                        request_id: pending.request_id,
+                        code,
+                        worker_code,
+                    }));
+                }
                 let code = match result {
                     Completion::Exited(status) if status.success() => None,
                     Completion::Exited(status) if pending.confirmed_not_paired(status) => {
@@ -293,12 +320,16 @@ mod pair_log_tests {
 }
 
 pub(crate) fn consume_available(pending: &mut Pending) -> Result<Option<Event>, ()> {
+    let mut progress = None;
     while pending.buffer.contains(&b'\n') {
         if let Some(event) = consume_line(pending)? {
-            return Ok(Some(event));
+            if progress.is_some() {
+                return Err(());
+            }
+            progress = Some(event);
         }
     }
-    Ok(None)
+    Ok(progress)
 }
 
 fn consume_line(pending: &mut Pending) -> Result<Option<Event>, ()> {
@@ -386,7 +417,13 @@ fn consume_line(pending: &mut Pending) -> Result<Option<Event>, ()> {
                 })
         }
         OperationName::Pair => {
-            event == Some("paired") && value.get("already").and_then(Value::as_bool).is_some()
+            (event == Some("paired") && value.get("already").and_then(Value::as_bool).is_some())
+                || (event == Some("failed")
+                    && value
+                        .get("reason")
+                        .and_then(Value::as_str)
+                        .is_some_and(|s| !s.is_empty() && s.len() <= 256)
+                    && value.get("code").and_then(Value::as_i64).is_some())
         }
         OperationName::Unpair => {
             event == Some("unpaired") && value.get("already").and_then(Value::as_bool).is_some()

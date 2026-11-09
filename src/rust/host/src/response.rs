@@ -177,6 +177,27 @@ pub fn failure(id: u32, code: Code, out: &mut [u8]) -> Result<usize, Error> {
     encode(Kind::Error, id, &Failure { code, message }, out)
 }
 
+pub fn pair_failure(id: u32, code: Code, worker_code: i64, out: &mut [u8]) -> Result<usize, Error> {
+    if id == 0 {
+        return Err(Error::InvalidId);
+    }
+    let reason = if code == Code::Timeout {
+        "Pairing timed out"
+    } else {
+        "Pairing request failed"
+    };
+    let message = format!("{reason} (worker code {worker_code})");
+    encode(
+        Kind::Error,
+        id,
+        &Failure {
+            code,
+            message: &message,
+        },
+        out,
+    )
+}
+
 pub fn result(id: u32, op: OperationName, value: &Value, out: &mut [u8]) -> Result<usize, Error> {
     if id == 0 {
         return Err(Error::InvalidId);

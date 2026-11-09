@@ -264,6 +264,13 @@ impl<'a> Connection<'a> {
             controller::Event::Management(bridge::Event::Failure { request_id, code }) => {
                 self.enqueue(now, |out| response::failure(request_id, code, out))
             }
+            controller::Event::Management(bridge::Event::PairFailure {
+                request_id,
+                code,
+                worker_code,
+            }) => self.enqueue(now, |out| {
+                response::pair_failure(request_id, code, worker_code, out)
+            }),
             controller::Event::Connected => self.enqueue(now, |out| {
                 response::encode(Kind::Event, 0, &json!({"event":"connected"}), out)
             }),

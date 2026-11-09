@@ -612,6 +612,18 @@ impl Controller {
                     if pending.operation == management::OperationName::Pair {
                         eprintln!("pair worker completion: {result:?}");
                     }
+                    let pair_failure = if matches!(result, management::Completion::Exited(_)) {
+                        pending.pair_failure()
+                    } else {
+                        None
+                    };
+                    if let Some((code, worker_code)) = pair_failure {
+                        return Ok(Some(Event::Management(crate::bridge::Event::PairFailure {
+                            request_id: pending.request_id,
+                            code,
+                            worker_code,
+                        })));
+                    }
                     let code = match result {
                         management::Completion::Exited(status)
                             if status.success()
