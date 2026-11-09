@@ -25,10 +25,11 @@ pub enum Setting {
     MenuChord,
     StreamInfo,
     FrameCounter,
+    TouchMouse,
 }
 
 impl Setting {
-    pub const COUNT: usize = 10;
+    pub const COUNT: usize = 11;
     pub const ALL: [Setting; Self::COUNT] = [
         Setting::Size,
         Setting::Fps,
@@ -40,6 +41,7 @@ impl Setting {
         Setting::MenuChord,
         Setting::StreamInfo,
         Setting::FrameCounter,
+        Setting::TouchMouse,
     ];
 
     pub fn from_index(index: usize) -> Option<Self> {
@@ -190,6 +192,7 @@ const ROWS: [Row; Setting::COUNT] = [
     row("menuChord", "Hold L+R for menu", RowKind::Toggle, 2, 1),
     row("streamInfo", "Stream info badge", RowKind::Toggle, 2, 0),
     row("frameCounter", "Frame counter", RowKind::Toggle, 2, 0),
+    row("touchMouse", "Touch as mouse", RowKind::Toggle, 2, 0),
 ];
 
 fn bitrate_mbps(index: u8) -> f64 {
@@ -244,6 +247,8 @@ pub struct StreamOptions {
     pub menu_chord: bool,
     pub stream_info: bool,
     pub frame_counter: bool,
+    /// Touches drive the PC mouse instead of touch input.
+    pub touch_mouse: bool,
     pub launchable: bool,
 }
 
@@ -640,6 +645,7 @@ impl Settings {
             menu_chord: used.on(Setting::MenuChord),
             stream_info: used.on(Setting::StreamInfo),
             frame_counter: used.on(Setting::FrameCounter),
+            touch_mouse: used.on(Setting::TouchMouse),
             launchable: caps.codec(codec),
         }
     }
