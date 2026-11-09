@@ -1,0 +1,286 @@
+//! The saved hosts and the removed list of hosts.json. Port of src/streamer/ui/hosts.js and
+//! the remember/remove steps of service.js; rules in src/streamer/ui/CLAUDE.md, "Hosts".
+
+use alloc::string::String;
+use alloc::vec::Vec;
+use core::fmt::Write;
+
+use crate::json::{Json, Kind, Value};
+use crate::model::{Address, Host, MAX_HOSTS, Name};
+
+pub const FILE: &str = "hosts.json";
+
+/// The written file stays within what the JSON reader takes back.
+pub const MAX_BYTES: usize = crate::json::MAX_TEXT;
+
+/// A removed host: discovery does not add it back until it is listed again.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Removed {
+    pub address: Address,
+    pub uniqueid: Address,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Error {
+    /// The file exists but could not be read whole, so it must not be overwritten.
+    Unreadable,
+    /// More saved hosts than the model shows.
+    TooMany,
+}
+
+impl Error {
+    pub fn message(self) -> &'static str {
+        match self {
+            Self::Unreadable => "hosts.json could not be read",
+            Self::TooMany => "hosts.json has more hosts than the console shows",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct HostBook {
+    hosts: Vec<Host>,
+    removed: Vec<Removed>,
+    dirty: bool,
+}
+
+/// JavaScript's `String.prototype.trim` set: Rust's White_Space without U+0085, plus U+FEFF.
+fn js_space(c: char) -> bool {
+    (c.is_whitespace() && c != '\u{85}') || c == '\u{feff}'
+}
+
+fn string<'a>(value: Option<Value<'a>>) -> Option<&'a str> {
+    core::str::from_utf8(value?.string()?).ok()
+}
+
+/// `same`: the same uniqueid when both know one, else the same address.
+fn same(a: (&Address, &Address), b: (&Address, &Address)) -> bool {
+    if !a.1.is_empty() && !b.1.is_empty() {
+        return a.1.as_str() == b.1.as_str();
+    }
+    a.0.as_str() == b.0.as_str()
+}
+
+/// Entries with an address, trimmed, each address once with the first kept. Addresses and
+/// uniqueids too long for the model are dropped rather than cut into another host's address.
+fn entries<'a>(list: Option<Value<'a>>) -> Vec<(Value<'a>, Removed)> {
+    let mut kept: Vec<(Value<'a>, Removed)> = Vec::new();
+    let Some(list) = list.filter(|list| list.kind() == Kind::Array) else {
+        return kept;
+    };
+
+    let mut entry = list.child();
+    while let Some(value) = entry {
+        entry = value.next();
+        let Some(address) = string(value.member("address")).map(|text| text.trim_matches(js_space))
+        else {
+            continue;
+        };
+        let uniqueid = string(value.member("uniqueid")).unwrap_or("");
+        let fits = address.len() <= 63 && uniqueid.len() <= 63;
+        let seen = kept
+            .iter()
+            .any(|(_, host)| host.address.as_str() == address);
+        if address.is_empty() || seen || !fits {
+            continue;
+        }
+        let host = Removed {
+            address: Address::of(address),
+            uniqueid: Address::of(uniqueid),
+        };
+        kept.push((value, host));
+    }
+    kept
+}
+
+/// JSON string quoting as `JSON.stringify` writes it.
+fn quote(out: &mut String, text: &str) {
+    out.push('"');
+    for c in text.chars() {
+        let _ = match c {
+            '"' => out.write_str("\\\""),
+            '\\' => out.write_str("\\\\"),
+            '\u{8}' => out.write_str("\\b"),
+            '\u{c}' => out.write_str("\\f"),
+            '\n' => out.write_str("\\n"),
+            '\r' => out.write_str("\\r"),
+            '\t' => out.write_str("\\t"),
+            c if (c as u32) < 0x20 => write!(out, "\\u{:04x}", c as u32),
+            c => out.write_char(c),
+        };
+    }
+    out.push('"');
+}
+
+fn put_uniqueid(out: &mut String, uniqueid: &Address) {
+    if !uniqueid.is_empty() {
+        out.push_str(",\"uniqueid\":");
+        quote(out, uniqueid.as_str());
+    }
+}
+
+impl HostBook {
+    /// hosts.json as written, `{hosts, removed}`, or the plain host array of older versions.
+    /// Anything malformed reads as no hosts, as in hosts.js.
+    pub fn parse(text: &[u8], json: &mut Json) -> Result<Self, Error> {
+        let mut book = Self::default();
+        let Some(root) = json.parse(text) else {
+            return Ok(book);
+        };
+        let (hosts, removed) = match root.kind() {
+            Kind::Array => (Some(root), None),
+            Kind::Object => (root.member("hosts"), root.member("removed")),
+            _ => (None, None),
+        };
+
+        let hosts = entries(hosts);
+        if hosts.len() > MAX_HOSTS {
+            return Err(Error::TooMany);
+        }
+        for (value, host) in hosts {
+            let name = string(value.member("name")).filter(|name| !name.is_empty());
+            book.hosts.push(Host {
+                name: Name::of(name.unwrap_or(host.address.as_str())),
+                address: host.address,
+                uniqueid: host.uniqueid,
+            });
+        }
+        book.removed = entries(removed).into_iter().map(|(_, host)| host).collect();
+        Ok(book)
+    }
+
+    pub fn hosts(&self) -> &[Host] {
+        &self.hosts
+    }
+
+    pub fn removed(&self) -> &[Removed] {
+        &self.removed
+    }
+
+    /// Whether the book changed since it was read or last saved.
+    pub fn dirty(&self) -> bool {
+        self.dirty
+    }
+
+    pub fn saved(&mut self) {
+        self.dirty = false;
+    }
+
+    /// A host answered a list: it leaves the removed list, and a known uniqueid at a new
+    /// address moves that entry there (a new DHCP lease) and drops any other entry at the
+    /// address; an unknown host is appended. True when the host list changed.
+    pub fn remember(&mut self, host: &Host) -> Result<bool, Error> {
+        let before = self.removed.len();
+        self.removed.retain(|entry| {
+            !same(
+                (&entry.address, &entry.uniqueid),
+                (&host.address, &host.uniqueid),
+            )
+        });
+        self.dirty |= self.removed.len() != before;
+
+        let at_address = self
+            .hosts
+            .iter()
+            .position(|entry| entry.address == host.address);
+        let by_id = (!host.uniqueid.is_empty())
+            .then(|| {
+                self.hosts
+                    .iter()
+                    .position(|entry| entry.uniqueid == host.uniqueid)
+            })
+            .flatten();
+        let Some(target) = by_id.or(at_address) else {
+            if self.hosts.len() >= MAX_HOSTS {
+                return Err(Error::TooMany);
+            }
+            self.hosts.push(*host);
+            self.dirty = true;
+            return Ok(true);
+        };
+
+        let entry = self.hosts[target];
+        let moved = entry.address != host.address;
+        let learned = !host.uniqueid.is_empty() && entry.uniqueid != host.uniqueid;
+        if !moved && !learned {
+            return Ok(false);
+        }
+
+        let mut updated = entry;
+        updated.address = host.address;
+        if !host.uniqueid.is_empty() {
+            updated.uniqueid = host.uniqueid;
+        }
+        let hosts = core::mem::take(&mut self.hosts);
+        self.hosts = hosts
+            .into_iter()
+            .enumerate()
+            .filter_map(|(index, other)| {
+                if index == target {
+                    return Some(updated);
+                }
+                (other.address != host.address).then_some(other)
+            })
+            .collect();
+        self.dirty = true;
+        Ok(true)
+    }
+
+    /// Drops the host and keeps it on the removed list; its pairing stays on the PC.
+    pub fn forget(&mut self, host: &Host) {
+        let entry = self
+            .hosts
+            .iter()
+            .find(|other| other.address == host.address);
+        let gone = Removed {
+            address: entry.map_or(host.address, |entry| entry.address),
+            uniqueid: entry.map_or(host.uniqueid, |entry| entry.uniqueid),
+        };
+        self.hosts.retain(|other| other.address != host.address);
+        self.removed.retain(|other| {
+            !same(
+                (&other.address, &other.uniqueid),
+                (&gone.address, &gone.uniqueid),
+            )
+        });
+        self.removed.push(gone);
+        self.dirty = true;
+    }
+
+    fn write(&self, removed: &[Removed]) -> String {
+        let mut out = String::from("{\"hosts\":[");
+        for (index, host) in self.hosts.iter().enumerate() {
+            out.push_str(if index == 0 {
+                "{\"name\":"
+            } else {
+                ",{\"name\":"
+            });
+            quote(&mut out, host.name.as_str());
+            out.push_str(",\"address\":");
+            quote(&mut out, host.address.as_str());
+            put_uniqueid(&mut out, &host.uniqueid);
+            out.push('}');
+        }
+        out.push_str("],\"removed\":[");
+        for (index, host) in removed.iter().enumerate() {
+            out.push_str(if index == 0 {
+                "{\"address\":"
+            } else {
+                ",{\"address\":"
+            });
+            quote(&mut out, host.address.as_str());
+            put_uniqueid(&mut out, &host.uniqueid);
+            out.push('}');
+        }
+        out.push_str("]}");
+        out
+    }
+
+    /// The file, compact, as `JSON.stringify({hosts, removed})`. When it would not fit
+    /// `MAX_BYTES` the oldest removed entries go first; None when the hosts alone do not fit.
+    pub fn to_json(&self) -> Option<String> {
+        (0..=self.removed.len())
+            .map(|dropped| self.write(&self.removed[dropped..]))
+            .find(|text| text.len() <= MAX_BYTES)
+    }
+}

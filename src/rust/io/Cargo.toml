@@ -1,0 +1,12 @@
+[package]
+name = "moonlight-nx2-io"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.93"
+publish = false
+
+[dependencies]
+moonlight-nx2-core = { path = "../core" }
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"

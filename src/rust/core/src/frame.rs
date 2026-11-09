@@ -1,0 +1,176 @@
+pub const WIDTH: u32 = 1920;
+pub const HEIGHT: u32 = 1080;
+pub const INPUT_BYTES: usize = 4096;
+pub const STORAGE_BYTES: usize = 48_418_816;
+pub const FRAME_BYTES: usize = 12_533_760;
+pub const FRAMES_OFFSET: usize = 2_424_832;
+pub const VIDEO_SLOTS: usize = 2;
+pub const UI_OFFSET: usize = 40_030_208;
+pub const UI_PAGE_BYTES: usize = 4_194_304;
+pub const UI_PAGES: usize = 2;
+pub const UI_INSTANCES: u32 = 106;
+pub const BADGE_INSTANCE: u32 = 106;
+pub const BADGE_OFFSET: usize = 27_492_352;
+pub const VIDEO_BASE: usize = 0xb000;
+pub const VIDEO_SLOT_BYTES: usize = 32;
+pub const TARGET_WIDTH: usize = 0xb120;
+pub const TARGET_HEIGHT: usize = 0xb124;
+pub const TARGET_BACKING_WIDTH: usize = 0xb128;
+pub const TARGET_BACKING_HEIGHT: usize = 0xb12c;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Error {
+    Invalid,
+    Unsupported,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Matrix {
+    Bt601,
+    Bt709,
+}
+
+pub struct Plane<'a> {
+    pub bytes: &'a [u8],
+    pub stride: u32,
+}
+
+pub struct Frame<'a> {
+    pub luma: Plane<'a>,
+    pub chroma: Plane<'a>,
+    pub coded_width: u32,
+    pub coded_height: u32,
+    pub crop_left: u32,
+    pub crop_top: u32,
+    pub display_width: u32,
+    pub display_height: u32,
+    pub matrix: Matrix,
+    pub full_range: bool,
+    pub timestamp_ns: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Layout {
+    pub width: u32,
+    pub height: u32,
+    pub stride: u32,
+    pub slice_height: u32,
+    pub chroma_rows: u32,
+    pub chroma_bytes: u32,
+    pub color: u32,
+}
+
+fn round_up(value: u32, step: u32) -> Result<u32, Error> {
+    value
+        .checked_add(step - 1)
+        .map(|value| value / step * step)
+        .ok_or(Error::Invalid)
+}
+
+fn extent(stride: u32, rows: u32, width: u32) -> Result<usize, Error> {
+    if rows == 0 {
+        return Err(Error::Invalid);
+    }
+    (stride as usize)
+        .checked_mul(rows as usize - 1)
+        .and_then(|offset| offset.checked_add(width as usize))
+        .ok_or(Error::Invalid)
+}
+
+impl Frame<'_> {
+    pub fn plan(&self) -> Result<Layout, Error> {
+        let right = self
+            .crop_left
+            .checked_add(self.display_width)
+            .ok_or(Error::Invalid)?;
+        let bottom = self
+            .crop_top
+            .checked_add(self.display_height)
+            .ok_or(Error::Invalid)?;
+        let coded_chroma = round_up(self.coded_width, 2)?;
+        if self.display_width == 0
+            || self.display_height == 0
+            || right > self.coded_width
+            || bottom > self.coded_height
+            || self.luma.stride < self.coded_width
+            || self.chroma.stride < coded_chroma
+            || self.luma.bytes.len()
+                < extent(self.luma.stride, self.coded_height, self.coded_width)?
+            || self.chroma.bytes.len()
+                < extent(
+                    self.chroma.stride,
+                    round_up(self.coded_height, 2)? / 2,
+                    coded_chroma,
+                )?
+        {
+            return Err(Error::Invalid);
+        }
+        if (self.crop_left | self.crop_top) & 1 != 0 || self.full_range {
+            return Err(Error::Unsupported);
+        }
+        let stride = round_up(self.display_width, 64)?;
+        let slice_height = round_up(self.display_height, 2)?;
+        let bytes = stride as u64 * slice_height as u64 / 2 * 3;
+        if stride > 8192 || slice_height > 8192 || bytes > FRAME_BYTES as u64 {
+            return Err(Error::Unsupported);
+        }
+        Ok(Layout {
+            width: self.display_width,
+            height: self.display_height,
+            stride,
+            slice_height,
+            chroma_rows: slice_height / 2,
+            chroma_bytes: round_up(self.display_width, 2)?,
+            color: u32::from(self.matrix == Matrix::Bt709),
+        })
+    }
+
+    pub fn copy_to(&self, slot: &mut [u8]) -> Result<Layout, Error> {
+        let layout = self.plan()?;
+        if slot.len() < layout.bytes() {
+            return Err(Error::Invalid);
+        }
+        slot[..layout.bytes()].fill(0);
+        for row in 0..layout.height as usize {
+            let source = (self.crop_top as usize + row) * self.luma.stride as usize
+                + self.crop_left as usize;
+            let target = row * layout.stride as usize;
+            slot[target..target + layout.width as usize]
+                .copy_from_slice(&self.luma.bytes[source..source + layout.width as usize]);
+        }
+        let start = layout.stride as usize * layout.slice_height as usize;
+        for row in 0..layout.height.div_ceil(2) as usize {
+            let source = (self.crop_top as usize / 2 + row) * self.chroma.stride as usize
+                + self.crop_left as usize;
+            let target = start + row * layout.stride as usize;
+            slot[target..target + layout.chroma_bytes as usize]
+                .copy_from_slice(&self.chroma.bytes[source..source + layout.chroma_bytes as usize]);
+        }
+        Ok(layout)
+    }
+}
+
+impl Layout {
+    pub fn bytes(&self) -> usize {
+        self.stride as usize * self.slice_height as usize * 3 / 2
+    }
+
+    pub fn publish(&self, storage: &mut [u8], slot: usize, sequence: u32) -> Result<(), Error> {
+        if slot >= VIDEO_SLOTS || storage.len() < VIDEO_BASE + VIDEO_SLOTS * VIDEO_SLOT_BYTES {
+            return Err(Error::Invalid);
+        }
+        for (offset, value) in [
+            (4, self.width),
+            (8, self.height),
+            (12, self.stride),
+            (16, self.slice_height),
+            (20, self.color),
+            (0, sequence),
+        ] {
+            let start = VIDEO_BASE + slot * VIDEO_SLOT_BYTES + offset;
+            storage[start..start + 4].copy_from_slice(&value.to_le_bytes());
+        }
+        storage[8..12].copy_from_slice(&3u32.to_le_bytes());
+        Ok(())
+    }
+}

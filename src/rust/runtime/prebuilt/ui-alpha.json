@@ -1,0 +1,39 @@
+{
+  "format": "moonlight.rust.ui-alpha",
+  "version": 1,
+  "builder": "rig",
+  "source_branch": "rust-nro-rewrite",
+  "commands": [
+    [
+      "glslc",
+      "-O",
+      "--target-env=vulkan1.0",
+      "-I",
+      "/media/storage2/builds/moonlight/20261109T094100Z-ae67243-ui-alpha-shader",
+      "-I",
+      "/media/storage/own/nintendo/switch2/moonlight-nx2/src/renderer/civ7/shaders",
+      "/media/storage2/builds/moonlight/20261109T094100Z-ae67243-ui-alpha-shader/ui-alpha.frag",
+      "-o",
+      "/media/storage2/builds/moonlight/20261109T094100Z-ae67243-ui-alpha-shader/ui-alpha.spv"
+    ],
+    [
+      "spirv-val",
+      "--target-env",
+      "vulkan1.0",
+      "/media/storage2/builds/moonlight/20261109T094100Z-ae67243-ui-alpha-shader/ui-alpha.spv"
+    ]
+  ],
+  "compiler": "shaderc v2026.2 2026-04-24spirv-tools v2026.2 2026-04-24glslang d5f08ae5c5a9a45165578445cbd0f9adf0223448\nTarget: SPIR-V 1.0\n",
+  "sources": {
+    "/media/storage/own/nintendo/switch2/moonlight-nx2/src/rust/runtime/shaders/ui-alpha.frag": "8f79915164d926a4d60597f5dfc10602f6d7691c9f90806b08cea2fd3e08d07e",
+    "/media/storage/own/nintendo/switch2/moonlight-nx2/src/renderer/civ7/shaders/ui.frag": "a8c0dff07b50f4c609c8f35d8a6f67ee3418989dd9a462af2199225f35fb8c08",
+    "/media/storage/own/nintendo/switch2/moonlight-nx2/src/renderer/civ7/shaders/storage.glsl": "81c18548664c68dfcf7bb9b2ce683234dbcd08b161a6c1756555ace8a912d3e6",
+    "/media/storage2/builds/moonlight/20261109T094100Z-ae67243-ui-alpha-shader/layout.glsl": "1557ce904a8d292197fc4a8b0f90ce68183c40d704806c7c5454ab1eb36c1e2a"
+  },
+  "shader": {
+    "path": "ui-alpha.spv",
+    "bytes": 34852,
+    "sha256": "8bbbe12167d6ad95aed84880b1694f4144060cad2a2759e4da4dd4f5b2392e77"
+  },
+  "scope": "Text strips output bitmapSample alpha as grayscale with forced alpha1; other draws unchanged"
+}

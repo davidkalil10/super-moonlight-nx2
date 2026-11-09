@@ -11,3 +11,6 @@ __pycache__/
 /dist/
 /.claude/
 node_modules
+
+# rust build output
+target/

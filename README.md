@@ -3,6 +3,9 @@
 Stream PC games from Sunshine to Nintendo Switch 2, with controller, touch and stereo audio.
 Runs through the CivSwitch loader in Civilization VII.
 
+An additional native NRO target for the 9 November testship SDK is in development.
+See [Native Switch 2 port](NATIVE.md) for builds and device validation.
+
 ## Build
 
 On Linux, install Node.js 22.12+, Git, CMake, a C compiler, Make and Podman.

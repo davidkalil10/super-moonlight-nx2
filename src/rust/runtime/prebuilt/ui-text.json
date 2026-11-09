@@ -1,0 +1,39 @@
+{
+  "format": "moonlight.rust.ui-text",
+  "version": 1,
+  "builder": "rig",
+  "source_branch": "rust-nro-rewrite",
+  "commands": [
+    [
+      "glslc",
+      "-O",
+      "--target-env=vulkan1.0",
+      "-I",
+      "/media/storage2/builds/moonlight/20261109T095700Z-ae67243-ui-text-shader",
+      "-I",
+      "/media/storage/own/nintendo/switch2/moonlight-nx2/src/renderer/civ7/shaders",
+      "/media/storage2/builds/moonlight/20261109T095700Z-ae67243-ui-text-shader/ui-text.frag",
+      "-o",
+      "/media/storage2/builds/moonlight/20261109T095700Z-ae67243-ui-text-shader/ui-text.spv"
+    ],
+    [
+      "spirv-val",
+      "--target-env",
+      "vulkan1.0",
+      "/media/storage2/builds/moonlight/20261109T095700Z-ae67243-ui-text-shader/ui-text.spv"
+    ]
+  ],
+  "compiler": "shaderc v2026.2 2026-04-24spirv-tools v2026.2 2026-04-24glslang d5f08ae5c5a9a45165578445cbd0f9adf0223448\nTarget: SPIR-V 1.0\n",
+  "sources": {
+    "/media/storage/own/nintendo/switch2/moonlight-nx2/src/rust/runtime/shaders/ui-text.frag": "781ac88178e92696b67f97aa8c56932fff581f91ecd9ac930c414c98d8495e3a",
+    "/media/storage/own/nintendo/switch2/moonlight-nx2/src/renderer/civ7/shaders/ui.frag": "a8c0dff07b50f4c609c8f35d8a6f67ee3418989dd9a462af2199225f35fb8c08",
+    "/media/storage/own/nintendo/switch2/moonlight-nx2/src/renderer/civ7/shaders/storage.glsl": "81c18548664c68dfcf7bb9b2ce683234dbcd08b161a6c1756555ace8a912d3e6",
+    "/media/storage2/builds/moonlight/20261109T095700Z-ae67243-ui-text-shader/layout.glsl": "1557ce904a8d292197fc4a8b0f90ce68183c40d704806c7c5454ab1eb36c1e2a"
+  },
+  "shader": {
+    "path": "ui-text.spv",
+    "bytes": 35220,
+    "sha256": "c690bb35549203f7bc1e0258f5bcc450a048af1d4e44c3a6d29d0c23207a28da"
+  },
+  "scope": "Text branch separated; original colors, sampled alpha and blending retained"
+}

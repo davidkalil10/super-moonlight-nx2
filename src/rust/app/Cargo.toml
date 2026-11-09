@@ -1,0 +1,14 @@
+[package]
+name = "moonlight-nx2-app"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+moonlight-nx2-core = { path = "../core" }
+moonlight-nx2-io = { path = "../io" }
+moonlight-nx2-ui = { path = "../ui" }
+
+[lints]
+workspace = true
