@@ -71,6 +71,21 @@ const KEY_LABELS: [&str; 12] = [
     "1", "2", "3", "4", "5", "6", "7", "8", "9", ".", "0", "Erase",
 ];
 
+fn error_next_step(message: Option<&str>, lost: bool) -> &'static str {
+    let message = message.unwrap_or("");
+    if message.contains("Pairing") || message.contains("paired") {
+        "Open Sunshine on the PC and pair this console, then try again"
+    } else if lost
+        || message.contains("reach")
+        || message.contains("connection")
+        || message.contains("disconnected")
+    {
+        "Wake the PC and check Sunshine and Wi-Fi, then try again"
+    } else {
+        "Check Wi-Fi and Sunshine, then go back and try again"
+    }
+}
+
 type Keys<'k> = &'k [(&'k str, &'k str)];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1627,7 +1642,7 @@ impl Builder<'_> {
         self.heading(
             kicker,
             model.message().unwrap_or("Something went wrong"),
-            None,
+            Some(error_next_step(model.message(), lost)),
             &style,
         );
         let label = if can_reconnect { "Reconnect" } else { "Back" };
@@ -1676,5 +1691,18 @@ impl Builder<'_> {
             Screen::Splash | Screen::Stopped => return false,
         }
         true
+    }
+}
+
+#[cfg(test)]
+mod error_help_tests {
+    use super::error_next_step;
+
+    #[test]
+    fn errors_offer_an_actionable_next_step() {
+        assert!(error_next_step(Some("Pairing failed"), false).contains("pair"));
+        let lost = error_next_step(Some("Cannot reach PC"), true);
+        assert!(lost.contains("Wake") && lost.contains("Wi-Fi") && lost.contains("Sunshine"));
+        assert!(error_next_step(None, false).contains("go back"));
     }
 }

@@ -7,6 +7,9 @@ use moonlight_nx2_app::{
 };
 use moonlight_nx2_core::control::{Frame, Kind};
 
+const REQUEST_TIMEOUT_MS: u64 = 60_000;
+const RETRY_DELAY_MS: u64 = 5_000;
+
 struct Pending {
     app: u32,
     cover: Cover,
@@ -19,6 +22,7 @@ struct Pending {
 pub struct Fetcher {
     pending: Option<Pending>,
     attempted: Vec<u32>,
+    retry_after: Vec<(u32, u64)>,
     disabled: bool,
     fatal: bool,
 }
@@ -44,6 +48,22 @@ impl Fetcher {
     pub fn attempted(&self, app: u32) -> bool {
         self.disabled || self.attempted.contains(&app)
     }
+    pub fn eligible(&self, app: u32, now_ms: u64) -> bool {
+        !self.attempted(app)
+            && self
+                .retry_after
+                .iter()
+                .find(|(id, _)| *id == app)
+                .is_none_or(|(_, after)| now_ms >= *after)
+    }
+
+    fn defer(&mut self, app: u32, now_ms: u64) {
+        self.retry_after
+            .retain(|(id, after)| *id != app && *after > now_ms);
+        self.retry_after
+            .push((app, now_ms.saturating_add(RETRY_DELAY_MS)));
+    }
+
     pub fn mark_attempted(&mut self, app: u32) {
         if !self.attempted.contains(&app) {
             self.attempted.push(app);
@@ -76,11 +96,11 @@ impl Fetcher {
         );
         if let Ok(id) = link.request(request.as_bytes()) {
             pending.request = Some(id);
-            pending.deadline = now_ms.saturating_add(30_000);
+            pending.deadline = now_ms.saturating_add(REQUEST_TIMEOUT_MS);
         }
     }
 
-    pub fn poll<L: Link>(&mut self, link: &mut L) -> Option<(u32, Vec<u8>)> {
+    pub fn poll<L: Link>(&mut self, link: &mut L, now_ms: u64) -> Option<(u32, Vec<u8>)> {
         let pending = self.pending.as_mut()?;
         let id = pending.request?;
         let Some(frame) = link.peek() else {
@@ -108,6 +128,11 @@ impl Fetcher {
                 pending.cover.into_bytes().map(|bytes| (app, bytes))
             }
             Ok(false) => None,
+            Err(Error::RetryLater) => {
+                self.pending = None;
+                self.defer(app, now_ms);
+                None
+            }
             Err(Error::Unsupported) => {
                 self.disabled = true;
                 self.pending = None;
@@ -205,7 +230,7 @@ mod tests {
         assert_eq!(guard.request(b"{}"), Err(LinkError::Again));
         guard.link.frame = Some((Kind::Event, 1, br#"{"event":"result","op":"cover","ok":true,"value":{"app":7,"mime":"image/png","total":4,"offset":0,"data":"AQID"}}"#.to_vec()));
         assert!(guard.peek().is_none());
-        assert!(fetch.poll(&mut link).is_none());
+        assert!(fetch.poll(&mut link, 0).is_none());
         fetch.request(&mut link, "192.168.1.2", 1);
         assert!(
             core::str::from_utf8(&link.requests[1])
@@ -213,7 +238,7 @@ mod tests {
                 .contains("\"offset\":3")
         );
         link.frame = Some((Kind::Event, 2, br#"{"event":"result","op":"cover","ok":true,"value":{"app":7,"mime":"image/png","total":4,"offset":3,"data":"BA=="}}"#.to_vec()));
-        assert_eq!(fetch.poll(&mut link), Some((7, vec![1, 2, 3, 4])));
+        assert_eq!(fetch.poll(&mut link, 0), Some((7, vec![1, 2, 3, 4])));
         fetch.begin(8);
         fetch.request(&mut link, "192.168.1.2", 2);
         link.frame = Some((
@@ -221,7 +246,7 @@ mod tests {
             3,
             br#"{"code":"unsupported","message":"unsupported"}"#.to_vec(),
         ));
-        assert!(fetch.poll(&mut link).is_none());
+        assert!(fetch.poll(&mut link, 0).is_none());
         assert!(fetch.attempted(9));
     }
 
@@ -232,14 +257,14 @@ mod tests {
         fetch.begin(7);
         fetch.request(&mut link, "192.168.1.2", 0);
         link.frame = Some((Kind::Event, 1, br#"{"event":"result","op":"cover","ok":true,"value":{"app":7,"mime":"image/png","total":4,"offset":0,"data":"AQID"}}"#.to_vec()));
-        assert!(fetch.poll(&mut link).is_none());
+        assert!(fetch.poll(&mut link, 0).is_none());
         fetch.request(&mut link, "192.168.1.2", 1);
         link.frame = Some((
             Kind::Error,
             2,
             br#"{"code":"backend_failed","message":"changed"}"#.to_vec(),
         ));
-        assert!(fetch.poll(&mut link).is_none());
+        assert!(fetch.poll(&mut link, 0).is_none());
         fetch.request(&mut link, "192.168.1.2", 2);
         assert!(
             core::str::from_utf8(&link.requests[2])
@@ -247,15 +272,48 @@ mod tests {
                 .contains("\"offset\":0")
         );
         link.frame = Some((Kind::Event, 3, br#"{"event":"result","op":"cover","ok":true,"value":{"app":7,"mime":"image/png","total":4,"offset":0,"data":"AQID"}}"#.to_vec()));
-        assert!(fetch.poll(&mut link).is_none());
+        assert!(fetch.poll(&mut link, 0).is_none());
         fetch.request(&mut link, "192.168.1.2", 3);
         link.frame = Some((
             Kind::Error,
             4,
             br#"{"code":"backend_failed","message":"changed"}"#.to_vec(),
         ));
-        assert!(fetch.poll(&mut link).is_none());
+        assert!(fetch.poll(&mut link, 0).is_none());
         assert!(!fetch.busy());
         assert!(fetch.attempted(7));
+    }
+    #[test]
+    fn explicit_busy_and_timeout_retry_later_without_losing_other_covers() {
+        let mut fetch = Fetcher::default();
+        let mut link = Fake::default();
+        fetch.begin(7);
+        fetch.request(&mut link, "192.168.1.4", 1_000);
+        assert!(!fetch.expired(60_999));
+        assert!(fetch.expired(61_000));
+        link.frame = Some((
+            Kind::Error,
+            1,
+            br#"{"code":"busy","message":"busy"}"#.to_vec(),
+        ));
+        assert!(fetch.poll(&mut link, 2_000).is_none());
+        assert!(!fetch.attempted(7));
+        assert!(!fetch.eligible(7, 6_999));
+        assert!(fetch.eligible(7, 7_000));
+        assert!(fetch.eligible(8, 2_000));
+        fetch.begin(8);
+        fetch.request(&mut link, "192.168.1.4", 2_000);
+        link.frame = Some((
+            Kind::Error,
+            2,
+            br#"{"code":"timeout","message":"timeout"}"#.to_vec(),
+        ));
+        assert!(fetch.poll(&mut link, 2_100).is_none());
+        assert!(!fetch.attempted(8));
+        assert!(!fetch.eligible(8, 7_099));
+        assert!(fetch.eligible(8, 7_100));
+        fetch.begin(7);
+        fetch.request(&mut link, "192.168.1.4", 7_000);
+        assert_eq!(link.requests.len(), 3);
     }
 }

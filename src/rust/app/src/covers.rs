@@ -13,6 +13,7 @@ pub enum Error {
     Malformed,
     Unsupported,
     Backend,
+    RetryLater,
     TooLarge,
     NoMemory,
 }
@@ -51,6 +52,7 @@ impl Cover {
             return Err(match code {
                 Some("unsupported" | "invalid_request") => Error::Unsupported,
                 Some("backend_failed") => Error::Backend,
+                Some("timeout" | "busy") => Error::RetryLater,
                 Some("too_large") => Error::TooLarge,
                 _ => Error::Malformed,
             });
@@ -70,6 +72,7 @@ impl Cover {
             return Err(match code {
                 Some("unsupported" | "invalid_request") => Error::Unsupported,
                 Some("backend_failed") => Error::Backend,
+                Some("timeout" | "busy") => Error::RetryLater,
                 Some("too_large") => Error::TooLarge,
                 _ => Error::Malformed,
             });
@@ -177,5 +180,25 @@ mod tests {
         assert_eq!(cover.accept(br#"{"event":"result","op":"cover","ok":true,"value":{"app":7,"mime":"image/png","total":4,"offset":3,"data":"BA=="}}"#), Ok(true));
         assert_eq!(cover.bytes(), Some(&[1, 2, 3, 4][..]));
         assert!(decode_base64(b"AB==").is_err());
+    }
+    #[test]
+    fn transient_errors_are_not_malformed() {
+        let mut cover = Cover::new(1).unwrap();
+        assert_eq!(
+            cover.accept(br#"{"code":"busy","message":"try later"}"#),
+            Err(Error::RetryLater)
+        );
+        assert_eq!(
+            cover.accept(br#"{"code":"timeout","message":"try later"}"#),
+            Err(Error::RetryLater)
+        );
+        assert_eq!(
+            cover.accept(br#"{"event":"result","op":"cover","ok":false,"code":"busy"}"#),
+            Err(Error::RetryLater)
+        );
+        assert_eq!(
+            cover.accept(br#"{"code":"unexpected"}"#),
+            Err(Error::Malformed)
+        );
     }
 }

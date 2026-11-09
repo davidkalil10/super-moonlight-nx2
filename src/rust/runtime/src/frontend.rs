@@ -219,7 +219,7 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
                 })
             }
             Err(_) if asked => {
-                self.message = Some("PC discovery is unavailable; add the PC by address")
+                self.message = Some("PC discovery unavailable; check Wi-Fi or add a PC by IP")
             }
             Err(_) => {}
         }
@@ -252,8 +252,14 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
         let found = discovery.answers.hosts();
         if let Some(error) = self.client.discovered(&found) {
             self.message = Some(error);
-        } else if found.is_empty() && discovery.asked {
-            self.message = Some("No PC answered; add the PC by address");
+        } else if discovery.asked {
+            self.message = if failed {
+                Some("PC discovery failed; check Wi-Fi or add a PC by IP")
+            } else if found.is_empty() {
+                Some("No PCs found; check Sunshine or add a PC by IP")
+            } else {
+                Some("Select a PC; import a PC connection before connecting")
+            };
         }
     }
 
@@ -358,7 +364,8 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
             Ok(socket) => socket,
             Err(_) => {
                 self.client.runtime(RuntimeEvent::LinkFailed);
-                self.message = Some("PC connection failed; import a new connection to retry");
+                self.message =
+                    Some("Check Wi-Fi and Sunshine; import a new PC connection to retry");
                 return;
             }
         };
@@ -371,7 +378,8 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
             }
             Err(error) => {
                 self.client.runtime(RuntimeEvent::LinkFailed);
-                self.message = Some("PC connection failed; import a new connection to retry");
+                self.message =
+                    Some("Check Wi-Fi and Sunshine; import a new PC connection to retry");
                 if error.retained {
                     self.exit = true;
                 }
@@ -419,8 +427,9 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
                         }
                         Err(error) => {
                             self.client.runtime(RuntimeEvent::LinkFailed);
-                            self.message =
-                                Some("PC connection failed; import a new connection to retry");
+                            self.message = Some(
+                                "Check Wi-Fi and Sunshine; import a new PC connection to retry",
+                            );
                             if error.retained {
                                 self.exit = true;
                             }
@@ -463,7 +472,7 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
                 self.stats.authenticated += 1;
                 self.client.runtime(RuntimeEvent::LinkOpened);
             }
-            if let Some((app, png)) = self.covers.poll(control)
+            if let Some((app, png)) = self.covers.poll(control, now_ms)
                 && let Some(host) = self.cover_host
                 && self
                     .client
@@ -535,7 +544,11 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
             }
         }
         if core::mem::take(&mut self.discover_at_start) {
-            self.discover(connections, now_ms, false);
+            let first_run = self.client.bridge.model().hosts().is_empty();
+            if first_run {
+                self.message = Some("Searching for PCs; you can also add one by IP");
+            }
+            self.discover(connections, now_ms, first_run);
         }
         self.poll_discovery(now_ms);
         if disconnected {
@@ -544,7 +557,8 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
                 self.exit = true;
             }
             self.client.runtime(RuntimeEvent::LinkFailed);
-            self.message = Some("PC disconnected; import a new connection to reconnect");
+            self.message =
+                Some("Check Wi-Fi and Sunshine; import a new PC connection to reconnect");
         }
         if !disconnected
             && self.access != Access::SingleList
@@ -576,7 +590,9 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
                         .skip(start)
                         .take(moonlight_nx2_ui::model::APPS_PER_PAGE as usize)
                         .map(|app| app.id)
-                        .find(|id| !self.client.has_cover(*id) && !self.covers.attempted(*id));
+                        .find(|id| {
+                            !self.client.has_cover(*id) && self.covers.eligible(*id, now_ms)
+                        });
                     if let Some(app) = next {
                         let cached = self
                             .cover_cache
