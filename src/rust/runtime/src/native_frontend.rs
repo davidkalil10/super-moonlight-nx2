@@ -14,6 +14,7 @@ use crate::{
 };
 use alloc::{boxed::Box, ffi::CString, format};
 use core::ffi::{CStr, c_char};
+use moonlight_nx2_core::codec::Capabilities;
 use moonlight_nx2_ui::{
     json::Json,
     model::{Event, Screen},
@@ -213,7 +214,7 @@ fn execute(
     let (mut last_screen, mut listed_at, mut failed, mut blocked_start) =
         (None, None, false, false);
     let mut input_gate = InputGate::default();
-    let mut stream = Stream::new(Default::default());
+    let mut stream = Stream::new(decoder_capabilities(&mut app, docked));
     let mut second = start;
     while unsafe { sdk::appletMainLoop() } && !app.exiting() && !sdk::process_retired() {
         let now = unsafe { sdk::moonlightNowNs() };
@@ -278,10 +279,12 @@ fn execute(
             app.client.bridge.model().message() == Some("This console cannot play a stream yet");
         if now.saturating_sub(second) >= 1_000_000_000 {
             log(&format!(
-                "frontend: frames={} requests={} native_media=0",
+                "frontend: frames={} requests={} media_opened={}",
                 app.stats().frames,
-                app.stats().requests
+                app.stats().requests,
+                app.stats().media_opened
             ));
+            stream.report();
             second = now;
         }
     }
@@ -298,7 +301,7 @@ fn execute(
     !failed
         && closed
         && stats.frames > 0
-        && stats.media_opened == 0
+        && (stats.media_opened == 0 || cfg!(feature = "diagnostic-frontend"))
         && !stats.rejected
         && (!checked
             || (stats.requests == 1
@@ -307,4 +310,22 @@ fn execute(
                 && changed
                 && persisted
                 && blocked_start))
+}
+
+#[cfg(feature = "diagnostic-frontend")]
+fn decoder_capabilities(app: &mut Frontend<Directory, NetSocket>, docked: bool) -> Capabilities {
+    use moonlight_nx2_app::policy::Context;
+    let (decoder, display) = crate::video_sink::capabilities();
+    app.client.context_changed(Context {
+        docked,
+        decoder,
+        display,
+    });
+    log("frontend: video sink; 1080p60 H.264/AV1 video is received and discarded");
+    crate::video_sink::capabilities().0
+}
+
+#[cfg(not(feature = "diagnostic-frontend"))]
+fn decoder_capabilities(_: &mut Frontend<Directory, NetSocket>, _: bool) -> Capabilities {
+    Capabilities::default()
 }

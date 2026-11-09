@@ -5,7 +5,6 @@ use crate::{
     client::Client,
     device::log,
     frontend_media::{self, Tick},
-    gsv::GsvBackend,
     hid::FrameInput,
     media_session::{self, Session},
     net::{NetSocket, PeerConnector, UdpSocket},
@@ -34,9 +33,14 @@ use moonlight_nx2_io::{
 };
 use moonlight_nx2_ui::store::Files;
 
-type TcpSession = Session<'static, GsvBackend, NetSocket, Audout, Channel<'static, NetSocket>>;
+#[cfg(not(feature = "diagnostic-frontend"))]
+type Decoder = crate::gsv::GsvBackend;
+#[cfg(feature = "diagnostic-frontend")]
+type Decoder = crate::video_sink::VideoSink;
+
+type TcpSession = Session<'static, Decoder, NetSocket, Audout, Channel<'static, NetSocket>>;
 type UdpSession =
-    Session<'static, GsvBackend, NetSocket, Audout, Receiver<'static, NetSocket, UdpSocket>>;
+    Session<'static, Decoder, NetSocket, Audout, Receiver<'static, NetSocket, UdpSocket>>;
 
 enum Active {
     Tcp(TcpSession),
@@ -111,6 +115,7 @@ impl Stream {
         match opened {
             Ok(running) => {
                 self.running = Some(running);
+                log("stream: media opened");
                 true
             }
             Err(reason) => {
@@ -150,7 +155,7 @@ impl Stream {
         let memory = unsafe { &mut *buffers };
         let [first, second] = &mut memory.frames;
         let video = Video::open(
-            GsvBackend::new(),
+            Decoder::new(),
             config,
             &self.capabilities,
             self.retired,
@@ -266,7 +271,22 @@ impl Stream {
         }
     }
 
+    pub fn report(&self) {
+        let Some(running) = self.running.as_ref() else {
+            return;
+        };
+        let stats = match &running.session {
+            Active::Tcp(session) => session.video_stats(),
+            Active::Udp(session) => session.video_stats(),
+        };
+        log(&format!(
+            "stream: video units={} bytes={} presented={} dropped={}",
+            stats.accepted_units, stats.accepted_bytes, stats.presented, stats.dropped
+        ));
+    }
+
     pub fn close<F: Files + Clone>(&mut self, client: &mut Client<F>) {
+        self.report();
         let Some(mut running) = self.running.take() else {
             return;
         };

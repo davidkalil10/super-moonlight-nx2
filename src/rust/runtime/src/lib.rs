@@ -66,6 +66,8 @@ mod gpu_coexist;
 mod io_diagnostic;
 #[cfg(all(target_os = "none", feature = "frontend"))]
 mod native_frontend;
+#[cfg(all(target_os = "none", feature = "diagnostic-frontend"))]
+mod video_sink;
 #[cfg(target_os = "none")]
 pub mod net;
 #[cfg(all(target_os = "none", feature = "diagnostic-nvdec"))]
