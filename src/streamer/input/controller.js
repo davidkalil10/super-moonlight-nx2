@@ -50,13 +50,15 @@ function controllerMapping(npad) {
     x: 0x4000,
     y: 0x8000
   };
-  /** NPAD face button to FLAG, per layout. */
-  const FACE = {
-    position: {b: FLAG.a, a: FLAG.b, y: FLAG.x, x: FLAG.y},
-    labels: {a: FLAG.a, b: FLAG.b, x: FLAG.x, y: FLAG.y}
-  };
-  /** NPAD button to FLAG for everything but the face buttons and triggers. */
-  const SHARED = {
+  /**
+   * NPAD button to FLAG for everything but the triggers; face buttons map by printed letter.
+   * @type {Record<string, number>}
+   */
+  const BUTTONS = {
+    a: FLAG.a,
+    b: FLAG.b,
+    x: FLAG.x,
+    y: FLAG.y,
     up: FLAG.up,
     down: FLAG.down,
     left: FLAG.left,
@@ -139,21 +141,18 @@ function controllerMapping(npad) {
    * Maps a decoded pad to LiSendMultiControllerEvent fields. Opposite d-pad directions held
    * together cancel out, and the start chord held in full becomes PC Start.
    * @param {typeof NEUTRAL} pad
-   * @param {'position' | 'labels'} [layout]
    * @param {string[]} [startChord] NPAD button names, empty for no chord
    */
-  function toMoonlight(pad, layout = 'position', startChord = START_CHORD) {
+  function toMoonlight(pad, startChord = START_CHORD) {
     const held = (/** @type {number} */ bit) => (pad.buttons & bit) !== 0;
-    /** @type {Record<string, number>} */
-    const flags = {...FACE[layout], ...SHARED};
 
     let buttonFlags = 0;
-    for (const [name, flag] of Object.entries(flags)) {
+    for (const [name, flag] of Object.entries(BUTTONS)) {
       if (held(npad[name])) buttonFlags |= flag;
     }
 
     if (holds(pad, startChord)) {
-      for (const name of startChord) buttonFlags &= ~flags[name];
+      for (const name of startChord) buttonFlags &= ~BUTTONS[name];
       buttonFlags |= FLAG.play;
     }
 
@@ -182,7 +181,7 @@ function controllerMapping(npad) {
     return !!a && !!b && Object.keys(a).every(key => a[key] === b[key]);
   }
 
-  return {FLAG, FACE, SHARED, START_CHORD, STOP_CHORD, NEUTRAL, readPad, decodePad, holds, toMoonlight, same};
+  return {FLAG, BUTTONS, START_CHORD, STOP_CHORD, NEUTRAL, readPad, decodePad, holds, toMoonlight, same};
 }
 
 const {FLAG, START_CHORD, STOP_CHORD, NEUTRAL, decodePad: decode, holds, toMoonlight, same} =

@@ -61,7 +61,6 @@ export function streamShape(args) {
   const fps = Number(option('--fps', '60'));
   const undockedFps = Number(option('--undocked-fps', String(fps)));
   const codec = /** @type {'h264' | 'av1'} */ (option('--codec', 'h264') === 'av1' ? 'av1' : 'h264');
-  const buttons = /** @type {'position' | 'labels'} */ (option('--buttons', '') === 'position' ? 'position' : 'labels');
   const helperArgs = ['--local-audio', '--sops'].filter(flag => args.includes(flag));
   const streamInfo = args.includes('--stream-info');
   const frameCounter = args.includes('--frame-counter');
@@ -72,7 +71,7 @@ export function streamShape(args) {
    */
   const bitrate = (sessionFps, sessionCodec = codec, size = {width, height}) =>
     sessionBitrate(withCodec(args, sessionCodec), size.width, size.height, sessionFps);
-  return {width, height, fps, undockedFps, codec, bitrate, buttons, helperArgs, streamInfo, frameCounter};
+  return {width, height, fps, undockedFps, codec, bitrate, helperArgs, streamInfo, frameCounter};
 }
 
 /**
@@ -250,7 +249,7 @@ export async function runApplication({rpc, directory, menu, gpu, hostAddress, he
       onStream(host);
       renderMode.invalidate();
       const abort = new AbortController();
-      const {width, height, fps: requestedFps, undockedFps, codec, bitrate, buttons, helperArgs,
+      const {width, height, fps: requestedFps, undockedFps, codec, bitrate, helperArgs,
         streamInfo, frameCounter} = streamShape(args);
       let choice = {codec};
       /** @type {ReturnType<typeof createQuadBadge> | undefined} */
@@ -308,7 +307,7 @@ export async function runApplication({rpc, directory, menu, gpu, hostAddress, he
                     const rate = change
                       ? [rateChangeText({height: size.height, fps: change.from}, {height: size.height, fps: change.to})] : [];
                     return streamVideo({rpc, directory, hostAddress, host: host.address, app: String(app.id), helper,
-                      helperArgs, buttons, width: size.width, height: size.height, codec: choice.codec,
+                      helperArgs, width: size.width, height: size.height, codec: choice.codec,
                       fps, bitrate: kbps,
                       badge: badgeFor([
                         ...shapeChanges({height, fps: requestedFps}, {height: size.height, fps: launchFps}),

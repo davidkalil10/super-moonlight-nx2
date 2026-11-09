@@ -57,6 +57,9 @@ at. Tests: `src/streamer/ui/test/` in moonlight-nx2-dev.
   by letter, now the default) or Xbox (`position`). Its `resetBefore: 6` gives every older save
   Nintendo: saves write every row, so a saved `position` cannot be told from the old default,
   and a saved `labels` is Nintendo already.
+  Version 7 (2026-11-09) drops the Controller layout row: buttons always map by printed letter
+  (input/CLAUDE.md, "Controller"). sanitize() keeps only catalog rows, so an old `buttons`
+  value is ignored.
   Stream info on keeps "1080p120 · AV1 · 30 Mbps" (plus any fallback note) on the top
   right badge for the whole stream at every layer size; off, the badge shows fallbacks for 4 s.
   Frame counter on (no save version change; a save without it loads it off) adds a line under

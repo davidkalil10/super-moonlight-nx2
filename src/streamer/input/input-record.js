@@ -33,9 +33,8 @@ const TOUCH_ACTIONS = ['down', 'move', 'up'];
  * The stop chord releases the pad and lifts the touches once, asks for a stop, and ends input.
  * Buttons held while input was gated stay released until they lift, as fingers do.
  * @param {InputMapping} mapping
- * @param {'position' | 'labels'} [layout] the face button layout (CLAUDE.md, "Controller")
  */
-function createInputRecorder(mapping, layout = 'position') {
+function createInputRecorder(mapping) {
   const {controller, touch} = mapping;
   const tracker = touch.createTracker();
   const forwarded = touch.createTracker();
@@ -57,7 +56,7 @@ function createInputRecorder(mapping, layout = 'position') {
     /** @type {InputRecord} */
     const record = {v: mapping.record.version, stop: true};
 
-    const released = changed(controller.toMoonlight({...controller.NEUTRAL, connected}, 'position', []));
+    const released = changed(controller.toMoonlight({...controller.NEUTRAL, connected}, []));
     if (released) record.pad = released;
 
     const lifted = touch.flush(forwarded);
@@ -85,7 +84,7 @@ function createInputRecorder(mapping, layout = 'position') {
 
     /** @type {InputRecord} */
     const result = {v: mapping.record.version};
-    const pad = changed(controller.toMoonlight(allowed ? open : gated, layout, []));
+    const pad = changed(controller.toMoonlight(allowed ? open : gated, []));
     if (pad) result.pad = pad;
 
     if (touchBytes) {

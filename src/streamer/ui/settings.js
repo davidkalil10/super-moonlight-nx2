@@ -64,12 +64,6 @@ function inUse(settings, docked) {
 }
 
 /**
- * Value text of the controller layout row: Nintendo maps each button by its printed letter, Xbox
- * by its position (input/CLAUDE.md, "Controller").
- */
-const LAYOUTS = {labels: 'Nintendo', position: 'Xbox'};
-
-/**
  * A catalog row. `formerDefaults` are fallbacks of the unversioned format: a save from before
  * version 2 holding one of them gets today's fallback instead. A save older than `resetBefore`
  * takes today's fallback for the row whatever it holds. `docked` values are only stepped onto
@@ -137,14 +131,6 @@ const CATALOG = [
     text: onOff
   },
   {
-    id: 'buttons',
-    label: 'Controller layout',
-    values: ['labels', 'position'],
-    fallback: 'labels',
-    text: (/** @type {keyof typeof LAYOUTS} */ value) => LAYOUTS[value],
-    resetBefore: 6
-  },
-  {
     id: 'streamInfo',
     label: 'Stream info badge',
     values: [false, true],
@@ -184,9 +170,10 @@ function createSettingsCore(rows) {
    * 3 added AV1 to the codec row, version 4 added the transport row and moved every save to AV1
    * over UDP once, version 5 dropped 30 fps and added the host audio, SOPS, quit on return,
    * button layout and stream info rows, keeping every other value, version 6 made the button
-   * layout the controller layout with Nintendo (by letter) as the default and reset it once.
+   * layout the controller layout with Nintendo (by letter) as the default and reset it once,
+   * version 7 dropped the controller layout row: buttons always map by letter.
    */
-  const version = 6;
+  const version = 7;
   /** The first version whose saves hold today's defaults rather than the former ones. */
   const currentDefaults = 2;
 
@@ -372,7 +359,6 @@ function streamArgs(settings) {
 
   if (settings.hostAudio) args.push('--local-audio');
   if (settings.optimise) args.push('--sops');
-  if (settings.buttons === 'position') args.push('--buttons', 'position');
   if (settings.streamInfo) args.push('--stream-info');
   if (settings.frameCounter) args.push('--frame-counter');
   return args;
