@@ -81,7 +81,7 @@ impl Setting {
         match self {
             Self::Size => "Resolution of the stream",
             Self::Fps => "Frames per second the PC sends",
-            Self::Bitrate => "Automatic follows the network test",
+            Self::Bitrate => "Auto picks only the bitrate from the network test",
             Self::Codec => "AV1 looks better at the same bitrate, H.264 is the fallback",
             Self::Optimise => "Let the PC adjust game settings for the stream",
             Self::HostAudio => "Also play the sound on the PC",
