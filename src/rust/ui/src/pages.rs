@@ -155,6 +155,8 @@ fn join(out: &mut String, part: Option<&str>) {
     out.push_str(part);
 }
 
+const NEEDS_120_HZ: &str = "Needs a 120 Hz display";
+
 /// Why a row cannot be changed right now, when it cannot.
 fn locked_reason(row: &SettingRow) -> Option<&'static str> {
     if row.setting != Setting::Fps {
@@ -162,7 +164,7 @@ fn locked_reason(row: &SettingRow) -> Option<&'static str> {
     } else if !row.adjustable {
         Some("Fixed for 4K")
     } else if !row.can_left && !row.can_right {
-        Some("120 fps needs a 120 Hz display")
+        Some(NEEDS_120_HZ)
     } else {
         None
     }
@@ -961,7 +963,7 @@ impl Builder<'_> {
             locked.extend([("1440p", "Docked only"), ("4K", "Docked only")]);
         }
         if !model.capabilities().fps120 {
-            locked.push(("120 fps", "Not available"));
+            locked.push(("120 fps", NEEDS_120_HZ));
         }
         let mut y = BODY_Y + 16 + rows * (ROW_HEIGHT + ROW_GAP) + 14;
         for (label, reason) in locked {
