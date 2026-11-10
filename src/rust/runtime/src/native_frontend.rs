@@ -435,7 +435,7 @@ fn execute(renderer: &mut Renderer, connections: &mut NativeConnections, launch:
     !failed
         && closed
         && stats.frames > 0
-        && (stats.media_opened == 0 || cfg!(feature = "diagnostic-frontend"))
+        && (stats.media_opened == 0 || !checked)
         && !stats.rejected
         && (!checked
             || (stats.requests == 1
