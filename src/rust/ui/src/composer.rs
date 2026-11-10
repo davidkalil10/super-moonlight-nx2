@@ -1002,10 +1002,12 @@ impl Builder<'_> {
                 0.0,
                 0,
             );
+            let mut state = String::from(host.address.as_str());
+            join(&mut state, model.presence(&host.address).label());
             self.text(
                 x + CARD_PAD,
                 y + 60,
-                host.address.as_str(),
+                &state,
                 24,
                 inner,
                 COLOR_MUTED,
@@ -1107,7 +1109,7 @@ impl Builder<'_> {
             chips: &chips,
             keys,
             background: COLOR_BACKGROUND,
-            cursor_home: 3,
+            cursor_home: 4,
             ..Default::default()
         });
         let line = "Remove keeps pairing; unpair makes the PC forget this console";
@@ -1119,31 +1121,18 @@ impl Builder<'_> {
         );
 
         let width = 300;
-        self.button(item::UNPAIR, SIDE, BUTTON_Y, width, "Unpair", false);
-        self.button(
-            item::REMOVE_HOST,
-            SIDE + width + BUTTON_GAP,
-            BUTTON_Y,
-            width,
-            "Remove PC",
-            false,
-        );
-        self.button(
-            item::RENAME_HOST,
-            SIDE + 2 * (width + BUTTON_GAP),
-            BUTTON_Y,
-            width,
-            "Rename PC",
-            false,
-        );
-        self.button(
-            item::CANCEL,
-            SIDE + 3 * (width + BUTTON_GAP),
-            BUTTON_Y,
-            width,
-            "Cancel",
-            false,
-        );
+        let wakeable = model.host().is_some_and(|host| host.mac.is_some());
+        let choices = [
+            (item::WAKE_HOST, "Wake PC", !wakeable),
+            (item::UNPAIR, "Unpair", false),
+            (item::REMOVE_HOST, "Remove PC", false),
+            (item::RENAME_HOST, "Rename PC", false),
+            (item::CANCEL, "Cancel", false),
+        ];
+        for (i, (id, label, greyed)) in (0u32..).zip(choices) {
+            let x = SIDE + i * (width + BUTTON_GAP);
+            self.button(id, x, BUTTON_Y, width, label, greyed);
+        }
     }
 
     fn rename_host_page(&mut self, model: &Model) {
@@ -1473,12 +1462,18 @@ impl Builder<'_> {
 
     fn settings_page(&mut self, model: &Model, settings_error: Option<&str>) {
         let editing_keys: Keys = &[("\u{25c2}\u{25b8}", "Change"), ("A", "Done"), ("B", "Done")];
-        let browsing_keys: Keys = &[("A", "Edit"), ("B", "Back"), ("Y", "Reset")];
+        let browsing_keys: Keys = &[
+            ("A", "Edit"),
+            ("B", "Back"),
+            ("X", "Test network"),
+            ("Y", "Reset"),
+        ];
         let rows = model.settings().rows(model.docked(), model.capabilities());
         let editing = model.editing().is_some_and(|s| rows[s as usize].adjustable);
 
         let note = match settings_error.filter(|e| !e.is_empty()) {
             Some(error) => format!("Settings could not be saved: {error}"),
+            None if !model.link_note().is_empty() => String::from(model.link_note()),
             None => String::from("Applies to the next launch"),
         };
         let chips = [
@@ -1606,6 +1601,17 @@ impl Builder<'_> {
             COLOR_SOFT,
             Align::Left,
         );
+        if !model.system_status().is_empty() {
+            self.plain(
+                SIDE,
+                596,
+                model.system_status(),
+                26,
+                width,
+                COLOR_SOFT,
+                Align::Left,
+            );
+        }
         self.button(
             item::RETURN_TO_APPS,
             SIDE,
@@ -1683,7 +1689,8 @@ impl Builder<'_> {
             }
             Screen::Connecting => {
                 let address = model.host().map(|h| h.address.as_str());
-                self.status(model, "Connecting", host, address, cancel);
+                let line = model.message().or(address);
+                self.status(model, "Connecting", host, line, cancel);
             }
             Screen::Pairing => self.pairing_page(model),
             Screen::Apps => self.apps_page(model),

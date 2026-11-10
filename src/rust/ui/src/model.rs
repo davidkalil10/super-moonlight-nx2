@@ -3,6 +3,8 @@
 
 use core::fmt::Write;
 
+use crate::link_choice::LinkChoice;
+use crate::presence::{Presence, Table};
 use crate::settings::{Capabilities, Setting, Settings};
 use crate::text::Text;
 
@@ -77,6 +79,7 @@ pub mod item {
     pub const RENAME_HOST: u32 = 16;
     pub const KEY_PAGE: u32 = 17;
     pub const SAVE_NAME: u32 = 18;
+    pub const WAKE_HOST: u32 = 19;
     pub const HOST: u32 = 10000;
     pub const APP: u32 = 20000;
     pub const SETTING: u32 = 30000;
@@ -227,6 +230,8 @@ pub enum IntentKind {
     Covers,
     Pair,
     Exit,
+    WakeHost,
+    TestNetwork,
 }
 
 impl IntentKind {
@@ -249,6 +254,8 @@ impl IntentKind {
             "covers",
             "pair",
             "exit",
+            "wakeHost",
+            "testNetwork",
         ][self as usize]
     }
 }
@@ -319,6 +326,10 @@ pub struct Model {
     docked: bool,
     editing: Option<Setting>,
     capabilities: Capabilities,
+    presence: Table,
+    link_choice: Option<LinkChoice>,
+    link_note: Message,
+    system_status: Message,
 }
 
 fn last_page(length: usize, size: u32) -> u32 {
@@ -402,6 +413,10 @@ impl Model {
             docked: false,
             editing: None,
             capabilities,
+            presence: Table::default(),
+            link_choice: None,
+            link_note: Message::new(),
+            system_status: Message::new(),
         };
         model.set_hosts(hosts);
         model
@@ -530,6 +545,45 @@ impl Model {
 
     pub fn settings(&self) -> &Settings {
         &self.settings
+    }
+
+    pub fn presence(&self, address: &Address) -> Presence {
+        self.presence.get(address)
+    }
+
+    /// True when the hosts page shows the change.
+    pub fn set_presence(&mut self, address: &Address, presence: Presence) -> bool {
+        self.presence.set(address, presence) && self.screen == Screen::Hosts
+    }
+
+    pub fn link_choice(&self) -> Option<&LinkChoice> {
+        self.link_choice.as_ref()
+    }
+
+    /// The network test's one line: what it measured and picked, or why it could not run.
+    pub fn link_note(&self) -> &str {
+        self.link_note.as_str()
+    }
+
+    /// True when the settings page shows the change.
+    pub fn set_link(&mut self, choice: Option<LinkChoice>, note: &str) -> bool {
+        let changed = self.link_choice != choice || self.link_note.as_str() != note;
+        self.link_choice = choice;
+        self.link_note = Message::of(note);
+        changed && self.screen == Screen::Settings
+    }
+
+    /// Battery, temperature and Wi-Fi, shown under the stream statistics.
+    pub fn system_status(&self) -> &str {
+        self.system_status.as_str()
+    }
+
+    pub fn set_system_status(&mut self, text: &str) -> bool {
+        if self.system_status.as_str() == text {
+            return false;
+        }
+        self.system_status = Message::of(text);
+        self.overlay
     }
 
     pub fn docked(&self) -> bool {
@@ -742,6 +796,10 @@ impl Model {
         }
 
         match item {
+            item::WAKE_HOST if host.mac.is_some() => {
+                step.add(IntentKind::WakeHost, Some(host));
+                self.open_host(host, self.host_index, step);
+            }
             item::UNPAIR => {
                 self.screen = Screen::Unpairing;
                 step.changed = true;
@@ -954,6 +1012,7 @@ impl Model {
                 step.changed = true;
                 step.add(IntentKind::SaveSettings, None);
             }
+            Op::X => step.add(IntentKind::TestNetwork, self.host),
             _ => {}
         }
     }
@@ -1130,6 +1189,7 @@ impl Model {
             Event::ConnectionLost { host } => self.on_connection_lost(host, step),
             Event::Hosts { hosts } => {
                 self.set_hosts(hosts);
+                self.presence.retain(hosts);
                 self.host_page = self
                     .host_page
                     .min(last_page(self.host_count, HOSTS_PER_PAGE));

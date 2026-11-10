@@ -145,7 +145,8 @@ impl Capabilities {
         modes[codec as usize] |= 1 << (size as usize * 2 + rate);
     }
 
-    fn mode(&self, codec: Codec, size: Size, fps: u32) -> bool {
+    /// Whether the decoder and display offer this mode.
+    pub fn mode(&self, codec: Codec, size: Size, fps: u32) -> bool {
         let Some(rate) = RATES.iter().position(|value| *value == fps) else {
             return false;
         };

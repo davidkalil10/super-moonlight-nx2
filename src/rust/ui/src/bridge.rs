@@ -213,6 +213,28 @@ impl<F: Files> Bridge<F> {
         }
     }
 
+    pub fn set_presence(
+        &mut self,
+        address: &crate::model::Address,
+        presence: crate::presence::Presence,
+    ) {
+        if self.model.set_presence(address, presence) {
+            self.revision += 1;
+        }
+    }
+
+    pub fn set_link(&mut self, choice: Option<crate::link_choice::LinkChoice>, note: &str) {
+        if self.model.set_link(choice, note) {
+            self.revision += 1;
+        }
+    }
+
+    pub fn set_system_status(&mut self, text: &str) {
+        if self.model.set_system_status(text) {
+            self.revision += 1;
+        }
+    }
+
     pub fn epoch(&self) -> u32 {
         self.epoch
     }
