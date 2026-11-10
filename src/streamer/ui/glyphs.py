@@ -32,7 +32,7 @@ VERSION = 1
 # the atlas fallback, and the reference is made the same way on every PC.
 text.CJK_PATH = None
 
-UI_SYMBOLS = "…‹›◂▸‘’“”–—•€™"
+UI_SYMBOLS = "…‹›◂▸‘’“”–—•€™œŒŸ−"
 # Modern Greek and the Cyrillic of Russian, Ukrainian, Belarusian, Serbian, Macedonian and
 # Bulgarian; Sora has neither, so DejaVu draws them, as text.py does.
 GREEK = "ΆΈΉΊΌΎΏΐ" + "".join(chr(c) for c in range(0x391, 0x3CF) if c != 0x3A2)
@@ -48,6 +48,7 @@ COMBOS = [
     (26, 500, CHARSET), (26, 600, CHARSET), (26, 700, CHARSET), (28, 500, CHARSET),
     (28, 600, CHARSET), (32, 700, CHARSET), (36, 700, CHARSET), (40, 700, CHARSET),
     (48, 700, CHARSET), (56, 700, CHARSET), (72, 700, CHARSET), (67, 700, INITIALS),
+    (28, 700, CHARSET), (32, 500, CHARSET), (32, 600, CHARSET), (40, 500, CHARSET),
 ]
 LEGEND_SIZES = [26]
 
