@@ -10,6 +10,7 @@ use crate::{
     device::log,
     render::Renderer,
     sdk,
+    sdk_video::SdkVideo,
     video::{self, Video},
 };
 use alloc::{format, vec};
@@ -23,254 +24,234 @@ use moonlight_nx2_core::{
 };
 
 const H264: &[u8] = include_bytes!("../refclip/h264.mlrc");
-#[cfg(not(feature = "diagnostic-sdk-modes-rate"))]
 const AV1: &[u8] = include_bytes!("../refclip/av1.mlrc");
-
-#[cfg(not(feature = "diagnostic-sdk-modes-rate"))]
+/// The 1080p60 clips every diagnostic replays first.
 const CLIPS: [(&str, &[u8]); 2] = [("h264", H264), ("av1", AV1)];
-#[cfg(feature = "diagnostic-sdk-modes-rate")]
-const CLIPS: [(&str, &[u8]); 1] = [("h264", H264)];
-/// One diagnostic session on the SDK decoder: a clip, the rate it is fed at, how it is fed and
-/// what the session changes from a stream's own choices.
-#[cfg(feature = "diagnostic-sdk-modes")]
-struct Trial {
-    name: &'static str,
-    clip: &'static [u8],
-    fps: u32,
-    feed: Feed,
-    tuning: Tuning,
-}
-#[cfg(feature = "diagnostic-sdk-modes")]
-use crate::sdk_video::Tuning;
 
 #[cfg(feature = "diagnostic-sdk-modes")]
-const fn trial(name: &'static str, clip: &'static [u8], tuning: Tuning) -> Trial {
-    Trial {
-        name,
-        clip,
-        fps: CLIP_FPS,
-        feed: Feed::Held,
-        tuning,
+mod trials {
+    //! The sessions of the sdk-modes diagnostic. `build.py --trials` picks the set a build runs.
+    use super::{CLIP_FPS, Feed};
+    use crate::sdk_video::Tuning;
+
+    const AV1_1080P120: &[u8] = include_bytes!("../refclip/av1_1080p120.mlrc");
+    const H264_1080P120: &[u8] = include_bytes!("../refclip/h264_1080p120.mlrc");
+    const AV1_1440P: &[u8] = include_bytes!("../refclip/av1_1440p.mlrc");
+    const H264_1440P: &[u8] = include_bytes!("../refclip/h264_1440p.mlrc");
+    const AV1_1440P120: &[u8] = include_bytes!("../refclip/av1_1440p120.mlrc");
+    const H264_1440P120: &[u8] = include_bytes!("../refclip/h264_1440p120.mlrc");
+    const AV1_2160P: &[u8] = include_bytes!("../refclip/av1_2160p.mlrc");
+    const H264_2160P: &[u8] = include_bytes!("../refclip/h264_2160p.mlrc");
+    const AV1_2160P_LONG: &[u8] = include_bytes!("../refclip/av1_2160p_long.mlrc");
+    const H264_2160P_LONG: &[u8] = include_bytes!("../refclip/h264_2160p_long.mlrc");
+
+    /// One session on the SDK decoder: a clip, the rate it is fed at, how it is fed and what
+    /// the session changes from a stream's own choices.
+    pub struct Trial {
+        pub name: &'static str,
+        pub clip: &'static [u8],
+        pub fps: u32,
+        pub feed: Feed,
+        pub tuning: Tuning,
     }
-}
 
-/// Two-frame clips above 1080p, then 1440p at 120 units a second on a display that turns at
-/// its own rate. A refused session closes and the next one runs.
-#[cfg(all(
-    feature = "diagnostic-sdk-modes",
-    not(any(
-        feature = "diagnostic-sdk-modes-4k",
-        feature = "diagnostic-sdk-modes-rate"
-    ))
-))]
-const TRIALS: [Trial; 6] = [
-    trial("av1_1440p", AV1_1440P, Tuning::NONE),
-    trial("h264_1440p", H264_1440P, Tuning::NONE),
-    trial("av1_2160p", AV1_2160P, Tuning::NONE),
-    trial("h264_2160p", H264_2160P, Tuning::NONE),
-    paced("av1_1440p120", AV1_1440P120),
-    paced("h264_1440p120", H264_1440P120),
-];
-#[cfg(all(
-    feature = "diagnostic-sdk-modes",
-    not(any(
-        feature = "diagnostic-sdk-modes-4k",
-        feature = "diagnostic-sdk-modes-rate"
-    ))
-))]
-const fn paced(name: &'static str, clip: &'static [u8]) -> Trial {
-    Trial {
-        fps: 120,
-        feed: Feed::Paced,
-        ..trial(
+    /// What one build of the diagnostic runs.
+    pub struct Set {
+        /// How many of the 1080p60 clips go first.
+        pub clips: usize,
+        pub trials: &'static [&'static [Trial]],
+    }
+
+    /// The set named when the diagnostic was built; `sizes` when none was.
+    pub fn chosen() -> Set {
+        match option_env!("MOONLIGHT_SDK_MODES_TRIALS") {
+            Some("4k") => Set {
+                clips: 2,
+                trials: &[&AT_2160P],
+            },
+            Some("rate") => Set {
+                clips: 1,
+                trials: &[&RATES, &FED_FASTER],
+            },
+            Some("paced") => Set {
+                clips: 1,
+                trials: &[&FED_FASTER],
+            },
+            _ => Set {
+                clips: 2,
+                trials: &[&SIZES],
+            },
+        }
+    }
+
+    const fn held(name: &'static str, clip: &'static [u8], tuning: Tuning) -> Trial {
+        Trial {
             name,
             clip,
+            fps: CLIP_FPS,
+            feed: Feed::Held,
+            tuning,
+        }
+    }
+
+    /// A clip fed at `fps` units a second, timed and not summed.
+    const fn paced(fps: u32, name: &'static str, clip: &'static [u8], tuning: Tuning) -> Trial {
+        Trial {
+            name,
+            clip,
+            fps,
+            feed: Feed::Paced,
+            tuning: Tuning {
+                quiet: true,
+                ..tuning
+            },
+        }
+    }
+
+    /// Initialize command by command, configured at `frame_rate`.
+    const fn rate(frame_rate: u32) -> Tuning {
+        Tuning {
+            frame_rate,
+            split_initialize: true,
+            ..Tuning::NONE
+        }
+    }
+
+    const SPLIT: Tuning = rate(60);
+    /// The retail client's AV1 session at 2160p sent input format 1; a stream sends 3 from
+    /// 1080p up.
+    const RETAIL_INPUT: Tuning = Tuning {
+        input_format: 1,
+        ..SPLIT
+    };
+
+    const fn at_30(tuning: Tuning) -> Tuning {
+        Tuning {
+            frame_rate: 30,
+            ..tuning
+        }
+    }
+
+    /// An output the pipeline cannot read back: only the start result counts.
+    const fn output(format: u32) -> Tuning {
+        Tuning {
+            output_format: format,
+            ..SPLIT
+        }
+    }
+
+    /// `sizes`: two-frame clips above 1080p, then 1440p at 120 units a second on a display
+    /// that turns at its own rate. A refused session closes and the next one runs.
+    const SIZES: [Trial; 6] = [
+        held("av1_1440p", AV1_1440P, Tuning::NONE),
+        held("h264_1440p", H264_1440P, Tuning::NONE),
+        held("av1_2160p", AV1_2160P, Tuning::NONE),
+        held("h264_2160p", H264_2160P, Tuning::NONE),
+        paced(
+            120,
+            "av1_1440p120",
+            AV1_1440P120,
             Tuning {
                 frame_rate: 120,
-                quiet: true,
                 ..Tuning::NONE
             },
-        )
-    }
-}
-#[cfg(all(
-    feature = "diagnostic-sdk-modes",
-    not(feature = "diagnostic-sdk-modes-4k")
-))]
-const AV1_1440P120: &[u8] = include_bytes!("../refclip/av1_1440p120.mlrc");
-#[cfg(all(
-    feature = "diagnostic-sdk-modes",
-    not(feature = "diagnostic-sdk-modes-4k")
-))]
-const H264_1440P120: &[u8] = include_bytes!("../refclip/h264_1440p120.mlrc");
-#[cfg(all(
-    feature = "diagnostic-sdk-modes",
-    not(feature = "diagnostic-sdk-modes-rate")
-))]
-const AV1_1440P: &[u8] = include_bytes!("../refclip/av1_1440p.mlrc");
-#[cfg(all(
-    feature = "diagnostic-sdk-modes",
-    not(feature = "diagnostic-sdk-modes-rate")
-))]
-const H264_1440P: &[u8] = include_bytes!("../refclip/h264_1440p.mlrc");
-#[cfg(feature = "diagnostic-sdk-modes")]
-const AV1_2160P: &[u8] = include_bytes!("../refclip/av1_2160p.mlrc");
-#[cfg(feature = "diagnostic-sdk-modes")]
-const H264_2160P: &[u8] = include_bytes!("../refclip/h264_2160p.mlrc");
-
-/// What the service refuses at 2160p (0x17bc6f), one difference from a stream's session at a
-/// time, AV1 first: it is the codec the retail client decoded at this size. Every session
-/// initializes command by command; the first two prove that path at a size that works.
-#[cfg(feature = "diagnostic-sdk-modes-4k")]
-const TRIALS: [Trial; 15] = [
-    trial("av1_1440p_split", AV1_1440P, SPLIT),
-    trial("h264_1440p_split", H264_1440P, SPLIT),
-    trial("av1_2160p_split", AV1_2160P, SPLIT),
-    trial("av1_2160p_in1", AV1_2160P, RETAIL_INPUT),
-    trial("av1_2160p_30", AV1_2160P, at_30(SPLIT)),
-    trial("av1_2160p_in1_30", AV1_2160P, at_30(RETAIL_INPUT)),
-    trial(
-        "av1_2160p_work308",
-        AV1_2160P,
-        Tuning {
-            work_mebibytes: 308,
-            ..SPLIT
-        },
-    ),
-    trial(
-        "av1_2160p_input4m",
-        AV1_2160P,
-        Tuning {
-            max_input_bytes: 4 << 20,
-            ..SPLIT
-        },
-    ),
-    trial(
-        "av1_2160p_pool2176",
-        AV1_2160P,
-        Tuning {
-            pool_height: 2176,
-            ..SPLIT
-        },
-    ),
-    trial("av1_2160p_rgba", AV1_2160P, output(2)),
-    trial("av1_2160p_hdr", AV1_2160P, output(4)),
-    trial("av1_2160p_format5", AV1_2160P, output(5)),
-    trial("h264_2160p_split", H264_2160P, SPLIT),
-    trial("h264_2160p_in1", H264_2160P, RETAIL_INPUT),
-    trial("h264_2160p_30", H264_2160P, at_30(SPLIT)),
-];
-#[cfg(feature = "diagnostic-sdk-modes-4k")]
-const SPLIT: Tuning = Tuning {
-    frame_rate: 60,
-    split_initialize: true,
-    ..Tuning::NONE
-};
-/// The retail client's AV1 session at 2160p sent input format 1; a stream sends 3 from 1080p up.
-#[cfg(feature = "diagnostic-sdk-modes-4k")]
-const RETAIL_INPUT: Tuning = Tuning {
-    input_format: 1,
-    ..SPLIT
-};
-/// An output the pipeline cannot read back: only the start result counts.
-#[cfg(feature = "diagnostic-sdk-modes-4k")]
-const fn output(format: u32) -> Tuning {
-    Tuning {
-        output_format: format,
-        ..SPLIT
-    }
-}
-#[cfg(feature = "diagnostic-sdk-modes-4k")]
-const fn at_30(tuning: Tuning) -> Tuning {
-    Tuning {
-        frame_rate: 30,
-        ..tuning
-    }
-}
-
-/// Whether the configured rate is only a declaration. The service takes 2160p configured at 30
-/// and refuses it at 60, and refuses 1440p at 120: first where the 2160p limit sits, on
-/// two-frame sessions that are known to close cleanly either way, then 120 at two sizes, then
-/// clips fed faster than the decoder was told. Those come last: a decoder fed past its
-/// configured rate has never run. AV1 goes before H.264 in each part.
-#[cfg(feature = "diagnostic-sdk-modes-rate")]
-const TRIALS: [Trial; 16] = [
-    trial("av1_2160p_r59", AV1_2160P, rate(59)),
-    trial("av1_2160p_r50", AV1_2160P, rate(50)),
-    trial("av1_2160p_r48", AV1_2160P, rate(48)),
-    trial("av1_2160p_r45", AV1_2160P, rate(45)),
-    trial("av1_2160p_r40", AV1_2160P, rate(40)),
-    fed(120, "av1_1440p120_r120", AV1_1440P120, 120),
-    fed(120, "av1_1080p120_r120", AV1_1080P120, 120),
-    trial("h264_2160p_r30", H264_2160P, rate(30)),
-    fed(120, "h264_1440p120_r120", H264_1440P120, 120),
-    fed(120, "h264_1080p120_r120", H264_1080P120, 120),
-    fed(60, "av1_2160p_r30_fed60", AV1_2160P_LONG, 30),
-    fed(120, "av1_1440p120_r60_fed120", AV1_1440P120, 60),
-    fed(120, "av1_1080p120_r60_fed120", AV1_1080P120, 60),
-    fed(60, "h264_2160p_r30_fed60", H264_2160P_LONG, 30),
-    fed(120, "h264_1440p120_r60_fed120", H264_1440P120, 60),
-    fed(120, "h264_1080p120_r60_fed120", H264_1080P120, 60),
-];
-#[cfg(feature = "diagnostic-sdk-modes-rate")]
-const fn rate(frame_rate: u32) -> Tuning {
-    Tuning {
-        frame_rate,
-        split_initialize: true,
-        ..Tuning::NONE
-    }
-}
-/// A clip fed at `fps` units a second to a decoder configured for `frame_rate`.
-#[cfg(feature = "diagnostic-sdk-modes-rate")]
-const fn fed(fps: u32, name: &'static str, clip: &'static [u8], frame_rate: u32) -> Trial {
-    Trial {
-        fps,
-        feed: Feed::Paced,
-        ..trial(
-            name,
-            clip,
+        ),
+        paced(
+            120,
+            "h264_1440p120",
+            H264_1440P120,
             Tuning {
-                quiet: true,
-                ..rate(frame_rate)
+                frame_rate: 120,
+                ..Tuning::NONE
             },
-        )
-    }
+        ),
+    ];
+
+    /// `4k`: what the service refuses at 2160p (0x17bc6f), one difference from a stream's
+    /// session at a time, AV1 first: it is the codec the retail client decoded at this size.
+    /// Every session initializes command by command; the first two prove that path at a size
+    /// that works.
+    const AT_2160P: [Trial; 15] = [
+        held("av1_1440p_split", AV1_1440P, SPLIT),
+        held("h264_1440p_split", H264_1440P, SPLIT),
+        held("av1_2160p_split", AV1_2160P, SPLIT),
+        held("av1_2160p_in1", AV1_2160P, RETAIL_INPUT),
+        held("av1_2160p_30", AV1_2160P, at_30(SPLIT)),
+        held("av1_2160p_in1_30", AV1_2160P, at_30(RETAIL_INPUT)),
+        held(
+            "av1_2160p_work308",
+            AV1_2160P,
+            Tuning {
+                work_mebibytes: 308,
+                ..SPLIT
+            },
+        ),
+        held(
+            "av1_2160p_input4m",
+            AV1_2160P,
+            Tuning {
+                max_input_bytes: 4 << 20,
+                ..SPLIT
+            },
+        ),
+        held(
+            "av1_2160p_pool2176",
+            AV1_2160P,
+            Tuning {
+                pool_height: 2176,
+                ..SPLIT
+            },
+        ),
+        held("av1_2160p_rgba", AV1_2160P, output(2)),
+        held("av1_2160p_hdr", AV1_2160P, output(4)),
+        held("av1_2160p_format5", AV1_2160P, output(5)),
+        held("h264_2160p_split", H264_2160P, SPLIT),
+        held("h264_2160p_in1", H264_2160P, RETAIL_INPUT),
+        held("h264_2160p_30", H264_2160P, at_30(SPLIT)),
+    ];
+
+    /// `rate`, first part: whether the configured rate is only a declaration. The service
+    /// takes 2160p configured at 30 and refuses it at 60, and refuses 1440p at 120: where the
+    /// 2160p limit sits, on two-frame sessions that close cleanly either way, then 120 at two
+    /// sizes. AV1 goes before H.264.
+    const RATES: [Trial; 10] = [
+        held("av1_2160p_r59", AV1_2160P, rate(59)),
+        held("av1_2160p_r50", AV1_2160P, rate(50)),
+        held("av1_2160p_r48", AV1_2160P, rate(48)),
+        held("av1_2160p_r45", AV1_2160P, rate(45)),
+        held("av1_2160p_r40", AV1_2160P, rate(40)),
+        paced(120, "av1_1440p120_r120", AV1_1440P120, rate(120)),
+        paced(120, "av1_1080p120_r120", AV1_1080P120, rate(120)),
+        held("h264_2160p_r30", H264_2160P, rate(30)),
+        paced(120, "h264_1440p120_r120", H264_1440P120, rate(120)),
+        paced(120, "h264_1080p120_r120", H264_1080P120, rate(120)),
+    ];
+
+    /// `paced`, and the end of `rate`: clips fed faster than the decoder was told. They come
+    /// last, a decoder fed past its configured rate had never run.
+    const FED_FASTER: [Trial; 6] = [
+        paced(60, "av1_2160p_r30_fed60", AV1_2160P_LONG, rate(30)),
+        paced(120, "av1_1440p120_r60_fed120", AV1_1440P120, rate(60)),
+        paced(120, "av1_1080p120_r60_fed120", AV1_1080P120, rate(60)),
+        paced(60, "h264_2160p_r30_fed60", H264_2160P_LONG, rate(30)),
+        paced(120, "h264_1440p120_r60_fed120", H264_1440P120, rate(60)),
+        paced(120, "h264_1080p120_r60_fed120", H264_1080P120, rate(60)),
+    ];
 }
-#[cfg(feature = "diagnostic-sdk-modes-rate")]
-const AV1_1080P120: &[u8] = include_bytes!("../refclip/av1_1080p120.mlrc");
-#[cfg(feature = "diagnostic-sdk-modes-rate")]
-const H264_1080P120: &[u8] = include_bytes!("../refclip/h264_1080p120.mlrc");
-#[cfg(feature = "diagnostic-sdk-modes-rate")]
-const AV1_2160P_LONG: &[u8] = include_bytes!("../refclip/av1_2160p_long.mlrc");
-#[cfg(feature = "diagnostic-sdk-modes-rate")]
-const H264_2160P_LONG: &[u8] = include_bytes!("../refclip/h264_2160p_long.mlrc");
+
 /// Presents per decoded frame: about half a second at 60 Hz, a quarter at 120 Hz.
 const HOLD_PRESENTS: u32 = 30;
 /// Presents the last frame of each clip stays up, for a still HDMI capture.
 const FINAL_PRESENTS: u32 = 300;
 const DECODE_WAIT_NS: u64 = 2_000_000_000;
-#[cfg(feature = "sdk-video")]
 const CLIP_FPS: u32 = 60;
-
-/// The backend under test. The sink answers grey frames, so its sums never match; it proves
-/// the plumbing. A real decoder gates these two behind its feature (`diagnostic-native-decode`)
-/// and adds its own constructor and `BACKING` next to them.
-#[cfg(not(feature = "sdk-video"))]
-fn backend(_: &mut Renderer) -> Option<crate::video_sink::VideoSink> {
-    Some(crate::video_sink::VideoSink::new())
-}
-#[cfg(feature = "sdk-video")]
-fn backend(_: &mut Renderer) -> Option<crate::sdk_video::SdkVideo> {
-    Some(crate::sdk_video::SdkVideo::new(CLIP_FPS))
-}
-const BACKING: Backing = Backing::CpuReference;
 
 /// One session: true when the clip decoded, uploaded and closed cleanly.
 fn session<B: Backend<N>, const N: usize>(
     renderer: &mut Renderer,
     name: &'static str,
     bytes: &[u8],
-    backend: Option<B>,
+    backend: B,
     feed: Feed,
 ) -> bool {
     log(&format!("b2ar: codec={name} begin"));
@@ -278,11 +259,7 @@ fn session<B: Backend<N>, const N: usize>(
         log(&format!("ref: {name} clip malformed"));
         return false;
     };
-    let Some(backend) = backend else {
-        log(&format!("ref: {name} backend unavailable"));
-        return false;
-    };
-    let result = replay(renderer, backend, BACKING, name, &clip, feed);
+    let result = replay(renderer, backend, Backing::CpuReference, name, &clip, feed);
     log(&format!("b2ar: codec={name} replay={result}"));
     log(&format!(
         "ref: {name} session {}",
@@ -297,27 +274,28 @@ fn stopped() -> bool {
 
 /// Replays every embedded clip; true when each session passed.
 pub fn run(renderer: &mut Renderer) -> bool {
+    #[cfg(feature = "diagnostic-sdk-modes")]
+    let set = trials::chosen();
+    #[cfg(feature = "diagnostic-sdk-modes")]
+    let clips = &CLIPS[..set.clips];
+    #[cfg(not(feature = "diagnostic-sdk-modes"))]
+    let clips = &CLIPS;
     let mut passed = true;
-    for (name, bytes) in CLIPS {
-        let backend = backend(renderer);
+    for &(name, bytes) in clips {
+        let backend = SdkVideo::new(CLIP_FPS);
         passed &= session(renderer, name, bytes, backend, Feed::Held);
         if stopped() {
             return false;
         }
     }
     #[cfg(feature = "diagnostic-sdk-modes")]
-    for trial in TRIALS {
-        #[cfg(feature = "diagnostic-sdk-modes-paced")]
-        if trial.feed != Feed::Paced || trial.tuning.frame_rate == trial.fps {
-            continue;
-        }
-        let backend = crate::sdk_video::SdkVideo::tuned(trial.fps, trial.tuning);
-        passed &= session(renderer, trial.name, trial.clip, Some(backend), trial.feed);
+    for trial in set.trials.iter().copied().flatten() {
+        let backend = SdkVideo::tuned(trial.fps, trial.tuning);
+        passed &= session(renderer, trial.name, trial.clip, backend, trial.feed);
         if stopped() {
             return false;
         }
     }
-    #[cfg(feature = "diagnostic-sdk-decode")]
     if let Some(size) = Size::new(1920, 1088) {
         crate::sdk_video::note_output_formats(size);
     }
@@ -331,13 +309,7 @@ pub enum Feed {
     /// One unit at a time, each frame summed and held on screen.
     Held,
     /// Units at the clip's own rate with one present a refresh, timed and not summed.
-    #[cfg_attr(
-        any(
-            not(feature = "diagnostic-sdk-modes"),
-            feature = "diagnostic-sdk-modes-4k"
-        ),
-        allow(dead_code)
-    )]
+    #[cfg_attr(not(feature = "diagnostic-sdk-modes"), allow(dead_code))]
     Paced,
 }
 

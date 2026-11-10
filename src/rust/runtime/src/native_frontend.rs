@@ -186,7 +186,7 @@ pub fn run() -> bool {
             return false;
         }
     };
-    #[cfg(feature = "diagnostic-ref-replay")]
+    #[cfg(feature = "diagnostic-sdk-decode")]
     crate::ref_replay::run(&mut renderer);
     let verified = stream_capabilities().supports(
         moonlight_nx2_core::codec::Codec::H264,
@@ -421,31 +421,25 @@ fn execute(renderer: &mut Renderer, connections: &mut NativeConnections, launch:
     !failed && closed && stats.frames > 0 && !stats.rejected
 }
 
-/// The SDK decoder and sink builds ask for a 4K layer when docked. The 120 Hz build asks for
-/// 1440p there, the largest size a TV shows at 120 Hz. The sink and 120 Hz builds present
-/// every refresh, which also asks the display for 120 Hz.
+/// Docked, the layer is 4K; the 120 Hz build asks for 1440p there, the largest size a TV shows
+/// at 120 Hz. That build and the decode diagnostics present every refresh, which also asks the
+/// display for 120 Hz.
 fn render_config(low_latency: bool) -> Config {
-    let fast = cfg!(any(
-        feature = "diagnostic-frontend",
+    let (docked_width, docked_height) = if cfg!(feature = "sdk-video-120hz") {
+        (2560, 1440)
+    } else {
+        (3840, 2160)
+    };
+    let every_refresh = cfg!(any(
+        feature = "diagnostic-sdk-decode",
         feature = "sdk-video-120hz"
     ));
-    let docked_1440p = cfg!(feature = "sdk-video-120hz");
-    let window_mode = if docked_1440p {
-        WindowMode::PerMode {
-            docked_width: 2560,
-            docked_height: 1440,
-        }
-    } else if cfg!(any(feature = "diagnostic-frontend", feature = "sdk-video")) {
-        WindowMode::PerMode {
-            docked_width: 3840,
-            docked_height: 2160,
-        }
-    } else {
-        WindowMode::Fixed
-    };
     Config {
-        window_mode,
-        frame_rates: fast.then_some(FrameRates::EVERY_REFRESH),
+        window_mode: WindowMode::PerMode {
+            docked_width,
+            docked_height,
+        },
+        frame_rates: every_refresh.then_some(FrameRates::EVERY_REFRESH),
         present: present_mode(low_latency),
         ..Config::default()
     }
@@ -461,7 +455,6 @@ fn present_mode(low_latency: bool) -> crate::render::PresentMode {
 
 /// Hands the operation mode and the display modes verified for it to the client; a live stream
 /// restarts in the new context.
-#[cfg(any(feature = "diagnostic-frontend", feature = "sdk-video"))]
 fn display_context(
     app: &mut Frontend<Directory, NetSocket>,
     docked: bool,
@@ -474,28 +467,11 @@ fn display_context(
             decoder: stream_capabilities(),
             display,
         });
-    #[cfg(not(feature = "sdk-video"))]
-    log(&format!(
-        "display: context docked={docked} accepted={accepted}; video sink receives and discards up to 1440p120 and 4K60"
-    ));
-    #[cfg(feature = "sdk-video")]
     log(&format!(
         "display: context docked={docked} accepted={accepted}; native decoder capability is runtime gated"
     ));
 }
 
-/// Without a decoder nothing can be offered; only the operation mode reaches the model.
-#[cfg(not(any(feature = "diagnostic-frontend", feature = "sdk-video")))]
-fn display_context(app: &mut Frontend<Directory, NetSocket>, docked: bool, _: DisplayCapabilities) {
-    app.client.event(&Event::OperationMode { docked });
-}
-
-#[cfg(any(feature = "diagnostic-frontend", feature = "sdk-video"))]
 fn stream_capabilities() -> Capabilities {
     crate::frontend_stream::decoder_capabilities()
-}
-
-#[cfg(not(any(feature = "diagnostic-frontend", feature = "sdk-video")))]
-fn stream_capabilities() -> Capabilities {
-    Capabilities::default()
 }

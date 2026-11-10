@@ -3,8 +3,6 @@
 extern crate alloc;
 
 use alloc::{boxed::Box, vec::Vec};
-#[cfg(feature = "host-renderer")]
-use moonlight_nx2_app::link::LinkError;
 use moonlight_nx2_app::{
     driver::{Driver, Effect, Ui},
     link::Link,

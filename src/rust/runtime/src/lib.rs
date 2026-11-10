@@ -55,16 +55,10 @@ mod io_diagnostic;
 mod native_frontend;
 #[cfg(target_os = "none")]
 pub mod net;
-#[cfg(all(target_os = "none", feature = "diagnostic-ref-replay"))]
+#[cfg(all(target_os = "none", feature = "diagnostic-sdk-decode"))]
 mod ref_replay;
 #[cfg(all(target_os = "none", feature = "diagnostic-udp"))]
 mod udp_diagnostic;
-#[cfg(all(
-    target_os = "none",
-    feature = "diagnostic-frontend",
-    not(feature = "sdk-video")
-))]
-mod video_sink;
 
 #[cfg(any(target_os = "none", feature = "host-renderer"))]
 mod cache_file;
@@ -82,8 +76,6 @@ pub mod files;
 pub mod frontend;
 #[cfg(any(target_os = "none", feature = "host-renderer"))]
 pub mod frontend_media;
-#[cfg(target_os = "none")]
-pub mod gsv;
 #[cfg(any(target_os = "none", feature = "host-renderer"))]
 pub mod hid;
 #[cfg(any(target_os = "none", feature = "host-renderer"))]
@@ -96,7 +88,7 @@ pub mod render;
 mod render_platform;
 #[cfg(target_os = "none")]
 pub mod sdk;
-#[cfg(all(target_os = "none", feature = "sdk-video"))]
+#[cfg(all(target_os = "none", feature = "frontend"))]
 mod sdk_video;
 #[cfg(any(target_os = "none", feature = "host-renderer"))]
 pub mod stream_stats;

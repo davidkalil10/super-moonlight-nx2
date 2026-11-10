@@ -1,13 +1,13 @@
 extern crate alloc;
 
-#[cfg(any(not(feature = "frontend"), feature = "diagnostic-frontend"))]
+#[cfg(any(not(feature = "frontend"), feature = "diagnostic-sdk-decode"))]
 use alloc::{format, vec::Vec};
 use core::{
     alloc::{GlobalAlloc, Layout},
     ffi::c_void,
     panic::PanicInfo,
 };
-#[cfg(any(not(feature = "frontend"), feature = "diagnostic-frontend"))]
+#[cfg(any(not(feature = "frontend"), feature = "diagnostic-sdk-decode"))]
 use moonlight_nx2_core::{audio, codec, control, input, media};
 
 unsafe extern "C" {
@@ -42,7 +42,7 @@ pub(super) fn log(message: &str) {
     unsafe { moonlightPlatformLog(message.as_ptr(), message.len()) };
 }
 
-#[cfg(any(not(feature = "frontend"), feature = "diagnostic-frontend"))]
+#[cfg(any(not(feature = "frontend"), feature = "diagnostic-sdk-decode"))]
 fn core_check() -> bool {
     let mut storage = Vec::new();
     if storage.try_reserve_exact(control::MAX_PAYLOAD).is_err() {
@@ -272,16 +272,14 @@ pub extern "C" fn main() -> i32 {
     if !unsafe { moonlightPlatformStart() } {
         return 1;
     }
-    log(if cfg!(feature = "sdk-video") {
+    log(if cfg!(feature = "frontend") {
         "Moonlight NX2 Rust frontend; native video behind verified capabilities"
-    } else if cfg!(feature = "frontend") {
-        "Moonlight NX2 Rust frontend; native codecs disabled"
     } else {
         "Moonlight NX2 Rust runtime diagnostic; streaming not implemented"
     });
-    #[cfg(any(not(feature = "frontend"), feature = "diagnostic-frontend"))]
+    #[cfg(any(not(feature = "frontend"), feature = "diagnostic-sdk-decode"))]
     let passed = core_check();
-    #[cfg(not(any(not(feature = "frontend"), feature = "diagnostic-frontend")))]
+    #[cfg(not(any(not(feature = "frontend"), feature = "diagnostic-sdk-decode")))]
     let passed = true;
     #[cfg(feature = "frontend")]
     let passed = passed && crate::native_frontend::run();

@@ -3,7 +3,6 @@
 import argparse
 import datetime
 import hashlib
-import importlib.util
 import json
 import os
 from pathlib import Path
@@ -15,6 +14,36 @@ ROOT = Path(__file__).resolve().parent
 APP = ROOT.parents[1]
 TARGET = "aarch64-unknown-none"
 RUST_COMMIT = "6efa357bff60d192688e02de0c78cae24a7f3a55"
+SDK = {
+    "ounce-sdk": "20261110",
+    "libounce": "cc442785",
+    "ouncevk": "99b78bc",
+    "ouncehen": "ed1c5f0",
+}
+SDK_FILES = (
+    "ounce-sdk-version.txt",
+    "libounce/switch2_rules",
+    "libounce/switch.specs",
+    "libounce/include/switch2/services/gsv.h",
+    "libounce/lib/libnx.a",
+    "portlibs/switch2/include/ouncehen.h",
+    "portlibs/switch2/include/vulkan/vulkan.h",
+    "portlibs/switch2/lib/libvulkan.a",
+)
+# The builds users and testers get, and the runtime features each one turns on.
+PRODUCTION = {
+    "production": "frontend",
+    "production-tcp": "frontend,video-tcp",
+    "production-120": "frontend,sdk-video-120hz",
+    "production-120-decode": "frontend,sdk-video-120-decode",
+}
+# Diagnostics of the SDK video decoder: the frontend with reference clips replayed first.
+SDK_DIAGNOSTICS = ("sdk-decode", "sdk-modes")
+# The session sets of sdk-modes (runtime/src/ref_replay.rs).
+TRIALS = ("sizes", "4k", "rate", "paced")
+STAGE_DIAGNOSTICS = ("core", "renderer", "display", "display120", "io", "audio-cue", "udp", "ui",
+                     "ui-order", "ui-data", "ui-alpha", "ui-text", "ui-text-apps",
+                     "ui-text-overlay", "ui-text-interactive")
 
 
 def digest(path):
@@ -48,19 +77,37 @@ def sources():
     return result
 
 
-def nacp_title(diagnostic):
-    if diagnostic == "production-sdk":
-        return "Moonlight NX2"
-    if diagnostic == "frontend":
-        return "Moonlight NX2 Rust"
-    return f"Moonlight NX2 Rust {diagnostic}"
+def features(diagnostic):
+    if diagnostic == "core":
+        return None
+    return PRODUCTION.get(diagnostic, f"diagnostic-{diagnostic}")
 
 
-def helpers():
-    spec = importlib.util.spec_from_file_location("native_builder", APP / "build-native.py")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+def build_name(args):
+    if args.diagnostic == "sdk-modes" and args.trials != TRIALS[0]:
+        return f"sdk-modes-{args.trials}"
+    return args.diagnostic
+
+
+def nacp_title(name):
+    return "Moonlight NX2" if name == "production" else f"Moonlight NX2 Rust {name}"
+
+
+def installed_sdk(path):
+    files = {name: (path / name).read_bytes() for name in SDK_FILES}
+    rows = [line.split() for line in files["ounce-sdk-version.txt"].decode().splitlines() if line.strip()]
+    if any(len(row) != 2 for row in rows) or dict(rows) != SDK:
+        raise ValueError(f"Expected the pinned SDK {SDK}")
+    return {"version": SDK,
+            "files": {name: hashlib.sha256(data).hexdigest() for name, data in files.items()}}
+
+
+def source_revision(override):
+    if override:
+        if len(override) != 40 or any(char not in "0123456789abcdef" for char in override):
+            raise ValueError("--revision must be a full Git commit hash")
+        return override
+    return subprocess.check_output(["git", "-C", str(APP), "rev-parse", "HEAD"], text=True).strip()
 
 
 def run(command, env, log, commands):
@@ -76,15 +123,16 @@ def build(args):
         raise ValueError("Use an absolute output directory without whitespace")
     if directory == APP or APP in directory.parents:
         raise ValueError("Keep output outside the app checkout")
-    native = helpers()
     env = dict(os.environ)
     info = {"created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-            "source_revision": native.source_revision(args.revision),
-            "sources": sources(), "native_builder_sha256": digest(APP / "build-native.py"),
+            "source_revision": source_revision(args.revision), "sources": sources(),
             "builder": os.environ.get("MOONLIGHT_BUILDER", platform.node()),
             "builder_architecture": platform.machine(), "stage": args.stage,
             "status": "building", "streaming": False, "commands": []}
     info["diagnostic"] = args.diagnostic
+    if args.diagnostic == "sdk-modes":
+        info["trials"] = args.trials
+        env["MOONLIGHT_SDK_MODES_TRIALS"] = args.trials
     info["source_branch"] = args.branch
     if info["source_branch"] is None:
         try:
@@ -116,16 +164,8 @@ def build(args):
             commands = [["cargo", "build", "--manifest-path", str(ROOT / "Cargo.toml"),
                          "--package", "moonlight-nx2-runtime", "--target", TARGET, "--release", "--locked",
                          "-Zbuild-std=core,alloc", "-Zbuild-std-features="]]
-            if args.diagnostic == "production-sdk":
-                commands[0].extend(["--features", "frontend,sdk-video"])
-            elif args.diagnostic == "production-sdk-tcp":
-                commands[0].extend(["--features", "frontend,sdk-video,video-tcp"])
-            elif args.diagnostic == "production-sdk-120":
-                commands[0].extend(["--features", "frontend,sdk-video-120hz"])
-            elif args.diagnostic == "production-sdk-120-decode":
-                commands[0].extend(["--features", "frontend,sdk-video-120-decode"])
-            elif args.diagnostic != "core":
-                commands[0].extend(["--features", f"diagnostic-{args.diagnostic}"])
+            if features(args.diagnostic):
+                commands[0].extend(["--features", features(args.diagnostic)])
             artifact = directory / "cargo" / TARGET / "release/libmoonlight_nx2_runtime.a"
         else:
             dev = args.dev or APP.parent / "moonlight-nx2-dev"
@@ -155,13 +195,13 @@ def build(args):
             raise ValueError("Expected a completed device Rust build")
         if rust["sources"] != info["sources"] or rust["source_revision"] != info["source_revision"]:
             raise ValueError("The Rust archive was built from different source")
-        if rust["diagnostic"] != args.diagnostic:
+        if rust["diagnostic"] != args.diagnostic or rust.get("trials") != info.get("trials"):
             raise ValueError("The Rust archive uses a different diagnostic mode")
         library = args.rust_directory / rust["artifact"]["name"]
         if digest(library) != rust["artifact"]["sha256"]:
             raise ValueError("Rust archive checksum mismatch")
         info["rust_build"] = rust
-        info["sdk"] = native.installed_sdk(args.devkitpro)
+        info["sdk"] = installed_sdk(args.devkitpro)
         compiler = args.devkitpro / "devkitA64/bin/aarch64-none-elf-gcc"
         info["compiler"] = subprocess.check_output([str(compiler), "--version"], text=True).splitlines()[0]
         info["target"] = "aarch64-none-elf"
@@ -169,15 +209,10 @@ def build(args):
         env["PATH"] = str(args.devkitpro / "tools/bin") + os.pathsep + env.get("PATH", "")
         commands = [["make", "--no-print-directory", "-f", str(ROOT / "nro/Makefile"),
                      f"BUILD_DIR={directory}", f"RUST_LIBRARY={library}",
-                     "NACP_TITLE=" + nacp_title(args.diagnostic),
+                     "NACP_TITLE=" + nacp_title(build_name(args)),
                      "NACP_VERSION=" + args.nacp_version]]
-        diagnostic_sdk = args.diagnostic in ("sdk-decode", "sdk-modes", "sdk-modes-4k", "sdk-modes-rate", "sdk-modes-paced")
-        if diagnostic_sdk or args.diagnostic.startswith("production-sdk"):
-            if info["sdk"]["version"] != native.SDK_VIDDEC:
-                raise ValueError("The SDK video decoder needs the 2026-11-10 SDK")
-            commands[0].append("SDK_VIDDEC=1")
-            if diagnostic_sdk:
-                commands[0].append("BREADCRUMBS=1")
+        if args.diagnostic in SDK_DIAGNOSTICS:
+            commands[0].append("BREADCRUMBS=1")
         artifact = directory / "moonlight-nx2-rust.nro"
 
     directory.mkdir(parents=True, exist_ok=False)
@@ -209,7 +244,10 @@ def main():
     parser.add_argument("--revision")
     parser.add_argument("--branch")
     parser.add_argument("--nacp-version", default="0.1.0")
-    parser.add_argument("--diagnostic", choices=("core", "renderer", "display", "display120", "io", "audio-cue", "udp", "sdk-decode", "sdk-modes", "sdk-modes-4k", "sdk-modes-rate", "sdk-modes-paced", "ui", "ui-order", "ui-data", "ui-alpha", "ui-text", "ui-text-apps", "ui-text-overlay", "ui-text-interactive", "frontend", "ref-replay", "production-sdk", "production-sdk-tcp", "production-sdk-120", "production-sdk-120-decode"), default="core")
+    parser.add_argument("--diagnostic", default="core",
+                        choices=(*PRODUCTION, *SDK_DIAGNOSTICS, *STAGE_DIAGNOSTICS))
+    parser.add_argument("--trials", choices=TRIALS, default=TRIALS[0],
+                        help="the sessions an sdk-modes build runs")
     parser.add_argument("--rust-directory", type=Path)
     parser.add_argument("--cargo-home", type=Path)
     parser.add_argument("--dev", type=Path)

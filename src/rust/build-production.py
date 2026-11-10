@@ -9,6 +9,8 @@ import re
 import shlex
 import subprocess
 
+from build import SDK_DIAGNOSTICS, TRIALS
+
 
 APP = Path(__file__).resolve().parents[2]
 BUILDS = Path("/media/storage2/builds/moonlight")
@@ -48,18 +50,27 @@ def main():
                         help="with --hz120, offer 120 fps on a 60 Hz display too, to measure the decoder")
     parser.add_argument("--tcp-video", action="store_true",
                         help="keep video on TCP instead of UDP")
+    parser.add_argument("--diagnostic", choices=SDK_DIAGNOSTICS,
+                        help="build this decoder diagnostic instead of the app")
+    parser.add_argument("--trials", choices=TRIALS, default=TRIALS[0],
+                        help="the sessions an sdk-modes diagnostic runs")
     args = parser.parse_args()
+    if args.diagnostic and (args.hz120 or args.tcp_video):
+        parser.error("--diagnostic goes alone")
     if args.tcp_video and args.hz120:
         parser.error("--tcp-video does not go with --hz120")
     if args.decode120 and not args.hz120:
         parser.error("--decode120 goes with --hz120")
-    diagnostic = "production-sdk"
+    diagnostic = args.diagnostic or "production"
     if args.hz120:
         diagnostic += "-120"
     if args.decode120:
         diagnostic += "-decode"
     if args.tcp_video:
         diagnostic += "-tcp"
+    name = diagnostic
+    if diagnostic == "sdk-modes" and args.trials != TRIALS[0]:
+        name += f"-{args.trials}"
     revision = subprocess.check_output(
         ["git", "-C", str(APP), "rev-parse", "HEAD"], text=True).strip()
     description = subprocess.check_output(
@@ -69,7 +80,7 @@ def main():
         ["git", "-C", str(APP), "branch", "--show-current"], text=True).strip()
     version = nacp_version(description, revision)
     stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    build_id = f"{stamp}-{revision[:7]}-{diagnostic}"
+    build_id = f"{stamp}-{revision[:7]}-{name}"
     remote_sdk = shlex.quote(str(SDK / "ounce-sdk.tar.xz"))
     remote_sdk_sha = subprocess.check_output(
         ["ssh", "m4", f"shasum -a 256 {remote_sdk}"], text=True).split()[0]
@@ -91,6 +102,7 @@ def main():
         "archive_sha256": digest(archive),
         "builder": "m4",
         "diagnostic": diagnostic,
+        "trials": args.trials if diagnostic == "sdk-modes" else None,
         "sdk_sha256": SDK_SHA256,
         "builder_image": BUILDER_IMAGE,
     }, indent=2) + "\n")
@@ -118,7 +130,7 @@ def main():
         f"/usr/bin/python3 -B {remote_source}/src/rust/build.py rust",
         f"--directory {remote_rust} --cargo-home {cargo_home}",
         f"--revision {shlex.quote(revision)} --branch {shlex.quote(branch or 'detached')}",
-        f"--diagnostic {diagnostic}",
+        f"--diagnostic {diagnostic} --trials {args.trials}",
         f"> {rust_log} 2>&1",
     ])
     run(["ssh", "m4", rust_command])
@@ -132,7 +144,7 @@ def main():
         "set -eu",
         "tar -xJf /sdk/ounce-sdk.tar.xz -C /opt/devkitpro",
         "export PATH=/opt/devkitpro/devkitA64/bin:/opt/devkitpro/tools/bin:$PATH",
-        f"python3 -B /work/source/src/rust/build.py nro --directory /work/nro --rust-directory /work/rust --revision {revision_arg} --branch {branch_arg} --diagnostic {diagnostic} --nacp-version {shlex.quote(version)}",
+        f"python3 -B /work/source/src/rust/build.py nro --directory /work/nro --rust-directory /work/rust --revision {revision_arg} --branch {branch_arg} --diagnostic {diagnostic} --trials {args.trials} --nacp-version {shlex.quote(version)}",
     ])
     docker_command = " ".join([
         "/usr/local/bin/docker run --rm --network=none",
@@ -147,7 +159,7 @@ def main():
     run(["rsync", "-a", f"m4:{remote_root}/", str(local_root) + "/"])
     artifact = local_root / "nro/moonlight-nx2-rust.nro"
     if not artifact.is_file() or artifact.stat().st_size < 20:
-        raise RuntimeError(f"m4 did not return the {diagnostic} NRO")
+        raise RuntimeError(f"m4 did not return the {name} NRO")
     receipt = json.loads((local_root / "nro/BUILD-INFO.json").read_text())
     if (receipt["status"] != "built" or receipt["diagnostic"] != diagnostic
             or receipt["source_revision"] != revision):

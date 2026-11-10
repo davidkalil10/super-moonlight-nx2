@@ -36,15 +36,9 @@ use moonlight_nx2_io::{
 };
 use moonlight_nx2_ui::store::Files;
 
-#[cfg(not(any(feature = "diagnostic-frontend", feature = "sdk-video")))]
-type Decoder = crate::gsv::GsvBackend;
-#[cfg(all(feature = "diagnostic-frontend", not(feature = "sdk-video")))]
-type Decoder = crate::video_sink::VideoSink;
-#[cfg(feature = "sdk-video")]
 type Decoder = crate::sdk_video::SdkVideo;
 const SURFACES: usize = decoder::SURFACES;
 
-#[cfg(any(feature = "diagnostic-frontend", feature = "sdk-video"))]
 pub(crate) fn decoder_capabilities() -> Capabilities {
     <Decoder as decoder::Backend<SURFACES>>::capabilities()
 }
@@ -206,17 +200,14 @@ impl Stream {
                 codec: core_codec(descriptor.codec),
                 coded,
                 display,
-                timeout_ms: if cfg!(feature = "sdk-video") { 2000 } else { 0 },
+                timeout_ms: 2000,
                 frame_registration: FrameRegistration::Register,
                 backing: Backing::CpuReference,
             },
             fps: descriptor.fps,
             matrix: Matrix::Bt709,
         };
-        #[cfg(feature = "sdk-video")]
         let backend = Decoder::new(descriptor.fps);
-        #[cfg(not(feature = "sdk-video"))]
-        let backend = Decoder::new();
         let buffers = Box::into_raw(Buffers::new(coded));
         let memory = unsafe { &mut *buffers };
         let [first, second] = &mut memory.frames;
