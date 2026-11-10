@@ -38,6 +38,7 @@ sdk-video = []
 diagnostic-sdk-decode = ["diagnostic-ref-replay", "sdk-video"]
 diagnostic-sdk-modes = ["diagnostic-sdk-decode"]
 sdk-video-docked-modes = ["sdk-video"]
+sdk-video-120hz = ["sdk-video"]
 host-renderer = []
 
 [dependencies]

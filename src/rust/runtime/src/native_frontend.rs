@@ -6,7 +6,7 @@ use crate::{
     client_session::Session,
     control_link::Access,
     device::log,
-    display::Probe,
+    display::{FrameRates, Probe, WindowMode},
     files::Directory,
     frontend::{AuthError, Connections, Frontend, MediaRequest},
     frontend_stream::Stream,
@@ -444,43 +444,34 @@ fn execute(renderer: &mut Renderer, connections: &mut NativeConnections, launch:
                 && blocked_start))
 }
 
-/// The sink build presents at up to 120 Hz and asks for a 4K layer when docked.
-#[cfg(feature = "diagnostic-frontend")]
+/// The sink and docked-modes builds ask for a 4K layer when docked, so 1440p and 4K can be
+/// verified. The 120 Hz build asks for 1440p there, the largest size a TV shows at 120 Hz. The
+/// sink and 120 Hz builds present every refresh, which also asks the display for 120 Hz.
 fn render_config(low_latency: bool) -> Config {
-    Config {
-        window_mode: crate::display::WindowMode::PerMode {
+    let docked_4k = cfg!(any(
+        feature = "diagnostic-frontend",
+        feature = "sdk-video-docked-modes"
+    ));
+    let fast = cfg!(any(
+        feature = "diagnostic-frontend",
+        feature = "sdk-video-120hz"
+    ));
+    let window_mode = if docked_4k {
+        WindowMode::PerMode {
             docked_width: 3840,
             docked_height: 2160,
-        },
-        frame_rates: Some(crate::display::FrameRates {
-            at_120hz: 120,
-            at_60hz: 60,
-            vrr: false,
-        }),
-        present: present_mode(low_latency),
-        ..Config::default()
-    }
-}
-
-/// The docked-modes build asks for a 4K layer when docked, so 1440p and 4K can be verified.
-#[cfg(all(
-    feature = "sdk-video-docked-modes",
-    not(feature = "diagnostic-frontend")
-))]
-fn render_config(low_latency: bool) -> Config {
+        }
+    } else if fast {
+        WindowMode::PerMode {
+            docked_width: 2560,
+            docked_height: 1440,
+        }
+    } else {
+        WindowMode::Fixed
+    };
     Config {
-        window_mode: crate::display::WindowMode::PerMode {
-            docked_width: 3840,
-            docked_height: 2160,
-        },
-        present: present_mode(low_latency),
-        ..Config::default()
-    }
-}
-
-#[cfg(not(any(feature = "diagnostic-frontend", feature = "sdk-video-docked-modes")))]
-fn render_config(low_latency: bool) -> Config {
-    Config {
+        window_mode,
+        frame_rates: fast.then_some(FrameRates::EVERY_REFRESH),
         present: present_mode(low_latency),
         ..Config::default()
     }

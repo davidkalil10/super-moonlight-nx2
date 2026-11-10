@@ -15,6 +15,13 @@ pub struct FrameRates {
 }
 
 impl FrameRates {
+    /// A frame every refresh at 120 and at 60 Hz, at a fixed cadence.
+    pub const EVERY_REFRESH: Self = Self {
+        at_120hz: 120,
+        at_60hz: 60,
+        vrr: false,
+    };
+
     pub fn valid(self) -> bool {
         self.at_120hz <= 120 && self.at_60hz <= 60
     }

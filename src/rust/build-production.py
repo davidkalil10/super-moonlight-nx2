@@ -48,12 +48,16 @@ def main():
                         help="decode through the 2026-11-10 SDK's video decoder")
     parser.add_argument("--docked-modes", action="store_true",
                         help="with --sdk-video, offer 1440p and 4K when docked (unmeasured)")
+    parser.add_argument("--hz120", action="store_true",
+                        help="with --sdk-video, present at 120 Hz and offer 120 fps up to 1440p (unmeasured)")
     args = parser.parse_args()
-    if args.docked_modes and not args.sdk_video:
-        parser.error("--docked-modes needs --sdk-video")
+    if (args.docked_modes or args.hz120) and not args.sdk_video:
+        parser.error("--docked-modes and --hz120 need --sdk-video")
     diagnostic = "production-sdk" if args.sdk_video else "production"
     if args.docked_modes:
-        diagnostic = "production-sdk-modes"
+        diagnostic += "-modes"
+    if args.hz120:
+        diagnostic += "-120"
     sdk_directory = SDK_VIDDEC if args.sdk_video else SDK
     sdk_sha256 = SDK_VIDDEC_SHA256 if args.sdk_video else SDK_SHA256
     revision = subprocess.check_output(

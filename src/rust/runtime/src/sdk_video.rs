@@ -26,10 +26,14 @@ pub const SDK_AV1_VERIFIED: bool = true;
 /// 1440p and 4K are not measured on the console yet. Only the docked-modes build offers
 /// them, and only on a docked layer that presented at that size.
 pub const SDK_DOCKED_MODES: bool = cfg!(feature = "sdk-video-docked-modes");
+/// 120 fps is not measured on the console yet. Only the 120 Hz build offers it, up to 1440p,
+/// and only on a display that presented at 120 Hz.
+pub const SDK_120HZ: bool = cfg!(feature = "sdk-video-120hz");
+const FAST_FPS: u32 = if SDK_120HZ { 120 } else { 60 };
 /// Largest size and rate per tier, and whether it is offered.
 const MODES: [(u32, u32, u32, bool); 3] = [
-    (1920, 1080, 60, true),
-    (2560, 1440, 60, SDK_DOCKED_MODES),
+    (1920, 1080, FAST_FPS, true),
+    (2560, 1440, FAST_FPS, SDK_DOCKED_MODES || SDK_120HZ),
     (3840, 2160, 60, SDK_DOCKED_MODES),
 ];
 const SUBMIT_BUSY: u32 = (3603 << 9) | 111;

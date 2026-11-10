@@ -15,3 +15,6 @@ and compacted to fit its version field. `src/rust/nro/icon.png` is embedded in t
 video is decoded through the SDK's video decoder.
 Adding `--docked-modes` builds `production-sdk-modes`, which also asks for a 4K layer when docked
 and offers H.264 1440p and 4K there. Those modes are not measured on the console yet.
+Adding `--hz120` builds `production-sdk-120`, which presents every refresh, asks the display for
+120 Hz and a 1440p layer when docked, and offers 120 fps up to 1440p where the display showed it.
+With both flags (`production-sdk-modes-120`) the docked layer stays 4K. Not measured on the console yet.
