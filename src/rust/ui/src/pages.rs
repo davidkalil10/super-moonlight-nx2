@@ -3,13 +3,14 @@
 
 use alloc::format;
 use alloc::string::String;
+use alloc::vec::Vec;
 
 use crate::composer::{
     Builder, CONTENT_WIDTH, Error, Face, Keys, SCREEN_WIDTH, SIDE,
     home_slot, page_count, shown_count,
 };
 use crate::glyphs::Align;
-use crate::model::{APPS_PER_PAGE, Address, HOSTS_PER_PAGE, Host, Model, Screen, is_address, item};
+use crate::model::{APPS_PER_PAGE, Address, CATEGORIES, HOSTS_PER_PAGE, Host, Model, Screen, is_address, item};
 use crate::presence::Presence;
 use crate::page::{self, Shape};
 use crate::readout::{Network, Readout};
@@ -20,6 +21,7 @@ const STATUS: Face = Face::new(28, 500);
 const NAME: Face = Face::new(40, 700);
 const BODY: Face = Face::new(28, 500);
 const OPTION: Face = Face::new(32, 600);
+const VALUE: Face = Face::new(32, 700);
 const BODY_BOLD: Face = Face::new(28, 700);
 const BUTTON: Face = Face::new(32, 700);
 const HINT: Face = Face::new(24, 500);
@@ -34,6 +36,12 @@ const FOOT_Y: u32 = 984;
 const BODY_Y: u32 = 219;
 const RIGHT: u32 = SCREEN_WIDTH - SIDE;
 const PANEL_RADIUS: u32 = 18;
+const CATEGORY_WIDTH: u32 = 460;
+const CATEGORY_HEIGHT: u32 = 80;
+const PANE_X: u32 = SIDE + CATEGORY_WIDTH + 48;
+const PANE_WIDTH: u32 = CONTENT_WIDTH - CATEGORY_WIDTH - 48;
+const ROW_HEIGHT: u32 = 104;
+const VALUE_WIDTH: u32 = 420;
 const BUTTON_RADIUS: u32 = 14;
 
 const CARD_WIDTH: u32 = 840;
@@ -584,10 +592,34 @@ impl Builder<'_> {
         }
     }
 
-    fn setting_row(&mut self, row: &SettingRow, i: u32, editing: bool) {
+    fn category_list(&mut self, model: &Model) {
         let pal = self.pal;
-        let height = 80;
-        let (x, y) = card_at(i, BODY_Y + 16, height, 16);
+        let names = ["Picture", "Sound", "Controls", "Network", "This console"];
+        for (i, name) in (0u32..).zip(names) {
+            let y = BODY_Y + 16 + i * (CATEGORY_HEIGHT + 12);
+            self.item(
+                item::CATEGORY + i,
+                SIDE,
+                y,
+                CATEGORY_WIDTH,
+                CATEGORY_HEIGHT,
+                page::ITEM_REPORTS_FOCUS,
+                PANEL_RADIUS,
+            );
+            let current = i == u32::from(model.category());
+            if current {
+                self.fill(SIDE, y, CATEGORY_WIDTH, CATEGORY_HEIGHT, pal.panel, PANEL_RADIUS);
+            }
+            let ink = if current { pal.ink } else { pal.dim };
+            self.put(SIDE + 28, y + 20, CATEGORY_WIDTH - 56, name, OPTION, ink, Align::Left);
+        }
+    }
+
+    fn setting_row(&mut self, model: &Model, row: &SettingRow, slot: u32) {
+        let pal = self.pal;
+        let editing = model.editing() == Some(row.setting);
+        let x = PANE_X;
+        let y = BODY_Y + 16 + slot * (ROW_HEIGHT + 12);
         let mut flags = 0;
         if row.adjustable {
             flags |= page::ITEM_ADJUSTABLE;
@@ -598,25 +630,32 @@ impl Builder<'_> {
         if row.greyed {
             flags |= page::ITEM_GREYED;
         }
-        self.item(item::SETTING + i, x, y, CARD_WIDTH, height, flags, PANEL_RADIUS);
+        self.item(item::SETTING + row.setting as u32, x, y, PANE_WIDTH, ROW_HEIGHT, flags, PANEL_RADIUS);
         let fill = if row.greyed { pal.ground } else { pal.panel };
-        self.fill(x, y, CARD_WIDTH, height, fill, PANEL_RADIUS);
+        self.fill(x, y, PANE_WIDTH, ROW_HEIGHT, fill, PANEL_RADIUS);
         let ink = if row.greyed { pal.line } else { pal.ink };
-        let label = row.setting.label();
-        self.put(x + CARD_PAD, y + 22, 360, label, BODY, pal.dim, Align::Left);
-        let value_x = x + CARD_PAD + 340;
-        let value_width = CARD_WIDTH - 2 * CARD_PAD - 340;
+        self.put(x + CARD_PAD, y + 14, 520, row.setting.label(), OPTION, ink, Align::Left);
+        let hint = if row.setting == Setting::Size && !model.docked() {
+            "1440p and 4K are only available when docked"
+        } else {
+            row.setting.hint()
+        };
+        let hint_width = PANE_WIDTH - 2 * CARD_PAD - VALUE_WIDTH;
+        self.put(x + CARD_PAD, y + 58, hint_width, hint, HINT, pal.dim, Align::Left);
+
+        let value_x = x + PANE_WIDTH - CARD_PAD - VALUE_WIDTH;
+        let value_y = y + 26;
         if row.greyed {
-            self.put(value_x, y + 22, value_width, "Not available yet", BODY, pal.line, Align::Right);
+            self.put(value_x, value_y, VALUE_WIDTH, "Not available yet", BODY, pal.line, Align::Right);
         } else if !row.adjustable {
-            self.put(value_x, y + 22, value_width, row.value.as_str(), BODY_BOLD, ink, Align::Right);
+            self.put(value_x, value_y, VALUE_WIDTH, row.value.as_str(), VALUE, ink, Align::Right);
         } else {
             self.stepper(
                 value_x,
-                y + 22,
+                value_y,
                 row.value.as_str(),
-                BODY_BOLD,
-                value_width,
+                VALUE,
+                VALUE_WIDTH,
                 ink,
                 editing && row.can_left,
                 editing && row.can_right,
@@ -630,7 +669,7 @@ impl Builder<'_> {
             ("Y", "Reset"),
             ("X", "Test network"),
             ("B", "Back"),
-            ("A", "Edit"),
+            ("A", "Change"),
         ];
         let rows = model.settings().rows(model.docked(), model.capabilities());
         let editing = model.editing().is_some_and(|s| rows[s as usize].adjustable);
@@ -639,31 +678,23 @@ impl Builder<'_> {
             None if !model.link_note().is_empty() => String::from(model.link_note()),
             None => String::from("Changes apply to the next stream"),
         };
+        let shown: Vec<&SettingRow> = rows
+            .iter()
+            .filter(|row| row.setting.category() == model.category())
+            .collect();
         self.frame(
             model,
             &Chrome {
                 title: "Settings",
                 left: &left,
                 keys: if editing { editing_keys } else { browsing_keys },
+                cursor_home: u32::from(CATEGORIES),
                 ..Chrome::default()
             },
         );
-        for (i, row) in (0u32..).zip(&rows) {
-            self.setting_row(row, i, model.editing() == Some(row.setting));
-        }
-        if !model.docked() {
-            let pal = self.pal;
-            let cursor = item::SETTING + Setting::Size as u32;
-            self.put_when(
-                SIDE,
-                FOOT_Y - 76,
-                CONTENT_WIDTH,
-                "1440p and 4K are only available when docked",
-                HINT,
-                pal.dim,
-                Align::Left,
-                cursor,
-            );
+        self.category_list(model);
+        for (slot, row) in (0u32..).zip(shown) {
+            self.setting_row(model, row, slot);
         }
     }
 

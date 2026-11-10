@@ -61,6 +61,37 @@ impl Setting {
         self.row().label
     }
 
+    /// The pane of the Settings page the row sits in: Picture, Sound, Controls, Network or
+    /// This console, in that order.
+    pub fn category(self) -> u8 {
+        match self {
+            Self::Size | Self::Fps | Self::Bitrate | Self::Codec | Self::Optimise => 0,
+            Self::HostAudio => 1,
+            Self::MenuChord | Self::TouchMouse => 2,
+            Self::LowLatency => 3,
+            Self::QuitOnReturn | Self::StreamInfo | Self::FrameCounter | Self::Theme => 4,
+        }
+    }
+
+    /// One line on what the row does, shown under its name.
+    pub fn hint(self) -> &'static str {
+        match self {
+            Self::Size => "Up to 1440p when docked, 1080p in handheld",
+            Self::Fps => "Frames per second the PC sends",
+            Self::Bitrate => "Automatic follows the network test",
+            Self::Codec => "AV1 looks better at the same bitrate, H.264 is the fallback",
+            Self::Optimise => "Let the PC adjust game settings for the stream",
+            Self::HostAudio => "Also play the sound on the PC",
+            Self::MenuChord => "Hold + and \u{2212} for a second to open the stream menu",
+            Self::TouchMouse => "Touches move the PC mouse instead of sending touch",
+            Self::LowLatency => "Applies after restarting the app",
+            Self::QuitOnReturn => "Disconnect also quits the app on the PC",
+            Self::StreamInfo => "A small badge with the stream mode over the video",
+            Self::FrameCounter => "Frame rate and delays over the video",
+            Self::Theme => "System follows the console's theme",
+        }
+    }
+
     fn row(self) -> &'static Row {
         &ROWS[self as usize]
     }
