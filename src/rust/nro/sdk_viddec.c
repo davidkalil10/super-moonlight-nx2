@@ -6,8 +6,6 @@
 #include <string.h>
 #include <switch.h>
 
-#define WORK_BYTES_1080P (64ull * 1024 * 1024)
-#define PIXELS_1080P (1920ull * 1088)
 #define INPUT_MAX (1024u * 1024)
 #define WORK_RESTORE_POLLS 1000
 #define ACQUISITIONS_NOTED 8
@@ -141,19 +139,11 @@ Result moonlightSdkVideoOpen(uint32_t width, uint32_t height, uint32_t count, ui
     return 0;
 }
 
-/* 64 MiB carried 1080p on the console; larger pictures get it once per 1080p of area. */
-static uint64_t work_bytes(void)
-{
-    uint64_t pixels = (uint64_t)video.width * video.height;
-
-    return WORK_BYTES_1080P * ((pixels + PIXELS_1080P - 1) / PIXELS_1080P);
-}
-
-Result moonlightSdkVideoStart(uint32_t fps, const void *codec_config, size_t codec_config_bytes,
-                              uint32_t *stage)
+Result moonlightSdkVideoStart(uint32_t codec, uint32_t fps, size_t work_bytes,
+                              const void *codec_config, size_t codec_config_bytes, uint32_t *stage)
 {
     ViddecDecoderConfig config = {
-        .codec = ViddecCodec_H264,
+        .codec = codec,
         .input_format = video.width >= 1920 || video.height >= 1080 ? 3 : 1,
         .output_format = ViddecOutputFormat_Nv12,
         .output_mode = 1,
@@ -162,17 +152,17 @@ Result moonlightSdkVideoStart(uint32_t fps, const void *codec_config, size_t cod
         .frame_rate = fps,
         .max_input_size = INPUT_MAX,
     };
-    uint64_t bytes = work_bytes();
     Result result;
 
-    if (!video.decoder_open || video.started || video.work)
+    if (!video.decoder_open || video.started || video.work || work_bytes < 0x4000 ||
+        work_bytes % 0x1000)
         return fail(stage, STAGE_INITIALIZE, MAKERESULT(Module_Libnx, LibnxError_BadInput));
-    note("sdk-video: before work memory bytes=%llu", (unsigned long long)bytes);
-    video.work = memalign(0x1000, bytes);
+    note("sdk-video: before work memory bytes=%zu", work_bytes);
+    video.work = memalign(0x1000, work_bytes);
     if (!video.work)
         return fail(stage, STAGE_WORK_MEMORY, MAKERESULT(Module_Libnx, LibnxError_OutOfMemory));
     note("sdk-video: before initialize work=%p", video.work);
-    result = viddecDecoderInitialize(&video.decoder, &config, video.work, bytes, codec_config,
+    result = viddecDecoderInitialize(&video.decoder, &config, video.work, work_bytes, codec_config,
                                      codec_config_bytes);
     if (R_FAILED(result))
         return fail(stage, STAGE_INITIALIZE, result);
@@ -190,6 +180,36 @@ Result moonlightSdkVideoStart(uint32_t fps, const void *codec_config, size_t cod
     video.started = true;
     *stage = 0;
     return 0;
+}
+
+/* Sizes one image of every output format in the SDK's table. Nothing is allocated. */
+void moonlightSdkVideoNoteFormats(uint32_t width, uint32_t height)
+{
+    Result result;
+
+    if (video.root)
+        return;
+    result = viddecInitialize();
+    if (R_FAILED(result)) {
+        note("sdk-video: formats root result=0x%x", (unsigned)result);
+        return;
+    }
+    for (uint32_t format = ViddecOutputFormat_Rgba; format <= 5; format++) {
+        for (uint32_t tiling = ViddecTilingMode_PitchLinear;
+             tiling <= ViddecTilingMode_BlockLinear; tiling++) {
+            GsvDecodeImagePreference preference;
+            uint64_t bytes = 0;
+            uint64_t alignment = 0;
+
+            result = viddecMakeImagePreference(&preference, width, height, format, tiling);
+            if (R_SUCCEEDED(result))
+                result = viddecGetImagePoolSize(&preference, 1, &bytes, &alignment);
+            note("sdk-video: format=%u tiling=%u image bytes=%llu alignment=%llu result=0x%x",
+                 (unsigned)format, (unsigned)tiling, (unsigned long long)bytes,
+                 (unsigned long long)alignment, (unsigned)result);
+        }
+    }
+    viddecExit();
 }
 
 Result moonlightSdkVideoSubmit(const void *data, size_t bytes, int64_t timestamp_ns)

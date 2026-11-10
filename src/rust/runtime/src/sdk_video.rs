@@ -1,6 +1,6 @@
 //! Decoder backend over the SDK's video decoder (`viddec.h`), through `nro/sdk_viddec.c`.
 //! The service decodes into a CPU-backed image pool and each frame is copied out as linear
-//! NV12. The session needs the stream's SPS and PPS, so it starts on the first access unit.
+//! NV12. The session is configured from the stream, so it starts on the first access unit.
 //! The service scales the picture to the image size, so images have the display size.
 
 extern crate alloc;
@@ -12,9 +12,9 @@ use crate::{
 };
 use alloc::format;
 use moonlight_nx2_core::{
-    annexb,
     codec::{Capabilities, Codec, Depth, Evidence, Mode, Size},
     decoder::{Backend, BackendError, Backing, Config, SURFACES, UNITS},
+    viddec::{self, Av1Config},
     video_wire::Output,
 };
 
@@ -29,7 +29,11 @@ const MODES: [(u32, u32, u32, bool); 3] = [
     (2560, 1440, 60, SDK_H264_DOCKED_VERIFIED),
     (3840, 2160, 60, SDK_H264_DOCKED_VERIFIED),
 ];
-const CODEC_CONFIG_BYTES: usize = 1024;
+/// AV1 and HEVC stay out of the stream offer until each has its own console run.
+pub const SDK_AV1_VERIFIED: bool = false;
+pub const SDK_HEVC_VERIFIED: bool = false;
+/// The configure buffer production would open AV1 with.
+const AV1_CONFIG: Av1Config = Av1Config::Mime;
 const SUBMIT_BUSY: u32 = (3603 << 9) | 111;
 
 #[repr(C)]
@@ -64,7 +68,9 @@ unsafe extern "C" {
         sync_result: *mut u32,
     ) -> u32;
     fn moonlightSdkVideoStart(
+        codec: u32,
         fps: u32,
+        work_bytes: usize,
         codec_config: *const u8,
         codec_config_bytes: usize,
         stage: *mut u32,
@@ -83,10 +89,34 @@ unsafe extern "C" {
     fn moonlightSdkVideoRelease(slot: u32) -> u32;
     fn moonlightSdkVideoPollResult() -> u32;
     fn moonlightSdkVideoClose(stage: *mut u32) -> u32;
+    #[cfg(feature = "diagnostic-sdk-decode")]
+    fn moonlightSdkVideoNoteFormats(width: u32, height: u32);
+}
+
+fn verified(codec: Codec) -> bool {
+    match codec {
+        Codec::H264 => SDK_H264_VERIFIED,
+        Codec::Av1 => SDK_AV1_VERIFIED,
+        Codec::Hevc => SDK_HEVC_VERIFIED,
+        Codec::Vp9 => false,
+    }
+}
+
+/// H.264 as before; the others only once verified, or in the diagnostic that verifies them.
+fn accepted(codec: Codec) -> bool {
+    codec == Codec::H264 || verified(codec) || cfg!(feature = "diagnostic-sdk-decode")
+}
+
+/// Logs the size the service reports for one image of every output format, HDR included.
+/// It opens the decoder root by itself, so call it with no session open.
+#[cfg(feature = "diagnostic-sdk-decode")]
+pub fn note_output_formats(size: Size) {
+    unsafe { moonlightSdkVideoNoteFormats(size.width(), size.height()) }
 }
 
 pub struct SdkVideo {
     fps: u32,
+    av1_config: Av1Config,
     config: Option<Config>,
     started: bool,
     ready: Option<usize>,
@@ -98,8 +128,13 @@ pub struct SdkVideo {
 
 impl SdkVideo {
     pub fn new(fps: u32) -> Self {
+        Self::with_av1_config(fps, AV1_CONFIG)
+    }
+
+    pub fn with_av1_config(fps: u32, av1_config: Av1Config) -> Self {
         Self {
             fps,
+            av1_config,
             config: None,
             started: false,
             ready: None,
@@ -125,17 +160,47 @@ impl SdkVideo {
     }
 
     fn start(&mut self, access_unit: &[u8]) -> Result<(), BackendError> {
-        let mut codec_config = [0; CODEC_CONFIG_BYTES];
-        let Some(bytes) = annexb::h264_parameter_sets(access_unit, &mut codec_config) else {
-            log("sdk-video: first access unit has no SPS and PPS");
+        let config = self.config.ok_or(BackendError::Invalid)?;
+        let session =
+            viddec::session(config.codec, config.display).ok_or(BackendError::Unsupported)?;
+        let mut codec_config = [0; viddec::CODEC_CONFIG_MAX];
+        let Some(bytes) = viddec::codec_config(
+            config.codec,
+            self.av1_config,
+            access_unit,
+            &mut codec_config,
+        ) else {
+            log(&format!(
+                "sdk-video: first {:?} access unit has no codec configuration",
+                config.codec
+            ));
             return Err(BackendError::Invalid);
         };
+        match config.codec {
+            Codec::Av1 => log(&format!(
+                "sdk-video: AV1 configure buffer is {:?}",
+                self.av1_config
+            )),
+            Codec::Hevc => log(&format!(
+                "sdk-video: HEVC codec value {} is a guess, unverified",
+                session.codec
+            )),
+            _ => {}
+        }
         let mut stage = 0;
-        let result =
-            unsafe { moonlightSdkVideoStart(self.fps, codec_config.as_ptr(), bytes, &mut stage) };
+        let result = unsafe {
+            moonlightSdkVideoStart(
+                session.codec,
+                self.fps,
+                session.work_bytes,
+                codec_config.as_ptr(),
+                bytes,
+                &mut stage,
+            )
+        };
         log(&format!(
-            "sdk-video: start result=0x{result:x} stage={stage} codec_config_bytes={bytes} fps={}",
-            self.fps
+            "sdk-video: start codec={:?} value={} result=0x{result:x} stage={stage} codec_config_bytes={bytes} work_bytes={} fps={}",
+            config.codec, session.codec, session.work_bytes, self.fps
         ));
         if result != 0 {
             return Err(BackendError::Refused);
@@ -156,8 +221,8 @@ fn check(operation: &str, result: u32) -> Result<(), BackendError> {
 impl Backend for SdkVideo {
     fn capabilities() -> Capabilities {
         let mut capabilities = Capabilities::default();
-        for (width, height, fps, verified) in MODES {
-            if verified {
+        for (width, height, fps, offered) in MODES {
+            if offered {
                 capabilities.record(
                     Mode {
                         codec: Codec::H264,
@@ -169,11 +234,24 @@ impl Backend for SdkVideo {
                 );
             }
         }
+        for codec in [Codec::Av1, Codec::Hevc] {
+            if verified(codec) {
+                capabilities.record(
+                    Mode {
+                        codec,
+                        depth: Depth::Eight,
+                        maximum: Size::new(1920, 1080).unwrap(),
+                        fps: 60,
+                    },
+                    Evidence::PixelsAndCloseVerified,
+                );
+            }
+        }
         capabilities
     }
 
     fn open(&mut self, config: Config) -> Result<[u32; SURFACES], BackendError> {
-        if config.codec != Codec::H264 || config.backing != Backing::CpuReference {
+        if !accepted(config.codec) || config.backing != Backing::CpuReference {
             return Err(BackendError::Unsupported);
         }
         let mut images = [0; SURFACES];

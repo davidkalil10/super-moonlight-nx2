@@ -16,4 +16,5 @@ pub mod nv_access;
 pub mod recovery;
 pub mod stats;
 pub mod untile;
+pub mod viddec;
 pub mod video_wire;
