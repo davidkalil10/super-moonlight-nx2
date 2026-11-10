@@ -50,14 +50,20 @@ def main():
                         help="with --sdk-video, also offer 4K when docked (the service refuses it)")
     parser.add_argument("--hz120", action="store_true",
                         help="with --sdk-video, present at 120 Hz and offer 120 fps up to 1440p (unmeasured)")
+    parser.add_argument("--tcp-video", action="store_true",
+                        help="with --sdk-video alone, keep video on TCP instead of UDP")
     args = parser.parse_args()
-    if (args.docked_modes or args.hz120) and not args.sdk_video:
-        parser.error("--docked-modes and --hz120 need --sdk-video")
+    if (args.docked_modes or args.hz120 or args.tcp_video) and not args.sdk_video:
+        parser.error("--docked-modes, --hz120 and --tcp-video need --sdk-video")
+    if args.tcp_video and (args.docked_modes or args.hz120):
+        parser.error("--tcp-video goes with --sdk-video alone")
     diagnostic = "production-sdk" if args.sdk_video else "production"
     if args.docked_modes:
         diagnostic += "-modes"
     if args.hz120:
         diagnostic += "-120"
+    if args.tcp_video:
+        diagnostic += "-tcp"
     sdk_directory = SDK_VIDDEC if args.sdk_video else SDK
     sdk_sha256 = SDK_VIDDEC_SHA256 if args.sdk_video else SDK_SHA256
     revision = subprocess.check_output(

@@ -241,7 +241,9 @@ impl<F: Files + Clone> Client<F> {
         service.set_telemetry_profile(Some(
             moonlight_nx2_app::request::TelemetryProfile::UpstreamV1,
         ));
-        service.set_transport(Some(moonlight_nx2_app::request::Transport::UdpV1));
+        if !cfg!(feature = "video-tcp") {
+            service.set_transport(Some(moonlight_nx2_app::request::Transport::UdpV1));
+        }
         let mut bridge = Box::new(Bridge::new(
             storage(bytes)?,
             driver.hosts().hosts(),

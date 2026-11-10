@@ -20,6 +20,7 @@ decoder service refuses that size so far.
 Adding `--hz120` builds `production-sdk-120`, which presents every refresh, asks the display for
 120 Hz and a 1440p layer when docked, and offers 120 fps up to 1440p where the display showed it.
 With both flags (`production-sdk-modes-120`) the docked layer stays 4K. Not measured on the console yet.
+Video goes over UDP; `--sdk-video --tcp-video` builds `production-sdk-tcp`, the same app with video on TCP.
 
 ## Stream controls
 
