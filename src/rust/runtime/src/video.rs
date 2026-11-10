@@ -531,8 +531,14 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
         }
     }
 
+    /// Takes every frame the decoder finished since the last call and shows the newest, so a
+    /// step that submitted two units to work off a backlog does not leave one waiting.
     pub fn present(&mut self, renderer: &mut Renderer, interactive: bool) -> Result<bool, Error> {
-        self.poll_upload(renderer)?;
+        for _ in 0..decoder::UNITS {
+            if !self.poll_upload(renderer)? {
+                break;
+            }
+        }
         self.present_pending(renderer, interactive)
     }
 

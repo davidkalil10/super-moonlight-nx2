@@ -11,6 +11,9 @@ use moonlight_nx2_io::socket::{IoError, Socket};
 use moonlight_nx2_io::udp::{self, Datagram, Receiver};
 
 pub const PCM_RECORDS_PER_STEP: usize = 4;
+/// Video records one step may hand to the decoder. One keeps pace with the stream; the second
+/// works off a backlog left by a late burst, so latency returns to normal without a keyframe.
+pub const VIDEO_RECORDS_PER_STEP: usize = 2;
 pub const CONNECT_TIMEOUT_MS: u64 = 5_000;
 pub const VIDEO_READ_BUDGET: usize = 256 * 1024;
 pub const PCM_READ_BUDGET: usize = 8 * 1024;
@@ -582,9 +585,10 @@ impl<'a, S: Socket, D: Device, VC: VideoChannel> Media<'a, S, D, VC> {
         Ok(())
     }
 
-    /// One bounded step: at most one video record and `PCM_RECORDS_PER_STEP` PCM records, then a
-    /// decoder poll, so a unit submitted this step can present in the same frame. The poll runs on
-    /// every step that reaches it, with or without a new unit and after EOF.
+    /// One bounded step: at most `VIDEO_RECORDS_PER_STEP` video records and
+    /// `PCM_RECORDS_PER_STEP` PCM records, then a decoder poll, so a unit submitted this step can
+    /// present in the same frame. The poll runs on every step that reaches it, with or without a
+    /// new unit and after EOF.
     pub fn step<V: Decoder, I: InputSource>(
         &mut self,
         decoder: &mut V,
@@ -633,30 +637,32 @@ impl<'a, S: Socket, D: Device, VC: VideoChannel> Media<'a, S, D, VC> {
         now_ms: u64,
         progress: &mut Progress,
     ) -> Result<(), Failure> {
-        self.video.pump_video(now_ms)?;
+        for _ in 0..VIDEO_RECORDS_PER_STEP {
+            self.video.pump_video(now_ms)?;
+            if !self.flush_video_ack()? {
+                return Ok(());
+            }
 
-        if !self.flush_video_ack()? {
-            return Ok(());
+            let received_us = self.video.local_arrival_us();
+            let Some(record) = self.video.video_record() else {
+                return Ok(());
+            };
+            let header = record.raw_header;
+            match decoder.submit_timed(&record.header, record.payload, received_us) {
+                Submit::Accepted => {}
+                Submit::Busy => return Ok(()),
+                Submit::Failed => return Err(Failure::Decoder),
+            }
+
+            self.video.accept_video()?;
+            progress.video_records += 1;
+
+            let length = input.take(&mut self.input).min(MAX_INPUT_BYTES);
+            self.held_video = Some(HeldAck { header, length });
+            self.flush_video_ack()?;
         }
-
-        let received_us = self.video.local_arrival_us();
-        let Some(record) = self.video.video_record() else {
-            return Ok(());
-        };
-        let header = record.raw_header;
-        match decoder.submit_timed(&record.header, record.payload, received_us) {
-            Submit::Accepted => {}
-            Submit::Busy => return Ok(()),
-            Submit::Failed => return Err(Failure::Decoder),
-        }
-
-        self.video.accept_video()?;
-        progress.video_records += 1;
-
-        let length = input.take(&mut self.input).min(MAX_INPUT_BYTES);
-        self.held_video = Some(HeldAck { header, length });
-        self.flush_video_ack()?;
-        Ok(())
+        // Sends the last acknowledgement and its input now, not on the next step.
+        self.video.pump_video(now_ms)
     }
 
     /// Sends a held acknowledgement with its original input record. False while still held.
