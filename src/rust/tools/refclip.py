@@ -143,12 +143,13 @@ def load_sums(path, decoder=None):
 LOG_LINE = re.compile(r"ref: (\w+) frame (\d+) pts_us=(\d+) y=([0-9a-f]{8}) uv=([0-9a-f]{8})")
 
 
-def compare_log(log, reference, required=(), decoder=None):
+def compare_log(log, reference, required=(), decoder=None, only=None):
     passed = True
     seen = {}
     for match in LOG_LINE.finditer(log.read_text(errors="replace")):
         codec, index, pts, y, uv = match.groups()
-        seen.setdefault(codec, []).append((int(index), int(pts), y, uv))
+        if only in (None, codec):
+            seen.setdefault(codec, []).append((int(index), int(pts), y, uv))
     if not seen:
         print("log: no 'ref:' frame lines")
         return False
@@ -218,7 +219,8 @@ def main():
                        help="directory written by generate")
     check.add_argument("--log", type=Path)
     check.add_argument("--capture", type=Path, help="HDMI capture frame of the replay")
-    check.add_argument("--codec", choices=CODECS, default="h264")
+    check.add_argument("--codec", choices=CODECS,
+                       help="the only codec to check in the log; the capture's codec (h264)")
     check.add_argument("--expect-codec", choices=CODECS, action="append", default=[])
     check.add_argument("--psnr", type=float, default=30.0)
     check.add_argument("--decoder", choices=["sdk"],
@@ -232,9 +234,10 @@ def main():
         return 0
     passed = True
     if args.log:
-        passed &= compare_log(args.log, args.reference, args.expect_codec, args.decoder)
+        required = args.expect_codec or ([args.codec] if args.codec else [])
+        passed &= compare_log(args.log, args.reference, required, args.decoder, args.codec)
     if args.capture:
-        passed &= compare_capture(args.capture, args.reference, args.codec, args.psnr)
+        passed &= compare_capture(args.capture, args.reference, args.codec or "h264", args.psnr)
     print("PASS" if passed else "FAIL")
     return 0 if passed else 1
 
