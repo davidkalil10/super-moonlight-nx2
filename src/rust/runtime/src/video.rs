@@ -73,6 +73,7 @@ struct Timing {
     last_present_ns: u64,
     interval_max_us: u64,
     dropped_start: u64,
+    presented_start: u64,
 }
 
 const LOG_TIMING: bool = cfg!(feature = "diagnostic-native-decode");
@@ -116,8 +117,11 @@ impl Timing {
         let clamp = |value: u64| u32::try_from(value).unwrap_or(u32::MAX);
         crate::stream_stats::publish(StreamStats {
             window_ms: clamp(elapsed / 1_000_000),
-            fps_x10: clamp(self.frames * 10_000_000_000 / elapsed),
-            decode_mean_us: clamp(self.decode_us / frames),
+            fps_x10: clamp(
+                stats.presented.saturating_sub(self.presented_start) * 10_000_000_000 / elapsed,
+            ),
+            decode_mean_us: crate::stream_stats::take_readback_mean_us()
+                .unwrap_or_else(|| clamp(self.decode_us / frames)),
             decode_max_us: clamp(self.decode_max_us),
             latency_mean_us: clamp(self.latency_us / frames),
             latency_max_us: clamp(self.latency_max_us),
@@ -157,6 +161,7 @@ impl Timing {
             logged: self.logged,
             last_present_ns: self.last_present_ns,
             dropped_start: stats.dropped,
+            presented_start: stats.presented,
             ..Self::default()
         };
     }

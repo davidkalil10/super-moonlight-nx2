@@ -121,6 +121,9 @@ struct StageTotal {
     max_us: AtomicU32,
 }
 
+static READBACK_SUM_US: AtomicU64 = AtomicU64::new(0);
+static READBACK_COUNT: AtomicU32 = AtomicU32::new(0);
+
 static STAGE_TOTALS: [StageTotal; STAGES] = [const {
     StageTotal {
         sum_us: AtomicU64::new(0),
@@ -137,6 +140,19 @@ pub fn stage(stage: Stage, started_ns: u64, ended_ns: u64) {
         .fetch_add(u64::from(elapsed_us), Ordering::Relaxed);
     total.count.fetch_add(1, Ordering::Relaxed);
     total.max_us.fetch_max(elapsed_us, Ordering::Relaxed);
+    if matches!(stage, Stage::Readback) {
+        READBACK_SUM_US.fetch_add(u64::from(elapsed_us), Ordering::Relaxed);
+        READBACK_COUNT.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+/// The mean readback time since the last call, kept apart from the session totals the stream
+/// report takes. None when no frame was read back.
+pub fn take_readback_mean_us() -> Option<u32> {
+    let sum = READBACK_SUM_US.swap(0, Ordering::Relaxed);
+    let count = READBACK_COUNT.swap(0, Ordering::Relaxed);
+    sum.checked_div(u64::from(count))
+        .map(|mean| u32::try_from(mean).unwrap_or(u32::MAX))
 }
 
 /// The stage times since the last call, in `Stage` order.

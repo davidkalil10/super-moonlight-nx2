@@ -134,6 +134,7 @@ pub struct Client<F> {
     stats_epoch: Option<moonlight_nx2_app::policy::Epoch>,
     network_stats: Option<moonlight_nx2_app::metrics::Second>,
     native_stats: Option<moonlight_nx2_core::stats::StreamStats>,
+    session_us: u64,
     badge: crate::policy_badge::Badge,
 }
 
@@ -192,20 +193,43 @@ fn ui_capabilities(context: &moonlight_nx2_app::policy::Context) -> Capabilities
     result
 }
 
+/// The frame rate comes from the policy's one-second windows when there is one: the same
+/// presented count the stream log reports. The video path's own window is the fallback.
+fn presented_fps_x10(
+    network: Option<moonlight_nx2_app::metrics::Second>,
+    native: Option<moonlight_nx2_core::stats::StreamStats>,
+) -> Option<u32> {
+    network
+        .filter(|second| second.elapsed_us > 0)
+        .map(|second| {
+            let fps_x10 = u128::from(second.presented) * 10_000_000 / u128::from(second.elapsed_us);
+            u32::try_from(fps_x10).unwrap_or(u32::MAX)
+        })
+        .or_else(|| native.map(|stats| stats.fps_x10))
+}
+
+fn stream_readout(
+    network: Option<moonlight_nx2_app::metrics::Second>,
+    native: Option<moonlight_nx2_core::stats::StreamStats>,
+    session_us: u64,
+) -> moonlight_nx2_ui::readout::StreamReadout {
+    moonlight_nx2_ui::readout::StreamReadout {
+        fps_x10: presented_fps_x10(network, native),
+        bitrate_kbps: network.filter(|s| s.elapsed_us > 0).map(|s| {
+            u32::try_from(u128::from(s.bytes) * 8_000 / u128::from(s.elapsed_us)).unwrap_or(u32::MAX)
+        }),
+        decode_us: native.filter(|s| s.presented > 0).map(|s| s.decode_mean_us),
+        network_us: network.and_then(|second| second.network_rtt_us),
+        session_s: u32::try_from(session_us / 1_000_000).unwrap_or(u32::MAX),
+    }
+}
+
 fn stream_stats_text(
     network: Option<moonlight_nx2_app::metrics::Second>,
     native: Option<moonlight_nx2_core::stats::StreamStats>,
 ) -> alloc::string::String {
-    let fps = native
-        .map(|s| alloc::format!("{}.{:01}", s.fps_x10 / 10, s.fps_x10 % 10))
-        .or_else(|| {
-            network.filter(|s| s.elapsed_us > 0).map(|s| {
-                alloc::format!(
-                    "{}",
-                    u128::from(s.presented) * 1_000_000 / u128::from(s.elapsed_us)
-                )
-            })
-        })
+    let fps = presented_fps_x10(network, native)
+        .map(|fps_x10| alloc::format!("{}.{:01}", fps_x10 / 10, fps_x10 % 10))
         .unwrap_or_else(|| alloc::string::String::from("--"));
     let bitrate = network
         .filter(|s| s.elapsed_us > 0)
@@ -275,6 +299,7 @@ impl<F: Files + Clone> Client<F> {
             stats_epoch: None,
             network_stats: None,
             native_stats: None,
+            session_us: 0,
             badge: crate::policy_badge::Badge::default(),
         })
     }
@@ -385,6 +410,7 @@ impl<F: Files + Clone> Client<F> {
             self.stats_epoch = epoch;
             self.network_stats = None;
             self.native_stats = None;
+            self.session_us = 0;
             self.refresh_stream_stats();
         }
         let storage = storage(bytes)?;
@@ -460,6 +486,11 @@ impl<F: Files + Clone> Client<F> {
     fn refresh_stream_stats(&mut self) {
         self.bridge
             .set_stream_stats(&stream_stats_text(self.network_stats, self.native_stats));
+        self.bridge.set_stream(stream_readout(
+            self.network_stats,
+            self.native_stats,
+            self.session_us,
+        ));
     }
 
     pub fn update_native_stats(&mut self, stats: Option<moonlight_nx2_core::stats::StreamStats>) {
@@ -509,6 +540,7 @@ impl<F: Files + Clone> Client<F> {
         if let moonlight_nx2_app::policy::Feedback::Metrics { epoch, report } = feedback
             && self.driver.session_epoch() == Some(epoch)
         {
+            self.session_us += report.second.elapsed_us;
             self.network_stats = Some(report.second);
             self.refresh_stream_stats();
         }
