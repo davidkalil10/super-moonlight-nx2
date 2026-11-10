@@ -76,7 +76,7 @@ impl Setting {
     /// One line on what the row does, shown under its name.
     pub fn hint(self) -> &'static str {
         match self {
-            Self::Size => "Up to 1440p when docked, 1080p in handheld",
+            Self::Size => "Resolution of the stream",
             Self::Fps => "Frames per second the PC sends",
             Self::Bitrate => "Automatic follows the network test",
             Self::Codec => "AV1 looks better at the same bitrate, H.264 is the fallback",

@@ -1271,16 +1271,17 @@ impl Model {
             return;
         }
 
+        let cancelled = op == Op::B || (op == Op::A && item == item::CANCEL);
         match self.screen {
             Screen::Hosts => self.on_hosts(op, item, step),
             Screen::AddHost => self.on_add_host(op, item, step),
             Screen::HostMenu => self.on_host_menu(op, item, step),
             Screen::RenameHost => self.on_rename_host(op, item, step),
-            Screen::Connecting if op == Op::B => {
+            Screen::Connecting if cancelled => {
                 self.back_to_hosts(step);
                 step.add(IntentKind::CancelList, None);
             }
-            Screen::Pairing if op == Op::B => {
+            Screen::Pairing if cancelled => {
                 self.pin = None;
                 self.url = None;
                 self.back_to_hosts(step);
@@ -1289,7 +1290,7 @@ impl Model {
             Screen::Apps => self.on_apps(op, item, step),
             Screen::QuitConfirm => self.on_quit_confirm(op, item, step),
             Screen::Settings => self.on_settings(op, item, value, step),
-            Screen::Launching if op == Op::B => {
+            Screen::Launching if cancelled => {
                 self.screen = Screen::Connecting;
                 self.app = None;
                 step.changed = true;

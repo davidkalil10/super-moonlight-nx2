@@ -36,6 +36,13 @@ const FOOT_Y: u32 = 984;
 const BODY_Y: u32 = 219;
 const RIGHT: u32 = SCREEN_WIDTH - SIDE;
 const PANEL_RADIUS: u32 = 18;
+const DIALOG_WIDTH: u32 = 1040;
+const DIALOG_X: u32 = (SCREEN_WIDTH - DIALOG_WIDTH) / 2;
+const DIALOG_PAD: u32 = 56;
+const DIALOG_RADIUS: u32 = 28;
+const DIALOG_HEIGHT: u32 = 460;
+const DIALOG_BUTTON: u32 = 88;
+const PAIRING_HEIGHT: u32 = 520;
 const CATEGORY_WIDTH: u32 = 460;
 const CATEGORY_HEIGHT: u32 = 80;
 const PANE_X: u32 = SIDE + CATEGORY_WIDTH + 48;
@@ -55,7 +62,6 @@ const CARD_PAD: u32 = 32;
 const KEYPAD_Y: u32 = 430;
 const KEYPAD_WIDTH: u32 = 160;
 const KEYPAD_GAP: u32 = 24;
-const BUTTON_Y: u32 = 640;
 const BUTTON_WIDTH: u32 = 400;
 const BUTTON_GAP: u32 = 48;
 const PAGER_WIDTH: u32 = 300;
@@ -200,27 +206,82 @@ impl Builder<'_> {
         self.button(item::NEXT, next_x, y, PAGER_WIDTH, "Next  \u{203a}", at + 1 >= pages);
     }
 
-    fn message(&mut self, kicker: &str, title: &str, line: Option<&str>, y: u32, color: u32) {
-        let pal = self.pal;
-        self.put(SIDE, y, CONTENT_WIDTH, kicker, BODY, pal.dim, Align::Left);
-        self.put(SIDE, y + 44, CONTENT_WIDTH, title, HEADLINE, color, Align::Left);
-        if let Some(line) = line.filter(|l| !l.is_empty()) {
-            self.put(SIDE, y + 128, CONTENT_WIDTH, line, BODY, pal.dim, Align::Left);
+    fn wrapped(&mut self, x: u32, y: u32, width: u32, text: &str, face: Face, color: u32) -> u32 {
+        let mut line = String::new();
+        let mut y = y;
+        for word in text.split(' ') {
+            let candidate = if line.is_empty() {
+                String::from(word)
+            } else {
+                format!("{line} {word}")
+            };
+            if !line.is_empty() && self.text_width(&candidate, face) > width {
+                self.put(x, y, width, &line, face, color, Align::Center);
+                y += face.size + 12;
+                line = String::from(word);
+            } else {
+                line = candidate;
+            }
         }
+        if !line.is_empty() {
+            self.put(x, y, width, &line, face, color, Align::Center);
+            y += face.size + 12;
+        }
+        y
     }
 
-    fn status(&mut self, model: &Model, title: &str, line: Option<&str>, keys: Keys) {
+    fn dialog_panel(&mut self, height: u32) -> (u32, u32) {
+        let pal = self.pal;
+        let y = BODY_Y + (RULE_BOTTOM - BODY_Y - height) / 2;
+        self.fill(DIALOG_X, y, DIALOG_WIDTH, height, pal.panel, DIALOG_RADIUS);
+        (DIALOG_X + DIALOG_PAD, y)
+    }
+
+    fn dialog_button(&mut self, id: u32, y: u32, label: &str) {
+        let pal = self.pal;
+        let x = DIALOG_X + (DIALOG_WIDTH - BUTTON_WIDTH) / 2;
+        self.item(id, x, y, BUTTON_WIDTH, DIALOG_BUTTON, 0, BUTTON_RADIUS);
+        self.fill(x, y, BUTTON_WIDTH, DIALOG_BUTTON, pal.ground, BUTTON_RADIUS);
+        self.put(x, y + 20, BUTTON_WIDTH, label, BUTTON, pal.ink, Align::Center);
+    }
+
+    /// A centred panel: a title, what happened, what to do, and one default button.
+    fn dialog(
+        &mut self,
+        model: &Model,
+        title: &str,
+        happened: &str,
+        next: Option<&str>,
+        button: Option<(u32, &str)>,
+        keys: Keys,
+    ) {
         self.frame(
             model,
             &Chrome {
                 title: host_name(model).unwrap_or("Moonlight"),
                 keys,
-                flags: page::FLAG_HIDE_CURSOR,
+                flags: if button.is_some() { 0 } else { page::FLAG_HIDE_CURSOR },
                 ..Chrome::default()
             },
         );
-        let ink = self.pal.ink;
-        self.message("Moonlight", title, line, 340, ink);
+        let pal = self.pal;
+        let height = if button.is_some() { DIALOG_HEIGHT } else { DIALOG_HEIGHT - DIALOG_BUTTON - 24 };
+        let (x, y) = self.dialog_panel(height);
+        let inner = DIALOG_WIDTH - 2 * DIALOG_PAD;
+        self.put(x, y + 44, inner, title, NAME, pal.ink, Align::Center);
+        let mut at = y + 124;
+        at = self.wrapped(x, at, inner, happened, BODY, pal.ink);
+        if let Some(next) = next.filter(|next| !next.is_empty()) {
+            self.wrapped(x, at + 8, inner, next, BODY, pal.dim);
+        }
+        if let Some((id, label)) = button {
+            self.dialog_button(id, y + height - DIALOG_BUTTON - 40, label);
+        }
+    }
+
+    fn status(&mut self, model: &Model, title: &str, line: Option<&str>, keys: Keys, cancel: bool) {
+        let button = cancel.then_some((item::CANCEL, "Cancel"));
+        self.dialog(model, title, line.unwrap_or(""), None, button, keys);
     }
 
     fn hosts_page(&mut self, model: &Model) {
@@ -566,29 +627,29 @@ impl Builder<'_> {
             },
         );
         let pal = self.pal;
+        let (x, y) = self.dialog_panel(PAIRING_HEIGHT);
+        let inner = DIALOG_WIDTH - 2 * DIALOG_PAD;
+        let host = host_name(model).unwrap_or("the PC");
+        self.put(x, y + 44, inner, &format!("Pair with {host}"), NAME, pal.ink, Align::Center);
         let Some(pin) = model.pin().filter(|p| !p.is_empty()) else {
-            self.message(
-                "Pairing",
-                "Waiting for a PIN\u{2026}",
-                Some("The PC is starting the pairing"),
-                340,
-                pal.ink,
-            );
+            self.wrapped(x, y + 140, inner, "Waiting for the PC to show a PIN.", BODY, pal.ink);
             return;
         };
-        self.message(
-            "Pairing",
-            pin,
-            Some("Enter this PIN in Sunshine within 5 minutes"),
-            340,
-            pal.accent,
-        );
-        if let Some(url) = model.url().filter(|u| !u.is_empty()) {
-            self.put(SIDE, 340 + 190, CONTENT_WIDTH, url, HINT, pal.dim, Align::Left);
-        }
+        self.wrapped(x, y + 124, inner, "Enter this PIN in Sunshine on the PC.", BODY, pal.ink);
+        self.put(x, y + 190, inner, pin, PIN, pal.accent, Align::Center);
         if let Some(left) = model.pin_left_s() {
+            let total = model.pin_timeout_s().max(1);
+            let bar = inner - 2 * 120;
+            let bar_x = x + 120;
+            let bar_y = y + 330;
+            self.fill(bar_x, bar_y, bar, 12, pal.line, 6);
+            let filled = (bar * left.min(total) / total).max(12);
+            self.fill(bar_x, bar_y, filled, 12, pal.accent, 6);
             let countdown = format!("{}:{:02} left", left / 60, left % 60);
-            self.put(SIDE, 340 + 230, CONTENT_WIDTH, &countdown, HINT, pal.dim, Align::Left);
+            self.put(x, bar_y + 28, inner, &countdown, HINT, pal.dim, Align::Center);
+        }
+        if let Some(url) = model.url().filter(|u| !u.is_empty()) {
+            self.put(x, y + PAIRING_HEIGHT - 64, inner, url, HINT, pal.dim, Align::Center);
         }
     }
 
@@ -636,7 +697,7 @@ impl Builder<'_> {
         let ink = if row.greyed { pal.line } else { pal.ink };
         self.put(x + CARD_PAD, y + 14, 520, row.setting.label(), OPTION, ink, Align::Left);
         let hint = if row.setting == Setting::Size && !model.docked() {
-            "1440p and 4K are only available when docked"
+            "1440p and 4K: docked only"
         } else {
             row.setting.hint()
         };
@@ -715,23 +776,22 @@ impl Builder<'_> {
             .find(|a| a.id == current)
             .map_or("the running app", |a| a.name.as_str());
         let title = format!("Quit {running}?");
-        let ink = self.pal.ink;
-        self.message(
-            "Quit host app",
-            &title,
-            Some("The stream ends and the app closes on the PC"),
-            340,
-            ink,
-        );
-        self.button(item::CONFIRM_QUIT, SIDE, BUTTON_Y, BUTTON_WIDTH, "Quit", false);
-        self.button(
-            item::CANCEL,
-            SIDE + BUTTON_WIDTH + BUTTON_GAP,
-            BUTTON_Y,
-            BUTTON_WIDTH,
-            "Cancel",
-            false,
-        );
+        let pal = self.pal;
+        let (x, y) = self.dialog_panel(DIALOG_HEIGHT);
+        let inner = DIALOG_WIDTH - 2 * DIALOG_PAD;
+        self.put(x, y + 44, inner, &title, NAME, pal.ink, Align::Center);
+        self.wrapped(x, y + 124, inner, "The stream ends and the app closes on the PC.", BODY, pal.ink);
+        let button_y = y + DIALOG_HEIGHT - DIALOG_BUTTON - 40;
+        let width = (inner - BUTTON_GAP) / 2;
+        for (i, (id, label)) in [(item::CONFIRM_QUIT, "Quit"), (item::CANCEL, "Cancel")]
+            .into_iter()
+            .enumerate()
+        {
+            let bx = x + i as u32 * (width + BUTTON_GAP);
+            self.item(id, bx, button_y, width, DIALOG_BUTTON, 0, BUTTON_RADIUS);
+            self.fill(bx, button_y, width, DIALOG_BUTTON, pal.ground, BUTTON_RADIUS);
+            self.put(bx, button_y + 20, width, label, BUTTON, pal.ink, Align::Center);
+        }
     }
 
     fn overlay_page(&mut self, model: &Model) {
@@ -821,27 +881,19 @@ impl Builder<'_> {
         let keys: Keys = if can_reconnect {
             &[("B", "PCs"), ("A", "Reconnect")]
         } else {
-            &[("A", "Back")]
+            &[("A", "OK")]
         };
-        self.frame(
+        let title = if lost { "Connection lost" } else { "Something went wrong" };
+        let happened = model.message().unwrap_or("Something went wrong");
+        let label = if can_reconnect { "Reconnect" } else { "OK" };
+        self.dialog(
             model,
-            &Chrome {
-                title: host_name(model).unwrap_or("Moonlight"),
-                keys,
-                ..Chrome::default()
-            },
-        );
-        let kicker = if lost { "Connection lost" } else { "Something went wrong" };
-        let ink = self.pal.ink;
-        self.message(
-            kicker,
-            model.message().unwrap_or("Something went wrong"),
+            title,
+            happened,
             Some(error_next_step(model.message(), lost)),
-            340,
-            ink,
+            Some((item::BACK, label)),
+            keys,
         );
-        let label = if can_reconnect { "Reconnect" } else { "Back" };
-        self.button(item::BACK, SIDE, BUTTON_Y, BUTTON_WIDTH, label, false);
     }
 
     pub(crate) fn compose(&mut self, model: &Model, settings_error: Option<&str>) -> bool {
@@ -853,12 +905,12 @@ impl Builder<'_> {
             Screen::HostMenu => self.host_menu_page(model),
             Screen::RenameHost => self.rename_host_page(model),
             Screen::Unpairing => {
-                self.status(model, host, Some("Asking the PC to forget this console\u{2026}"), &[]);
+                self.status(model, "Unpairing", Some("Asking the PC to forget this console\u{2026}"), &[], false);
             }
             Screen::Connecting => {
-                let address = model.host().map(|h| h.address.as_str());
-                let line = model.message().or(address);
-                self.status(model, host, line, cancel);
+                let wait = format!("Reaching {host} at {}", model.host().map_or("", |h| h.address.as_str()));
+                let line = model.message().unwrap_or(&wait);
+                self.status(model, "Connecting", Some(line), cancel, true);
             }
             Screen::Pairing => self.pairing_page(model),
             Screen::Apps => self.apps_page(model),
@@ -867,10 +919,12 @@ impl Builder<'_> {
             Screen::Launching => {
                 let title = model.app().map_or("", |a| a.name.as_str());
                 let line = model.message().unwrap_or("Starting the stream\u{2026}");
-                self.status(model, title, Some(line), cancel);
+                self.status(model, title, Some(line), cancel, true);
             }
             Screen::Streaming => self.overlay_page(model),
-            Screen::Quitting => self.status(model, host, Some("Closing the app on the PC\u{2026}"), &[]),
+            Screen::Quitting => {
+                self.status(model, host, Some("Closing the app on the PC\u{2026}"), &[], false);
+            }
             Screen::ConnectionLost | Screen::Error => self.error_page(model),
             Screen::Splash | Screen::Stopped => return false,
         }
