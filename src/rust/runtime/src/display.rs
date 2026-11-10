@@ -117,6 +117,10 @@ pub(crate) fn observe() -> Option<Snapshot> {
 /// Stream sizes a layer can show, largest first; a layer shows any of them up to its own size.
 const SIZES: [(u32, u32); 4] = [(3840, 2160), (2560, 1440), (1920, 1080), (1280, 720)];
 
+/// Seconds in a row at 60 Hz before rates above it are taken back. A mode change or a dock
+/// change not confirmed yet reads 60 Hz for less than that.
+const SLOW_SECONDS: u32 = 3;
+
 /// The per-second present rate and the display modes it verified, one set per operation mode.
 /// A mode counts as verified once a full second presented on pace at the layer's size; the set
 /// of the other operation mode is kept, so docking back reuses what was already shown.
@@ -124,6 +128,7 @@ pub struct Probe {
     docked: bool,
     verified: [moonlight_nx2_app::policy::DisplayCapabilities; 2],
     best: [(u32, u32, u32); 2],
+    slow_seconds: u32,
     second_ns: u64,
     presented: u64,
     rate: u32,
@@ -135,6 +140,7 @@ impl Probe {
             docked,
             verified: Default::default(),
             best: [(0, 0, 0); 2],
+            slow_seconds: 0,
             second_ns: now_ns,
             presented,
             rate: 0,
@@ -143,6 +149,7 @@ impl Probe {
 
     pub fn set_docked(&mut self, docked: bool) {
         self.docked = docked;
+        self.slow_seconds = 0;
     }
 
     pub fn capabilities(&self) -> moonlight_nx2_app::policy::DisplayCapabilities {
@@ -160,6 +167,35 @@ impl Probe {
         self.second_ns = now_ns;
         self.presented = presented;
         Some(self.rate)
+    }
+
+    /// Call once per closed second with the display's rate. Returns true when the display
+    /// stayed at 60 Hz after rates above it were verified: those modes are now capped at 60.
+    pub fn cap_at_60(&mut self, hz: u32) -> bool {
+        use moonlight_nx2_app::policy::{DisplayEvidence, DisplayMode};
+        let index = usize::from(self.docked);
+        let (best_width, best_height, best_fps) = self.best[index];
+        if hz != 60 || best_fps <= 60 {
+            self.slow_seconds = 0;
+            return false;
+        }
+        self.slow_seconds += 1;
+        if self.slow_seconds < SLOW_SECONDS {
+            return false;
+        }
+        self.slow_seconds = 0;
+        for (width, height) in SIZES {
+            if width <= best_width && height <= best_height {
+                let mode = DisplayMode {
+                    width,
+                    height,
+                    fps: 60,
+                };
+                self.verified[index].record(mode, DisplayEvidence::PresentedAndCloseVerified);
+            }
+        }
+        self.best[index].2 = 60;
+        true
     }
 
     /// Records the layer's mode when the last second kept pace with `hz` (120 or 60 Hz, within

@@ -369,6 +369,14 @@ fn execute(renderer: &mut Renderer, connections: &mut NativeConnections, launch:
             && let Some(rate) = probe.second(now, info.presented)
         {
             let hz = snapshot.map_or(0, |display| display.nominal_hz);
+            if probe.cap_at_60(hz) {
+                log(&format!(
+                    "display: 120 Hz lost docked={}; modes capped at 60",
+                    dock.current()
+                ));
+                display_context(&mut app, dock.current(), probe.capabilities());
+                pending = false;
+            }
             pending |= probe.verify(info.width, info.height, hz);
             if pending && screen != Screen::Streaming {
                 display_context(&mut app, dock.current(), probe.capabilities());
