@@ -130,6 +130,8 @@ def build(args):
                 commands[0].extend(["--features", "frontend,sdk-video,video-tcp"])
             elif args.diagnostic == "production-sdk-120":
                 commands[0].extend(["--features", "frontend,sdk-video-120hz"])
+            elif args.diagnostic == "production-sdk-120-decode":
+                commands[0].extend(["--features", "frontend,sdk-video-120-decode"])
             elif args.diagnostic == "production-sdk-modes-120":
                 commands[0].extend(["--features", "frontend,sdk-video-docked-modes,sdk-video-120hz"])
             elif args.diagnostic != "core":
@@ -241,7 +243,7 @@ def main():
     parser.add_argument("--revision")
     parser.add_argument("--branch")
     parser.add_argument("--nacp-version", default="0.1.0")
-    parser.add_argument("--diagnostic", choices=("core", "renderer", "display", "display120", "coexist", "io", "audio-cue", "udp", "nvdec", "sdk-backing", "native-decode", "sdk-decode", "sdk-modes", "ui", "ui-order", "ui-data", "ui-alpha", "ui-text", "ui-text-apps", "ui-text-overlay", "ui-text-interactive", "control", "control-default", "frontend", "frontend-check", "ref-replay", "production", "production-sdk", "production-sdk-modes", "production-sdk-tcp", "production-sdk-120", "production-sdk-modes-120"), default="core")
+    parser.add_argument("--diagnostic", choices=("core", "renderer", "display", "display120", "coexist", "io", "audio-cue", "udp", "nvdec", "sdk-backing", "native-decode", "sdk-decode", "sdk-modes", "ui", "ui-order", "ui-data", "ui-alpha", "ui-text", "ui-text-apps", "ui-text-overlay", "ui-text-interactive", "control", "control-default", "frontend", "frontend-check", "ref-replay", "production", "production-sdk", "production-sdk-modes", "production-sdk-tcp", "production-sdk-120", "production-sdk-120-decode", "production-sdk-modes-120"), default="core")
     parser.add_argument("--sdk-backing-library-dir", type=Path)
     parser.add_argument("--rust-directory", type=Path)
     parser.add_argument("--cargo-home", type=Path)

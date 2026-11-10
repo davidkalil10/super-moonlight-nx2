@@ -117,6 +117,11 @@ pub(crate) fn observe() -> Option<Snapshot> {
 /// Stream sizes a layer can show, largest first; a layer shows any of them up to its own size.
 const SIZES: [(u32, u32); 4] = [(3840, 2160), (2560, 1440), (1920, 1080), (1280, 720)];
 
+/// The decode-capacity build streams 120 fps on a display that stays at 60 Hz: the stream loop
+/// takes two units a refresh and shows the newer frame, which measures the decoder without a
+/// 120 Hz display.
+const FAST_STREAM_AT_60HZ: bool = cfg!(feature = "sdk-video-120-decode");
+
 /// Seconds in a row at 60 Hz before rates above it are taken back. A mode change or a dock
 /// change not confirmed yet reads 60 Hz for less than that.
 const SLOW_SECONDS: u32 = 3;
@@ -175,7 +180,7 @@ impl Probe {
         use moonlight_nx2_app::policy::{DisplayEvidence, DisplayMode};
         let index = usize::from(self.docked);
         let (best_width, best_height, best_fps) = self.best[index];
-        if hz != 60 || best_fps <= 60 {
+        if hz != 60 || best_fps <= 60 || FAST_STREAM_AT_60HZ {
             self.slow_seconds = 0;
             return false;
         }
@@ -208,6 +213,7 @@ impl Probe {
         else {
             return false;
         };
+        let fps = if FAST_STREAM_AT_60HZ { 120 } else { fps };
         let index = usize::from(self.docked);
         let (best_width, best_height, best_fps) = self.best[index];
         if width <= best_width && height <= best_height && fps <= best_fps {
