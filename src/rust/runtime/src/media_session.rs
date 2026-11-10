@@ -9,7 +9,10 @@ use moonlight_nx2_app::{
     service::RuntimeEvent,
 };
 use moonlight_nx2_core::decoder::{Backend, SURFACES};
-use moonlight_nx2_io::{audio::Device, socket::Socket};
+use moonlight_nx2_io::{
+    audio::{self, Device},
+    socket::Socket,
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Error {
@@ -63,6 +66,10 @@ impl<'a, B: Backend<N>, S: Socket, D: Device, V: VideoChannel, const N: usize>
 
     pub fn video_recovery(&self) -> moonlight_nx2_core::recovery::Counters {
         self.video.recovery()
+    }
+
+    pub fn audio_stats(&self) -> Option<audio::Stats> {
+        self.media.as_ref().and_then(Media::audio_stats)
     }
 
     pub fn begin_drain(&mut self, now_ms: u64) {

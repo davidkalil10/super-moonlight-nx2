@@ -30,7 +30,7 @@ use moonlight_nx2_core::{
     recovery,
 };
 use moonlight_nx2_io::{
-    audio::{SLOT_BYTES, SLOTS, Slots},
+    audio::{self, SLOT_BYTES, SLOTS, Slots},
     media::Channel,
     udp::{self, Receiver},
 };
@@ -44,6 +44,28 @@ pub(crate) fn decoder_capabilities() -> Capabilities {
 }
 
 const MEDIA_SILENCE_MS: u64 = 10_000;
+
+fn log_audio_offer(descriptor: &Descriptor, device: bool) {
+    let Some(offer) = &descriptor.audio else {
+        log("stream: audio not offered");
+        return;
+    };
+    let queue = audio::Config::default();
+    log(&format!(
+        "stream: audio offered rate={} channels={} chunk_bytes={} device={} queue device_ms={} target_ms={} burst_ms={}",
+        offer.rate,
+        offer.channels,
+        offer.chunk_bytes,
+        if device {
+            "free"
+        } else {
+            "retained, PCM unplayed"
+        },
+        queue.output_ms,
+        queue.target_ms,
+        queue.burst_ms
+    ));
+}
 
 type TcpSession =
     Session<'static, Decoder, NetSocket, Audout, Channel<'static, NetSocket>, SURFACES>;
@@ -91,6 +113,13 @@ impl Running {
         match &self.session {
             Active::Tcp(session) => (session.video_stats(), session.video_recovery()),
             Active::Udp(session) => (session.video_stats(), session.video_recovery()),
+        }
+    }
+
+    fn audio_stats(&self) -> Option<audio::Stats> {
+        match &self.session {
+            Active::Tcp(session) => session.audio_stats(),
+            Active::Udp(session) => session.audio_stats(),
         }
     }
 
@@ -233,6 +262,7 @@ impl Stream {
             pcm_outbound: &mut memory.pcm_outbound,
         };
         let audio = self.audio.take();
+        log_audio_offer(descriptor, audio.is_some());
         let mut connector = PeerConnector::new(peer);
         let session = if descriptor.video.transport == Transport::UdpV1 {
             UdpMedia::open_udp(&mut connector, descriptor, media, audio, now_ms)
@@ -376,6 +406,23 @@ impl Stream {
         log(&format!(
             "stream: {}",
             crate::stream_stats::take_stages_text()
+        ));
+        let Some(audio) = running.audio_stats() else {
+            return;
+        };
+        log(&format!(
+            "stream: audio received={} queued={} played={} dropped={} overflow={} cuts={} underruns={} starved_ms={} depth_ms={}..{} pump_gap_ms={}",
+            audio.received,
+            audio.appended,
+            audio.released,
+            audio.dropped,
+            audio.overflow_drops,
+            audio.cuts,
+            audio.polled_starvations,
+            audio.starved_ms_at_most,
+            audio.second_low_depth_ms,
+            audio.second_high_depth_ms,
+            audio.longest_pump_gap_ms
         ));
     }
 

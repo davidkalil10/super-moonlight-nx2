@@ -621,6 +621,10 @@ impl<'a, S: Socket, D: Device, VC: VideoChannel> Media<'a, S, D, VC> {
         Ok(progress)
     }
 
+    pub fn audio_stats(&self) -> Option<audio::Stats> {
+        self.audio.as_ref().map(Output::stats)
+    }
+
     /// Starts the bounded drain after the stop: keep stepping until `Progress.drained`, then
     /// `close` reports `Outcome::Drained`; past `DRAIN_TIMEOUT_MS` the step fails with
     /// `DrainTimeout` and `close` reports `Outcome::Aborted`.

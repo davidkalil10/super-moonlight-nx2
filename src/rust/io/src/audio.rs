@@ -85,11 +85,15 @@ pub struct Stats {
     pub appended: u64,
     pub released: u64,
     pub dropped: u64,
+    pub overflow_drops: u64,
     pub cuts: u64,
     pub crossfades: u64,
     pub acknowledged: u64,
     pub depth_ms: u32,
     pub max_depth_ms: u32,
+    /// Lowest and highest depth at a pump over the last full second.
+    pub second_low_depth_ms: u32,
+    pub second_high_depth_ms: u32,
     pub polled_starvations: u64,
     pub starved_ms_at_least: u64,
     pub starved_ms_at_most: u64,
@@ -130,8 +134,8 @@ pub struct Output<D: Device> {
     entries: [Entry; ACK_CAPACITY],
     entry_head: usize,
     entry_count: usize,
-    overflow_drops: u64,
     start_chunks: usize,
+    depth_range: Option<DepthRange>,
     fade: [u8; SLOT_BYTES],
     fade_bytes: usize,
     fade_pending: bool,
@@ -143,6 +147,14 @@ pub struct Output<D: Device> {
     starved_since: Option<u64>,
     stats: Stats,
 }
+
+struct DepthRange {
+    since_ms: u64,
+    low_ms: u32,
+    high_ms: u32,
+}
+
+const DEPTH_PERIOD_MS: u64 = 1000;
 
 /// The queue policy and how many chunks make `output_ms`.
 fn policy(config: &Config) -> Result<(Policy, usize), Error> {
@@ -236,8 +248,8 @@ impl<D: Device> Output<D> {
             }; ACK_CAPACITY],
             entry_head: 0,
             entry_count: 0,
-            overflow_drops: 0,
             start_chunks,
+            depth_range: None,
             fade: [0; SLOT_BYTES],
             fade_bytes: config.fade_frames as usize * config.channels as usize * 2,
             fade_pending: false,
@@ -291,7 +303,7 @@ impl<D: Device> Output<D> {
         self.entry_count += 1;
         self.stats.received += 1;
         let Some(slot) = slot else {
-            self.overflow_drops += 1;
+            self.stats.overflow_drops += 1;
             self.stats.dropped += 1;
             return Ok(());
         };
@@ -419,10 +431,27 @@ impl<D: Device> Output<D> {
 
     fn copy_queue_stats(&mut self) {
         let queue: audio::Stats = self.queue.stats();
-        self.stats.dropped = queue.dropped + self.overflow_drops;
+        self.stats.dropped = queue.dropped + self.stats.overflow_drops;
         self.stats.cuts = queue.cuts;
         self.stats.depth_ms = (queue.depth_us / 1000) as u32;
         self.stats.max_depth_ms = (queue.max_depth_us / 1000) as u32;
+    }
+
+    fn track_depth(&mut self, now_ms: u64) {
+        let depth = self.stats.depth_ms;
+        let range = self.depth_range.get_or_insert(DepthRange {
+            since_ms: now_ms,
+            low_ms: depth,
+            high_ms: depth,
+        });
+        range.low_ms = range.low_ms.min(depth);
+        range.high_ms = range.high_ms.max(depth);
+        if now_ms - range.since_ms < DEPTH_PERIOD_MS {
+            return;
+        }
+        self.stats.second_low_depth_ms = range.low_ms;
+        self.stats.second_high_depth_ms = range.high_ms;
+        self.depth_range = None;
     }
 
     /// Collects released buffers, paces the queue and appends to the device. Call at least
@@ -447,6 +476,7 @@ impl<D: Device> Output<D> {
             };
         }
         self.copy_queue_stats();
+        self.track_depth(now_ms);
         result
     }
 

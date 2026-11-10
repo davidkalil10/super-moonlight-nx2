@@ -1,7 +1,10 @@
 //! libounce audout behind the io crate's `audio::Device`. C side: src/rust/nro/io_adapter.c.
 //! Behaviour follows src/native/audio/audout.c.
 
-use crate::sdk;
+extern crate alloc;
+
+use crate::{device::log, sdk};
+use alloc::format;
 use core::ptr::NonNull;
 use moonlight_nx2_io::audio::{Device, DeviceError, Format, SLOT_BYTES, SLOTS, Slots};
 
@@ -63,7 +66,10 @@ impl Audout {
         self.last_result
     }
 
-    fn check(&mut self, status: u32, raw: u32) -> Result<(), DeviceError> {
+    fn check(&mut self, call: &str, status: u32, raw: u32) -> Result<(), DeviceError> {
+        if status != AUDIO_OK {
+            log(&format!("audio: {call} failed result=0x{raw:08x}"));
+        }
         match status {
             AUDIO_OK => Ok(()),
             AUDIO_REFUSED => {
@@ -95,11 +101,15 @@ impl Audout {
         }
     }
 
-    fn call(&mut self, f: unsafe extern "C" fn(*mut u32) -> u32) -> Result<(), DeviceError> {
+    fn call(
+        &mut self,
+        name: &str,
+        f: unsafe extern "C" fn(*mut u32) -> u32,
+    ) -> Result<(), DeviceError> {
         self.ready()?;
         let mut raw = 0;
         let status = unsafe { f(&mut raw) };
-        self.check(status, raw)
+        self.check(name, status, raw)
     }
 }
 
@@ -122,7 +132,11 @@ impl Device for Audout {
         let memory = memory.as_ptr().cast::<u8>();
         let status =
             unsafe { moonlightIoAudioOpen(memory, SLOT_BYTES as u32, &mut format, &mut raw) };
-        self.check(status, raw)?;
+        log(&format!(
+            "audio: open result=0x{raw:08x} rate={} channels={} bits={} signed={} slots={SLOTS} slot_bytes={SLOT_BYTES}",
+            format.sample_rate, format.channels, format.sample_bits, format.sample_signed
+        ));
+        self.check("open", status, raw)?;
 
         self.state = AudioState::Open;
         Ok(Format {
@@ -141,7 +155,7 @@ impl Device for Audout {
         }
         let mut raw = 0;
         let status = unsafe { moonlightIoAudioAppend(slot, bytes as u32, &mut raw) };
-        self.check(status, raw)
+        self.check("append", status, raw)
     }
 
     fn released(&mut self) -> Result<Option<usize>, DeviceError> {
@@ -149,7 +163,7 @@ impl Device for Audout {
         let mut slot = -1;
         let mut raw = 0;
         let status = unsafe { moonlightIoAudioReleased(&mut slot, &mut raw) };
-        self.check(status, raw)?;
+        self.check("released", status, raw)?;
         match slot {
             -1 => Ok(None),
             0.. => Ok(Some(slot as usize)),
@@ -162,7 +176,7 @@ impl Device for Audout {
         let mut count = 0;
         let mut raw = 0;
         let status = unsafe { moonlightIoAudioQueued(&mut count, &mut raw) };
-        self.check(status, raw)?;
+        self.check("queued", status, raw)?;
         Ok(count)
     }
 
@@ -172,24 +186,24 @@ impl Device for Audout {
         let mut contains = true;
         let mut raw = 0;
         let status = unsafe { moonlightIoAudioContains(slot, &mut contains, &mut raw) };
-        self.check(status, raw)?;
+        self.check("contains", status, raw)?;
         Ok(contains)
     }
 
     fn start(&mut self) -> Result<(), DeviceError> {
-        self.call(moonlightIoAudioStart)
+        self.call("start", moonlightIoAudioStart)
     }
 
     fn stop(&mut self) -> Result<(), DeviceError> {
-        self.call(moonlightIoAudioStop)
+        self.call("stop", moonlightIoAudioStop)
     }
 
     fn flush(&mut self) -> Result<(), DeviceError> {
-        self.call(moonlightIoAudioFlush)
+        self.call("flush", moonlightIoAudioFlush)
     }
 
     fn close(&mut self) -> Result<(), DeviceError> {
-        self.call(moonlightIoAudioClose)?;
+        self.call("close", moonlightIoAudioClose)?;
         self.state = AudioState::Closed;
         Ok(())
     }
