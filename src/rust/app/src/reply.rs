@@ -227,6 +227,7 @@ pub enum EventClass {
     UpstreamStatus,
     Rumble,
     Touch,
+    HostDisplay,
     Lifecycle,
     Unknown,
     Unclassifiable,
@@ -261,6 +262,8 @@ pub fn classify_event(payload: &[u8]) -> EventClass {
         EventClass::Rumble
     } else if event.string_is("touch") {
         EventClass::Touch
+    } else if event.string_is("host_display") {
+        EventClass::HostDisplay
     } else if ["connected", "stopped", "stream_failed"]
         .iter()
         .any(|name| event.string_is(name))
@@ -268,6 +271,50 @@ pub fn classify_event(payload: &[u8]) -> EventClass {
         EventClass::Lifecycle
     } else {
         EventClass::Unknown
+    }
+}
+
+/// Why the PC display does not follow the stream, as the host names it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DisplayUnmatched {
+    Unsupported,
+    RemotePc,
+    Config,
+    NoOutput,
+    NoMode,
+    Failed,
+    /// A reason from a newer host.
+    Other,
+}
+
+impl DisplayUnmatched {
+    fn named(reason: Value<'_>) -> Self {
+        [
+            ("unsupported", Self::Unsupported),
+            ("remote_pc", Self::RemotePc),
+            ("config", Self::Config),
+            ("no_output", Self::NoOutput),
+            ("no_mode", Self::NoMode),
+            ("failed", Self::Failed),
+        ]
+        .into_iter()
+        .find(|(name, _)| reason.string_is(name))
+        .map_or(Self::Other, |(_, known)| known)
+    }
+
+    /// The line shown over the stream.
+    pub fn note(self) -> &'static str {
+        match self {
+            Self::Unsupported => {
+                "PC display not matched \u{b7} no supported display control on this PC"
+            }
+            Self::RemotePc => "PC display not matched \u{b7} Sunshine runs on another PC",
+            Self::Config => "PC display not matched \u{b7} check display.json on the PC",
+            Self::NoOutput => "PC display not matched \u{b7} name the output in display.json",
+            Self::NoMode => "PC display not matched \u{b7} it has no mode for this stream",
+            Self::Failed => "PC display not matched \u{b7} the mode change failed",
+            Self::Other => "PC display not matched",
+        }
     }
 }
 
@@ -305,6 +352,8 @@ pub enum Reply<'a> {
     Touch {
         supported: bool,
     },
+    /// ID 0: "Optimise game settings" is on and the PC display stays as it is.
+    HostDisplay(DisplayUnmatched),
     /// `message` is the host's text: empty when absent, oversized or not plain text.
     Failure {
         code: Code,
@@ -380,6 +429,14 @@ fn lifecycle(root: Value<'_>) -> Result<Reply<'_>, Error> {
             .and_then(|flag| flag.as_bool())
             .ok_or(Error::Shape)?;
         return Ok(Reply::Touch { supported });
+    }
+    if event.string_is("host_display") {
+        exact_keys(root, &["event", "reason"])?;
+        let reason = root
+            .member("reason")
+            .filter(|reason| reason.kind() == Kind::String)
+            .ok_or(Error::Shape)?;
+        return Ok(Reply::HostDisplay(DisplayUnmatched::named(reason)));
     }
     if event.string_is("stream_failed") {
         exact_keys(root, &["event", "start_id", "code", "message"])?;

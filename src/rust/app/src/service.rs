@@ -149,6 +149,8 @@ pub enum Action {
     Rumble(reply::Rumble),
     /// The PC takes no touch: show the note once over the stream.
     TouchNote,
+    /// The PC display does not follow the stream: show why over the stream.
+    DisplayNote(reply::DisplayUnmatched),
     /// Open video/audio channels for this accepted descriptor; report back with `runtime`.
     OpenMedia(Descriptor),
     /// Drain then close media (`Media::begin_drain`, step until drained or `DrainTimeout`,
@@ -1266,6 +1268,10 @@ impl Service {
                     Ok(Reply::Touch { supported }) => Outcome::Owned(Reply::Touch { supported }),
                     _ => Outcome::InvalidAdvisory,
                 },
+                EventClass::HostDisplay => match decoded {
+                    Ok(Reply::HostDisplay(reason)) => Outcome::Owned(Reply::HostDisplay(reason)),
+                    _ => Outcome::InvalidAdvisory,
+                },
                 EventClass::Unknown => Outcome::IgnoredEvent,
                 EventClass::Lifecycle | EventClass::Unclassifiable
                     if decoded.is_err() && self.telemetry_negotiated() =>
@@ -1335,6 +1341,7 @@ impl Service {
             Reply::UpstreamStatus(status) => Outcome::Upstream(status),
             Reply::Rumble(rumble) => Outcome::Owned(Reply::Rumble(rumble)),
             Reply::Touch { supported } => Outcome::Owned(Reply::Touch { supported }),
+            Reply::HostDisplay(reason) => Outcome::Owned(Reply::HostDisplay(reason)),
             Reply::Failure { code, message } => Outcome::Owned(Reply::Failure { code, message }),
         }
     }
@@ -1639,6 +1646,10 @@ impl Service {
                 self.act(Action::TouchNote)
             }
             Reply::Touch { .. } => self.stats.stale += 1,
+            Reply::HostDisplay(reason) if self.phase == Phase::Streaming => {
+                self.act(Action::DisplayNote(reason))
+            }
+            Reply::HostDisplay(_) => self.stats.stale += 1,
             _ => self.stats.malformed += 1,
         }
     }
