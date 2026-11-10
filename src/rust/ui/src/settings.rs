@@ -583,7 +583,7 @@ impl Settings {
             return;
         }
         let mut best = None;
-        for codec in [Codec::H264, Codec::Av1, Codec::Hevc] {
+        for codec in [Codec::Av1, Codec::H264, Codec::Hevc] {
             for size in Size::ALL {
                 if size.docked_only() && !docked {
                     continue;

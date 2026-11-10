@@ -199,7 +199,7 @@ const fn at_30(tuning: Tuning) -> Tuning {
 /// and refuses it at 60, and refuses 1440p at 120: first where the 2160p limit sits, on
 /// two-frame sessions that are known to close cleanly either way, then 120 at two sizes, then
 /// clips fed faster than the decoder was told. Those come last: a decoder fed past its
-/// configured rate has never run.
+/// configured rate has never run. AV1 goes before H.264 in each part.
 #[cfg(feature = "diagnostic-sdk-modes-rate")]
 const TRIALS: [Trial; 16] = [
     trial("av1_2160p_r59", AV1_2160P, rate(59)),
@@ -207,16 +207,16 @@ const TRIALS: [Trial; 16] = [
     trial("av1_2160p_r48", AV1_2160P, rate(48)),
     trial("av1_2160p_r45", AV1_2160P, rate(45)),
     trial("av1_2160p_r40", AV1_2160P, rate(40)),
-    trial("h264_2160p_r30", H264_2160P, rate(30)),
     fed(120, "av1_1440p120_r120", AV1_1440P120, 120),
-    fed(120, "h264_1440p120_r120", H264_1440P120, 120),
     fed(120, "av1_1080p120_r120", AV1_1080P120, 120),
+    trial("h264_2160p_r30", H264_2160P, rate(30)),
+    fed(120, "h264_1440p120_r120", H264_1440P120, 120),
     fed(120, "h264_1080p120_r120", H264_1080P120, 120),
     fed(60, "av1_2160p_r30_fed60", AV1_2160P_LONG, 30),
-    fed(60, "h264_2160p_r30_fed60", H264_2160P_LONG, 30),
     fed(120, "av1_1440p120_r60_fed120", AV1_1440P120, 60),
-    fed(120, "h264_1440p120_r60_fed120", H264_1440P120, 60),
     fed(120, "av1_1080p120_r60_fed120", AV1_1080P120, 60),
+    fed(60, "h264_2160p_r30_fed60", H264_2160P_LONG, 30),
+    fed(120, "h264_1440p120_r60_fed120", H264_1440P120, 60),
     fed(120, "h264_1080p120_r60_fed120", H264_1080P120, 60),
 ];
 #[cfg(feature = "diagnostic-sdk-modes-rate")]

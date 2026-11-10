@@ -30,11 +30,12 @@ pub const SDK_DOCKED_MODES: bool = cfg!(feature = "sdk-video-docked-modes");
 /// and only on a display that presented at 120 Hz.
 pub const SDK_120HZ: bool = cfg!(feature = "sdk-video-120hz");
 const FAST_FPS: u32 = if SDK_120HZ { 120 } else { 60 };
-/// Largest size and rate per tier, and whether it is offered.
-const MODES: [(u32, u32, u32, bool); 3] = [
-    (1920, 1080, FAST_FPS, true),
-    (2560, 1440, FAST_FPS, true),
-    (3840, 2160, 60, SDK_DOCKED_MODES),
+/// Largest size and rate per tier, and whether it is offered on AV1 and on H.264. AV1 comes
+/// first and a tier may be offered on it alone: H.264 is the fallback, not a condition.
+const MODES: [(u32, u32, u32, bool, bool); 3] = [
+    (1920, 1080, FAST_FPS, true, true),
+    (2560, 1440, FAST_FPS, true, true),
+    (3840, 2160, 60, SDK_DOCKED_MODES, SDK_DOCKED_MODES),
 ];
 const SUBMIT_BUSY: u32 = (3603 << 9) | 111;
 
@@ -281,8 +282,8 @@ fn check(operation: &str, result: u32) -> Result<(), BackendError> {
 impl Backend for SdkVideo {
     fn capabilities() -> Capabilities {
         let mut capabilities = Capabilities::default();
-        for codec in [Codec::H264, Codec::Av1] {
-            for (width, height, fps, offered) in MODES {
+        for (width, height, fps, av1, h264) in MODES {
+            for (codec, offered) in [(Codec::Av1, av1), (Codec::H264, h264)] {
                 if verified(codec) && offered {
                     capabilities.record(
                         Mode {
