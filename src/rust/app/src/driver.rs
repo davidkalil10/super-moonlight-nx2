@@ -256,7 +256,6 @@ impl Driver {
     /// A fresh recorder for each stream; the stop chord ends only the stream it was held in.
     pub fn stream_opened(&mut self) {
         self.recorder = Recorder::new();
-        self.recorder.reserve_menu_chord();
         self.stop_sent = false;
     }
 

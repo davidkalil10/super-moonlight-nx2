@@ -961,7 +961,7 @@ impl Model {
 
     fn on_streaming(&mut self, op: Op, item: u32, step: &mut Step) {
         if op == Op::Chord {
-            if self.overlay {
+            if self.overlay || !self.settings.on(Setting::MenuChord) {
                 return;
             }
             self.overlay = true;

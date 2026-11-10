@@ -322,6 +322,11 @@ impl<F: Files + Clone> Client<F> {
         }
         let storage = storage(bytes)?;
         let active = self.bridge.model().screen() == Screen::Streaming
+            && self
+                .bridge
+                .model()
+                .settings()
+                .on(moonlight_nx2_ui::settings::Setting::MenuChord)
             && self.driver.service().phase() == moonlight_nx2_app::stream::Phase::Streaming
             && self.bridge.overlay_ready(storage);
         if self.menu_chord.update(input, active, now_ms) && self.bridge.show_overlay(storage) {
@@ -335,7 +340,11 @@ impl<F: Files + Clone> Client<F> {
     }
 
     pub fn needs_ui_compute(&mut self, input: &crate::hid::FrameInput, frame: &Frame) -> bool {
-        let enabled = View(&mut self.bridge).stream_options().menu_chord;
+        let enabled = self
+            .bridge
+            .model()
+            .settings()
+            .on(moonlight_nx2_ui::settings::Setting::MenuChord);
         self.ui_schedule
             .needs_compute(input, frame.interactive, enabled)
     }

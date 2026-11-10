@@ -41,7 +41,8 @@ impl InputGate {
     }
 }
 
-const MENU_CHORD: u64 = (3 << 6) | (3 << 10);
+/// L and R held together, as the Civ7 control shader counts them.
+const MENU_CHORD: u64 = 3 << 6;
 
 #[derive(Default)]
 pub struct MenuChord {
@@ -78,9 +79,10 @@ impl UiSchedule {
         &mut self,
         input: &FrameInput,
         page_interactive: bool,
-        _menu_enabled: bool,
+        menu_enabled: bool,
     ) -> bool {
-        let active = input.pad.connected && input.raw_buttons & MENU_CHORD == MENU_CHORD;
+        let active =
+            menu_enabled && input.pad.connected && input.raw_buttons & MENU_CHORD == MENU_CHORD;
         let needed = page_interactive || active || self.chord_active;
         self.chord_active = active;
         needed
