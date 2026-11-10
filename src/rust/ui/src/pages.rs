@@ -73,7 +73,7 @@ const RESUME_HEIGHT: u32 = 84;
 const RESUME_Y: u32 = RULE_BOTTOM - 24 - RESUME_HEIGHT;
 const RESUME_PAD: u32 = 34;
 const RESUME_APP_MAX: u32 = 700;
-const PLUS_PILL: (u32, u32) = (62, 40);
+const RESUME_PILL: (u32, u32) = (62, 40);
 const DOT: u32 = 20;
 const STATUS_CENTRE: u32 = 33;
 const SHEET_ICON_CENTRE: u32 = 15;
@@ -542,9 +542,9 @@ impl Builder<'_> {
         let width = self.text_width(label, BODY) + 2;
         let label_x = RIGHT - RESUME_PAD - width;
         self.put(label_x, y + 20, width, label, BODY, pal.ink, Align::Left);
-        let pill_x = label_x - 12 - PLUS_PILL.0;
-        self.fill(pill_x, y + (RESUME_HEIGHT - PLUS_PILL.1) / 2, PLUS_PILL.0, PLUS_PILL.1, pal.ink, PLUS_PILL.1 / 2);
-        self.put(pill_x, y + 20, PLUS_PILL.0, "+", BODY_BOLD, pal.ground, Align::Center);
+        let pill_x = label_x - 12 - RESUME_PILL.0;
+        self.fill(pill_x, y + (RESUME_HEIGHT - RESUME_PILL.1) / 2, RESUME_PILL.0, RESUME_PILL.1, pal.ink, RESUME_PILL.1 / 2);
+        self.put(pill_x, y + 20, RESUME_PILL.0, "\u{2212}", BODY_BOLD, pal.ground, Align::Center);
     }
 
     fn add_host_page(&mut self, model: &Model) {
@@ -659,7 +659,7 @@ impl Builder<'_> {
     }
 
     fn apps_page(&mut self, model: &Model) {
-        let keys: Keys = &[("+", "Stream options"), ("X", "Settings"), ("B", "PCs"), ("A", "Launch")];
+        let keys: Keys = &[("\u{2212}", "Stream options"), ("X", "Settings"), ("B", "PCs"), ("A", "Launch")];
         let quit: Keys = &[("Y", "Quit host app")];
         let apps = model.apps();
         let count = apps.len() as u32;

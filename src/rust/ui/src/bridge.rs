@@ -48,7 +48,7 @@ const OPS: [Op; 9] = [
     Op::Chord,
     Op::Edit,
     Op::Focus,
-    Op::Plus,
+    Op::Minus,
 ];
 
 pub type Storage = [u8; STORAGE_BYTES];

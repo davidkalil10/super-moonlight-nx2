@@ -109,13 +109,13 @@
   },
   "blob": {
     "path": "shaders.bin",
-    "bytes": 91680,
-    "sha256": "fcf575b6a000e257101d2e5759fd79e6fe772eefa3e705bd728cafccae0ba1f4"
+    "bytes": 91696,
+    "sha256": "6684b9e2b21dcfe7a2e9c91b644bac8f4faebd89b55427ed36d04487f90ce6ce"
   },
   "sources": {
-    "publish.comp": "208372a9cc3ce67e554b1bf289225814969cbc33f9f9a7db7fa41e98f21ca086",
+    "publish.comp": "9a52f6d19abb08bf7d6f63dccbea17fff490ee03d3b7fb30ee053a4bea93567e",
     "storage.glsl": "81c18548664c68dfcf7bb9b2ce683234dbcd08b161a6c1756555ace8a912d3e6",
-    "ui-control.glsl": "0c3cd09668b0978f7b854a8f88acbd3cc2724243c10c07a75bf4f79a30663578",
+    "ui-control.glsl": "5133603d4f47f285dfd86b309fb4c7a11418e596f8a5184463582e8fe346de34",
     "ui.frag": "b2097ac18a83855ddc96e5a0d4c0b004aaa78e37e24e71d82c0e0c683dbf5a1d",
     "ui.vert": "11b8ef7ae3a3897d010a06bb30c9ed62c2fbb521dca039d8d73b29341bd79b97",
     "video-storage.frag": "bd7c0b6877d11fafa3d691d01498d5039651f434d6dcba9fdcf7ed66d0b5fdb9",

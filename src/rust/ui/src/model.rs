@@ -161,7 +161,7 @@ pub enum Op {
     Chord,
     Edit,
     Focus,
-    Plus,
+    Minus,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -1051,7 +1051,7 @@ impl Model {
     }
 
     fn on_hosts(&mut self, op: Op, item: u32, step: &mut Step) {
-        if (op, item) == (Op::A, item::RESUME_HOST) || op == Op::Plus {
+        if (op, item) == (Op::A, item::RESUME_HOST) || op == Op::Minus {
             self.on_resume_host(step);
             return;
         }
@@ -1509,7 +1509,7 @@ impl Model {
             step.changed = true;
             return;
         }
-        if op == Op::Plus && self.screen == Screen::Apps && self.app_count > 0 {
+        if op == Op::Minus && self.screen == Screen::Apps && self.app_count > 0 {
             self.screen = Screen::AppOptions;
             self.editing = None;
             step.changed = true;
@@ -1907,7 +1907,7 @@ mod app_options_tests {
         let mut model = browsing();
         for expected in [Screen::Apps, Screen::AppOptions] {
             if expected == Screen::AppOptions {
-                run(&mut model, Op::Plus, 0, 0);
+                run(&mut model, Op::Minus, 0, 0);
             }
             assert_eq!(model.screen(), expected);
             run(&mut model, Op::X, 0, 0);
@@ -1925,7 +1925,7 @@ mod app_options_tests {
     #[test]
     fn x_does_nothing_while_a_row_is_being_edited() {
         let mut model = browsing();
-        run(&mut model, Op::Plus, 0, 0);
+        run(&mut model, Op::Minus, 0, 0);
         run(&mut model, Op::Edit, item::SETTING + Setting::Fps as u32, 0);
         run(&mut model, Op::X, 0, 0);
         assert_eq!(model.screen(), Screen::AppOptions);
@@ -1933,7 +1933,7 @@ mod app_options_tests {
 
     fn raise_fps(model: &mut Model) -> Step {
         let fps = item::SETTING + Setting::Fps as u32;
-        run(model, Op::Plus, 0, 0);
+        run(model, Op::Minus, 0, 0);
         run(model, Op::Edit, fps, 0);
         let step = run(model, Op::Adjust, fps, 1);
         run(model, Op::Edit, 0, 0);
@@ -2013,7 +2013,7 @@ mod app_options_tests {
     }
 
     #[test]
-    fn plus_resumes_the_running_app_unless_the_pc_went_quiet() {
+    fn minus_resumes_the_running_app_unless_the_pc_went_quiet() {
         let mut model = browsing();
         model.current_game = 7;
         model.resume = Some(Resume {
@@ -2025,11 +2025,11 @@ mod app_options_tests {
         let address = Address::of("192.168.1.4");
         model.set_presence(&address, Presence::Offline);
         assert!(model.resume().is_none());
-        run(&mut model, Op::Plus, 0, 0);
+        run(&mut model, Op::Minus, 0, 0);
         assert_eq!(model.screen(), Screen::Hosts);
 
         model.set_presence(&address, Presence::Online);
-        let step = run(&mut model, Op::Plus, 0, 0);
+        let step = run(&mut model, Op::Minus, 0, 0);
         assert_eq!(model.screen(), Screen::Connecting);
         assert!(step.intents().any(|i| i.kind == IntentKind::List));
     }

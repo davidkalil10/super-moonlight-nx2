@@ -12,7 +12,7 @@ const uint UI_FLAG_OVERLAY = 1u, UI_FLAG_HIDE_CURSOR = 2u, UI_FLAG_NO_CHORD = 4u
 const uint UI_ITEM_GREYED = 1u, UI_ITEM_CURRENT = 2u, UI_ITEM_ADJUSTABLE = 4u,
            UI_ITEM_PENDING = 8u, UI_ITEM_EDITING = 16u, UI_ITEM_REPORTS_FOCUS = 32u;
 const uint UI_OP_A = 1u, UI_OP_B = 2u, UI_OP_X = 3u, UI_OP_Y = 4u,
-           UI_OP_ADJUST = 5u, UI_OP_CHORD = 6u, UI_OP_EDIT = 7u, UI_OP_FOCUS = 8u, UI_OP_PLUS = 9u;
+           UI_OP_ADJUST = 5u, UI_OP_CHORD = 6u, UI_OP_EDIT = 7u, UI_OP_FOCUS = 8u, UI_OP_MINUS = 9u;
 const uint UI_CHORD_FRAMES = 60u, UI_STICK_REPEAT = 12u;
 
 uint uiPageBase(uint page) { return UI_BASE + page * UI_PAGE_WORDS; }
@@ -278,8 +278,8 @@ void uiInput() {
     } else if ((pressed & BUTTON_Y) != 0u) {
       uiCommand(UI_OP_Y, id, 0u);
       sent = true;
-    } else if ((pressed & BUTTON_PLUS) != 0u) {
-      uiCommand(UI_OP_PLUS, id, 0u);
+    } else if ((pressed & BUTTON_MINUS) != 0u) {
+      uiCommand(UI_OP_MINUS, id, 0u);
       sent = true;
     }
   }
