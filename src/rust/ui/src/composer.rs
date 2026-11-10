@@ -574,19 +574,6 @@ impl Builder<'_> {
         });
     }
 
-    pub(crate) fn outline(&mut self, x: u32, y: u32, w: u32, h: u32, color: u32, radius: u32) {
-        self.shape(Shape {
-            x,
-            y,
-            w,
-            h,
-            radius,
-            stroke: color,
-            stroke_width: 2,
-            ..Shape::default()
-        });
-    }
-
     pub(crate) fn dot(&mut self, x: u32, y: u32, size: u32, color: u32) {
         self.fill(x, y, size, size, color, size / 2);
     }
