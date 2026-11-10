@@ -20,6 +20,7 @@ use subtle::ConstantTimeEq;
 mod video_read;
 
 const MEDIA_CLOSE_CONTROL_GRACE: Duration = Duration::from_secs(2);
+const STATUS_LINES_PER_POLL: usize = 16;
 
 #[derive(Debug)]
 pub enum Error {
@@ -34,7 +35,8 @@ pub enum Error {
     Status(status::Error),
     Io(io::Error),
     Cleanup(Box<Error>),
-    ProcessFailed,
+    /// The worker ended without being asked to, or the helper ended it: its status says which.
+    ProcessFailed(helper::Status),
     Timeout,
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -509,7 +511,7 @@ impl Relay {
         {
             Status::Running => {}
             Status::Exited(code) if self.stop_started && code.success() => self.child_exited = true,
-            _ => return Err(Error::ProcessFailed),
+            status => return Err(Error::ProcessFailed(status)),
         }
         if self.await_stop_request
             && self
@@ -688,7 +690,23 @@ impl Relay {
         }
         Ok(())
     }
+    /// Takes the worker's status lines that have arrived, up to `STATUS_LINES_PER_POLL`. The
+    /// worker writes one per access unit; taking one a poll fell behind a 120 fps stream until
+    /// the bounded output queue overflowed and the helper ended the worker.
     fn read_status(&mut self, now: Instant) -> Result<Option<Event>, Error> {
+        for _ in 0..STATUS_LINES_PER_POLL {
+            let before = (self.status_offset, self.status_bytes.len());
+            if let Some(event) = self.read_status_line(now)? {
+                return Ok(Some(event));
+            }
+            if before == (self.status_offset, self.status_bytes.len()) {
+                break;
+            }
+        }
+        Ok(None)
+    }
+
+    fn read_status_line(&mut self, now: Instant) -> Result<Option<Event>, Error> {
         if self.status_offset == self.status_bytes.len() {
             self.status_bytes.clear();
             self.status_offset = 0;
