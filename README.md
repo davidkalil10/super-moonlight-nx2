@@ -86,7 +86,12 @@ once on the badge.
 
 ## Development
 
-Tests, tools and design notes live in the separate `moonlight-nx2-dev` repository.
+Tests, tools and design notes live in the separate `moonlight-nx2-dev` repository. Its
+parity tests compare the Rust UI and wire code with the C sources under `src/native`.
+
+The Civilization VII payload this app replaces is still under `src/streamer` and
+`src/renderer`: the Rust build takes its shader bundle and glyph atlas from there, and the
+PC bundle its pinned Moonlight sources (`src/streamer/protocol`).
 
 ## Credits
 

@@ -1,6 +1,0 @@
-Copied unmodified from ../libnx2 (ISC, see LICENSE) at c278681cfd36768102ef7abdefed095f4e9c3efd
-plus uncommitted working-tree files, 2026-11-09:
-5e6159853c8357d7766503bf96777c15e9de63c3a1168944ad0634c9153ff079  src/runtime/module.c (uncommitted)
-811908a77834d69feac9a4e31746473634c8b95fa842c74dbd585f66bc12837d  include/libnx2/runtime/module.h (uncommitted)
-1abcc1d2040cd07911ba3c31c75f2af57aa6c221d7aff99e051891f540c73995  include/libnx2/types.h
-a30ba36979944ccb1c78185085f23a6af765b23043bb05b68a57aab67f05d62d  include/libnx2/result.h
