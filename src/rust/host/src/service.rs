@@ -25,7 +25,7 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-pub const DEFAULT_PORT: u16 = 39381;
+pub const DEFAULT_PORT: u16 = moonlight_nx2_secure::PORT;
 pub const ADMIN_SOCKET: &str = "admin.sock";
 const HELLO_LIMIT: Duration = Duration::from_secs(10);
 const PAIR_LIMIT: Duration = Duration::from_secs(120);

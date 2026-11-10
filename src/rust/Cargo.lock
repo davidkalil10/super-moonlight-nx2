@@ -203,6 +203,7 @@ version = "0.1.0"
 dependencies = [
  "libc",
  "moonlight-nx2-core",
+ "moonlight-nx2-io",
  "moonlight-nx2-secure",
  "serde",
  "serde_json",
@@ -214,6 +215,8 @@ name = "moonlight-nx2-io"
 version = "0.1.0"
 dependencies = [
  "moonlight-nx2-core",
+ "moonlight-nx2-secure",
+ "rand_core",
 ]
 
 [[package]]
@@ -224,6 +227,7 @@ dependencies = [
  "moonlight-nx2-app",
  "moonlight-nx2-core",
  "moonlight-nx2-io",
+ "moonlight-nx2-secure",
  "moonlight-nx2-ui",
 ]
 

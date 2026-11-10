@@ -13,6 +13,8 @@ pub use record::{Opener, Sealer};
 
 pub const MAGIC: [u8; 4] = *b"MNS1";
 pub const VERSION: u8 = 1;
+/// The TCP port a helper service listens on unless told otherwise.
+pub const PORT: u16 = 39381;
 pub const ID_BYTES: usize = 16;
 pub const KEY_BYTES: usize = 32;
 pub const CODE_DIGITS: usize = 8;
