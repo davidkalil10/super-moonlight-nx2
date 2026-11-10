@@ -13,7 +13,7 @@ use core::cell::Cell;
 use moonlight_nx2_core::{
     codec::{Capabilities, Codec, Depth},
     decoder::{self, Backend, Decoder, FrameInfo, FrameToken, SURFACES},
-    frame::{Frame, Matrix, Plane},
+    frame::{Frame, Layout, Matrix, Plane},
     media::Header,
     recovery::{self, Decision, Recovery},
     stats::StreamStats,
@@ -404,13 +404,43 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
         }
     }
 
+    /// Shows a frame the decoder read straight into the renderer's upload slot.
+    fn publish_staged(
+        &mut self,
+        renderer: &mut Renderer,
+        slot: usize,
+        info: &FrameInfo,
+    ) -> Result<bool, Error> {
+        let published = Layout::coded(
+            info.coded.width(),
+            info.coded.height(),
+            info.display.width(),
+            info.display.height(),
+            self.matrix,
+        )
+        .map_err(render::Error::from)
+        .and_then(|layout| renderer.publish(slot, layout));
+        self.decoder
+            .release(info.token)
+            .map_err(|error| self.fail(Error::Decoder(error)))?;
+        match published {
+            Ok(_) => Ok(true),
+            Err(render::Error::Busy) => Ok(false),
+            Err(error) => Err(self.fail(Error::Renderer(error))),
+        }
+    }
+
     pub fn poll_upload(&mut self, renderer: &mut Renderer) -> Result<bool, Error> {
         self.active()?;
         self.release_bound(renderer)?;
         self.recovery.tick(platform::now_ns() / 1_000_000);
         self.forward_idr_request();
         let poll_start_ns = platform::now_ns();
-        let frame = self.decoder.poll();
+        let (staged_slot, frame) = match renderer.staging() {
+            Ok(Some((slot, staging))) => (Some(slot), self.decoder.poll_into(Some(staging))),
+            Ok(None) => (None, self.decoder.poll()),
+            Err(error) => return Err(self.fail(Error::Renderer(error))),
+        };
         stream_stats::stage(Stage::Poll, poll_start_ns, platform::now_ns());
         let frame = frame.map_err(|error| self.fail(Error::Decoder(error)))?;
         let Some(info) = frame else {
@@ -448,7 +478,10 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
                 .map_err(|error| self.fail(Error::Decoder(error)))?;
             return Ok(false);
         }
-        let uploaded = self.upload(renderer, &info);
+        let uploaded = match staged_slot.filter(|_| info.staged) {
+            Some(slot) => self.publish_staged(renderer, slot, &info),
+            None => self.upload(renderer, &info),
+        };
         stream_stats::stage(Stage::Upload, decoded_ns, platform::now_ns());
         if !uploaded? {
             self.stats.dropped += 1;

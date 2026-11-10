@@ -151,6 +151,38 @@ impl Frame<'_> {
 }
 
 impl Layout {
+    /// The layout of a coded NV12 frame written into a slot as it is: both planes keep the
+    /// coded width as their stride and the picture sits at the top left.
+    pub fn coded(
+        coded_width: u32,
+        coded_height: u32,
+        display_width: u32,
+        display_height: u32,
+        matrix: Matrix,
+    ) -> Result<Self, Error> {
+        if display_width == 0
+            || display_height == 0
+            || display_width > coded_width
+            || display_height > coded_height
+            || (coded_width | coded_height) & 1 != 0
+        {
+            return Err(Error::Invalid);
+        }
+        let layout = Self {
+            width: display_width,
+            height: display_height,
+            stride: coded_width,
+            slice_height: coded_height,
+            chroma_rows: coded_height / 2,
+            chroma_bytes: round_up(display_width, 2)?,
+            color: u32::from(matrix == Matrix::Bt709),
+        };
+        if coded_width > 8192 || coded_height > 8192 || layout.bytes() > FRAME_BYTES {
+            return Err(Error::Unsupported);
+        }
+        Ok(layout)
+    }
+
     pub fn bytes(&self) -> usize {
         self.stride as usize * self.slice_height as usize * 3 / 2
     }

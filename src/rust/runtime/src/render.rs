@@ -429,13 +429,36 @@ impl Renderer {
         self.active()?;
         frame.plan()?;
         let slot = self.acquire_slot()?;
+        let layout = frame.copy_to(self.slot_bytes(slot))?;
+        self.publish(slot, layout)
+    }
+
+    /// The free upload slot and its memory, for a frame written in place and then shown with
+    /// `publish`. None while both slots are still read.
+    pub fn staging(&mut self) -> Result<Option<(usize, &mut [u8])>, Error> {
+        self.active()?;
+        self.objects.collect(0)?;
+        let Some(slot) = self.objects.free_slot() else {
+            return Ok(None);
+        };
+        Ok(Some((slot, self.slot_bytes(slot))))
+    }
+
+    fn slot_bytes(&mut self, slot: usize) -> &mut [u8] {
+        let offset = frame::FRAMES_OFFSET + slot * frame::FRAME_BYTES;
+        &mut self.objects.storage.bytes_mut()[offset..offset + frame::FRAME_BYTES]
+    }
+
+    /// Makes the frame in `slot` the one the next present shows.
+    pub fn publish(&mut self, slot: usize, layout: frame::Layout) -> Result<usize, Error> {
+        self.active()?;
+        if self.objects.free_slot() != Some(slot) {
+            return Err(Error::Busy);
+        }
         #[cfg(all(target_os = "none", feature = "native-video"))]
         if let Some(native) = self.objects.native.as_mut() {
             native.forget_slot(slot);
         }
-        let offset = frame::FRAMES_OFFSET + slot * frame::FRAME_BYTES;
-        let layout = frame
-            .copy_to(&mut self.objects.storage.bytes_mut()[offset..offset + frame::FRAME_BYTES])?;
         self.objects.sequence = self.objects.sequence.wrapping_add(1).max(1);
         let sequence = self.objects.sequence;
         layout.publish(self.objects.storage.bytes_mut(), slot, sequence)?;

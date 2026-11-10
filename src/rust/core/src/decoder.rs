@@ -129,6 +129,8 @@ pub struct FrameInfo {
     pub coded: Size,
     pub display: Size,
     pub bound: Option<untile::Image>,
+    /// The frame was read into the caller's staging memory, not into a held frame.
+    pub staged: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -347,6 +349,12 @@ impl<'a, B: Backend<N>, const N: usize> Decoder<'a, B, N> {
     }
 
     pub fn poll(&mut self) -> Result<Option<FrameInfo>, Error> {
+        self.poll_into(None)
+    }
+
+    /// Polls like `poll`, but reads a copied frame straight into `staging` when it holds a
+    /// coded NV12 frame, sparing the caller a second copy. `frame` has no bytes for it.
+    pub fn poll_into(&mut self, staging: Option<&mut [u8]>) -> Result<Option<FrameInfo>, Error> {
         self.active()?;
         let Some(oldest) = self.pending[0] else {
             return Ok(None);
@@ -362,6 +370,7 @@ impl<'a, B: Backend<N>, const N: usize> Decoder<'a, B, N> {
             self.failed = true;
             return Err(Error::Failed);
         }
+        let staging = staging.filter(|staging| staging.len() >= self.config.coded.nv12_bytes());
         let ready = match self.backend.ready(surface) {
             Ok(ready) => ready,
             Err(error) => return Err(self.fail(error)),
@@ -401,6 +410,7 @@ impl<'a, B: Backend<N>, const N: usize> Decoder<'a, B, N> {
         } else {
             None
         };
+        let staged = bound.is_none() && staging.is_some();
         let token = match (bound, frame) {
             (Some(_), _) => {
                 self.queued.pop();
@@ -409,7 +419,11 @@ impl<'a, B: Backend<N>, const N: usize> Decoder<'a, B, N> {
                 token
             }
             (None, Some(frame)) => {
-                let target = &mut self.frames[frame][..self.config.coded.nv12_bytes()];
+                let bytes = self.config.coded.nv12_bytes();
+                let target = match staging {
+                    Some(staging) => &mut staging[..bytes],
+                    None => &mut self.frames[frame][..bytes],
+                };
                 if let Err(error) = self.backend.readback(surface, target) {
                     return Err(self.fail(error));
                 }
@@ -441,6 +455,7 @@ impl<'a, B: Backend<N>, const N: usize> Decoder<'a, B, N> {
             coded: self.config.coded,
             display: self.config.display,
             bound,
+            staged,
         }))
     }
 
