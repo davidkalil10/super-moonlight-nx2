@@ -118,18 +118,20 @@ def compare_log(log, reference, required=()):
             passed = False
             continue
         expected = load_sums(path)
-        good = 0
+        good = luma = chroma = 0
         for index, pts, y, uv in frames:
             want = expected.get(index)
             ok = want is not None and want == (pts, y, uv)
             good += ok
+            luma += want is not None and want[1] == y
+            chroma += want is not None and want[2] == uv
             if not ok:
                 detail = "missing" if want is None else f"want y={want[1]} uv={want[2]}"
-                luma = " (luma matches)" if want and want[1] == y else ""
-                print(f"{codec} frame {index}: y={y} uv={uv} {detail}{luma}")
+                print(f"{codec} frame {index}: y={y} uv={uv} {detail}")
         indices = [frame[0] for frame in frames]
         complete = len(frames) == len(expected) and set(indices) == set(expected)
         print(f"{codec}: {good}/{len(expected)} frames match"
+              f" (luma {luma}/{len(expected)}, chroma {chroma}/{len(expected)})"
               + ("" if complete else f", {len(frames)} logged"))
         passed &= complete and good == len(expected)
     return passed
