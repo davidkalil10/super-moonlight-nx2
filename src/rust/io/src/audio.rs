@@ -49,6 +49,9 @@ pub enum Error {
     Failed,
 }
 
+/// `output_ms` is what the device holds after a pump, and playback starts once it holds that
+/// much. It has to outlast the caller's pump period: a 60 Hz loop that misses a frame pumps
+/// 33 ms apart.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Config {
     pub sample_rate: u32,
@@ -67,10 +70,10 @@ impl Default for Config {
             sample_rate: 48_000,
             channels: 2,
             chunk_bytes: 1920,
-            target_ms: 20,
-            burst_ms: 70,
+            target_ms: 50,
+            burst_ms: 100,
             window_ms: 500,
-            output_ms: 20,
+            output_ms: 50,
             fade_frames: 72,
         }
     }
@@ -128,6 +131,7 @@ pub struct Output<D: Device> {
     entry_head: usize,
     entry_count: usize,
     overflow_drops: u64,
+    start_chunks: usize,
     fade: [u8; SLOT_BYTES],
     fade_bytes: usize,
     fade_pending: bool,
@@ -140,7 +144,8 @@ pub struct Output<D: Device> {
     stats: Stats,
 }
 
-fn policy(config: &Config) -> Result<Policy, Error> {
+/// The queue policy and how many chunks make `output_ms`.
+fn policy(config: &Config) -> Result<(Policy, usize), Error> {
     let rate_ok = (8_000..=192_000).contains(&config.sample_rate);
     let channels_ok = (1..=8).contains(&config.channels);
     if !rate_ok || !channels_ok {
@@ -162,15 +167,17 @@ fn policy(config: &Config) -> Result<Policy, Error> {
     if !scaled.is_multiple_of(byte_rate) {
         return Err(Error::Unsupported);
     }
+    let chunk_us = scaled / byte_rate;
     let ms = |value: u32| u64::from(value) * 1000;
-    Policy::new(
-        scaled / byte_rate,
+    let policy = Policy::new(
+        chunk_us,
         ms(config.target_ms),
         ms(config.burst_ms),
         ms(config.window_ms),
         ms(config.output_ms),
     )
-    .map_err(|_| Error::Invalid)
+    .map_err(|_| Error::Invalid)?;
+    Ok((policy, (ms(config.output_ms) / chunk_us) as usize))
 }
 
 fn format_matches(config: &Config, format: &Format) -> bool {
@@ -198,7 +205,7 @@ impl<D: Device> Output<D> {
         mut device: D,
         memory: &'static mut Slots,
     ) -> Result<Self, (Error, Retained<D>)> {
-        let policy = match policy(&config) {
+        let (policy, start_chunks) = match policy(&config) {
             Ok(policy) => policy,
             Err(error) => return Err((error, Retained::Returned(device, memory))),
         };
@@ -230,6 +237,7 @@ impl<D: Device> Output<D> {
             entry_head: 0,
             entry_count: 0,
             overflow_drops: 0,
+            start_chunks,
             fade: [0; SLOT_BYTES],
             fade_bytes: config.fade_frames as usize * config.channels as usize * 2,
             fade_pending: false,
@@ -400,7 +408,7 @@ impl<D: Device> Output<D> {
             self.append(slot as usize, now_ms)?;
         }
 
-        if self.started || self.queue.output_count() < 2 {
+        if self.started || self.queue.output_count() < self.start_chunks {
             return Ok(());
         }
         self.device.start().map_err(|error| self.fail(error))?;
