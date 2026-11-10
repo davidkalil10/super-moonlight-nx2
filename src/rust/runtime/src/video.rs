@@ -41,6 +41,9 @@ pub struct Stats {
     pub decoded: u64,
     pub uploaded: u64,
     pub dropped: u64,
+    /// Uploaded frames a newer one replaced before the display turned: a backlog worked off,
+    /// not a loss.
+    pub caught_up: u64,
     pub presented: u64,
     pub zero_copy: u64,
 }
@@ -489,7 +492,7 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
         }
         self.stats.uploaded += 1;
         if self.pending {
-            self.stats.dropped += 1;
+            self.stats.caught_up += 1;
         }
         self.pending = true;
         self.pending_arrival = arrival;
@@ -531,10 +534,15 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
         }
     }
 
-    /// Takes every frame the decoder finished since the last call and shows the newest, so a
-    /// step that submitted two units to work off a backlog does not leave one waiting.
+    /// Takes the frames the decoder finished since the last call and shows the newest, so a
+    /// step that submitted two units to work off a backlog does not leave one waiting. A frame
+    /// the renderer has no free slot for stays in the decoder for the next turn. One present
+    /// follows, so a turn lasts one display refresh.
     pub fn present(&mut self, renderer: &mut Renderer, interactive: bool) -> Result<bool, Error> {
         for _ in 0..decoder::UNITS {
+            if self.pending && matches!(renderer.staging(), Ok(None)) {
+                break;
+            }
             if !self.poll_upload(renderer)? {
                 break;
             }

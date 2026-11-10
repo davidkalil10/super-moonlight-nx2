@@ -116,8 +116,10 @@ impl Running {
         }
     }
 
-    /// What the console can measure for the bitrate and frame-rate policies: frames it decoded
-    /// but never showed or skipped while waiting for a keyframe, and the keyframes it asked for.
+    /// What the console can measure for the bitrate and frame-rate policies: frames it lost,
+    /// could not upload or skipped while waiting for a keyframe, and the keyframes it asked for.
+    /// Frames replaced while working off a backlog are not counted: they say the link was late
+    /// once, not that it loses frames.
     fn telemetry(&self, now_ms: u64) -> Telemetry {
         let (stats, recovery) = self.counters();
         let dropped = stats.dropped.saturating_add(recovery.frames_skipped);
@@ -410,11 +412,12 @@ impl Stream {
         };
         let (stats, recovery) = running.counters();
         log(&format!(
-            "stream: video units={} bytes={} presented={} dropped={} skipped={} idr_requests={}",
+            "stream: video units={} bytes={} presented={} dropped={} caught_up={} skipped={} idr_requests={}",
             stats.accepted_units,
             stats.accepted_bytes,
             stats.presented,
             stats.dropped,
+            stats.caught_up,
             recovery.frames_skipped,
             recovery.idr_requests
         ));
