@@ -35,7 +35,6 @@ SDK_FILES = (
 PRODUCTION = {
     "production": "frontend",
     "production-tcp": "frontend,video-tcp",
-    "production-120": "frontend,sdk-video-120hz",
     "production-120-decode": "frontend,sdk-video-120-decode",
 }
 # Diagnostics of the SDK video decoder: the frontend with reference clips replayed first.

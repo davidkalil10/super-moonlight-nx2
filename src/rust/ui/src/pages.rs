@@ -145,7 +145,15 @@ fn join(out: &mut String, part: Option<&str>) {
 
 /// Why a row cannot be changed right now, when it cannot.
 fn locked_reason(row: &SettingRow) -> Option<&'static str> {
-    (row.setting == Setting::Fps && !row.adjustable).then_some("Fixed for 4K")
+    if row.setting != Setting::Fps {
+        None
+    } else if !row.adjustable {
+        Some("Fixed for 4K")
+    } else if !row.can_left && !row.can_right {
+        Some("120 fps needs a 120 Hz display")
+    } else {
+        None
+    }
 }
 
 fn host_name(model: &Model) -> Option<&str> {

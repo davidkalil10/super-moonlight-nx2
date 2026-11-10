@@ -34,10 +34,8 @@ def nacp_version(description, revision):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--hz120", action="store_true",
-                        help="present at 120 Hz and offer 120 fps up to 1440p")
     parser.add_argument("--decode120", action="store_true",
-                        help="with --hz120, offer 120 fps on a 60 Hz display too, to measure the decoder")
+                        help="offer 120 fps on a 60 Hz display too, to measure the decoder")
     parser.add_argument("--tcp-video", action="store_true",
                         help="keep video on TCP instead of UDP")
     parser.add_argument("--diagnostic", choices=SDK_DIAGNOSTICS,
@@ -45,17 +43,13 @@ def main():
     parser.add_argument("--trials", choices=TRIALS, default=TRIALS[0],
                         help="the sessions an sdk-modes diagnostic runs")
     args = parser.parse_args()
-    if args.diagnostic and (args.hz120 or args.tcp_video):
+    if args.diagnostic and (args.decode120 or args.tcp_video):
         parser.error("--diagnostic goes alone")
-    if args.tcp_video and args.hz120:
-        parser.error("--tcp-video does not go with --hz120")
-    if args.decode120 and not args.hz120:
-        parser.error("--decode120 goes with --hz120")
+    if args.tcp_video and args.decode120:
+        parser.error("--tcp-video does not go with --decode120")
     diagnostic = args.diagnostic or "production"
-    if args.hz120:
-        diagnostic += "-120"
     if args.decode120:
-        diagnostic += "-decode"
+        diagnostic += "-120-decode"
     if args.tcp_video:
         diagnostic += "-tcp"
     name = diagnostic

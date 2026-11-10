@@ -17,11 +17,12 @@ pub struct FrameRates {
 }
 
 impl FrameRates {
-    /// A frame every refresh at 120 and at 60 Hz, at a fixed cadence.
+    /// A frame every refresh at 120 and at 60 Hz. Asking with VRR is what makes the display
+    /// prefer 120 Hz where it has it; the handheld panel reports both.
     pub const EVERY_REFRESH: Self = Self {
         at_120hz: 120,
         at_60hz: 60,
-        vrr: false,
+        vrr: true,
     };
 
     pub fn valid(self) -> bool {
@@ -216,17 +217,16 @@ impl Probe {
         true
     }
 
-    /// Records the layer's mode when the last second kept pace with `hz` (120 or 60 Hz, within
-    /// 10%). Returns true when the verified set for the current operation mode grew.
-    pub fn verify(&mut self, width: u32, height: u32, hz: u32) -> bool {
+    /// Records 120 for the layer's sizes once the display runs at 120 Hz and the window is
+    /// paced at every refresh (`every_refresh`: its present interval is 1/120). Returns true
+    /// when the set for the current operation mode grew. The present count is logged, not
+    /// judged: a menu that draws slower must not take 120 away from a stream.
+    pub fn verify(&mut self, width: u32, height: u32, hz: u32, every_refresh: bool) -> bool {
         use moonlight_nx2_app::policy::{DisplayEvidence, DisplayMode};
-        let Some(fps) = [120, 60]
-            .into_iter()
-            .find(|&fps| fps <= hz.max(60) && self.rate >= fps * 9 / 10)
-        else {
+        if !FAST_STREAM_AT_60HZ && !(hz == 120 && every_refresh) {
             return false;
-        };
-        let fps = if FAST_STREAM_AT_60HZ { 120 } else { fps };
+        }
+        let fps = 120;
         let index = usize::from(self.docked);
         let (best_width, best_height, best_fps) = self.best[index];
         if width <= best_width && height <= best_height && fps <= best_fps {

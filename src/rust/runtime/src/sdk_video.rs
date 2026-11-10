@@ -30,10 +30,9 @@ pub const SDK_AV1_2160P_VERIFIED: bool = true;
 /// H.264 at 2160p decoded 60 fed frames a second in the diagnostic with the decoder full on
 /// nearly every turn, and has not streamed: 2160p is AV1 only.
 pub const SDK_H264_2160P_VERIFIED: bool = false;
-/// 120 fps is not measured on the console yet. Only the 120 Hz build offers it, up to 1440p,
-/// and only on a display that presented at 120 Hz.
-pub const SDK_120HZ: bool = cfg!(feature = "sdk-video-120hz");
-const FAST_FPS: u32 = if SDK_120HZ { 120 } else { 60 };
+/// 120 units a second were decoded at 1440p on AV1 by a decoder configured at 60, in a real
+/// stream on the console (2026-11-10). The display decides whether 120 is offered.
+const FAST_FPS: u32 = 120;
 /// Largest size and rate per tier, and whether it is offered on AV1 and on H.264. AV1 comes
 /// first and a tier may be offered on it alone: H.264 is the fallback, not a condition.
 const MODES: [(u32, u32, u32, bool, bool); 3] = [

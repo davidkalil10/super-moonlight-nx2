@@ -16,9 +16,8 @@ python3 src/rust/build-production.py
 ```
 
 The NRO and its receipts land in `/media/storage2/builds/moonlight/<build-id>/`.
-`--hz120` builds the variant that presents at 120 Hz and offers 120 fps, `--hz120 --decode120`
-the one that measures the decoder at 120 fps on a 60 Hz display, and `--tcp-video` keeps video
-on TCP instead of UDP. Those three are test builds.
+`--decode120` builds the variant that measures the decoder at 120 fps on a 60 Hz display, and
+`--tcp-video` keeps video on TCP instead of UDP. Those two are test builds.
 
 The PC bundle is built on x86_64 Linux with Git and Podman:
 
@@ -62,7 +61,7 @@ Open **Settings** before launching a game. An app can keep its own picture optio
 | Option | Choices |
 | --- | --- |
 | Resolution | Automatic, 720p, 1080p; 1440p and 4K when docked |
-| Frame rate | 60 fps; 120 fps in the 120 Hz test build |
+| Frame rate | 60 fps; 120 fps up to 1440p while the display runs at 120 Hz, as the handheld screen does |
 | Bitrate | Auto from the network test, or 5–40 Mbps |
 | Codec | AV1, with H.264 as the fallback |
 | Optimise game settings | The PC display follows the stream's size and rate |

@@ -359,7 +359,10 @@ fn execute(renderer: &mut Renderer, connections: &mut NativeConnections, launch:
                 display_context(&mut app, dock.current(), probe.capabilities());
                 pending = false;
             }
-            pending |= probe.verify(info.width, info.height, hz);
+            let every_refresh = snapshot.is_some_and(|display| {
+                (display.interval_numerator, display.interval_denominator) == (1, 120)
+            });
+            pending |= probe.verify(info.width, info.height, hz, every_refresh);
             if pending && screen != Screen::Streaming {
                 display_context(&mut app, dock.current(), probe.capabilities());
                 pending = false;
@@ -421,25 +424,15 @@ fn execute(renderer: &mut Renderer, connections: &mut NativeConnections, launch:
     !failed && closed && stats.frames > 0 && !stats.rejected
 }
 
-/// Docked, the layer is 4K; the 120 Hz build asks for 1440p there, the largest size a TV shows
-/// at 120 Hz. That build and the decode diagnostics present every refresh, which also asks the
-/// display for 120 Hz.
+/// Docked, the layer is 4K. The window presents every refresh, which also asks the display for
+/// 120 Hz: the handheld panel has it, a TV has it or stays at 60.
 fn render_config(low_latency: bool) -> Config {
-    let (docked_width, docked_height) = if cfg!(feature = "sdk-video-120hz") {
-        (2560, 1440)
-    } else {
-        (3840, 2160)
-    };
-    let every_refresh = cfg!(any(
-        feature = "diagnostic-sdk-decode",
-        feature = "sdk-video-120hz"
-    ));
     Config {
         window_mode: WindowMode::PerMode {
-            docked_width,
-            docked_height,
+            docked_width: 3840,
+            docked_height: 2160,
         },
-        frame_rates: every_refresh.then_some(FrameRates::EVERY_REFRESH),
+        frame_rates: Some(FrameRates::EVERY_REFRESH),
         present: present_mode(low_latency),
         ..Config::default()
     }
