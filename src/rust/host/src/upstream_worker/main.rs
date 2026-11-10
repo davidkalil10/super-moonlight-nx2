@@ -334,6 +334,26 @@ fn list(server: &mut native::SERVER_DATA, host: &CStr, key_path: &std::path::Pat
     output(&value)
 }
 
+/// A random version 4 UUID, which Sunshine wants on every request.
+fn request_uuid() -> Option<String> {
+    let mut random = [0u8; 16];
+    std::fs::File::open("/dev/urandom")
+        .ok()?
+        .read_exact(&mut random)
+        .ok()?;
+    random[6] = (random[6] & 0x0f) | 0x40;
+    random[8] = (random[8] & 0x3f) | 0x80;
+    let hex = |bytes: &[u8]| -> String { bytes.iter().map(|byte| format!("{byte:02x}")).collect() };
+    Some(format!(
+        "{}-{}-{}-{}-{}",
+        hex(&random[..4]),
+        hex(&random[4..6]),
+        hex(&random[6..8]),
+        hex(&random[8..10]),
+        hex(&random[10..])
+    ))
+}
+
 fn server_details(
     server: &native::SERVER_DATA,
     host: &CStr,
@@ -349,32 +369,7 @@ fn server_details(
     if client_id.is_empty() || client_id.contains('\0') {
         return None;
     }
-    let mut random = [0u8; 16];
-    std::fs::File::open("/dev/urandom")
-        .ok()?
-        .read_exact(&mut random)
-        .ok()?;
-    random[6] = (random[6] & 0x0f) | 0x40;
-    random[8] = (random[8] & 0x3f) | 0x80;
-    let uuid = format!(
-        "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
-        random[0],
-        random[1],
-        random[2],
-        random[3],
-        random[4],
-        random[5],
-        random[6],
-        random[7],
-        random[8],
-        random[9],
-        random[10],
-        random[11],
-        random[12],
-        random[13],
-        random[14],
-        random[15]
-    );
+    let uuid = request_uuid()?;
     let url = CString::new(format!(
         "https://{}:{}/serverinfo?uniqueid={client_id}&uuid={uuid}",
         host.to_str().ok()?,

@@ -92,32 +92,7 @@ pub(super) fn fetch(
     if client_id.is_empty() || !client_id.bytes().all(|b| b.is_ascii_hexdigit()) {
         return Err(WorkerError::Failed);
     }
-    let mut random = [0u8; 16];
-    std::fs::File::open("/dev/urandom")
-        .map_err(|_| ())?
-        .read_exact(&mut random)
-        .map_err(|_| ())?;
-    random[6] = (random[6] & 0x0f) | 0x40;
-    random[8] = (random[8] & 0x3f) | 0x80;
-    let uuid = format!(
-        "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
-        random[0],
-        random[1],
-        random[2],
-        random[3],
-        random[4],
-        random[5],
-        random[6],
-        random[7],
-        random[8],
-        random[9],
-        random[10],
-        random[11],
-        random[12],
-        random[13],
-        random[14],
-        random[15]
-    );
+    let uuid = super::request_uuid().ok_or(())?;
     let url = CString::new(format!("https://{host}:{}/appasset?uniqueid={client_id}&uuid={uuid}&appid={app}&AssetType=2&AssetIdx=0", server.httpsPort)).map_err(|_| ())?;
     let cert = CString::new(key_path.join("client.pem").as_os_str().as_bytes()).map_err(|_| ())?;
     let key = CString::new(key_path.join("key.pem").as_os_str().as_bytes()).map_err(|_| ())?;
