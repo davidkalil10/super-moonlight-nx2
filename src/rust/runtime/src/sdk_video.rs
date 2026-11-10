@@ -84,6 +84,7 @@ pub struct SdkVideo {
     layout_reported: bool,
     submitted: [u64; UNITS],
     microseconds_reported: bool,
+    busy_submits: u64,
 }
 
 impl SdkVideo {
@@ -96,6 +97,7 @@ impl SdkVideo {
             layout_reported: false,
             submitted: [0; UNITS],
             microseconds_reported: false,
+            busy_submits: 0,
         }
     }
 
@@ -202,13 +204,15 @@ impl Backend for SdkVideo {
             "b2ar: before submit pts_us={pts_us} bytes={}",
             bytes.len()
         ));
-        self.submitted.rotate_left(1);
-        self.submitted[UNITS - 1] = pts_us;
         let result = unsafe { moonlightSdkVideoSubmit(bytes.as_ptr(), bytes.len(), timestamp_ns) };
         if result == SUBMIT_BUSY {
-            log("sdk-video: submit busy");
+            self.busy_submits += 1;
+            return Err(BackendError::Busy);
         }
-        check("submit", result)
+        check("submit", result)?;
+        self.submitted.rotate_left(1);
+        self.submitted[UNITS - 1] = pts_us;
+        Ok(())
     }
 
     fn ready(&mut self, surface: usize) -> Result<bool, BackendError> {
@@ -300,7 +304,8 @@ impl Backend for SdkVideo {
         let mut stage = 0;
         let result = unsafe { moonlightSdkVideoClose(&mut stage) };
         log(&format!(
-            "sdk-video: close result=0x{result:x} stage={stage} last_poll=0x{poll_result:x}"
+            "sdk-video: close result=0x{result:x} stage={stage} last_poll=0x{poll_result:x} busy_submits={}",
+            self.busy_submits
         ));
         self.config = None;
         self.started = false;

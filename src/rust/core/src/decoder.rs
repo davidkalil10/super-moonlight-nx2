@@ -32,6 +32,8 @@ fn allocate_owner() -> Option<u64> {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BackendError {
+    /// The decoder takes no input for now; the same unit is offered again later.
+    Busy,
     Refused,
     Invalid,
     NoMemory,
@@ -262,7 +264,7 @@ impl<'a, B: Backend<N>, const N: usize> Decoder<'a, B, N> {
             return Error::Uncertain;
         }
         match error {
-            BackendError::Refused => Error::Refused,
+            BackendError::Busy | BackendError::Refused => Error::Refused,
             BackendError::Invalid => Error::Invalid,
             BackendError::NoMemory => Error::NoMemory,
             BackendError::Unsupported => Error::Unsupported,
@@ -296,8 +298,10 @@ impl<'a, B: Backend<N>, const N: usize> Decoder<'a, B, N> {
         let Some(index) = self.pending.iter().position(Option::is_none) else {
             return Err(Error::Again);
         };
-        if let Err(error) = self.backend.submit(bytes, pts_us) {
-            return Err(self.fail(error));
+        match self.backend.submit(bytes, pts_us) {
+            Ok(()) => {}
+            Err(BackendError::Busy) => return Err(Error::Again),
+            Err(error) => return Err(self.fail(error)),
         }
         self.pending[index] = Some(Pending {
             pts_us,

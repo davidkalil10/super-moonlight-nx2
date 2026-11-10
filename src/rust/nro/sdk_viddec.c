@@ -8,7 +8,6 @@
 
 #define WORK_BYTES (64u * 1024 * 1024)
 #define INPUT_MAX (1024u * 1024)
-#define SUBMIT_WAIT_NS 50000000ull
 #define WORK_RESTORE_POLLS 1000
 #define ACQUISITIONS_NOTED 8
 
@@ -184,11 +183,6 @@ Result moonlightSdkVideoStart(uint32_t fps, const void *codec_config, size_t cod
 
 Result moonlightSdkVideoSubmit(const void *data, size_t bytes, int64_t timestamp_ns)
 {
-    Result result = viddecDecoderSubmit(&video.decoder, data, bytes, timestamp_ns, false, NULL);
-
-    if (result != VIDDEC_RESULT_SUBMIT_BUSY)
-        return result;
-    eventWait(&video.decoder.submission_ready, SUBMIT_WAIT_NS);
     return viddecDecoderSubmit(&video.decoder, data, bytes, timestamp_ns, false, NULL);
 }
 
