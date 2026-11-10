@@ -437,22 +437,13 @@ fn feed_paced<B: Backend<N>, const N: usize>(
     }
     let elapsed_ms = (now() - start_ns) / 1_000_000;
     let stats = video.stats();
-    let [submit, poll, output, readback, upload, present] = crate::stream_stats::take_stages();
-    let time = |stage: crate::stream_stats::StageTime| {
-        format!("{}x{}/{}", stage.count, stage.mean_us, stage.max_us)
-    };
     log(&format!(
         "ref: {name} paced {}@{} in {elapsed_ms} ms turns={turns} busy_turns={busy} decoded={} presented={} caught_up={} dropped={}",
         clip.units, clip.fps, stats.decoded, stats.presented, stats.caught_up, stats.dropped
     ));
     log(&format!(
-        "ref: {name} stages count x mean/max us submit={} poll={} output={} readback={} upload={} present={}",
-        time(submit),
-        time(poll),
-        time(output),
-        time(readback),
-        time(upload),
-        time(present)
+        "ref: {name} {}",
+        crate::stream_stats::take_stages_text()
     ));
     Ok(())
 }

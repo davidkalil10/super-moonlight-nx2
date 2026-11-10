@@ -212,30 +212,30 @@ fn stream_readout(
     }
 }
 
+/// The stats line of the stream menu, from the readout the badge shows.
 fn stream_stats_text(
-    network: Option<moonlight_nx2_app::metrics::Second>,
+    readout: &moonlight_nx2_ui::readout::StreamReadout,
     native: Option<moonlight_nx2_core::stats::StreamStats>,
 ) -> alloc::string::String {
-    let fps = presented_fps_x10(network, native)
-        .map(|fps_x10| alloc::format!("{}.{:01}", fps_x10 / 10, fps_x10 % 10))
-        .unwrap_or_else(|| alloc::string::String::from("--"));
-    let bitrate = network
-        .filter(|s| s.elapsed_us > 0)
-        .map(|s| alloc::format!("{}", u128::from(s.bytes) * 8_000 / u128::from(s.elapsed_us)))
-        .unwrap_or_else(|| alloc::string::String::from("--"));
+    let missing = || alloc::string::String::from("--");
     let millis = |us: u32| alloc::format!("{}.{:01}", us / 1000, (us % 1000) / 100);
-    let decode = native
-        .filter(|s| s.presented > 0)
-        .map(|s| millis(s.decode_mean_us))
-        .unwrap_or_else(|| alloc::string::String::from("--"));
+    let fps = readout
+        .fps_x10
+        .map(|fps_x10| alloc::format!("{}.{:01}", fps_x10 / 10, fps_x10 % 10))
+        .unwrap_or_else(missing);
+    let bitrate = readout
+        .bitrate_kbps
+        .map(|kbps| alloc::format!("{kbps}"))
+        .unwrap_or_else(missing);
+    let decode = readout.decode_us.map(millis).unwrap_or_else(missing);
     let present = native
         .filter(|s| s.presented > 0)
         .map(|s| millis(s.latency_mean_us))
-        .unwrap_or_else(|| alloc::string::String::from("--"));
+        .unwrap_or_else(missing);
     let input = native
         .filter(|s| s.input_mean_us != 0 || s.input_max_us != 0)
         .map(|s| millis(s.input_mean_us))
-        .unwrap_or_else(|| alloc::string::String::from("--"));
+        .unwrap_or_else(missing);
     alloc::format!(
         "FPS {fps} | {bitrate} kbps | Decode {decode} ms | Present {present} ms | Input {input} ms"
     )
@@ -480,13 +480,10 @@ impl<F: Files + Clone> Client<F> {
     }
 
     fn refresh_stream_stats(&mut self) {
+        let readout = stream_readout(self.network_stats, self.native_stats, self.session_us);
         self.bridge
-            .set_stream_stats(&stream_stats_text(self.network_stats, self.native_stats));
-        self.bridge.set_stream(stream_readout(
-            self.network_stats,
-            self.native_stats,
-            self.session_us,
-        ));
+            .set_stream_stats(&stream_stats_text(&readout, self.native_stats));
+        self.bridge.set_stream(readout);
     }
 
     pub fn update_native_stats(&mut self, stats: Option<moonlight_nx2_core::stats::StreamStats>) {
@@ -627,7 +624,7 @@ mod overlay_stats_tests {
 
     #[test]
     fn native_timing_is_displayed_only_when_observed() {
-        let unknown = stream_stats_text(None, None);
+        let unknown = stream_stats_text(&stream_readout(None, None, 0), None);
         assert!(unknown.contains("Present -- ms"));
         let native = moonlight_nx2_core::stats::StreamStats {
             fps_x10: 599,
@@ -636,7 +633,7 @@ mod overlay_stats_tests {
             presented: 60,
             ..Default::default()
         };
-        let text = stream_stats_text(None, Some(native));
+        let text = stream_stats_text(&stream_readout(None, Some(native), 0), Some(native));
         assert!(text.contains("FPS 59.9"));
         assert!(text.contains("Decode 1.2 ms"));
         assert!(text.contains("Present 3.4 ms"));
@@ -685,7 +682,7 @@ mod presented_rate_tests {
         };
         let readout = stream_readout(Some(window), Some(video_window), 0);
         assert_eq!(readout.fps_x10, Some(600));
-        assert!(stream_stats_text(Some(window), Some(video_window)).contains("FPS 60.0"));
+        assert!(stream_stats_text(&readout, Some(video_window)).contains("FPS 60.0"));
     }
 
     #[test]

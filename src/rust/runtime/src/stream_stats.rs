@@ -1,6 +1,9 @@
 //! Latest `StreamStats`, input age, per-stage times and the pending IDR request, published by
 //! the video path for the frontend to read each frame.
 
+extern crate alloc;
+
+use alloc::{format, string::String};
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use moonlight_nx2_core::stats::StreamStats;
 
@@ -168,6 +171,15 @@ pub fn take_stages() -> [StageTime; STAGES] {
             max_us: total.max_us.swap(0, Ordering::Relaxed),
         }
     })
+}
+
+/// The stage times since the last call, as the text of a log line.
+pub fn take_stages_text() -> String {
+    let [submit, poll, output, readback, upload, present] =
+        take_stages().map(|stage| format!("{}x{}/{}", stage.count, stage.mean_us, stage.max_us));
+    format!(
+        "stages count x mean/max us submit={submit} poll={poll} output={output} readback={readback} upload={upload} present={present}"
+    )
 }
 
 pub fn request_idr() {
