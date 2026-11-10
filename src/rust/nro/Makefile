@@ -23,7 +23,7 @@ CPPFLAGS += -I$(LIBNX)/include
 CFLAGS := $(ARCH) -std=gnu11 -O2 -g -Wall -Wextra -Werror -ffunction-sections -fdata-sections
 LDFLAGS := $(ARCH) -specs=$(LIBNX)/switch.specs -Wl,-Map,$(OUTPUT).map -Wl,--wrap=gsvRegisterFrame
 LIBS := -L$(DEVKITPRO)/portlibs/switch2/lib -L$(LIBNX)/lib -lvulkan -lnx -lm
-OBJECTS := $(BUILD_DIR)/platform.o $(BUILD_DIR)/io_adapter.o
+OBJECTS := $(BUILD_DIR)/platform.o $(BUILD_DIR)/io_adapter.o $(BUILD_DIR)/system.o
 
 ifeq ($(SDK_BACKING),1)
 SDK_INTEROP_TOOLS := $(abspath $(SOURCE_DIR)/../../../tools/testship/sdk-interop)
@@ -73,6 +73,9 @@ $(BUILD_DIR)/platform.o: $(SOURCE_DIR)/platform.c
 $(BUILD_DIR)/io_adapter.o: $(SOURCE_DIR)/io_adapter.c
 	$(CC) $(CPPFLAGS) $(CFLAGS) -MMD -MP -c $< -o $@
 
+$(BUILD_DIR)/system.o: $(SOURCE_DIR)/system.c
+	$(CC) $(CPPFLAGS) $(CFLAGS) -MMD -MP -c $< -o $@
+
 $(BUILD_DIR)/sdk_backing.o: $(SOURCE_DIR)/sdk_backing.c $(SOURCE_DIR)/sdk_backing.h
 	$(CC) $(CPPFLAGS) $(CFLAGS) -MMD -MP -c $< -o $@
 
@@ -87,6 +90,7 @@ $(OUTPUT).nro: $(OUTPUT).elf $(OUTPUT).nacp $(ICON_PATH)
 
 -include $(BUILD_DIR)/platform.d
 -include $(BUILD_DIR)/io_adapter.d
+-include $(BUILD_DIR)/system.d
 -include $(BUILD_DIR)/sdk_backing.d
 
 ifeq ($(NATIVE_DECODE),1)
