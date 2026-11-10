@@ -3,14 +3,14 @@
 extern crate alloc;
 
 use alloc::{boxed::Box, vec::Vec};
-#[cfg(any(feature = "diagnostic-control", feature = "host-renderer"))]
+#[cfg(feature = "host-renderer")]
 use moonlight_nx2_app::link::LinkError;
 use moonlight_nx2_app::{
     driver::{Driver, Effect, Ui},
     link::Link,
     service::{Action, RuntimeEvent},
 };
-#[cfg(any(feature = "diagnostic-control", feature = "host-renderer"))]
+#[cfg(feature = "host-renderer")]
 use moonlight_nx2_core::control::Frame as ControlFrame;
 use moonlight_nx2_ui::{
     bridge::{self, Bridge, Storage},
@@ -24,14 +24,14 @@ use moonlight_nx2_ui::{
 
 pub struct View<'a, F>(&'a mut Bridge<F>);
 
-#[cfg(any(feature = "diagnostic-control", feature = "host-renderer"))]
+#[cfg(feature = "host-renderer")]
 pub struct SingleList<L> {
     pub link: L,
     sent: bool,
     rejected: bool,
 }
 
-#[cfg(any(feature = "diagnostic-control", feature = "host-renderer"))]
+#[cfg(feature = "host-renderer")]
 impl<L> SingleList<L> {
     pub fn new(link: L) -> Self {
         Self {
@@ -48,7 +48,7 @@ impl<L> SingleList<L> {
     }
 }
 
-#[cfg(any(feature = "diagnostic-control", feature = "host-renderer"))]
+#[cfg(feature = "host-renderer")]
 impl<L: Link> Link for SingleList<L> {
     fn ready(&self) -> bool {
         self.link.ready()

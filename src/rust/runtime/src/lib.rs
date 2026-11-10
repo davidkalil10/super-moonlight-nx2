@@ -4,28 +4,17 @@
 compile_error!("host-renderer is only for host parity tests");
 #[cfg(any(
     all(feature = "diagnostic-renderer", feature = "diagnostic-io"),
-    all(feature = "diagnostic-renderer", feature = "diagnostic-nvdec"),
-    all(feature = "diagnostic-io", feature = "diagnostic-nvdec"),
     all(feature = "diagnostic-ui", feature = "diagnostic-renderer"),
     all(feature = "diagnostic-ui", feature = "diagnostic-io"),
-    all(feature = "diagnostic-ui", feature = "diagnostic-nvdec"),
-    all(feature = "diagnostic-control", feature = "diagnostic-ui"),
-    all(feature = "diagnostic-control", feature = "diagnostic-renderer"),
-    all(feature = "diagnostic-control", feature = "diagnostic-io"),
-    all(feature = "diagnostic-control", feature = "diagnostic-nvdec"),
     all(feature = "diagnostic-ui-data", feature = "diagnostic-ui-order"),
     all(feature = "diagnostic-ui-alpha", feature = "diagnostic-ui-text"),
     all(feature = "diagnostic-udp", feature = "diagnostic-renderer"),
     all(feature = "diagnostic-udp", feature = "diagnostic-io"),
-    all(feature = "diagnostic-udp", feature = "diagnostic-nvdec"),
     all(feature = "diagnostic-udp", feature = "diagnostic-ui"),
-    all(feature = "diagnostic-udp", feature = "diagnostic-control"),
     all(feature = "frontend", feature = "diagnostic-renderer"),
     all(feature = "frontend", feature = "diagnostic-ui"),
-    all(feature = "frontend", feature = "diagnostic-control"),
     all(feature = "frontend", feature = "diagnostic-io"),
-    all(feature = "frontend", feature = "diagnostic-udp"),
-    all(feature = "frontend", feature = "diagnostic-nvdec")
+    all(feature = "frontend", feature = "diagnostic-udp")
 ))]
 compile_error!("select one device diagnostic mode");
 
@@ -35,9 +24,7 @@ compile_error!("select one device diagnostic mode");
         feature = "diagnostic-renderer",
         feature = "diagnostic-io",
         feature = "diagnostic-udp",
-        feature = "diagnostic-nvdec",
         feature = "diagnostic-ui",
-        feature = "diagnostic-control",
         feature = "frontend"
     )
 ))]
@@ -62,16 +49,12 @@ pub mod audio_device;
 mod device;
 #[cfg(all(target_os = "none", feature = "frontend"))]
 mod frontend_stream;
-#[cfg(all(target_os = "none", feature = "diagnostic-coexist"))]
-mod gpu_coexist;
 #[cfg(all(target_os = "none", feature = "diagnostic-io"))]
 mod io_diagnostic;
 #[cfg(all(target_os = "none", feature = "frontend"))]
 mod native_frontend;
 #[cfg(target_os = "none")]
 pub mod net;
-#[cfg(all(target_os = "none", feature = "diagnostic-nvdec"))]
-mod nvdec_access;
 #[cfg(all(target_os = "none", feature = "diagnostic-ref-replay"))]
 mod ref_replay;
 #[cfg(all(target_os = "none", feature = "diagnostic-udp"))]
@@ -89,8 +72,6 @@ mod cache_file;
 pub mod client;
 #[cfg(any(target_os = "none", feature = "host-renderer"))]
 pub mod client_session;
-#[cfg(all(target_os = "none", feature = "diagnostic-control"))]
-mod control_diagnostic;
 #[cfg(any(target_os = "none", feature = "host-renderer"))]
 pub mod control_link;
 #[cfg(any(target_os = "none", feature = "host-renderer"))]

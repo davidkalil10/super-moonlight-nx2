@@ -1,21 +1,13 @@
 extern crate alloc;
 
-#[cfg(any(
-    not(feature = "frontend"),
-    feature = "diagnostic-frontend",
-    feature = "diagnostic-frontend-check"
-))]
+#[cfg(any(not(feature = "frontend"), feature = "diagnostic-frontend"))]
 use alloc::{format, vec::Vec};
 use core::{
     alloc::{GlobalAlloc, Layout},
     ffi::c_void,
     panic::PanicInfo,
 };
-#[cfg(any(
-    not(feature = "frontend"),
-    feature = "diagnostic-frontend",
-    feature = "diagnostic-frontend-check"
-))]
+#[cfg(any(not(feature = "frontend"), feature = "diagnostic-frontend"))]
 use moonlight_nx2_core::{audio, codec, control, input, media};
 
 unsafe extern "C" {
@@ -50,11 +42,7 @@ pub(super) fn log(message: &str) {
     unsafe { moonlightPlatformLog(message.as_ptr(), message.len()) };
 }
 
-#[cfg(any(
-    not(feature = "frontend"),
-    feature = "diagnostic-frontend",
-    feature = "diagnostic-frontend-check"
-))]
+#[cfg(any(not(feature = "frontend"), feature = "diagnostic-frontend"))]
 fn core_check() -> bool {
     let mut storage = Vec::new();
     if storage.try_reserve_exact(control::MAX_PAYLOAD).is_err() {
@@ -203,26 +191,9 @@ fn renderer_check() -> bool {
     let mut left = 0;
     let mut frames = 0;
     let mut failed = false;
-    #[cfg(feature = "diagnostic-coexist")]
-    let (mut coexist_done, mut coexist_passed, mut coexist_at) = (false, false, 0);
     while unsafe { sdk::appletMainLoop() }
         && unsafe { sdk::moonlightNowNs() }.saturating_sub(start) < 20_000_000_000
     {
-        #[cfg(feature = "diagnostic-coexist")]
-        if !coexist_done && frames >= 120 {
-            if renderer.storage_mut().is_err() {
-                failed = true;
-                break;
-            }
-            log(&format!("coexist: before completed_frames={frames}"));
-            coexist_at = frames;
-            coexist_passed = crate::gpu_coexist::check();
-            coexist_done = true;
-            if sdk::process_retired() {
-                failed = true;
-                break;
-            }
-        }
         for row in 460..620 {
             for x in left..left + 160 {
                 luma[row * WIDTH + x] = BARS[x * 8 / WIDTH][0];
@@ -288,14 +259,6 @@ fn renderer_check() -> bool {
     let close = renderer.close();
     log(&format!("renderer: close {close:?}"));
     let passed = !failed && close.is_ok() && frames >= 1000 && elapsed_ms >= 20_000;
-    #[cfg(feature = "diagnostic-coexist")]
-    let passed = {
-        log(&format!(
-            "coexist: after presented_frames={} observed={coexist_passed}",
-            frames - coexist_at
-        ));
-        passed && coexist_done && coexist_passed && frames - coexist_at >= 120
-    };
     log(if passed {
         "renderer: result PASS"
     } else {
@@ -316,17 +279,9 @@ pub extern "C" fn main() -> i32 {
     } else {
         "Moonlight NX2 Rust runtime diagnostic; streaming not implemented"
     });
-    #[cfg(any(
-        not(feature = "frontend"),
-        feature = "diagnostic-frontend",
-        feature = "diagnostic-frontend-check"
-    ))]
+    #[cfg(any(not(feature = "frontend"), feature = "diagnostic-frontend"))]
     let passed = core_check();
-    #[cfg(not(any(
-        not(feature = "frontend"),
-        feature = "diagnostic-frontend",
-        feature = "diagnostic-frontend-check"
-    )))]
+    #[cfg(not(any(not(feature = "frontend"), feature = "diagnostic-frontend")))]
     let passed = true;
     #[cfg(feature = "frontend")]
     let passed = passed && crate::native_frontend::run();
@@ -338,12 +293,8 @@ pub extern "C" fn main() -> i32 {
     let passed = passed && crate::audio_cue_diagnostic::check();
     #[cfg(feature = "diagnostic-udp")]
     let passed = passed && crate::udp_diagnostic::check();
-    #[cfg(feature = "diagnostic-nvdec")]
-    let passed = passed && crate::nvdec_access::nvdec_check();
     #[cfg(feature = "diagnostic-ui")]
     let passed = passed && crate::ui_diagnostic::check();
-    #[cfg(feature = "diagnostic-control")]
-    let passed = passed && crate::control_diagnostic::check();
     log(if passed {
         "runtime: result PASS"
     } else {

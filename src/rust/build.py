@@ -209,7 +209,7 @@ def main():
     parser.add_argument("--revision")
     parser.add_argument("--branch")
     parser.add_argument("--nacp-version", default="0.1.0")
-    parser.add_argument("--diagnostic", choices=("core", "renderer", "display", "display120", "coexist", "io", "audio-cue", "udp", "nvdec", "sdk-decode", "sdk-modes", "sdk-modes-4k", "sdk-modes-rate", "sdk-modes-paced", "ui", "ui-order", "ui-data", "ui-alpha", "ui-text", "ui-text-apps", "ui-text-overlay", "ui-text-interactive", "control", "control-default", "frontend", "frontend-check", "ref-replay", "production-sdk", "production-sdk-tcp", "production-sdk-120", "production-sdk-120-decode"), default="core")
+    parser.add_argument("--diagnostic", choices=("core", "renderer", "display", "display120", "io", "audio-cue", "udp", "sdk-decode", "sdk-modes", "sdk-modes-4k", "sdk-modes-rate", "sdk-modes-paced", "ui", "ui-order", "ui-data", "ui-alpha", "ui-text", "ui-text-apps", "ui-text-overlay", "ui-text-interactive", "frontend", "ref-replay", "production-sdk", "production-sdk-tcp", "production-sdk-120", "production-sdk-120-decode"), default="core")
     parser.add_argument("--rust-directory", type=Path)
     parser.add_argument("--cargo-home", type=Path)
     parser.add_argument("--dev", type=Path)

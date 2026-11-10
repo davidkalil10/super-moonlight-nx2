@@ -15,7 +15,7 @@ use crate::{
     render::{Config, Renderer},
     sdk,
 };
-use alloc::{boxed::Box, ffi::CString, format};
+use alloc::{boxed::Box, format};
 use core::ffi::{CStr, c_char};
 use moonlight_nx2_app::{dock::Monitor, policy::DisplayCapabilities};
 use moonlight_nx2_core::codec::Capabilities;
@@ -149,7 +149,6 @@ impl Drop for NativeConnections {
 }
 
 pub fn run() -> bool {
-    let checked = cfg!(feature = "diagnostic-frontend-check");
     let stack = unsafe { moonlightPlatformStackAvailable() };
     log(&format!(
         "frontend: stack available={stack} required=786432"
@@ -158,25 +157,9 @@ pub fn run() -> bool {
         return false;
     }
     let start = unsafe { sdk::moonlightNowNs() };
-    let directory = if checked {
-        CString::new(format!(
-            "sdmc:/switch/moonlight-nx2/rust/frontend-{start:016x}"
-        ))
-        .unwrap()
-    } else {
-        CString::from(c"sdmc:/switch/moonlight-nx2/rust-client")
-    };
-    let files = if checked {
-        Directory::create(&directory)
-    } else {
-        Directory::open(&directory)
-    };
-    let Some(files) = files else {
-        log(if checked {
-            "frontend: namespace refused; no existing directory was reused by the check"
-        } else {
-            "frontend: cannot open the app directory on the SD card"
-        });
+    let directory = c"sdmc:/switch/moonlight-nx2/rust-client";
+    let Some(files) = Directory::open(directory) else {
+        log("frontend: cannot open the app directory on the SD card");
         return false;
     };
     log(&format!(
@@ -184,18 +167,14 @@ pub fn run() -> bool {
         directory.to_str().unwrap()
     ));
     let mut connections = NativeConnections {
-        session_path: if checked {
-            c"sdmc:/switch/moonlight-nx2/rust/frontend-session"
-        } else {
-            c"sdmc:/switch/moonlight-nx2/rust-client/auth-session"
-        },
+        session_path: c"sdmc:/switch/moonlight-nx2/rust-client/auth-session",
         blocked: false,
         network: false,
     };
     let authorization = connections.authorization();
     let authorization_error = authorization.as_ref().err().copied();
     log(&format!(
-        "frontend: one-time authorization imported={} checked={checked}",
+        "frontend: one-time authorization imported={}",
         authorization.is_ok()
     ));
     let (_, saved_settings) = Store::new(files.clone()).load(&mut Box::new(Json::new()));
@@ -223,7 +202,6 @@ pub fn run() -> bool {
         files,
         authorization: authorization.ok(),
         authorization_error,
-        checked,
         verified,
         start,
     };
@@ -237,7 +215,6 @@ struct Launch {
     files: Directory,
     authorization: Option<Session>,
     authorization_error: Option<AuthError>,
-    checked: bool,
     verified: bool,
     start: u64,
 }
@@ -247,7 +224,6 @@ fn execute(renderer: &mut Renderer, connections: &mut NativeConnections, launch:
         files,
         authorization,
         authorization_error,
-        checked,
         verified,
         start,
     } = launch;
@@ -260,9 +236,7 @@ fn execute(renderer: &mut Renderer, connections: &mut NativeConnections, launch:
             ATLAS,
             files.clone(),
             authorization,
-            if checked {
-                Access::SingleList
-            } else if verified {
+            if verified {
                 Access::Streaming
             } else {
                 Access::User
@@ -277,10 +251,7 @@ fn execute(renderer: &mut Renderer, connections: &mut NativeConnections, launch:
             return false;
         }
     };
-    if !checked
-        && let Some(cache) =
-            crate::files::CoverDirectory::open(c"sdmc:/switch/moonlight-nx2/covers")
-    {
+    if let Some(cache) = crate::files::CoverDirectory::open(c"sdmc:/switch/moonlight-nx2/covers") {
         app.set_cover_cache(cache);
     }
     if authorization_error == Some(AuthError::Invalid) {
@@ -294,8 +265,7 @@ fn execute(renderer: &mut Renderer, connections: &mut NativeConnections, launch:
         Ok(sampler) => sampler,
         Err(_) => return false,
     };
-    let (mut last_screen, mut listed_at, mut failed, mut blocked_start) =
-        (None, None, false, false);
+    let (mut last_screen, mut failed, mut blocked_start) = (None, false, false);
     let mut input_gate = InputGate::default();
     let mut dock = Monitor::new(docked);
     let mut probe = Probe::new(docked, unsafe { sdk::moonlightNowNs() }, 0);
@@ -306,12 +276,6 @@ fn execute(renderer: &mut Renderer, connections: &mut NativeConnections, launch:
     let mut second = start;
     while unsafe { sdk::appletMainLoop() } && !app.exiting() && !sdk::process_retired() {
         let now = unsafe { sdk::moonlightNowNs() };
-        if checked && now.saturating_sub(start) >= 60_000_000_000 {
-            break;
-        }
-        if checked && listed_at.is_some_and(|at| now.saturating_sub(at) >= 8_000_000_000) {
-            break;
-        }
         let input = match sampler
             .read(renderer, app.screen() != Screen::Streaming)
             .and_then(|_| input_gate.filter(renderer.input_mut()?))
@@ -430,9 +394,6 @@ fn execute(renderer: &mut Renderer, connections: &mut NativeConnections, launch:
             log(&format!("frontend: screen {}", screen.name()));
             last_screen = Some(screen);
         }
-        if screen == Screen::Apps && listed_at.is_none() {
-            listed_at = Some(now);
-        }
         blocked_start |=
             app.client.bridge.model().message() == Some("This console cannot play a stream yet");
         if now.saturating_sub(second) >= 1_000_000_000 {
@@ -457,18 +418,7 @@ fn execute(renderer: &mut Renderer, connections: &mut NativeConnections, launch:
     log(&format!(
         "frontend: summary {stats:?} settings_changed={changed} settings_persisted={persisted} local_start_blocked={blocked_start} close={closed}"
     ));
-    !failed
-        && closed
-        && stats.frames > 0
-        && (stats.media_opened == 0 || !checked)
-        && !stats.rejected
-        && (!checked
-            || (stats.requests == 1
-                && stats.authenticated == 1
-                && listed_at.is_some()
-                && changed
-                && persisted
-                && blocked_start))
+    !failed && closed && stats.frames > 0 && !stats.rejected
 }
 
 /// The SDK decoder and sink builds ask for a 4K layer when docked. The 120 Hz build asks for
