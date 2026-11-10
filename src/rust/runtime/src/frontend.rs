@@ -601,6 +601,13 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
                 height: choice.height,
                 fps: choice.fps,
                 bitrate_kbps: choice.bitrate_kbps,
+                grade: match choice.grade {
+                    netprobe::Grade::Good => moonlight_nx2_ui::link_choice::Grade::Good,
+                    netprobe::Grade::Fair => moonlight_nx2_ui::link_choice::Grade::Fair,
+                    netprobe::Grade::Weak => moonlight_nx2_ui::link_choice::Grade::Weak,
+                },
+                rtt_us: choice.quality.rtt_us,
+                throughput_kbps: choice.quality.throughput_kbps,
             }),
             note.as_str(),
         );

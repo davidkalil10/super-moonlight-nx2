@@ -38,7 +38,16 @@ pub const APPLY_TIMEOUT_NS: u64 = 5_000_000_000;
 pub const MAX_QUEUED: usize = 16;
 
 const SAVE_FAILED: &str = "Settings write failed";
-const OPS: [Op; 7] = [Op::A, Op::B, Op::X, Op::Y, Op::Adjust, Op::Chord, Op::Edit];
+const OPS: [Op; 8] = [
+    Op::A,
+    Op::B,
+    Op::X,
+    Op::Y,
+    Op::Adjust,
+    Op::Chord,
+    Op::Edit,
+    Op::Focus,
+];
 
 pub type Storage = [u8; STORAGE_BYTES];
 
@@ -225,6 +234,30 @@ impl<F: Files> Bridge<F> {
 
     pub fn set_link(&mut self, choice: Option<crate::link_choice::LinkChoice>, note: &str) {
         if self.model.set_link(choice, note) {
+            self.revision += 1;
+        }
+    }
+
+    pub fn set_console_dark(&mut self, dark: Option<bool>) {
+        if self.model.set_console_dark(dark) {
+            self.revision += 1;
+        }
+    }
+
+    pub fn set_readout(&mut self, readout: crate::readout::Readout) {
+        if self.model.set_readout(readout) {
+            self.revision += 1;
+        }
+    }
+
+    pub fn set_stream(&mut self, stream: crate::readout::StreamReadout) {
+        if self.model.set_stream(stream) {
+            self.revision += 1;
+        }
+    }
+
+    pub fn set_link_ms(&mut self, address: &crate::model::Address, ms: u32) {
+        if self.model.set_link_ms(address, ms) {
             self.revision += 1;
         }
     }

@@ -57,14 +57,14 @@ pub fn directed_broadcast(address: [u8; 4], mask: Option<[u8; 4]>) -> [u8; 4] {
 /// What is known about each saved PC, by address.
 #[derive(Clone)]
 pub struct Table {
-    entries: [(Address, Presence); MAX_HOSTS],
+    entries: [(Address, Presence, u32); MAX_HOSTS],
     count: usize,
 }
 
 impl Default for Table {
     fn default() -> Self {
         Self {
-            entries: [(Address::new(), Presence::Unknown); MAX_HOSTS],
+            entries: [(Address::new(), Presence::Unknown, 0); MAX_HOSTS],
             count: 0,
         }
     }
@@ -74,15 +74,37 @@ impl Table {
     pub fn get(&self, address: &Address) -> Presence {
         self.entries[..self.count]
             .iter()
-            .find(|(known, _)| known == address)
-            .map_or(Presence::Unknown, |(_, presence)| *presence)
+            .find(|(known, _, _)| known == address)
+            .map_or(Presence::Unknown, |(_, presence, _)| *presence)
+    }
+
+    /// The last measured round trip to the PC in milliseconds, if it was ever measured.
+    pub fn link_ms(&self, address: &Address) -> Option<u32> {
+        self.entries[..self.count]
+            .iter()
+            .find(|(known, _, _)| known == address)
+            .and_then(|(_, _, ms)| (*ms != 0).then_some(*ms))
+    }
+
+    /// True when the stored figure changed. A PC not yet seen is not added.
+    pub fn set_link_ms(&mut self, address: &Address, ms: u32) -> bool {
+        let ms = ms.max(1);
+        let Some(entry) = self.entries[..self.count]
+            .iter_mut()
+            .find(|(known, _, _)| known == address)
+        else {
+            return false;
+        };
+        let changed = entry.2 != ms;
+        entry.2 = ms;
+        changed
     }
 
     /// True when the stored state changed.
     pub fn set(&mut self, address: &Address, presence: Presence) -> bool {
-        if let Some((_, known)) = self.entries[..self.count]
+        if let Some((_, known, _)) = self.entries[..self.count]
             .iter_mut()
-            .find(|(known, _)| known == address)
+            .find(|(known, _, _)| known == address)
         {
             let changed = *known != presence;
             *known = presence;
@@ -95,7 +117,7 @@ impl Table {
             self.entries.copy_within(1.., 0);
             self.count -= 1;
         }
-        self.entries[self.count] = (*address, presence);
+        self.entries[self.count] = (*address, presence, 0);
         self.count += 1;
         true
     }

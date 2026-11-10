@@ -7,10 +7,12 @@ pub const ROW_WORDS: usize = 8;
 pub const MAX_ITEMS: usize = 32;
 pub const MAX_TEXTS: usize = 48;
 pub const MAX_IMAGES: usize = 24;
+pub const MAX_SHAPES: usize = 22;
 pub const BLOCKS: usize = MAX_TEXTS + MAX_IMAGES;
 pub const ITEMS_OFFSET: usize = HEADER_WORDS * 4;
 pub const TEXTS_OFFSET: usize = ITEMS_OFFSET + MAX_ITEMS * ROW_WORDS * 4;
 pub const IMAGES_OFFSET: usize = TEXTS_OFFSET + MAX_TEXTS * ROW_WORDS * 4;
+pub const SHAPES_OFFSET: usize = IMAGES_OFFSET + MAX_IMAGES * ROW_WORDS * 4;
 pub const BODY_OFFSET: usize = 0x1000;
 pub const CHECKSUM_WORDS: usize = 10;
 pub const SCREEN_WIDTH: u32 = 1920;
@@ -41,6 +43,22 @@ pub struct Item {
     pub w: u32,
     pub h: u32,
     pub flags: u32,
+    pub radius: u32,
+}
+
+/// A filled and outlined rounded rectangle drawn under the strips and images. A radius of half
+/// the shorter side makes a pill or a circle; `dashed` breaks the outline.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Shape {
+    pub x: u32,
+    pub y: u32,
+    pub w: u32,
+    pub h: u32,
+    pub fill: u32,
+    pub radius: u32,
+    pub stroke: u32,
+    pub stroke_width: u32,
+    pub dashed: bool,
 }
 
 /// An alpha strip of `w * h` bytes. Identity 0 means the strip's address.
@@ -56,7 +74,8 @@ pub struct Strip<'a> {
     pub identity: u64,
 }
 
-/// An RGBA image of `w * h * 4` bytes. Identity 0 means the image's address.
+/// An RGBA image of `w * h * 4` bytes. Identity 0 means the image's address. A nonzero `shown`
+/// scales it to that size on screen and `radius` rounds its corners.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Image<'a> {
     pub x: u32,
@@ -65,6 +84,8 @@ pub struct Image<'a> {
     pub h: u32,
     pub rgba: &'a [u8],
     pub identity: u64,
+    pub shown: (u32, u32),
+    pub radius: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -78,6 +99,7 @@ pub enum Error {
     ImageRect,
     ImageBytes,
     ItemRect,
+    ShapeRect,
     TooBig,
 }
 
@@ -93,7 +115,19 @@ impl Error {
             Self::ImageRect => "UI image rect",
             Self::ImageBytes => "UI image bytes do not match its size",
             Self::ItemRect => "UI item needs a nonzero id or is off screen",
+            Self::ShapeRect => "UI shape rect",
             Self::TooBig => "UI page body exceeds the page",
+        }
+    }
+}
+
+impl Image<'_> {
+    /// The size drawn on screen: `shown`, or the bitmap's own size when `shown` is unset.
+    pub fn shown_size(&self) -> (u32, u32) {
+        if self.shown == (0, 0) {
+            (self.w, self.h)
+        } else {
+            self.shown
         }
     }
 }
@@ -105,9 +139,12 @@ pub struct Page<'a> {
     pub flags: u32,
     pub background: u32,
     pub cursor_home: u32,
+    pub accent: u32,
+    shapes: [Shape; MAX_SHAPES],
     items: [Item; MAX_ITEMS],
     texts: [Strip<'a>; MAX_TEXTS],
     images: [Image<'a>; MAX_IMAGES],
+    shape_count: usize,
     item_count: usize,
     text_count: usize,
     image_count: usize,
@@ -121,9 +158,12 @@ impl Default for Page<'_> {
             flags: 0,
             background: 0xff00_0000,
             cursor_home: 0,
+            accent: 0,
+            shapes: [Shape::default(); MAX_SHAPES],
             items: [Item::default(); MAX_ITEMS],
             texts: [Strip::default(); MAX_TEXTS],
             images: [Image::default(); MAX_IMAGES],
+            shape_count: 0,
             item_count: 0,
             text_count: 0,
             image_count: 0,
@@ -299,6 +339,14 @@ impl<'a> Page<'a> {
         Self::default()
     }
 
+    pub fn shapes(&self) -> &[Shape] {
+        &self.shapes[..self.shape_count]
+    }
+
+    pub fn push_shape(&mut self, shape: Shape) -> bool {
+        push(&mut self.shapes, &mut self.shape_count, shape)
+    }
+
     pub fn items(&self) -> &[Item] {
         &self.items[..self.item_count]
     }
@@ -351,9 +399,17 @@ impl<'a> Page<'a> {
             }
         }
 
+        for shape in self.shapes() {
+            if !in_screen(shape.x, shape.y, shape.w, shape.h) {
+                return Err(Error::ShapeRect);
+            }
+        }
+
         for image in self.images() {
-            let small = image.w <= MAX_IMAGE_WIDTH && image.h <= MAX_IMAGE_HEIGHT;
-            if !small || !in_screen(image.x, image.y, image.w, image.h) {
+            let (shown_w, shown_h) = image.shown_size();
+            let small = shown_w <= MAX_IMAGE_WIDTH && shown_h <= MAX_IMAGE_HEIGHT;
+            let source = image.w <= MAX_IMAGE_WIDTH && image.h <= MAX_IMAGE_HEIGHT;
+            if !small || !source || !in_screen(image.x, image.y, shown_w, shown_h) {
                 return Err(Error::ImageRect);
             }
             if image.rgba.len() != (image.w * image.h * 4) as usize {
@@ -441,13 +497,21 @@ impl<'a> Page<'a> {
         ];
         put(out, 0, &header);
         let sum = checksum(out);
-        put(out, CHECKSUM_WORDS * 4, &[sum]);
+        put(out, CHECKSUM_WORDS * 4, &[sum, self.shape_count as u32, self.accent]);
         Ok(placed)
     }
 
     fn write_tables(&self, placed: &Placement, out: &mut [u8]) {
         for (i, item) in self.items().iter().enumerate() {
-            let row = [item.id, item.x, item.y, item.w, item.h, item.flags];
+            let row = [
+                item.id,
+                item.x,
+                item.y,
+                item.w,
+                item.h,
+                item.flags,
+                item.radius,
+            ];
             put(out, ITEMS_OFFSET + i * ROW_WORDS * 4, &row);
         }
 
@@ -467,8 +531,40 @@ impl<'a> Page<'a> {
             let offset = placed
                 .offset_of(identity_of(image.rgba, image.identity))
                 .unwrap_or(u32::MAX);
-            let row = [image.x, image.y, image.w, image.h, offset, FORMAT_RGBA8];
+            let (shown_w, shown_h) = image.shown_size();
+            let scaled = (shown_w, shown_h) != (image.w, image.h);
+            let source = if scaled || image.radius != 0 {
+                [image.w | image.radius << 16, image.h]
+            } else {
+                [0, 0]
+            };
+            let row = [
+                image.x,
+                image.y,
+                shown_w,
+                shown_h,
+                offset,
+                FORMAT_RGBA8,
+                source[0],
+                source[1],
+            ];
             put(out, IMAGES_OFFSET + i * ROW_WORDS * 4, &row);
+        }
+
+        for (i, shape) in self.shapes().iter().enumerate() {
+            let style = shape.radius.min(255)
+                | shape.stroke_width.min(255) << 8
+                | u32::from(shape.dashed) << 16;
+            let row = [
+                shape.x,
+                shape.y,
+                shape.w,
+                shape.h,
+                shape.fill,
+                style,
+                shape.stroke,
+            ];
+            put(out, SHAPES_OFFSET + i * ROW_WORDS * 4, &row);
         }
     }
 }

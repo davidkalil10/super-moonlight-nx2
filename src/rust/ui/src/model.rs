@@ -5,8 +5,10 @@ use core::fmt::Write;
 
 use crate::link_choice::LinkChoice;
 use crate::presence::{Presence, Table};
+use crate::readout::{Readout, StreamReadout};
 use crate::settings::{Capabilities, Setting, Settings};
 use crate::text::Text;
+use crate::theme::Look;
 
 pub const MAX_HOSTS: usize = 64;
 pub const MAX_APPS: usize = 256;
@@ -80,6 +82,9 @@ pub mod item {
     pub const KEY_PAGE: u32 = 17;
     pub const SAVE_NAME: u32 = 18;
     pub const WAKE_HOST: u32 = 19;
+    pub const RESUME_STREAM: u32 = 20;
+    pub const RESUME_HOST: u32 = 21;
+    pub const CATEGORY: u32 = 50000;
     pub const HOST: u32 = 10000;
     pub const APP: u32 = 20000;
     pub const SETTING: u32 = 30000;
@@ -150,6 +155,7 @@ pub enum Op {
     Adjust,
     Chord,
     Edit,
+    Focus,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -295,6 +301,18 @@ impl Step {
     }
 }
 
+/// How many PCs remember the app last started on them.
+const PLAYED: usize = 8;
+/// Settings categories, in the order the page lists them.
+pub const CATEGORIES: u8 = 5;
+
+/// An app the PC reports as still running, offered on the PCs page.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Resume {
+    pub address: Address,
+    pub app: Name,
+}
+
 /// The UI model. About 60 KiB; the owner keeps one rather than placing it on a small stack.
 #[derive(Clone)]
 pub struct Model {
@@ -330,6 +348,14 @@ pub struct Model {
     link_choice: Option<LinkChoice>,
     link_note: Message,
     system_status: Message,
+    console_dark: Option<bool>,
+    readout: Readout,
+    stream: StreamReadout,
+    resume: Option<Resume>,
+    resume_pending: bool,
+    played: [(Address, Name); PLAYED],
+    played_count: usize,
+    category: u8,
 }
 
 fn last_page(length: usize, size: u32) -> u32 {
@@ -417,6 +443,14 @@ impl Model {
             link_choice: None,
             link_note: Message::new(),
             system_status: Message::new(),
+            console_dark: None,
+            readout: Readout::default(),
+            stream: StreamReadout::default(),
+            resume: None,
+            resume_pending: false,
+            played: [(Address::new(), Name::default()); PLAYED],
+            played_count: 0,
+            category: 0,
         };
         model.set_hosts(hosts);
         model
@@ -534,6 +568,73 @@ impl Model {
         self.stream_stats.as_str()
     }
 
+    pub fn look(&self) -> Look {
+        self.settings.theme().resolve(self.console_dark)
+    }
+
+    pub fn console_dark(&self) -> Option<bool> {
+        self.console_dark
+    }
+
+    pub fn set_console_dark(&mut self, dark: Option<bool>) -> bool {
+        let changed = self.console_dark != dark;
+        self.console_dark = dark;
+        changed
+    }
+
+    pub fn readout(&self) -> &Readout {
+        &self.readout
+    }
+
+    pub fn set_readout(&mut self, readout: Readout) -> bool {
+        let changed = self.readout != readout;
+        self.readout = readout;
+        changed
+    }
+
+    pub fn stream(&self) -> &StreamReadout {
+        &self.stream
+    }
+
+    /// True when the sheet is up and shows something different.
+    pub fn set_stream(&mut self, stream: StreamReadout) -> bool {
+        let changed = self.stream != stream;
+        self.stream = stream;
+        changed && self.overlay
+    }
+
+    pub fn resume(&self) -> Option<&Resume> {
+        self.resume.as_ref()
+    }
+
+    pub fn last_played(&self, address: &Address) -> Option<&str> {
+        self.played[..self.played_count]
+            .iter()
+            .find(|(known, _)| known == address)
+            .map(|(_, name)| name.as_str())
+    }
+
+    pub fn category(&self) -> u8 {
+        self.category
+    }
+
+    fn remember_played(&mut self, address: Address, name: Name) {
+        let known = self.played[..self.played_count]
+            .iter()
+            .position(|(known, _)| *known == address);
+        match known {
+            Some(index) => self.played[index].1 = name,
+            None if self.played_count < PLAYED => {
+                self.played[self.played_count] = (address, name);
+                self.played_count += 1;
+            }
+            None => {
+                self.played.copy_within(1.., 0);
+                self.played[PLAYED - 1] = (address, name);
+            }
+        }
+    }
+
     pub fn set_stream_stats(&mut self, text: &str) -> bool {
         let next = Message::of(text);
         if self.stream_stats.as_str() == next.as_str() {
@@ -554,6 +655,14 @@ impl Model {
     /// True when the hosts page shows the change.
     pub fn set_presence(&mut self, address: &Address, presence: Presence) -> bool {
         self.presence.set(address, presence) && self.screen == Screen::Hosts
+    }
+
+    pub fn link_ms(&self, address: &Address) -> Option<u32> {
+        self.presence.link_ms(address)
+    }
+
+    pub fn set_link_ms(&mut self, address: &Address, ms: u32) -> bool {
+        self.presence.set_link_ms(address, ms) && self.screen == Screen::Hosts
     }
 
     pub fn link_choice(&self) -> Option<&LinkChoice> {
@@ -666,6 +775,7 @@ impl Model {
     fn back_to_hosts(&mut self, step: &mut Step) {
         self.screen = Screen::Hosts;
         self.host = None;
+        self.resume_pending = false;
         step.changed = true;
     }
 
@@ -682,6 +792,7 @@ impl Model {
     }
 
     fn fail(&mut self, text: Option<&str>, back_apps: bool, step: &mut Step) {
+        self.resume_pending = false;
         self.screen = Screen::Error;
         self.message = message(text);
         self.back_apps = back_apps;
@@ -691,7 +802,47 @@ impl Model {
         step.changed = true;
     }
 
+    fn on_focus(&mut self, item: u32, step: &mut Step) {
+        match self.screen {
+            Screen::Apps => {
+                let Some(index) = self.app_item(item).map(|index| index as u32) else {
+                    return;
+                };
+                if index != self.app_index {
+                    self.app_index = index;
+                    step.changed = true;
+                }
+            }
+            Screen::Settings if self.editing.is_none() => {
+                let category = item
+                    .checked_sub(item::CATEGORY)
+                    .and_then(|category| u8::try_from(category).ok())
+                    .filter(|category| *category < CATEGORIES);
+                if let Some(category) = category.filter(|category| *category != self.category) {
+                    self.category = category;
+                    step.changed = true;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn on_resume_host(&mut self, step: &mut Step) {
+        let Some(resume) = self.resume else {
+            return;
+        };
+        let Some(index) = self.find_host(&resume.address) else {
+            return;
+        };
+        self.resume_pending = true;
+        self.open_host(self.hosts[index], index as u32, step);
+    }
+
     fn on_hosts(&mut self, op: Op, item: u32, step: &mut Step) {
+        if (op, item) == (Op::A, item::RESUME_HOST) {
+            self.on_resume_host(step);
+            return;
+        }
         let host = self.host_item(item);
         if let (Op::A, Some(index)) = (op, host) {
             self.open_host(self.hosts[index], index as u32, step);
@@ -931,6 +1082,9 @@ impl Model {
             return;
         }
 
+        if let Some(host) = self.host {
+            self.remember_played(host.address, app.name);
+        }
         self.screen = Screen::Launching;
         self.app = Some(app);
         self.app_index = index as u32;
@@ -1030,7 +1184,7 @@ impl Model {
         if !self.overlay {
             return;
         }
-        if op == Op::B {
+        if op == Op::B || (op == Op::A && item == item::RESUME_STREAM) {
             self.overlay = false;
             step.changed = true;
             step.add(IntentKind::ResumeInput, None);
@@ -1088,6 +1242,10 @@ impl Model {
     }
 
     fn on_command(&mut self, op: Op, item: u32, value: i32, step: &mut Step) {
+        if op == Op::Focus {
+            self.on_focus(item, step);
+            return;
+        }
         let browsing = matches!(self.screen, Screen::Hosts | Screen::Apps);
         if op == Op::X && browsing {
             self.from = self.screen;
@@ -1138,12 +1296,23 @@ impl Model {
         self.set_apps(apps);
         self.screen = Screen::Apps;
         self.current_game = current_game;
+        self.resume = self.host.zip(self.apps().iter().find(|app| app.id == current_game)).map(
+            |(host, app)| Resume {
+                address: host.address,
+                app: app.name,
+            },
+        );
         self.app_page = self.app_page.min(last_page(self.app_count, APPS_PER_PAGE));
         self.pin = None;
         self.url = None;
         self.message = message(text);
         step.changed = true;
         step.add(IntentKind::Covers, self.host);
+        if core::mem::take(&mut self.resume_pending)
+            && let Some(index) = self.apps().iter().position(|app| app.id == current_game)
+        {
+            self.launch(index, step);
+        }
     }
 
     fn on_connection_lost(&mut self, lost: Option<&Host>, step: &mut Step) {

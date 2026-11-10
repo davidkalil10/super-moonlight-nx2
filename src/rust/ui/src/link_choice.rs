@@ -2,13 +2,23 @@
 
 use crate::settings::StreamOptions;
 
-/// What the network test picked for this link.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Grade {
+    Good,
+    Fair,
+    Weak,
+}
+
+/// What the network test picked for this link, and what it measured.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct LinkChoice {
     pub width: u32,
     pub height: u32,
     pub fps: u32,
     pub bitrate_kbps: u32,
+    pub grade: Grade,
+    pub rtt_us: u32,
+    pub throughput_kbps: u32,
 }
 
 impl LinkChoice {

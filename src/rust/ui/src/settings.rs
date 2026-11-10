@@ -4,6 +4,7 @@ use core::fmt::Write;
 
 use crate::json::{Json, Kind, Value};
 use crate::text::Text;
+use crate::theme::Preference;
 
 pub const VERSION: u32 = 8;
 pub const JSON_BYTES: usize = 512;
@@ -27,10 +28,11 @@ pub enum Setting {
     FrameCounter,
     TouchMouse,
     LowLatency,
+    Theme,
 }
 
 impl Setting {
-    pub const COUNT: usize = 12;
+    pub const COUNT: usize = 13;
     pub const ALL: [Setting; Self::COUNT] = [
         Setting::Size,
         Setting::Fps,
@@ -44,6 +46,7 @@ impl Setting {
         Setting::FrameCounter,
         Setting::TouchMouse,
         Setting::LowLatency,
+        Setting::Theme,
     ];
 
     pub fn from_index(index: usize) -> Option<Self> {
@@ -173,6 +176,7 @@ enum RowKind {
     Bitrate,
     Codec,
     Toggle,
+    Theme,
 }
 
 struct Row {
@@ -222,6 +226,7 @@ const ROWS: [Row; Setting::COUNT] = [
     row("frameCounter", "Frame counter", RowKind::Toggle, 2, 0),
     row("touchMouse", "Touch as mouse", RowKind::Toggle, 2, 0),
     row("lowLatency", "Low latency (restart)", RowKind::Toggle, 2, 0),
+    row("theme", "Theme", RowKind::Theme, 3, 0),
 ];
 
 fn bitrate_mbps(index: u8) -> f64 {
@@ -388,6 +393,10 @@ impl Settings {
     /// Raw catalog index of `setting`.
     pub fn index(&self, setting: Setting) -> u8 {
         self.value[setting as usize]
+    }
+
+    pub fn theme(&self) -> Preference {
+        Preference::from_index(self.value[Setting::Theme as usize])
     }
 
     /// Whether a toggle (or any nonzero index) is set.
@@ -691,6 +700,7 @@ impl Settings {
                 RowKind::Bitrate => write!(out, "{}", bitrate_mbps(value)),
                 RowKind::Codec => write!(out, "\"{}\"", codec_at(value).name()),
                 RowKind::Toggle => write!(out, "{}", value != 0),
+                RowKind::Theme => write!(out, "\"{}\"", Preference::from_index(value).saved()),
             };
         }
         if self.fps_before_4k != 0 {
@@ -805,6 +815,10 @@ fn match_value(value: Value<'_>, row: &Row) -> Option<u8> {
             Kind::True => Some(1),
             _ => None,
         },
+        RowKind::Theme => Preference::ALL
+            .iter()
+            .position(|preference| value.string_is(preference.saved()))
+            .map(|i| i as u8),
     }
 }
 
@@ -845,6 +859,7 @@ impl core::fmt::Display for ValueText<'_> {
             }
             RowKind::Codec => f.write_str(codec_at(value).text()),
             RowKind::Toggle => f.write_str(if value != 0 { "On" } else { "Off" }),
+            RowKind::Theme => f.write_str(Preference::from_index(value).label()),
         }
     }
 }
