@@ -1500,14 +1500,14 @@ impl Model {
             self.on_focus(item, step);
             return;
         }
-        if op == Op::X && self.screen == Screen::Hosts {
+        let menu = matches!(self.screen, Screen::Hosts | Screen::Apps | Screen::AppOptions);
+        if op == Op::X && menu && self.editing.is_none() {
             self.from = self.screen;
             self.screen = Screen::Settings;
-            self.editing = None;
             step.changed = true;
             return;
         }
-        if op == Op::X && self.screen == Screen::Apps && self.app_count > 0 {
+        if op == Op::Plus && self.screen == Screen::Apps && self.app_count > 0 {
             self.screen = Screen::AppOptions;
             self.editing = None;
             step.changed = true;
@@ -1900,9 +1900,38 @@ mod app_options_tests {
         assert_eq!(saved.rumble_percent(), 75);
     }
 
+    #[test]
+    fn settings_open_from_every_menu_page_and_return_to_it() {
+        let mut model = browsing();
+        for expected in [Screen::Apps, Screen::AppOptions] {
+            if expected == Screen::AppOptions {
+                run(&mut model, Op::Plus, 0, 0);
+            }
+            assert_eq!(model.screen(), expected);
+            run(&mut model, Op::X, 0, 0);
+            assert_eq!(model.screen(), Screen::Settings);
+            run(&mut model, Op::B, 0, 0);
+            assert_eq!(model.screen(), expected);
+        }
+        run(&mut model, Op::B, 0, 0);
+        run(&mut model, Op::B, 0, 0);
+        assert_eq!(model.screen(), Screen::Hosts);
+        run(&mut model, Op::X, 0, 0);
+        assert_eq!(model.screen(), Screen::Settings);
+    }
+
+    #[test]
+    fn x_does_nothing_while_a_row_is_being_edited() {
+        let mut model = browsing();
+        run(&mut model, Op::Plus, 0, 0);
+        run(&mut model, Op::Edit, item::SETTING + Setting::Fps as u32, 0);
+        run(&mut model, Op::X, 0, 0);
+        assert_eq!(model.screen(), Screen::AppOptions);
+    }
+
     fn raise_fps(model: &mut Model) -> Step {
         let fps = item::SETTING + Setting::Fps as u32;
-        run(model, Op::X, 0, 0);
+        run(model, Op::Plus, 0, 0);
         run(model, Op::Edit, fps, 0);
         let step = run(model, Op::Adjust, fps, 1);
         run(model, Op::Edit, 0, 0);

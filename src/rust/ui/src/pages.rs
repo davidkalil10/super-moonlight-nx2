@@ -571,7 +571,7 @@ impl Builder<'_> {
     }
 
     fn apps_page(&mut self, model: &Model) {
-        let keys: Keys = &[("X", "Stream options"), ("B", "PCs"), ("A", "Launch")];
+        let keys: Keys = &[("+", "Stream options"), ("X", "Settings"), ("B", "PCs"), ("A", "Launch")];
         let quit: Keys = &[("Y", "Quit host app")];
         let apps = model.apps();
         let count = apps.len() as u32;
@@ -923,7 +923,7 @@ impl Builder<'_> {
 
     fn app_options_page(&mut self, model: &Model) {
         let editing_keys: Keys = &[("\u{25c2}\u{25b8}", "Change"), ("B", "Done"), ("A", "Done")];
-        let browsing_keys: Keys = &[("Y", "Reset"), ("B", "Back"), ("A", "Change")];
+        let browsing_keys: Keys = &[("Y", "Reset"), ("X", "Settings"), ("B", "Back"), ("A", "Change")];
         let stream = model.stream_settings();
         let rows = stream.rows(model.docked(), model.capabilities());
         let editing = model.editing().is_some_and(|s| rows[s as usize].adjustable);
