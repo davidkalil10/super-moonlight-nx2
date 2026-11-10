@@ -112,4 +112,10 @@ Civilization VII payload, Node service and C helper this app replaced.
 - [ENet](https://github.com/cgutman/enet) — networking.
 - [M PLUS Rounded 1c](https://github.com/coz-m/MPLUS_FONTS) — font.
 
+## Special thanks
+
+To [ave](https://gitlab.com/a), who made this possible.
+
+## Licence
+
 See [LICENSE](LICENSE) and the [font licence](src/rust/ui/fonts/OFL.txt).
