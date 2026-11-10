@@ -32,6 +32,10 @@ pub const STOP_TIMEOUT_MS: u64 = 15_000;
 pub const LINK_OPEN_TIMEOUT_MS: u64 = 10_000;
 pub const FIRST_FRAME_TIMEOUT_MS: u64 = 20_000;
 pub const MEDIA_CLOSE_TIMEOUT_MS: u64 = 10_000;
+/// Restarts in a row of a stream whose media failed while the PC still answers.
+pub const RESUME_ATTEMPTS: u8 = 3;
+/// A stream that then ran this long gets its restarts back.
+pub const RESUME_RESET_MS: u64 = 60_000;
 
 #[cfg(test)]
 mod wake_tests {
@@ -308,6 +312,9 @@ pub struct Service {
     /// The overlay paused stream input; PC rumble is dropped until it resumes.
     input_paused: bool,
     streamed: bool,
+    now_ms: u64,
+    resumes: u8,
+    resumed_ms: u64,
     quit_outcome: Option<QuitOutcome>,
     capabilities: Capabilities,
     outbox: [Option<Output>; OUTBOX],
@@ -364,6 +371,9 @@ impl Service {
             upstream: false,
             input_paused: false,
             streamed: false,
+            now_ms: 0,
+            resumes: 0,
+            resumed_ms: 0,
             quit_outcome: None,
             capabilities: Capabilities::default(),
             outbox: [None; OUTBOX],
@@ -676,6 +686,7 @@ impl Service {
             self.stats.stale += 1;
             return;
         }
+        self.now_ms = now_ms;
         self.check_wait(now_ms);
         if !self.link_up {
             return;
@@ -928,6 +939,7 @@ impl Service {
             dock::session_options(options_of(settings), self.docked, &self.capabilities);
         options.transport = self.transport;
         self.automatic_start = false;
+        self.resumes = 0;
         self.start_stream(host, app, options, self.telemetry);
     }
 
@@ -1700,6 +1712,9 @@ impl Service {
             return;
         }
         let streamed = self.streamed;
+        if streamed && self.resume() {
+            return;
+        }
         let notice = if streamed {
             StopNotice::Ended
         } else {
@@ -1713,6 +1728,32 @@ impl Service {
                 format_args!("The stream did not start: the console could not play it"),
             );
         }
+    }
+
+    /// Starts a playing stream again after its media failed: an outage the control link
+    /// survived should cost a pause, not the session.
+    fn resume(&mut self) -> bool {
+        if self.now_ms.saturating_sub(self.resumed_ms) >= RESUME_RESET_MS {
+            self.resumes = 0;
+        }
+        let (Some(host), Some(app), Some(options)) =
+            (self.stream_host, self.stream_app, self.requested)
+        else {
+            return false;
+        };
+        if !self.link_up || self.resumes == RESUME_ATTEMPTS {
+            return false;
+        }
+        self.resumes += 1;
+        self.resumed_ms = self.now_ms;
+        self.relaunch = Some(Relaunch {
+            host,
+            app,
+            options,
+            telemetry: self.requested_telemetry,
+        });
+        self.begin_stop(true, StopNotice::Relaunch);
+        true
     }
 
     fn close_media(&mut self) {
