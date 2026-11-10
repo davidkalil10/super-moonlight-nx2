@@ -982,7 +982,7 @@ impl Builder<'_> {
             (
                 item::TOGGLE_STATS,
                 "Show stats on screen",
-                Some(if model.settings().on(Setting::FrameCounter) { "On" } else { "Off" }),
+                Some(model.stats().label()),
                 pal.ink,
             ),
             (item::RETURN_TO_APPS, "Disconnect", None, pal.ink),

@@ -87,8 +87,8 @@ impl Setting {
             Self::TouchMouse => "Touches move the PC mouse instead of sending touch",
             Self::LowLatency => "Applies after restarting the app",
             Self::QuitOnReturn => "Disconnect also quits the app on the PC",
-            Self::StreamInfo => "A small badge with the stream mode over the video",
-            Self::FrameCounter => "Frame rate and delays over the video",
+            Self::StreamInfo => "Compact: a small badge with the stream mode over the video",
+            Self::FrameCounter => "Full: adds the frame rate and delays to the badge",
             Self::Theme => "System follows the console's theme",
         }
     }

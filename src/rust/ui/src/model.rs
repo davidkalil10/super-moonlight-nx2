@@ -313,6 +313,33 @@ const PLAYED: usize = MAX_HOSTS;
 /// Settings categories, in the order the page lists them.
 pub const CATEGORIES: u8 = 5;
 
+/// What the badge over the video shows: nothing, the stream mode, or the mode with the live
+/// frame counter.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Stats {
+    Off,
+    Compact,
+    Full,
+}
+
+impl Stats {
+    fn next(self) -> Self {
+        match self {
+            Self::Off => Self::Compact,
+            Self::Compact => Self::Full,
+            Self::Full => Self::Off,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Off => "Off",
+            Self::Compact => "Compact",
+            Self::Full => "Full",
+        }
+    }
+}
+
 /// An app the PC reports as still running, offered on the PCs page.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Resume {
@@ -628,6 +655,39 @@ impl Model {
 
     pub fn category(&self) -> u8 {
         self.category
+    }
+
+    /// How much the badge over the video shows: it follows the two badge settings.
+    pub fn stats(&self) -> Stats {
+        if self.settings.on(Setting::FrameCounter) {
+            Stats::Full
+        } else if self.settings.on(Setting::StreamInfo) {
+            Stats::Compact
+        } else {
+            Stats::Off
+        }
+    }
+
+    fn set_stats(&mut self, stats: Stats) -> bool {
+        let wanted = [
+            (Setting::StreamInfo, stats != Stats::Off),
+            (Setting::FrameCounter, stats == Stats::Full),
+        ];
+        let mut changed = false;
+        for (setting, on) in wanted {
+            if self.settings.on(setting) == on {
+                continue;
+            }
+            let direction = if on { 1 } else { -1 };
+            if let Some(adjusted) =
+                self.settings
+                    .adjust(setting, direction, self.docked, &self.capabilities)
+            {
+                self.settings = adjusted;
+                changed = true;
+            }
+        }
+        changed
     }
 
     /// Takes back what hosts.json remembered per PC.
@@ -1360,18 +1420,7 @@ impl Model {
         }
 
         if op == Op::A && item == item::TOGGLE_STATS {
-            let direction = if self.settings.on(Setting::FrameCounter) {
-                -1
-            } else {
-                1
-            };
-            if let Some(settings) = self.settings.adjust(
-                Setting::FrameCounter,
-                direction,
-                self.docked,
-                &self.capabilities,
-            ) {
-                self.settings = settings;
+            if self.set_stats(self.stats().next()) {
                 step.changed = true;
                 step.add(IntentKind::SaveSettings, None);
             }
@@ -1638,10 +1687,15 @@ mod stream_menu_tests {
         assert!(model.overlay());
         assert!(opened.intents().any(|i| i.kind == IntentKind::PauseInput));
         assert!(!model.allow_input());
-        let before = model.settings().on(Setting::FrameCounter);
         let toggle = command(&mut model, Op::A, item::TOGGLE_STATS);
-        assert_ne!(before, model.settings().on(Setting::FrameCounter));
+        assert_eq!(model.stats(), Stats::Compact);
         assert!(toggle.intents().any(|i| i.kind == IntentKind::SaveSettings));
+        command(&mut model, Op::A, item::TOGGLE_STATS);
+        assert_eq!(model.stats(), Stats::Full);
+        assert!(model.settings().on(Setting::FrameCounter));
+        command(&mut model, Op::A, item::TOGGLE_STATS);
+        assert_eq!(model.stats(), Stats::Off);
+        assert!(!model.settings().on(Setting::StreamInfo));
         let closed = command(&mut model, Op::B, 0);
         assert!(closed.intents().any(|i| i.kind == IntentKind::ResumeInput));
         assert!(model.allow_input());

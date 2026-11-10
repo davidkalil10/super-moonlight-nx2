@@ -655,3 +655,60 @@ mod overlay_stats_tests {
         assert!(text.contains("Input -- ms"));
     }
 }
+
+#[cfg(test)]
+mod presented_rate_tests {
+    use super::*;
+    use moonlight_nx2_app::metrics::Second;
+    use moonlight_nx2_core::stats::StreamStats;
+
+    fn second(presented: u32, elapsed_us: u64) -> Second {
+        Second {
+            elapsed_us,
+            units: presented,
+            bytes: 0,
+            presented,
+            caught_up: 0,
+            dropped_total: 0,
+            receive_to_present: None,
+            network_rtt_us: None,
+        }
+    }
+
+    #[test]
+    fn the_sheet_shows_frames_presented_per_second_of_the_policy_window() {
+        let video_window = StreamStats {
+            fps_x10: 300,
+            presented: 30,
+            ..Default::default()
+        };
+        let window = second(60, 1_000_000);
+        assert_eq!(presented_fps_x10(Some(window), Some(video_window)), Some(600));
+        assert_eq!(presented_fps_x10(Some(second(59, 1_001_000)), None), Some(589));
+    }
+
+    #[test]
+    fn the_sheet_and_the_overlay_text_read_the_same_figure() {
+        let window = second(60, 1_000_000);
+        let video_window = StreamStats {
+            fps_x10: 300,
+            presented: 30,
+            ..Default::default()
+        };
+        let readout = stream_readout(Some(window), Some(video_window), 0);
+        assert_eq!(readout.fps_x10, Some(600));
+        assert!(stream_stats_text(Some(window), Some(video_window)).contains("FPS 60.0"));
+    }
+
+    #[test]
+    fn without_a_closed_window_the_video_path_supplies_the_figure() {
+        let video_window = StreamStats {
+            fps_x10: 599,
+            presented: 60,
+            ..Default::default()
+        };
+        assert_eq!(presented_fps_x10(None, Some(video_window)), Some(599));
+        assert_eq!(presented_fps_x10(Some(second(0, 0)), Some(video_window)), Some(599));
+        assert_eq!(presented_fps_x10(None, None), None);
+    }
+}
