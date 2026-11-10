@@ -20,3 +20,11 @@ decoder service refuses that size so far.
 Adding `--hz120` builds `production-sdk-120`, which presents every refresh, asks the display for
 120 Hz and a 1440p layer when docked, and offers 120 fps up to 1440p where the display showed it.
 With both flags (`production-sdk-modes-120`) the docked layer stays 4K. Not measured on the console yet.
+
+## Stream controls
+
+- Hold Plus+Minus for a second: open the stream menu, unless **Hold + and - for menu** is off.
+  Plus and Minus still reach the PC while held. The Civ7 payload uses L+R here; the NRO does
+  not, because games hold L+R together (user decision, 2026-11-10).
+- L+R+Minus+Plus: stop the stream at once and return to the apps. It always works and never
+  opens the menu.

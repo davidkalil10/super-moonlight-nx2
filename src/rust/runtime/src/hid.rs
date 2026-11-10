@@ -41,8 +41,14 @@ impl InputGate {
     }
 }
 
-/// L and R held together, as the Civ7 control shader counts them.
-const MENU_CHORD: u64 = 3 << 6;
+/// Plus and Minus held together open the stream menu. Civ7 used L+R, which games hold too.
+const MENU_CHORD: u64 = 3 << 10;
+/// With L and R as well it is the stop chord, which must never open the menu.
+const STOP_CHORD: u64 = MENU_CHORD | (3 << 6);
+
+fn menu_held(buttons: u64) -> bool {
+    buttons & MENU_CHORD == MENU_CHORD && buttons & STOP_CHORD != STOP_CHORD
+}
 
 #[derive(Default)]
 pub struct MenuChord {
@@ -52,7 +58,7 @@ pub struct MenuChord {
 
 impl MenuChord {
     pub fn update(&mut self, input: &FrameInput, active: bool, now_ms: u64) -> bool {
-        if !active || !input.pad.connected || input.raw_buttons & MENU_CHORD != MENU_CHORD {
+        if !active || !input.pad.connected || !menu_held(input.raw_buttons) {
             self.since = None;
             self.fired = false;
             return false;
@@ -81,8 +87,7 @@ impl UiSchedule {
         page_interactive: bool,
         menu_enabled: bool,
     ) -> bool {
-        let active =
-            menu_enabled && input.pad.connected && input.raw_buttons & MENU_CHORD == MENU_CHORD;
+        let active = menu_enabled && input.pad.connected && menu_held(input.raw_buttons);
         let needed = page_interactive || active || self.chord_active;
         self.chord_active = active;
         needed
@@ -254,5 +259,31 @@ mod menu_tests {
         assert!(!chord.update(&input, true, 2000));
         assert!(chord.update(&input, true, 3000));
         assert!(!chord.update(&input, false, 4000));
+    }
+
+    fn held(buttons: u64) -> FrameInput {
+        let mut sample = [0u8; REQUIRED_BYTES];
+        sample[8..16].copy_from_slice(&buttons.to_le_bytes());
+        sample[32..36].copy_from_slice(&1u32.to_le_bytes());
+        FrameInput::decode(&sample).unwrap()
+    }
+
+    #[test]
+    fn stop_chord_and_l_r_alone_never_open_the_menu() {
+        let mut chord = MenuChord::default();
+        for buttons in [STOP_CHORD, 3 << 6, 1 << 10, 1 << 11] {
+            assert!(!chord.update(&held(buttons), true, 0));
+            assert!(!chord.update(&held(buttons), true, 5_000));
+        }
+    }
+
+    #[test]
+    fn adding_l_and_r_before_the_second_is_up_cancels_the_menu() {
+        let mut chord = MenuChord::default();
+        assert!(!chord.update(&held(MENU_CHORD), true, 0));
+        assert!(!chord.update(&held(STOP_CHORD), true, 900));
+        assert!(!chord.update(&held(STOP_CHORD), true, 2_000));
+        assert!(!chord.update(&held(MENU_CHORD | 1 << 6), true, 2_100));
+        assert!(chord.update(&held(MENU_CHORD | 1 << 6), true, 3_100));
     }
 }

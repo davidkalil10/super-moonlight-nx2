@@ -216,7 +216,7 @@ const ROWS: [Row; Setting::COUNT] = [
         2,
         0,
     ),
-    row("menuChord", "Hold L+R for menu", RowKind::Toggle, 2, 1),
+    row("menuChord", "Hold + and - for menu", RowKind::Toggle, 2, 1),
     row("streamInfo", "Stream info badge", RowKind::Toggle, 2, 0),
     row("frameCounter", "Frame counter", RowKind::Toggle, 2, 0),
     row("touchMouse", "Touch as mouse", RowKind::Toggle, 2, 0),
