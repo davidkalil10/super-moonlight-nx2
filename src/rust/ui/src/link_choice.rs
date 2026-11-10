@@ -19,6 +19,9 @@ pub struct LinkChoice {
     pub grade: Grade,
     pub rtt_us: u32,
     pub throughput_kbps: u32,
+    /// The size and rate the settings asked for when the choice was made. It says nothing
+    /// about any other: after a dock change the old choice must not shape the new stream.
+    pub wanted: (u32, u32, u32),
 }
 
 impl LinkChoice {
@@ -27,7 +30,7 @@ impl LinkChoice {
     /// was made for these very options with the size left to it. A fixed bitrate is the
     /// user's override and is left alone.
     pub fn apply(&self, mut options: StreamOptions) -> StreamOptions {
-        if !options.bitrate_auto {
+        if !options.bitrate_auto || (options.width, options.height, options.fps) != self.wanted {
             return options;
         }
         if options.size_auto && self.height < options.height {

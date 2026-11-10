@@ -100,6 +100,8 @@ struct LinkTest {
     wanted: bool,
     measured: Option<netprobe::LinkQuality>,
     chosen_for: Option<netprobe::Wanted>,
+    /// What the log already says about this measurement: each wanted shape and its result.
+    logged: Vec<(netprobe::Wanted, (u32, u32, u32, u32))>,
 }
 
 /// Part of each frame the link measurement may use.
@@ -888,11 +890,50 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
         }
     }
 
+    /// A new display or decoder context, as on a dock change. The network test's choice is
+    /// made again for the shape the new context asks for before the stream is, so a stream
+    /// that starts again takes the new shape with a bitrate chosen for it.
+    pub fn context_changed(&mut self, context: Context) -> bool {
+        let before = self.client.requested_options();
+        if let Some(quality) = self.link_test.measured {
+            let capabilities = crate::client::ui_capabilities(&context);
+            self.choose_link_in(quality, context.docked, &capabilities, false);
+        }
+        let accepted = self.client.context_changed(context);
+        let after = self.client.driver.service().relaunch_options();
+        if let (Some(before), Some(after)) = (before, after) {
+            crate::render_platform::log(&alloc::format!(
+                "stream: dock change relaunch from {}x{}@{} {} kbps to {}x{}@{} {} kbps",
+                before.width,
+                before.height,
+                before.fps,
+                before.bitrate_kbps,
+                after.width,
+                after.height,
+                after.fps,
+                after.bitrate_kbps
+            ));
+        }
+        accepted
+    }
+
     fn wanted_shape(&self) -> netprobe::Wanted {
         let model = self.client.bridge.model();
-        let options = model
+        self.wanted_in(model.docked(), model.capabilities())
+    }
+
+    /// The shape the settings and the focused app's own options ask for in a dock state.
+    fn wanted_in(
+        &self,
+        docked: bool,
+        capabilities: &moonlight_nx2_ui::settings::Capabilities,
+    ) -> netprobe::Wanted {
+        let options = self
+            .client
+            .bridge
+            .model()
             .stream_settings()
-            .stream_options(model.docked(), model.capabilities());
+            .stream_options(docked, capabilities);
         netprobe::Wanted {
             width: options.width,
             height: options.height,
@@ -904,29 +945,50 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
 
     /// Picks Auto's shape from the measured link for the settings in use.
     fn choose_link(&mut self, quality: netprobe::LinkQuality, announce: bool) {
-        use moonlight_nx2_ui::settings::Size;
-        let wanted = self.wanted_shape();
         let model = self.client.bridge.model();
-        let capabilities = *model.capabilities();
-        let codec = model
+        let (docked, capabilities) = (model.docked(), *model.capabilities());
+        self.choose_link_in(quality, docked, &capabilities, announce);
+    }
+
+    /// The same for a dock state and capabilities the model may not have yet.
+    fn choose_link_in(
+        &mut self,
+        quality: netprobe::LinkQuality,
+        docked: bool,
+        capabilities: &moonlight_nx2_ui::settings::Capabilities,
+        announce: bool,
+    ) {
+        use moonlight_nx2_ui::settings::Size;
+        let wanted = self.wanted_in(docked, capabilities);
+        let codec = self
+            .client
+            .bridge
+            .model()
             .stream_settings()
-            .in_use(model.docked(), &capabilities)
+            .in_use(docked, capabilities)
             .codec();
         let choice = netprobe::choose(quality, wanted, |_, height, fps| {
             capabilities.mode(codec, Size::from_height(height), fps)
         });
         let note = netprobe::note(&choice);
-        crate::render_platform::log(&alloc::format!(
-            "netprobe: {quality:?} wanted={}x{}@{} -> {}x{}@{} {} kbps {:?}",
-            wanted.width,
-            wanted.height,
-            wanted.fps,
-            choice.width,
-            choice.height,
-            choice.fps,
-            choice.bitrate_kbps,
-            choice.grade
-        ));
+        let resolved = (
+            wanted,
+            (choice.width, choice.height, choice.fps, choice.bitrate_kbps),
+        );
+        if !self.link_test.logged.contains(&resolved) {
+            self.link_test.logged.push(resolved);
+            crate::render_platform::log(&alloc::format!(
+                "netprobe: {quality:?} wanted={}x{}@{} -> {}x{}@{} {} kbps {:?}",
+                wanted.width,
+                wanted.height,
+                wanted.fps,
+                choice.width,
+                choice.height,
+                choice.fps,
+                choice.bitrate_kbps,
+                choice.grade
+            ));
+        }
         self.client.set_link(
             Some(LinkChoice {
                 width: choice.width,
@@ -940,6 +1002,7 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
                 },
                 rtt_us: choice.quality.rtt_us,
                 throughput_kbps: choice.quality.throughput_kbps,
+                wanted: (wanted.width, wanted.height, wanted.fps),
             }),
             note.as_str(),
         );
@@ -993,6 +1056,7 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
                     self.link_test.prober.rates()
                 ));
                 self.link_test.measured = Some(quality);
+                self.link_test.logged.clear();
                 self.choose_link(quality, true);
             }
             Some(outcome) => {

@@ -453,13 +453,11 @@ fn display_context(
     docked: bool,
     display: DisplayCapabilities,
 ) {
-    let accepted = app
-        .client
-        .context_changed(moonlight_nx2_app::policy::Context {
-            docked,
-            decoder: stream_capabilities(),
-            display,
-        });
+    let accepted = app.context_changed(moonlight_nx2_app::policy::Context {
+        docked,
+        decoder: stream_capabilities(),
+        display,
+    });
     log(&format!(
         "display: context docked={docked} accepted={accepted}; native decoder capability is runtime gated"
     ));

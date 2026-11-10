@@ -136,7 +136,7 @@ pub struct Client<F> {
     badge: crate::policy_badge::Badge,
 }
 
-fn ui_capabilities(context: &moonlight_nx2_app::policy::Context) -> Capabilities {
+pub(crate) fn ui_capabilities(context: &moonlight_nx2_app::policy::Context) -> Capabilities {
     use moonlight_nx2_app::{request, stream};
     let mut result = Capabilities {
         verified_modes: Some([0; 3]),

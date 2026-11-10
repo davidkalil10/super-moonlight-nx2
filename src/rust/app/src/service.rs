@@ -546,6 +546,11 @@ impl Service {
         }
     }
 
+    /// The options a stream stopped for a context change starts again with.
+    pub fn relaunch_options(&self) -> Option<Options> {
+        self.relaunch.as_ref().map(|relaunch| relaunch.options)
+    }
+
     pub fn set_capabilities(&mut self, capabilities: Capabilities) {
         self.capabilities = capabilities;
     }
