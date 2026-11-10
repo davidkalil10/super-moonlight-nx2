@@ -27,6 +27,7 @@ use moonlight_nx2_ui::{
 
 unsafe extern "C" {
     fn moonlightPlatformNetStart() -> bool;
+    fn moonlightPlatformRandom(out: *mut u8, bytes: usize);
     fn moonlightPlatformNetStop();
     fn moonlightPlatformStackAvailable() -> u64;
     fn moonlightIoTakeSession(
@@ -92,6 +93,10 @@ impl Connections for NativeConnections {
             }
         }
         NetSocket::connect(address, port)
+    }
+    fn random(&mut self, bytes: &mut [u8]) -> bool {
+        unsafe { moonlightPlatformRandom(bytes.as_mut_ptr(), bytes.len()) };
+        true
     }
     fn wake(&mut self, mac: [u8; 6], address: Option<[u8; 4]>) {
         if !self.network {

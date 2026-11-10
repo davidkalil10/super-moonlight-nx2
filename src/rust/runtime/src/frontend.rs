@@ -19,6 +19,7 @@ use moonlight_nx2_app::{
     link::{Link, LinkError},
     link_probe::Prober,
     netprobe,
+    pairings::{Loaded, Pairing, Pairings},
     policy::{Context, DisplayCapabilities},
     presence_watch::{Seen, Watch},
     reply::Descriptor,
@@ -29,9 +30,11 @@ use moonlight_nx2_app::{
 use moonlight_nx2_core::control::Frame as ControlFrame;
 use moonlight_nx2_io::{
     control,
+    secure::SecureSocket,
     socket::{IoError, Socket},
     udp::Datagram,
 };
+use moonlight_nx2_secure::{self as secure, Mode, Random, Status};
 use moonlight_nx2_ui::{
     discover::{self, Answers},
     json::{Json, Kind},
@@ -52,6 +55,11 @@ pub trait Connections {
     type Socket: Socket + 'static;
     fn authorization(&mut self) -> Result<Session, AuthError>;
     fn connect(&mut self, address: [u8; 4], port: u16) -> Result<Self::Socket, IoError>;
+    /// Fills `bytes` from the system's random source; false where there is none, and then
+    /// no PC can be paired or opened with a stored key.
+    fn random(&mut self, _bytes: &mut [u8]) -> bool {
+        false
+    }
     /// Sends Wake-on-LAN towards `address` and the broadcast addresses, and logs the outcome.
     fn wake(&mut self, _mac: [u8; 6], _address: Option<[u8; 4]>) {}
     /// A microsecond clock for the link measurement; 0 where there is none.
@@ -115,6 +123,51 @@ pub struct Stats {
     pub media_opened: u64,
 }
 
+/// How the helper connection being opened proves this console.
+enum Auth {
+    /// The staged one-shot session and its token.
+    Token(Session),
+    /// The key stored for a paired PC.
+    Key,
+    /// No key yet: pair first, with a code the user types on the PC.
+    Setup,
+}
+
+struct Target {
+    address: [u8; 4],
+    port: u16,
+    pc: Address,
+    auth: Auth,
+}
+
+/// An MNS1 handshake in progress; `code` is set while pairing.
+struct Handshake<S: Socket> {
+    socket: SecureSocket<S>,
+    address: [u8; 4],
+    pc: Address,
+    code: Option<[u8; secure::CODE_DIGITS]>,
+    deadline_ms: u64,
+}
+
+const SESSION_LIMIT_MS: u64 = 10_000;
+const PAIRING_LIMIT_MS: u64 = 125_000;
+const HELPER_SILENT: &str =
+    "The PC helper did not answer; check that moonlight-nx2-pc serve is running";
+const CODE_REFUSED: &str = "The code typed on the PC did not match; open the PC to try again";
+const PAIRING_OFF: &str = "The PC is not pairing consoles right now; try again in ten minutes";
+const PAIRING_TIMED_OUT: &str = "No code was typed on the PC in time; open the PC to try again";
+const HELPER_VERSION: &str = "The PC helper speaks another version; update both sides";
+const KEY_NOT_SAVED: &str = "The PC was paired but its key could not be saved";
+
+fn octets(address: &Address) -> Option<[u8; 4]> {
+    let mut parts = address.as_str().split('.');
+    let mut bytes = [0; 4];
+    for byte in &mut bytes {
+        *byte = parts.next()?.parse().ok()?;
+    }
+    parts.next().is_none().then_some(bytes)
+}
+
 pub enum MediaRequest {
     Open(Box<Descriptor>),
     Close,
@@ -122,8 +175,11 @@ pub enum MediaRequest {
 
 pub struct Frontend<F, S: Socket + 'static> {
     pub client: Client<F>,
-    control: Option<Control<S>>,
-    wake_connect: Option<(WakeConnect<S>, Session)>,
+    control: Option<Control<SecureSocket<S>>>,
+    wake_connect: Option<(WakeConnect<S>, Target)>,
+    handshake: Option<Handshake<S>>,
+    pairings: Pairings,
+    files: F,
     forced_wake: Option<Address>,
     presence: Watch<S>,
     link_test: LinkTest,
@@ -199,20 +255,25 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
                 }
             }
         }
+        let mut pairing_files = files.clone();
+        let (pairings, loaded) = Pairings::load(&mut pairing_files);
+        if loaded == Loaded::Damaged {
+            crate::render_platform::log("pairing: the pairings file is unreadable; ignored");
+        }
         let mut client = Client::new(bytes, atlas, files, 1)?;
         client.context_changed(Context {
             docked,
             decoder: Default::default(),
             display: DisplayCapabilities::default(),
         });
-        let message = import_error.or_else(|| {
-            (authorization.is_none() && client.bridge.model().message().is_none())
-                .then_some("Import a PC connection before connecting")
-        });
+        let message = import_error;
         Ok(Self {
             client,
             control: None,
             wake_connect: None,
+            handshake: None,
+            pairings,
+            files: pairing_files,
             forced_wake: None,
             presence: Watch::default(),
             link_test: LinkTest::default(),
@@ -351,9 +412,17 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
         self.client.clear_covers();
         self.link_test = LinkTest::default();
         self.client.set_link(None, "");
-        if let Some((mut pending, authorization)) = self.wake_connect.take() {
+        if let Some(mut handshake) = self.handshake.take()
+            && handshake.socket.close().is_err()
+        {
+            crate::render_platform::retire_process();
+            return false;
+        }
+        if let Some((mut pending, target)) = self.wake_connect.take() {
             // The token has not left the console yet, so the connection file is still good.
-            self.authorization = Some(authorization);
+            if let Auth::Token(authorization) = target.auth {
+                self.authorization = Some(authorization);
+            }
             let host = pending.host().address;
             self.client.set_presence(&host, Presence::Unknown);
             self.client.set_status(None);
@@ -376,30 +445,72 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
         }
     }
 
-    fn open<C: Connections<Socket = S>>(&mut self, connections: &mut C, now_ms: u64) {
-        if self.control.is_some() || self.wake_connect.is_some() {
-            self.client.runtime(RuntimeEvent::LinkFailed);
-            return;
-        }
-        let authorization = self
+    /// Chooses how to reach the helper for the selected PC: its stored key, the staged
+    /// one-shot session, or a first pairing. A staged session never replaces a key.
+    fn target<C: Connections<Socket = S>>(&mut self, connections: &mut C) -> Option<Target> {
+        let pc = self.client.bridge.model().host().map(|host| host.address);
+        let secure = pc
+            .and_then(|pc| octets(&pc).map(|address| (pc, address)))
+            .filter(|_| connections.random(&mut [0; 1]));
+        let paired = secure.filter(|(pc, _)| self.pairings.find(pc).is_some());
+        let staged = self
             .authorization
             .take()
             .map_or_else(|| connections.authorization(), Ok);
-        let Ok(mut authorization) = authorization else {
-            self.client.runtime(RuntimeEvent::LinkFailed);
-            self.message = Some(match authorization.err().unwrap() {
-                AuthError::Missing => "Import a new PC connection before connecting",
-                AuthError::Invalid => "The PC connection file is invalid",
-                AuthError::Uncertain => {
-                    "The PC connection file could not be consumed; restart before trying again"
-                }
+        if let Some((pc, address)) = paired {
+            match staged {
+                Ok(session) if session.host.address == pc => crate::render_platform::log(
+                    "pairing: the staged PC connection was discarded; this PC is paired",
+                ),
+                Ok(session) => self.authorization = Some(session),
+                Err(_) => {}
+            }
+            return Some(Target {
+                address,
+                port: secure::PORT,
+                pc,
+                auth: Auth::Key,
             });
+        }
+        match (staged, secure) {
+            (Ok(session), _) => Some(Target {
+                address: session.address,
+                port: session.port,
+                pc: session.host.address,
+                auth: Auth::Token(session),
+            }),
+            (Err(AuthError::Missing), Some((pc, address))) => Some(Target {
+                address,
+                port: secure::PORT,
+                pc,
+                auth: Auth::Setup,
+            }),
+            (Err(error), _) => {
+                self.message = Some(match error {
+                    AuthError::Missing => "Import a new PC connection before connecting",
+                    AuthError::Invalid => "The PC connection file is invalid",
+                    AuthError::Uncertain => {
+                        "The PC connection file could not be consumed; restart before trying again"
+                    }
+                });
+                None
+            }
+        }
+    }
+
+    fn open<C: Connections<Socket = S>>(&mut self, connections: &mut C, now_ms: u64) {
+        if self.control.is_some() || self.wake_connect.is_some() || self.handshake.is_some() {
+            self.client.runtime(RuntimeEvent::LinkFailed);
+            return;
+        }
+        let Some(target) = self.target(connections) else {
+            self.client.runtime(RuntimeEvent::LinkFailed);
             return;
         };
         let host = self.client.bridge.model().host().copied();
         if let Some((host, mac)) = host.and_then(|host| host.mac.map(|mac| (host, mac))) {
             let force = self.forced_wake.take() == Some(host.address);
-            let helper = (authorization.address, authorization.port);
+            let helper = (target.address, target.port);
             let pending =
                 WakeConnect::start(&mut Net(connections), helper, host, mac.0, force, now_ms);
             if crate::render_platform::process_retired() {
@@ -411,30 +522,107 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
                 .driver
                 .service_mut()
                 .set_link_timeout(now_ms, wake::LIMIT_MS + 30_000);
-            self.wake_connect = Some((pending, authorization));
+            self.wake_connect = Some((pending, target));
             return;
         }
         self.forced_wake = None;
-        let socket = match connections.connect(authorization.address, authorization.port) {
-            Ok(socket) => socket,
+        self.connect(connections, target, now_ms);
+    }
+
+    fn connect<C: Connections<Socket = S>>(
+        &mut self,
+        connections: &mut C,
+        target: Target,
+        now_ms: u64,
+    ) {
+        match connections.connect(target.address, target.port) {
+            Ok(socket) => self.attach(connections, socket, target, now_ms),
             Err(_) => {
                 self.client.runtime(RuntimeEvent::LinkFailed);
-                self.message =
-                    Some("Check Wi-Fi and Sunshine; import a new PC connection to retry");
-                return;
+                self.message = Some(match target.auth {
+                    Auth::Token(_) => {
+                        "Check Wi-Fi and Sunshine; import a new PC connection to retry"
+                    }
+                    _ => HELPER_SILENT,
+                });
             }
+        }
+    }
+
+    /// Starts authentication on a socket whose connect is in progress.
+    fn attach<C: Connections<Socket = S>>(
+        &mut self,
+        connections: &mut C,
+        socket: S,
+        target: Target,
+        now_ms: u64,
+    ) {
+        let mut random = Random(|bytes: &mut [u8]| {
+            connections.random(bytes);
+        });
+        let (mode, code, limit_ms) = match target.auth {
+            Auth::Token(mut session) => {
+                let token = core::mem::replace(&mut session.token, [0; 64]);
+                return self.control_over(
+                    SecureSocket::plain(socket),
+                    token,
+                    session.address,
+                    now_ms,
+                );
+            }
+            Auth::Key => (Mode::Session, None, SESSION_LIMIT_MS),
+            Auth::Setup => (
+                Mode::Pair,
+                Some(secure::new_code(&mut random)),
+                PAIRING_LIMIT_MS,
+            ),
         };
-        let token = core::mem::replace(&mut authorization.token, [0; 64]);
+        let console = self.pairings.console(|bytes| random.0(bytes));
+        let key = self.pairings.find(&target.pc).map(|pairing| pairing.key);
+        let secret: &[u8] = match (&code, &key) {
+            (Some(code), _) => code,
+            (None, Some(key)) => key,
+            (None, None) => &[],
+        };
+        let socket = SecureSocket::secured(socket, mode, console, secret, &mut random);
+        if let Some(code) = code {
+            let digits = core::str::from_utf8(&code).unwrap_or("");
+            self.text = Some(Message::of(&alloc::format!(
+                "Pairing code {} {}. On the PC run: moonlight-nx2-pc pair {digits}",
+                &digits[..4],
+                &digits[4..]
+            )));
+            self.client
+                .driver
+                .service_mut()
+                .set_link_timeout(now_ms, PAIRING_LIMIT_MS + 5_000);
+            crate::render_platform::log("pairing: showing a code and waiting for the PC");
+        }
+        self.handshake = Some(Handshake {
+            socket,
+            address: target.address,
+            pc: target.pc,
+            code,
+            deadline_ms: now_ms.saturating_add(limit_ms),
+        });
+    }
+
+    fn control_over(
+        &mut self,
+        socket: SecureSocket<S>,
+        token: [u8; 64],
+        address: [u8; 4],
+        now_ms: u64,
+    ) {
         match Control::open(socket, token, self.access, now_ms) {
             Ok(control) => {
                 self.control = Some(control);
-                self.peer = Some(authorization.address);
+                self.peer = Some(address);
                 self.stats.opened += 1;
             }
             Err(error) => {
                 self.client.runtime(RuntimeEvent::LinkFailed);
-                self.message =
-                    Some("Check Wi-Fi and Sunshine; import a new PC connection to retry");
+                self.message = Some(HELPER_SILENT);
                 if error.retained {
                     self.exit = true;
                 }
@@ -442,8 +630,139 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
         }
     }
 
+    fn link_failed(&mut self, message: &'static str) {
+        self.client.runtime(RuntimeEvent::LinkFailed);
+        self.message = Some(message);
+    }
+
+    /// Stores the key a finished pairing produced and opens a session with it.
+    fn paired<C: Connections<Socket = S>>(
+        &mut self,
+        connections: &mut C,
+        mut handshake: Handshake<S>,
+        now_ms: u64,
+    ) {
+        let pairing = handshake.socket.take_pairing();
+        if handshake.socket.close().is_err() {
+            crate::render_platform::retire_process();
+            self.exit = true;
+        }
+        let Some((helper, key)) = pairing else {
+            return self.link_failed(HELPER_SILENT);
+        };
+        self.pairings.add(Pairing {
+            address: handshake.pc,
+            helper,
+            key,
+        });
+        if !self.pairings.save(&mut self.files) {
+            self.pairings.forget(&handshake.pc);
+            return self.link_failed(KEY_NOT_SAVED);
+        }
+        crate::render_platform::log(&alloc::format!(
+            "pairing: paired with the helper at {}",
+            handshake.pc.as_str()
+        ));
+        self.text = Some(Message::of("Paired. Connecting\u{2026}"));
+        let target = Target {
+            address: handshake.address,
+            port: secure::PORT,
+            pc: handshake.pc,
+            auth: Auth::Key,
+        };
+        self.connect(connections, target, now_ms);
+    }
+
+    fn poll_handshake<C: Connections<Socket = S>>(&mut self, connections: &mut C, now_ms: u64) {
+        let Some(mut handshake) = self.handshake.take() else {
+            return;
+        };
+        let pairing = handshake.code.is_some();
+        let cancelled = self.client.bridge.model().screen() != Screen::Connecting;
+        let progress = if cancelled {
+            Err(IoError::Failed)
+        } else {
+            handshake.socket.poll_connect()
+        };
+        match progress {
+            Ok(false) if now_ms < handshake.deadline_ms => {
+                self.handshake = Some(handshake);
+                return;
+            }
+            Ok(true) if pairing => return self.paired(connections, handshake, now_ms),
+            Ok(true) => {
+                crate::render_platform::log("pairing: session opened with the stored key");
+                return self.control_over(
+                    handshake.socket,
+                    secure::SESSION_TOKEN,
+                    handshake.address,
+                    now_ms,
+                );
+            }
+            _ => {}
+        }
+        let failure = handshake.socket.failure();
+        if handshake.socket.close().is_err() {
+            crate::render_platform::retire_process();
+            self.exit = true;
+        }
+        if cancelled {
+            return;
+        }
+        crate::render_platform::log(&alloc::format!(
+            "pairing: handshake ended pairing={pairing} failure={failure:?} timed_out={}",
+            progress == Ok(false)
+        ));
+        let rejected = matches!(
+            failure,
+            Some(secure::Error::Confirm | secure::Error::Refused(Status::UnknownConsole))
+        );
+        match failure {
+            _ if rejected && !pairing => {
+                let target = Target {
+                    address: handshake.address,
+                    port: secure::PORT,
+                    pc: handshake.pc,
+                    auth: Auth::Setup,
+                };
+                self.connect(connections, target, now_ms)
+            }
+            Some(secure::Error::Confirm) => self.link_failed(CODE_REFUSED),
+            Some(secure::Error::Refused(Status::PairingUnavailable)) => {
+                self.link_failed(PAIRING_OFF)
+            }
+            Some(secure::Error::Version | secure::Error::Refused(Status::Version)) => {
+                self.link_failed(HELPER_VERSION)
+            }
+            _ if pairing && progress == Ok(false) => self.link_failed(PAIRING_TIMED_OUT),
+            _ => self.link_failed(HELPER_SILENT),
+        }
+    }
+
+    /// Removes the stored key of a PC the user removed.
+    fn forget(&mut self, pc: &Address) {
+        if !self.pairings.forget(pc) {
+            return;
+        }
+        // The second write replaces the backup the first one leaves, which still holds the key.
+        let saved = self.pairings.save(&mut self.files) && self.pairings.save(&mut self.files);
+        crate::render_platform::log(&alloc::format!(
+            "pairing: forgot {} saved={saved}",
+            pc.as_str()
+        ));
+    }
+
+    /// Whether the selected PC can be opened again without the user.
+    pub fn paired_host(&self) -> bool {
+        self.client
+            .bridge
+            .model()
+            .host()
+            .is_some_and(|host| self.pairings.find(&host.address).is_some())
+    }
+
     fn poll_wake_connect<C: Connections<Socket = S>>(&mut self, connections: &mut C, now_ms: u64) {
-        let Some((mut pending, mut authorization)) = self.wake_connect.take() else {
+        let Some((mut pending, target)) = self.wake_connect.take() else {
             return;
         };
         let host = *pending.host();
@@ -464,22 +783,7 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
             }
             Progress::Ready(socket) => {
                 self.client.set_presence(&host.address, Presence::Online);
-                let token = core::mem::replace(&mut authorization.token, [0; 64]);
-                match Control::open(socket, token, self.access, now_ms) {
-                    Ok(control) => {
-                        self.control = Some(control);
-                        self.peer = Some(authorization.address);
-                        self.stats.opened += 1;
-                    }
-                    Err(error) => {
-                        self.client.runtime(RuntimeEvent::LinkFailed);
-                        self.message =
-                            Some("Check Wi-Fi and Sunshine; import a new PC connection to retry");
-                        if error.retained {
-                            self.exit = true;
-                        }
-                    }
-                }
+                self.attach(connections, socket, target, now_ms);
                 return;
             }
             Progress::Failed(message) => {
@@ -491,7 +795,9 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
                 self.client.set_presence(&host.address, Presence::Offline);
                 self.client.runtime(RuntimeEvent::LinkFailed);
                 self.text = Some(message);
-                self.authorization = Some(authorization);
+                if let Auth::Token(authorization) = target.auth {
+                    self.authorization = Some(authorization);
+                }
                 return;
             }
             Progress::Retired => {
@@ -506,7 +812,7 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
             self.client.runtime(RuntimeEvent::LinkFailed);
             return;
         }
-        self.wake_connect = Some((pending, authorization));
+        self.wake_connect = Some((pending, target));
     }
 
     /// Asks the saved PCs whether they answer while the hosts page is up and nothing is open.
@@ -686,6 +992,7 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
         let message = self.message.take();
         let text = self.text.take();
         self.poll_wake_connect(connections, now_ms);
+        self.poll_handshake(connections, now_ms);
         self.watch_presence(connections, now_ms);
         self.test_link(connections, now_ms);
         let mut disconnected = false;
@@ -804,6 +1111,7 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
                     self.discover(connections, now_ms, true)
                 }
                 Effect::Action(Action::WakeHost(host)) => self.forced_wake = Some(host.address),
+                Effect::Action(Action::ForgetHost(host)) => self.forget(&host.address),
                 Effect::Action(Action::TestNetwork) => {
                     let ready = self.control.is_some() && self.authenticated;
                     self.link_test.wanted = ready;
@@ -839,8 +1147,10 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
                 self.exit = true;
             }
             self.client.runtime(RuntimeEvent::LinkFailed);
-            self.message =
-                Some("Check Wi-Fi and Sunshine; import a new PC connection to reconnect");
+            if !self.paired_host() {
+                self.message =
+                    Some("Check Wi-Fi and Sunshine; import a new PC connection to reconnect");
+            }
         }
         if !disconnected
             && self.access != Access::SingleList

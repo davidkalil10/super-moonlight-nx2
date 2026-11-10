@@ -118,7 +118,7 @@ impl Directory {
     fn path(&self, name: &str, suffix: &str) -> Option<CString> {
         if !matches!(
             name,
-            "hosts.json" | "settings.json" | "settings-0.json" | "settings-1.json"
+            "hosts.json" | "settings.json" | "settings-0.json" | "settings-1.json" | "pairings"
         ) {
             return None;
         }

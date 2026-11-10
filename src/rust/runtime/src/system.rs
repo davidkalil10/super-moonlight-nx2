@@ -7,6 +7,7 @@ extern crate alloc;
 use crate::{device::log, files::Directory, frontend::Frontend, net::NetSocket, render::Renderer};
 use alloc::format;
 use moonlight_nx2_app::{
+    reconnect::{self, Reconnect},
     suspend::{self, Command, Snapshot, Suspend},
     system_status::{self, LowBattery, Network, Reading},
 };
@@ -84,6 +85,7 @@ impl Source {
 
 pub struct System {
     suspend: Suspend,
+    reconnect: Reconnect,
     low_battery: LowBattery,
     /// The app was seen in focus once, so a later change means something.
     focus_reported: bool,
@@ -122,6 +124,7 @@ impl System {
         ));
         Self {
             suspend: Suspend::default(),
+            reconnect: Reconnect::default(),
             low_battery: LowBattery::default(),
             focus_reported: focus == FOCUS_IN,
             in_focus: true,
@@ -166,6 +169,7 @@ impl System {
             ));
         }
         self.pause_or_resume(app, in_focus, woke, now_ms);
+        self.reconnect(app, in_focus, now_ms);
         self.keep_awake(suspend::keeps_awake(app.screen()) && in_focus);
         if now_ms >= self.next_read_ms {
             self.next_read_ms = now_ms.saturating_add(READ_MS);
@@ -190,6 +194,7 @@ impl System {
             apps_ready: screen == Screen::Apps && app.client.driver.service().idle(),
             running: model.current_game(),
             link_up: app.link_up(),
+            paired: app.paired_host(),
             now_ms,
         };
         match self.suspend.tick(snapshot) {
@@ -218,9 +223,40 @@ impl System {
                     None => app.notice(suspend::ENDED_APP),
                 }
             }
+            Command::Reconnect => {
+                log("system: the PC connection is gone; reconnecting to resume");
+                self.reconnect.start(now_ms, true);
+            }
             Command::Ended(reason) => {
                 log(&format!("system: stream not resumed: {reason}"));
                 app.notice(reason);
+            }
+        }
+    }
+
+    /// Opens a paired PC again after its connection was cut off.
+    fn reconnect(&mut self, app: &mut Frontend<Directory, NetSocket>, in_focus: bool, now_ms: u64) {
+        let was_active = self.reconnect.active();
+        let command = self.reconnect.tick(reconnect::Snapshot {
+            screen: app.screen(),
+            link_up: app.link_up(),
+            paired: app.paired_host(),
+            in_focus,
+            now_ms,
+        });
+        if self.reconnect.active() && !was_active {
+            log("system: connection lost; reconnecting");
+            app.notice(reconnect::RECONNECTING);
+        }
+        match command {
+            reconnect::Command::None => {}
+            reconnect::Command::Reopen { resume } => {
+                log(&format!("system: reopening the PC resume={resume}"));
+                app.client.event(&Event::Reopen { resume });
+            }
+            reconnect::Command::GaveUp => {
+                log("system: the PC did not come back");
+                app.notice(reconnect::GAVE_UP);
             }
         }
     }
@@ -278,7 +314,9 @@ impl System {
         if self.color_set.active() {
             let mut dark = 0;
             let result = unsafe { moonlightSystemColorSet(&mut dark) };
-            let read = self.color_set.record("color set (1 is dark)", result, &dark);
+            let read = self
+                .color_set
+                .record("color set (1 is dark)", result, &dark);
             app.client.set_console_dark(read.then_some(dark != 0));
         }
         app.client.set_readout(self.readout());

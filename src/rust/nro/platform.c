@@ -67,6 +67,25 @@ _Static_assert(MAKERESULT(Module_Libnx, LibnxError_BadInput) == ((11u << 9) | 34
 uint64_t moonlightNowNs(void) { return armTicksToNs(armGetSystemTick()); }
 
 bool moonlightPlatformNetStart(void) { return R_SUCCEEDED(socketInitializeDefault()); }
+
+/* Key material: the kernel-seeded generator, mixed with the csrng service where it opens. */
+void moonlightPlatformRandom(uint8_t *out, size_t bytes)
+{
+    randomGet(out, bytes);
+    uint8_t extra[64];
+    if (R_FAILED(csrngInitialize()))
+        return;
+    for (size_t done = 0; done < bytes;) {
+        size_t count = bytes - done < sizeof(extra) ? bytes - done : sizeof(extra);
+        if (R_FAILED(csrngGetRandomBytes(extra, count)))
+            break;
+        for (size_t i = 0; i < count; i++)
+            out[done + i] ^= extra[i];
+        done += count;
+    }
+    memset(extra, 0, sizeof(extra));
+    csrngExit();
+}
 void moonlightPlatformNetStop(void) { socketExit(); }
 
 static HidNpadIdType source_id(int source)
