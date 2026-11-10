@@ -11,11 +11,14 @@
 #include <arpa/inet.h>
 #include <fcntl.h>
 #include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <poll.h>
 #include <sys/socket.h>
 #include <switch.h>
 
 #define AUDIO_SLOTS 16u
+/* Room for a keyframe's fragments between two receive passes. */
+#define DATAGRAM_RECEIVE_BYTES (512 * 1024)
 
 enum {
     IO_OK = 0,
@@ -88,6 +91,14 @@ static void open_socket(const uint8_t address[4], uint16_t port, int type, int p
         set(status, -1, close(fd) == 0 ? IO_FAILED : IO_CLOSE_FAILED, error);
         return;
     }
+
+    /* Best effort: acknowledgements and input must not wait for Nagle, and a keyframe burst
+     * must fit the datagram buffer. A refused option leaves the socket usable. */
+    int value = type == SOCK_STREAM ? 1 : DATAGRAM_RECEIVE_BYTES;
+    if (type == SOCK_STREAM)
+        setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &value, sizeof(value));
+    else
+        setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &value, sizeof(value));
 
     struct sockaddr_in endpoint;
     memset(&endpoint, 0, sizeof(endpoint));
