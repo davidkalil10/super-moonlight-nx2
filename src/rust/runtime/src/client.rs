@@ -237,9 +237,11 @@ impl<F: Files + Clone> Client<F> {
         let mut hosts = Store::new(files.clone());
         let mut json = Box::new(Json::new());
         let mut driver = Box::new(Driver::new(&mut hosts, &mut json));
-        driver.service_mut().set_telemetry_profile(Some(
+        let service = driver.service_mut();
+        service.set_telemetry_profile(Some(
             moonlight_nx2_app::request::TelemetryProfile::UpstreamV1,
         ));
+        service.set_transport(Some(moonlight_nx2_app::request::Transport::UdpV1));
         let mut bridge = Box::new(Bridge::new(
             storage(bytes)?,
             driver.hosts().hosts(),

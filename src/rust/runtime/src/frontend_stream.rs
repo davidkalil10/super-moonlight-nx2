@@ -378,7 +378,10 @@ impl Stream {
             running.last_record_ms = Some(now_ms);
         }
         if result.is_ok() {
-            client.observe(running.epoch, Observation::Telemetry(running.telemetry(now_ms)));
+            client.observe(
+                running.epoch,
+                Observation::Telemetry(running.telemetry(now_ms)),
+            );
         }
         let quiet = running
             .last_record_ms
