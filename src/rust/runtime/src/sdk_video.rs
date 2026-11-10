@@ -1,6 +1,7 @@
 //! Decoder backend over the SDK's video decoder (`viddec.h`), through `nro/sdk_viddec.c`.
 //! The service decodes into a CPU-backed image pool and each frame is copied out as linear
 //! NV12. The session needs the stream's SPS and PPS, so it starts on the first access unit.
+//! The service scales the picture to the image size, so images have the display size.
 
 extern crate alloc;
 
@@ -163,8 +164,8 @@ impl Backend for SdkVideo {
         let mut sync_result = 0;
         let result = unsafe {
             moonlightSdkVideoOpen(
-                config.coded.width(),
-                config.coded.height(),
+                config.display.width(),
+                config.display.height(),
                 SURFACES as u32,
                 images.as_mut_ptr(),
                 &mut stage,
