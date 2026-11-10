@@ -17,6 +17,7 @@ pub mod link_probe;
 pub mod media;
 pub mod metrics;
 pub mod netprobe;
+pub mod pads;
 pub mod policy;
 pub mod presence_watch;
 pub mod reply;
