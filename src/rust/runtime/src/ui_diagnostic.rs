@@ -326,7 +326,7 @@ fn run(renderer: &mut crate::render::Renderer) -> bool {
             log("ui.order: separate");
             separate = true;
         }
-        let sample = match sampler.read(renderer) {
+        let sample = match sampler.read(renderer, true) {
             Ok(sample) => sample,
             Err(error) => {
                 log(&format!("ui: input FAILED {error:?}"));

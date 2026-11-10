@@ -312,7 +312,7 @@ fn execute(renderer: &mut Renderer, connections: &mut NativeConnections, launch:
             break;
         }
         let input = match sampler
-            .read(renderer)
+            .read(renderer, app.screen() != Screen::Streaming)
             .and_then(|_| input_gate.filter(renderer.input_mut()?))
         {
             Ok(input) => input,

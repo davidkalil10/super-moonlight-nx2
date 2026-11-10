@@ -2,6 +2,7 @@
 
 use crate::render::Error;
 use moonlight_nx2_app::input::{EXTRA_PADS, Extra, Motion, PadState, Touches};
+use moonlight_nx2_app::pads::{PLAYERS, Routing, SOURCES, Slots, Source};
 
 pub const TOUCH_OFFSET: usize = 128;
 pub const TOUCH_BYTES: usize = 656;
@@ -14,6 +15,13 @@ const SLOT_BYTES: usize = 32;
 /// (1/1000 deg/s), u32 valid.
 pub const MOTION_OFFSET: usize = EXTRA_OFFSET + EXTRA_PADS * SLOT_BYTES;
 pub const EXTENDED_BYTES: usize = MOTION_OFFSET + (EXTRA_PADS + 1) * SLOT_BYTES;
+/// What the platform reads per controller source: a pad slot, then a motion slot.
+const SOURCE_BYTES: usize = 2 * SLOT_BYTES;
+pub const SOURCES_BYTES: usize = SOURCES * SOURCE_BYTES;
+/// The primary block holds a pad slot's buttons, sticks and attributes after its sample number.
+const PRIMARY_OFFSET: usize = 8;
+const PRIMARY_BYTES: usize = 28;
+const BUTTON_A: u8 = 1;
 
 #[derive(Default)]
 pub struct InputGate {
@@ -155,27 +163,103 @@ fn decode_extra(input: &[u8]) -> Extra {
     extra
 }
 
+/// Chooses this frame's players and writes their pads and motion where `FrameInput::decode`
+/// and the publish shader read them. `sources` is the platform's read of every controller.
+pub fn route(
+    routing: &mut Routing,
+    claim: bool,
+    sources: &[u8; SOURCES_BYTES],
+    input: &mut [u8],
+) -> Result<Slots, Error> {
+    if input.len() < REQUIRED_BYTES {
+        return Err(Error::Invalid);
+    }
+    let slots = routing.update(&source_states(sources), claim);
+    let slot = |player: usize, part: usize| {
+        let mut bytes = [0; SLOT_BYTES];
+        if let Some(source) = slots[player] {
+            let base = usize::from(source) * SOURCE_BYTES + part;
+            bytes.copy_from_slice(&sources[base..base + SLOT_BYTES]);
+        }
+        bytes
+    };
+
+    input[PRIMARY_OFFSET..PRIMARY_OFFSET + PRIMARY_BYTES]
+        .copy_from_slice(&slot(0, 0)[..PRIMARY_BYTES]);
+    if input.len() < EXTENDED_BYTES {
+        return Ok(slots);
+    }
+    for player in 1..PLAYERS {
+        let base = EXTRA_OFFSET + (player - 1) * SLOT_BYTES;
+        input[base..base + SLOT_BYTES].copy_from_slice(&slot(player, 0));
+    }
+    for player in 0..PLAYERS {
+        let base = MOTION_OFFSET + player * SLOT_BYTES;
+        input[base..base + SLOT_BYTES].copy_from_slice(&slot(player, SLOT_BYTES));
+    }
+    Ok(slots)
+}
+
+fn source_states(sources: &[u8; SOURCES_BYTES]) -> [Source; SOURCES] {
+    core::array::from_fn(|source| {
+        let pad = &sources[source * SOURCE_BYTES..][..SLOT_BYTES];
+        Source {
+            connected: pad[24] & 1 != 0,
+            a: pad[0] & BUTTON_A != 0,
+        }
+    })
+}
+
 #[cfg(target_os = "none")]
 mod device {
-    use super::{Error, FrameInput};
+    use super::{Error, FrameInput, SOURCES_BYTES, route};
     use crate::{render::Renderer, sdk};
     use core::{
         marker::PhantomData,
-        sync::atomic::{AtomicBool, Ordering},
+        sync::atomic::{AtomicBool, AtomicU8, Ordering},
     };
+    use moonlight_nx2_app::pads::{PLAYERS, Routing, Slots};
+
+    const UNROUTED: u8 = u8::MAX;
 
     static ACTIVE: AtomicBool = AtomicBool::new(false);
+    /// The controller source behind each player, for rumble.
+    static ROUTES: [AtomicU8; PLAYERS] = [const { AtomicU8::new(UNROUTED) }; PLAYERS];
     unsafe extern "C" {
         fn moonlightPlatformInputStart();
-        fn moonlightPlatformInputRead(sample: u64, input: *mut u8, bytes: usize) -> bool;
-        fn moonlightPlatformRumble(player: u32, low: u16, high: u16);
+        fn moonlightPlatformInputRead(
+            sample: u64,
+            input: *mut u8,
+            bytes: usize,
+            sources: *mut u8,
+        ) -> bool;
+        fn moonlightPlatformRumble(source: u32, low: u16, high: u16);
         fn moonlightPlatformRumbleStop();
     }
 
     /// Drives player `player` (0 = player 1) while the sampler owns input; else ignored.
     pub fn rumble(player: u8, low: u16, high: u16) {
-        if ACTIVE.load(Ordering::Acquire) {
-            unsafe { moonlightPlatformRumble(u32::from(player), low, high) };
+        if !ACTIVE.load(Ordering::Acquire) {
+            return;
+        }
+        let Some(route) = ROUTES.get(usize::from(player)) else {
+            return;
+        };
+        let source = route.load(Ordering::Acquire);
+        if source != UNROUTED {
+            unsafe { moonlightPlatformRumble(u32::from(source), low, high) };
+        }
+    }
+
+    /// Motors stop when a player changes controller, so none keeps an old player's rumble.
+    fn publish_routes(slots: &Slots) {
+        let mut changed = false;
+        for (route, slot) in ROUTES.iter().zip(slots) {
+            let source = slot.unwrap_or(UNROUTED);
+            changed |= route.swap(source, Ordering::AcqRel) != source;
+        }
+        if changed {
+            unsafe { moonlightPlatformRumbleStop() };
         }
     }
 
@@ -187,6 +271,8 @@ mod device {
 
     pub struct Sampler {
         sample: u64,
+        routing: Routing,
+        sources: [u8; SOURCES_BYTES],
         not_send: PhantomData<*mut ()>,
     }
 
@@ -202,20 +288,32 @@ mod device {
                 return Err(Error::Busy);
             }
             unsafe { moonlightPlatformInputStart() };
+            publish_routes(&[None; PLAYERS]);
             Ok(Self {
                 sample: 0,
+                routing: Routing::new(),
+                sources: [0; SOURCES_BYTES],
                 not_send: PhantomData,
             })
         }
 
-        pub fn read(&mut self, renderer: &mut Renderer) -> Result<FrameInput, Error> {
+        /// `claim` lets a controller that presses A become the primary pad.
+        pub fn read(&mut self, renderer: &mut Renderer, claim: bool) -> Result<FrameInput, Error> {
             self.sample = self.sample.checked_add(1).ok_or(Error::Invalid)?;
             let input = renderer.input_mut()?;
-            if !unsafe { moonlightPlatformInputRead(self.sample, input.as_mut_ptr(), input.len()) }
-            {
+            let read = unsafe {
+                moonlightPlatformInputRead(
+                    self.sample,
+                    input.as_mut_ptr(),
+                    input.len(),
+                    self.sources.as_mut_ptr(),
+                )
+            };
+            if !read {
                 return Err(Error::Invalid);
             }
             crate::stream_stats::input_sampled(crate::render_platform::now_ns());
+            publish_routes(&route(&mut self.routing, claim, &self.sources, input)?);
             FrameInput::decode(input)
         }
     }

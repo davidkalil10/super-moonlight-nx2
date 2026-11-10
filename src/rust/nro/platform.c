@@ -14,32 +14,31 @@
 
 #define LOG_DIRECTORY "sdmc:/switch/moonlight-nx2/rust"
 
-#define EXTRA_PADS 7
-#define EXTRA_OFFSET 1024
+/* Controller sources: handheld, then No1 to No8. Rust decides which one plays which player. */
+#define SOURCES 9
+#define PLAYERS 8
 #define SLOT_BYTES 32
-#define MOTION_OFFSET (EXTRA_OFFSET + EXTRA_PADS * SLOT_BYTES)
-#define EXTENDED_BYTES (MOTION_OFFSET + (EXTRA_PADS + 1) * SLOT_BYTES)
+#define SOURCE_BYTES (2 * SLOT_BYTES)
 
 static FILE *report;
-static PadState input_pad;
-static PadState extra_pads[EXTRA_PADS];
+static PadState pads[SOURCES];
 
-/* Six-axis handles per player, made for the style the controller had when first read. */
+/* Six-axis handles per source, made for the style the controller had when first read. */
 typedef struct {
     uint32_t style;
     HidSixAxisSensorHandle handles[2];
     int count;
 } Motion;
-static Motion motion[EXTRA_PADS + 1];
+static Motion motion[SOURCES];
 
-/* Vibration handles per player, remade when the controller style changes. */
+/* Vibration handles per source, remade when the controller style changes. */
 typedef struct {
     uint32_t style;
     HidVibrationDeviceHandle handles[2];
     int count;
     bool moving;
 } Vibration;
-static Vibration vibration[EXTRA_PADS + 1];
+static Vibration vibration[SOURCES];
 
 _Static_assert(sizeof(GsvSync) == 8, "GsvSync ABI");
 _Static_assert(sizeof(GsvGpu) == 8, "GsvGpu ABI");
@@ -66,12 +65,16 @@ uint64_t moonlightNowNs(void) { return armTicksToNs(armGetSystemTick()); }
 bool moonlightPlatformNetStart(void) { return R_SUCCEEDED(socketInitializeDefault()); }
 void moonlightPlatformNetStop(void) { socketExit(); }
 
+static HidNpadIdType source_id(int source)
+{
+    return source == 0 ? HidNpadIdType_Handheld : (HidNpadIdType)(HidNpadIdType_No1 + source - 1);
+}
+
 void moonlightPlatformInputStart(void)
 {
-    padConfigureInput(1 + EXTRA_PADS, HidNpadStyleSet_NpadStandard);
-    padInitializeDefault(&input_pad);
-    for (int slot = 0; slot < EXTRA_PADS; slot++)
-        padInitialize(&extra_pads[slot], (HidNpadIdType)(HidNpadIdType_No2 + slot));
+    padConfigureInput(PLAYERS, HidNpadStyleSet_NpadStandard);
+    for (int source = 0; source < SOURCES; source++)
+        padInitialize(&pads[source], source_id(source));
     hidInitializeTouchScreen();
 }
 
@@ -83,7 +86,7 @@ static void stop_motion(Motion *entry)
     entry->style = 0;
 }
 
-/* One motion sample in 1/1000 m/s^2 and 1/1000 deg/s; false when the player has no sensor. */
+/* One motion sample in 1/1000 m/s^2 and 1/1000 deg/s; false when the source has no sensor. */
 static bool read_motion(int index, HidNpadIdType id, int32_t out[6])
 {
     Motion *entry = &motion[index];
@@ -145,17 +148,14 @@ static void write_motion(uint8_t *slot, int index, HidNpadIdType id, bool connec
     memcpy(slot + 24, &valid, sizeof(valid));
 }
 
-/* Players 2 to 8 and every player's motion, above the block the publish shader reads. */
-static void read_extended(uint8_t *input)
+/* Every source's pad slot and motion slot. */
+static void read_sources(uint8_t *sources)
 {
-    bool handheld = hidGetNpadStyleSet(HidNpadIdType_Handheld) & HidNpadStyleTag_NpadHandheld;
-    write_motion(input + MOTION_OFFSET, 0, handheld ? HidNpadIdType_Handheld : HidNpadIdType_No1,
-                 padIsConnected(&input_pad));
-    for (int slot = 0; slot < EXTRA_PADS; slot++) {
-        padUpdate(&extra_pads[slot]);
-        write_pad(input + EXTRA_OFFSET + slot * SLOT_BYTES, &extra_pads[slot]);
-        write_motion(input + MOTION_OFFSET + (slot + 1) * SLOT_BYTES, slot + 1,
-                     (HidNpadIdType)(HidNpadIdType_No2 + slot), padIsConnected(&extra_pads[slot]));
+    for (int source = 0; source < SOURCES; source++) {
+        uint8_t *slot = sources + source * SOURCE_BYTES;
+        padUpdate(&pads[source]);
+        write_pad(slot, &pads[source]);
+        write_motion(slot + SLOT_BYTES, source, source_id(source), padIsConnected(&pads[source]));
     }
 }
 
@@ -183,15 +183,12 @@ static void send_vibration(Vibration *entry, uint16_t low, uint16_t high)
         entry->moving = low || high;
 }
 
-/* Player 0 is player 1 (handheld when the console is in handheld mode), up to player 8. */
-void moonlightPlatformRumble(uint32_t player, uint16_t low, uint16_t high)
+void moonlightPlatformRumble(uint32_t source, uint16_t low, uint16_t high)
 {
-    if (player > EXTRA_PADS)
+    if (source >= SOURCES)
         return;
-    HidNpadIdType id = (HidNpadIdType)(HidNpadIdType_No1 + player);
-    if (player == 0 && hidGetNpadStyleSet(HidNpadIdType_Handheld) & HidNpadStyleTag_NpadHandheld)
-        id = HidNpadIdType_Handheld;
-    Vibration *entry = &vibration[player];
+    HidNpadIdType id = source_id((int)source);
+    Vibration *entry = &vibration[source];
     uint32_t style = vibration_style(id);
     if (style != entry->style) {
         if (entry->moving)
@@ -210,9 +207,9 @@ void moonlightPlatformRumble(uint32_t player, uint16_t low, uint16_t high)
 
 void moonlightPlatformRumbleStop(void)
 {
-    for (int player = 0; player <= EXTRA_PADS; player++)
-        if (vibration[player].moving)
-            send_vibration(&vibration[player], 0, 0);
+    for (int source = 0; source < SOURCES; source++)
+        if (vibration[source].moving)
+            send_vibration(&vibration[source], 0, 0);
 }
 
 uint64_t moonlightPlatformStackAvailable(void)
@@ -264,23 +261,18 @@ bool moonlightPlatformDumpFile(const char *path, const uint8_t *bytes, size_t le
     return fclose(file) == 0 && written;
 }
 
-bool moonlightPlatformInputRead(uint64_t sample, uint8_t *input, size_t bytes)
+/* Rust fills the pad blocks of `input` from `sources` (SOURCES * SOURCE_BYTES bytes). */
+bool moonlightPlatformInputRead(uint64_t sample, uint8_t *input, size_t bytes, uint8_t *sources)
 {
-    if (!input || bytes < 128 + sizeof(HidTouchScreenState))
+    if (!input || !sources || bytes < 128 + sizeof(HidTouchScreenState))
         return false;
-    padUpdate(&input_pad);
     HidNpadCommonState state = {0};
     state.sampling_number = sample;
-    state.buttons = padGetButtons(&input_pad);
-    state.analog_stick_l = padGetStickPos(&input_pad, 0);
-    state.analog_stick_r = padGetStickPos(&input_pad, 1);
-    state.attributes = padIsConnected(&input_pad) ? HidNpadAttribute_IsConnected : 0;
     memcpy(input, &state, sizeof(state));
     HidTouchScreenState touch = {0};
     hidGetTouchScreenStates(&touch, 1);
     memcpy(input + 128, &touch, sizeof(touch));
-    if (bytes >= EXTENDED_BYTES)
-        read_extended(input);
+    read_sources(sources);
     return true;
 }
 

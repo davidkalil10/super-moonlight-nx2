@@ -150,7 +150,7 @@ fn run(renderer: &mut Renderer, session: &mut Session) -> bool {
         if listed_at.is_some_and(|at| now.saturating_sub(at) >= 5_000) {
             break;
         }
-        if sampler.read(renderer).is_err() {
+        if sampler.read(renderer, true).is_err() {
             failed = true;
             break;
         }
