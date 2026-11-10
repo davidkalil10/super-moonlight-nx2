@@ -9,7 +9,7 @@ use alloc::format;
 use moonlight_nx2_core::{
     annexb,
     codec::{Capabilities, Codec, Depth, Evidence, Mode, Size},
-    decoder::{Backend, BackendError, Backing, Config, SURFACES},
+    decoder::{Backend, BackendError, Backing, Config, SURFACES, UNITS},
     video_wire::Output,
 };
 
@@ -63,6 +63,7 @@ unsafe extern "C" {
         luma: *mut u8,
         chroma: *mut u8,
         pitch: usize,
+        rows: usize,
         layout: *mut Layout,
     ) -> u32;
     fn moonlightSdkVideoRelease(slot: u32) -> u32;
@@ -76,6 +77,8 @@ pub struct SdkVideo {
     started: bool,
     ready: Option<usize>,
     layout_reported: bool,
+    submitted: [u64; UNITS],
+    microseconds_reported: bool,
 }
 
 impl SdkVideo {
@@ -86,7 +89,23 @@ impl SdkVideo {
             started: false,
             ready: None,
             layout_reported: false,
+            submitted: [0; UNITS],
+            microseconds_reported: false,
         }
+    }
+
+    /// Input timestamps are sent in microseconds and the header documents nanoseconds for
+    /// the output. Until the console shows which one the service answers, both are taken.
+    fn timestamp_ns(&mut self, reported: u64) -> u64 {
+        let nanoseconds = |pts_us: &u64| pts_us.checked_mul(1000) == Some(reported);
+        if self.submitted.iter().any(nanoseconds) || !self.submitted.contains(&reported) {
+            return reported;
+        }
+        if !self.microseconds_reported {
+            self.microseconds_reported = true;
+            log("sdk-video: output timestamps are in microseconds");
+        }
+        reported * 1000
     }
 
     fn start(&mut self, access_unit: &[u8]) -> Result<(), BackendError> {
@@ -169,7 +188,17 @@ impl Backend for SdkVideo {
         if !self.started {
             self.start(bytes)?;
         }
-        let timestamp_ns = i64::try_from(pts_us * 1000).map_err(|_| BackendError::Invalid)?;
+        let timestamp_ns = pts_us
+            .checked_mul(1000)
+            .and_then(|timestamp| i64::try_from(timestamp).ok())
+            .ok_or(BackendError::Invalid)?;
+        #[cfg(feature = "diagnostic-sdk-decode")]
+        log(&format!(
+            "b2ar: before submit pts_us={pts_us} bytes={}",
+            bytes.len()
+        ));
+        self.submitted.rotate_left(1);
+        self.submitted[UNITS - 1] = pts_us;
         let result = unsafe { moonlightSdkVideoSubmit(bytes.as_ptr(), bytes.len(), timestamp_ns) };
         if result == SUBMIT_BUSY {
             log("sdk-video: submit busy");
@@ -183,6 +212,10 @@ impl Backend for SdkVideo {
             moonlightSdkVideoReady(surface as u32, &mut ready)
         })?;
         if ready {
+            #[cfg(feature = "diagnostic-sdk-decode")]
+            if self.ready != Some(surface) {
+                log(&format!("b2ar: ready surface={surface}"));
+            }
             self.ready = Some(surface);
         }
         Ok(ready)
@@ -191,9 +224,24 @@ impl Backend for SdkVideo {
     fn output(&mut self) -> Result<Output, BackendError> {
         let surface = self.ready.take().ok_or(BackendError::Invalid)?;
         let mut properties = Properties::default();
+        #[cfg(feature = "diagnostic-sdk-decode")]
+        log(&format!("b2ar: before output surface={surface}"));
         check("output properties", unsafe {
             moonlightSdkVideoOutput(surface as u32, &mut properties)
         })?;
+        #[cfg(feature = "diagnostic-sdk-decode")]
+        log(&format!(
+            "b2ar: output image={} {}x{} crop={}x{} timestamp={} end_of_stream={}",
+            properties.image,
+            properties.width,
+            properties.height,
+            properties.crop_width,
+            properties.crop_height,
+            properties.timestamp_ns,
+            properties.end_of_stream
+        ));
+        let reported =
+            u64::try_from(properties.timestamp_ns).map_err(|_| BackendError::Malformed)?;
         Ok(Output {
             image: properties.image,
             width: properties.width,
@@ -201,8 +249,7 @@ impl Backend for SdkVideo {
             display_width: properties.crop_width,
             display_height: properties.crop_height,
             color: 1,
-            timestamp_ns: u64::try_from(properties.timestamp_ns)
-                .map_err(|_| BackendError::Malformed)?,
+            timestamp_ns: self.timestamp_ns(reported),
             end_of_stream: properties.end_of_stream != 0,
         })
     }
@@ -222,12 +269,13 @@ impl Backend for SdkVideo {
                 luma.as_mut_ptr(),
                 chroma.as_mut_ptr(),
                 width,
+                config.coded.height() as usize,
                 &mut layout,
             )
         };
-        if !self.layout_reported {
+        if !self.layout_reported || result != 0 {
             self.layout_reported = true;
-            log(&format!("sdk-video: first image {layout:?}"));
+            log(&format!("sdk-video: image {layout:?}"));
         }
         check("read image", result)
     }

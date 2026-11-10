@@ -1,6 +1,8 @@
 #include <malloc.h>
 #include <stdbool.h>
+#include <stdarg.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 #include <switch.h>
 
@@ -8,6 +10,7 @@
 #define INPUT_MAX (1024u * 1024)
 #define SUBMIT_WAIT_NS 50000000ull
 #define WORK_RESTORE_POLLS 1000
+#define ACQUISITIONS_NOTED 8
 
 enum {
     STAGE_ROOT = 1,
@@ -56,6 +59,7 @@ static struct {
     uint32_t count;
     uint32_t width;
     uint32_t height;
+    uint32_t acquisitions;
     Result poll_result;
     bool root;
     bool pool_open;
@@ -63,6 +67,23 @@ static struct {
     bool sync_open;
     bool started;
 } video;
+
+void moonlightPlatformLog(const uint8_t *message, size_t bytes);
+
+__attribute__((format(printf, 1, 2))) static void note(const char *format, ...)
+{
+    char line[160];
+    va_list arguments;
+
+    va_start(arguments, format);
+    int length = vsnprintf(line, sizeof(line), format, arguments);
+    va_end(arguments);
+    if (length < 0)
+        return;
+    if ((size_t)length >= sizeof(line))
+        length = sizeof(line) - 1;
+    moonlightPlatformLog((const uint8_t *)line, length);
+}
 
 static Result fail(uint32_t *stage, uint32_t at, Result result)
 {
@@ -81,6 +102,7 @@ Result moonlightSdkVideoOpen(uint32_t width, uint32_t height, uint32_t count, ui
     if (video.root || count == 0 || count > VIDDEC_MAX_IMAGES)
         return fail(stage, STAGE_ROOT, MAKERESULT(Module_Libnx, LibnxError_BadInput));
     memset(&video, 0, sizeof(video));
+    note("sdk-video: before root");
     result = viddecInitialize();
     if (R_FAILED(result))
         return fail(stage, STAGE_ROOT, result);
@@ -95,6 +117,8 @@ Result moonlightSdkVideoOpen(uint32_t width, uint32_t height, uint32_t count, ui
     result = viddecGetImagePoolSize(&preference, count, &bytes, &alignment);
     if (R_FAILED(result))
         return fail(stage, STAGE_POOL_SIZE, result);
+    note("sdk-video: before pool bytes=%llu alignment=%llu", (unsigned long long)bytes,
+         (unsigned long long)alignment);
     video.backing = memalign(alignment, bytes);
     if (!video.backing)
         return fail(stage, STAGE_POOL_MEMORY, MAKERESULT(Module_Libnx, LibnxError_OutOfMemory));
@@ -103,12 +127,14 @@ Result moonlightSdkVideoOpen(uint32_t width, uint32_t height, uint32_t count, ui
     if (R_FAILED(result))
         return fail(stage, STAGE_POOL, result);
     video.pool_open = true;
+    note("sdk-video: before decoder session");
     result = viddecOpenDecoder(&video.decoder);
     if (R_FAILED(result))
         return fail(stage, STAGE_DECODER, result);
     video.decoder_open = true;
     for (uint32_t index = 0; index < count; index++)
         images[index] = viddecImagePoolGetImageId(&video.pool, index);
+    note("sdk-video: before sync session");
     *sync_result = gsvOpenSync(&video.sync);
     video.sync_open = R_SUCCEEDED(*sync_result);
     *stage = 0;
@@ -135,16 +161,19 @@ Result moonlightSdkVideoStart(uint32_t fps, const void *codec_config, size_t cod
     video.work = memalign(0x1000, WORK_BYTES);
     if (!video.work)
         return fail(stage, STAGE_WORK_MEMORY, MAKERESULT(Module_Libnx, LibnxError_OutOfMemory));
+    note("sdk-video: before initialize work=%p", video.work);
     result = viddecDecoderInitialize(&video.decoder, &config, video.work, WORK_BYTES, codec_config,
                                      codec_config_bytes);
     if (R_FAILED(result))
         return fail(stage, STAGE_INITIALIZE, result);
+    note("sdk-video: before register");
     for (uint32_t slot = 0; slot < video.count; slot++) {
         result = viddecDecoderRegisterImage(&video.decoder, slot,
                                             viddecImagePoolGetImageId(&video.pool, slot));
         if (R_FAILED(result))
             return fail(stage, STAGE_REGISTER, result);
     }
+    note("sdk-video: before start");
     result = viddecDecoderStart(&video.decoder);
     if (R_FAILED(result))
         return fail(stage, STAGE_START, result);
@@ -178,6 +207,13 @@ Result moonlightSdkVideoReady(uint32_t slot, bool *ready)
             return result;
         if (next != slot)
             return MAKERESULT(Module_Libnx, LibnxError_ShouldNotHappen);
+        if (video.acquisitions < ACQUISITIONS_NOTED) {
+            uint32_t words[4];
+            memcpy(words, &producer, sizeof(words));
+            note("sdk-video: acquired slot=%u producer=%08x %08x %08x %08x", (unsigned)slot,
+                 (unsigned)words[0], (unsigned)words[1], (unsigned)words[2], (unsigned)words[3]);
+            video.acquisitions++;
+        }
         video.producers[slot] = producer;
         video.acquired[slot] = true;
         video.described[slot] = false;
@@ -216,21 +252,27 @@ Result moonlightSdkVideoOutput(uint32_t slot, MoonlightSdkVideoOutput *out)
 }
 
 Result moonlightSdkVideoRead(uint32_t slot, uint8_t *luma, uint8_t *chroma, size_t pitch,
-                             MoonlightSdkVideoLayout *layout)
+                             size_t rows, MoonlightSdkVideoLayout *layout)
 {
-    GsvCpuImageDescriptor descriptor;
+    GsvCpuImageDescriptor descriptor = {0};
     Result result;
 
+    *layout = (MoonlightSdkVideoLayout){0};
     if (slot >= video.count || !video.acquired[slot])
         return MAKERESULT(Module_Libnx, LibnxError_BadInput);
-    result = viddecImagePoolReadNv12(&video.pool, slot, luma, pitch, chroma, pitch, &descriptor);
+    result = gsvGetCpuImageDescriptor(viddecImagePoolGetImageId(&video.pool, slot), &descriptor);
+    if (R_FAILED(result))
+        return result;
     *layout = (MoonlightSdkVideoLayout){
         .type = descriptor.type,
         .width = descriptor.width_minus_one + 1u,
         .height = descriptor.height_minus_one + 1u,
         .pitch = {descriptor.planes[0].pitch, descriptor.planes[1].pitch},
     };
-    return result;
+    if (layout->width > pitch || layout->height > rows)
+        return MAKERESULT(Module_Libnx, LibnxError_BadInput);
+    return viddecCopyImageNv12(&descriptor, video.pool.backing, video.pool.backing_size, luma,
+                               pitch, chroma, pitch);
 }
 
 Result moonlightSdkVideoRelease(uint32_t slot)
@@ -268,12 +310,14 @@ Result moonlightSdkVideoClose(uint32_t *stage)
     if (!video.root)
         return 0;
     if (video.started) {
+        note("sdk-video: before stop");
         result = viddecDecoderStop(&video.decoder);
         if (R_FAILED(result))
             first = fail(stage, STAGE_STOP, result);
         video.started = false;
     }
     if (video.decoder_open) {
+        note("sdk-video: before decoder close");
         viddecDecoderClose(&video.decoder);
         video.decoder_open = false;
     }
@@ -285,6 +329,7 @@ Result moonlightSdkVideoClose(uint32_t *stage)
         video.work = NULL;
     }
     if (video.pool_open) {
+        note("sdk-video: before pool close");
         result = viddecImagePoolClose(&video.pool);
         if (R_FAILED(result)) {
             if (R_SUCCEEDED(first))
@@ -298,6 +343,7 @@ Result moonlightSdkVideoClose(uint32_t *stage)
     if (video.sync_open)
         gsvSyncClose(&video.sync);
     video.sync_open = false;
+    note("sdk-video: before root exit");
     viddecExit();
     video.root = false;
     return first;
