@@ -17,7 +17,7 @@ include $(DEVKITPRO)/libounce/switch2_rules
 OUTPUT := $(BUILD_DIR)/moonlight-nx2-rust
 NACP_TITLE ?= Moonlight NX2 Rust core
 NACP_VERSION ?= 0.1.0
-ICON_PATH ?= $(SOURCE_DIR)/icon.png
+ICON_PATH ?= $(SOURCE_DIR)/icon.jpg
 ARCH := -march=armv8-a+crc+crypto -mtune=cortex-a57 -mtp=soft -fPIE
 CPPFLAGS += -I$(LIBNX)/include
 CFLAGS := $(ARCH) -std=gnu11 -O2 -g -Wall -Wextra -Werror -ffunction-sections -fdata-sections
