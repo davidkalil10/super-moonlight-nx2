@@ -341,11 +341,12 @@ fn execute(renderer: &mut Renderer, connections: &mut NativeConnections, launch:
             }
         }
         stream.pump(&mut app.client, now_ms);
-        stream.step(&mut app.client, renderer, &input, now_ms, frame.interactive);
+        let compute = app.client.needs_ui_compute(&input, &frame);
+        let presented = stream.step(&mut app.client, renderer, &input, now_ms, compute);
         app.client
             .update_native_stats(crate::stream_stats::latest());
-        let compute = app.client.needs_ui_compute(&input, &frame);
-        if let Err(error) = renderer.present(compute)
+        if !presented
+            && let Err(error) = renderer.present(compute)
             && error != crate::render::Error::Busy
         {
             failed = true;

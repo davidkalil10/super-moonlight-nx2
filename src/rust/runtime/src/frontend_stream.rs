@@ -306,6 +306,8 @@ impl Stream {
         }
     }
 
+    /// Steps the open stream. True when the step presented, so the caller's frame is already
+    /// on its way to the display and must not be presented again.
     pub fn step<F: Files + Clone>(
         &mut self,
         client: &mut Client<F>,
@@ -313,9 +315,9 @@ impl Stream {
         input: &FrameInput,
         now_ms: u64,
         interactive: bool,
-    ) {
+    ) -> bool {
         let Some(running) = self.running.as_mut() else {
-            return;
+            return false;
         };
         let tick = Tick {
             epoch: running.epoch,
@@ -326,6 +328,7 @@ impl Stream {
             Active::Tcp(session) => frontend_media::step(session, client, renderer, input, tick),
             Active::Udp(session) => frontend_media::step(session, client, renderer, input, tick),
         };
+        let presented = result.is_ok();
         if let Ok(step) = &result
             && step.progress.video_records + step.progress.pcm_records > 0
         {
@@ -349,6 +352,7 @@ impl Stream {
         if finished {
             self.close(client);
         }
+        presented
     }
 
     pub fn report(&self) {
