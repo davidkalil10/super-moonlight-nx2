@@ -287,7 +287,7 @@ def main():
     }, indent=2) + "\n")
     print(sums, end="")
     print(f"Bundle: {bundle}")
-    print(f"Next: {bundle / 'moonlight-nx2-pc'} setup --console CONSOLE_IP")
+    print(f"Next: {bundle / 'moonlight-nx2-pc'} setup")
 
 
 if __name__ == "__main__":

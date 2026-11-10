@@ -234,12 +234,15 @@ fn a_console_pairs_once_and_then_opens_sessions_with_the_key() {
     let (key, typed) = helper.pair(CONSOLE, b"12345678", "12345678");
     let key = key.unwrap();
     assert!(typed.status.success(), "{typed:?}");
+    let state = helper.state();
     assert_eq!(
-        (
-            mode(&helper.state()),
-            mode(&helper.state().join("consoles.json"))
-        ),
-        (0o700, 0o600)
+        [
+            mode(&state),
+            mode(&state.join("consoles.json")),
+            mode(&state.join("identity")),
+            mode(&state.join("admin.sock")),
+        ],
+        [0o700, 0o600, 0o600, 0o600]
     );
     let listed = String::from_utf8(helper.command(&["consoles"]).stdout).unwrap();
     assert!(listed.starts_with(&"c1".repeat(16)), "{listed}");

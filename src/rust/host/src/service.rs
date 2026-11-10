@@ -18,7 +18,10 @@ use std::{
     collections::VecDeque,
     io::{self, Read, Write},
     net::{IpAddr, SocketAddr, TcpListener, TcpStream},
-    os::unix::net::{UnixListener, UnixStream},
+    os::unix::{
+        fs::PermissionsExt,
+        net::{UnixListener, UnixStream},
+    },
     path::{Path, PathBuf},
     sync::atomic::{AtomicBool, Ordering},
     thread,
@@ -134,6 +137,7 @@ impl Service {
         let admin_path = state.join(ADMIN_SOCKET);
         let _ = std::fs::remove_file(&admin_path);
         let admin = UnixListener::bind(&admin_path)?;
+        std::fs::set_permissions(&admin_path, std::fs::Permissions::from_mode(0o600))?;
         admin.set_nonblocking(true)?;
         Ok(Self {
             listener,
