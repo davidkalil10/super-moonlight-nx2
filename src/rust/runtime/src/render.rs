@@ -395,11 +395,22 @@ impl Renderer {
     }
 
     fn acquire_slot(&mut self) -> Result<usize, Error> {
+        match self.free_slot_within(self.objects.config.upload_wait_ns)? {
+            Some(slot) => Ok(slot),
+            None => {
+                self.objects.info.busy_uploads += 1;
+                Err(Error::Busy)
+            }
+        }
+    }
+
+    /// The upload slot no frame in flight reads, waiting up to `wait_ns` for one to finish.
+    fn free_slot_within(&mut self, wait_ns: u64) -> Result<Option<usize>, Error> {
         self.objects.collect(0)?;
         if let Some(slot) = self.objects.free_slot() {
-            return Ok(slot);
+            return Ok(Some(slot));
         }
-        let deadline = sdk::now_ns().saturating_add(self.objects.config.upload_wait_ns);
+        let deadline = sdk::now_ns().saturating_add(wait_ns);
         for index in 0..2 {
             let budget = deadline.saturating_sub(sdk::now_ns());
             if budget == 0 {
@@ -416,13 +427,7 @@ impl Renderer {
                 break;
             }
         }
-        match self.objects.free_slot() {
-            Some(slot) => Ok(slot),
-            None => {
-                self.objects.info.busy_uploads += 1;
-                Err(Error::Busy)
-            }
-        }
+        Ok(self.objects.free_slot())
     }
 
     pub fn upload(&mut self, frame: &Frame<'_>) -> Result<usize, Error> {
@@ -434,11 +439,10 @@ impl Renderer {
     }
 
     /// The free upload slot and its memory, for a frame written in place and then shown with
-    /// `publish`. None while both slots are still read.
-    pub fn staging(&mut self) -> Result<Option<(usize, &mut [u8])>, Error> {
+    /// `publish`. None when both slots are still read after `wait_ns`.
+    pub fn staging(&mut self, wait_ns: u64) -> Result<Option<(usize, &mut [u8])>, Error> {
         self.active()?;
-        self.objects.collect(0)?;
-        let Some(slot) = self.objects.free_slot() else {
+        let Some(slot) = self.free_slot_within(wait_ns)? else {
             return Ok(None);
         };
         Ok(Some((slot, self.slot_bytes(slot))))

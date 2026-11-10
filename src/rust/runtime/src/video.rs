@@ -162,8 +162,14 @@ impl Timing {
     }
 }
 
+/// How long a finished frame waits for an upload slot. The slot of the frame before last is
+/// still read by the GPU for a moment after its present.
+const STAGING_WAIT_NS: u64 = 2_000_000;
+
 pub struct Video<'a, B: Backend<N>, const N: usize = SURFACES> {
     decoder: Decoder<'a, B, N>,
+    /// Frames are copied out of the decoder into an upload slot, not bound.
+    copied: bool,
     codec: Codec,
     recovery: Recovery,
     matrix: Matrix,
@@ -214,6 +220,7 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
         );
         Ok(Self {
             decoder,
+            copied: config.decoder.backing == decoder::Backing::CpuReference,
             codec: config.decoder.codec,
             recovery: Recovery::default(),
             matrix: config.matrix,
@@ -437,6 +444,8 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
     /// the unit is offered once more, so it goes in on the turn it arrived. Left waiting, it
     /// would go in next turn together with that turn's unit, their two frames would finish
     /// together, fill the decoder again and keep every later turn in the same step of two.
+    /// A frame taken here replaces one that was taken and not shown yet: that is the catch-up
+    /// when units arrive faster than the display turns.
     pub fn submit_draining(
         &mut self,
         renderer: &mut Renderer,
@@ -459,8 +468,10 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
         self.recovery.tick(platform::now_ns() / 1_000_000);
         self.forward_idr_request();
         let poll_start_ns = platform::now_ns();
-        let (staged_slot, frame) = match renderer.staging() {
+        let (staged_slot, frame) = match renderer.staging(STAGING_WAIT_NS) {
             Ok(Some((slot, staging))) => (Some(slot), self.decoder.poll_into(Some(staging))),
+            // A copied frame with no slot to go to would be read back and thrown away.
+            Ok(None) if self.copied => return Ok(false),
             Ok(None) => (None, self.decoder.poll()),
             Err(error) => return Err(self.fail(Error::Renderer(error))),
         };
@@ -554,18 +565,14 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
         }
     }
 
-    /// Takes the frames the decoder finished since the last call and shows the newest, so a
-    /// step that submitted two units to work off a backlog does not leave one waiting. A frame
-    /// the renderer has no free slot for stays in the decoder for the next turn. One present
-    /// follows, so a turn lasts one display refresh.
+    /// Takes one finished frame, unless the step already took one to make room for a unit,
+    /// and presents once, so a turn lasts one display refresh and frames are shown in order.
+    /// A second finished frame waits in the decoder for the next turn: a frame that is a turn
+    /// late then costs a turn of latency, not a picture. Only `submit_draining` replaces a
+    /// frame not shown yet, and only when units arrive faster than the decoder has room.
     pub fn present(&mut self, renderer: &mut Renderer, interactive: bool) -> Result<bool, Error> {
-        for _ in 0..decoder::UNITS {
-            if self.pending && matches!(renderer.staging(), Ok(None)) {
-                break;
-            }
-            if !self.poll_upload(renderer)? {
-                break;
-            }
+        if !self.pending {
+            self.poll_upload(renderer)?;
         }
         self.present_pending(renderer, interactive)
     }
