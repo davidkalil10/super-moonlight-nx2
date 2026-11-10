@@ -535,7 +535,14 @@ impl Service {
         let name = hex(&console[..4]);
         eprintln!("service: console {name} connected");
         let mut storage = vec![0; control::MAX_PAYLOAD];
-        let mut connection = Connection::secure(session.stream, helper.clone(), &mut storage)?;
+        let mut connection = match Connection::secure(session.stream, helper.clone(), &mut storage)
+        {
+            Ok(connection) => connection,
+            Err(error) => {
+                eprintln!("service: console {name} could not be served: {error:?}");
+                return Ok(None);
+            }
+        };
         if match_display {
             connection.match_display(display::Session::from_environment());
         }
