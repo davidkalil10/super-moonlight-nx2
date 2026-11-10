@@ -1,0 +1,40 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+layout(local_size_x = 1) in;
+#define STORAGE_ACCESS coherent
+#include "storage.glsl"
+layout(set = 0, binding = 0, std430) buffer InputState {
+  uint pad[10];
+  uint reserved[22];
+  uint touch[164];
+  uint previousButtons;
+  uint chordFrames;
+  uint stickRepeat;
+  uint touchHeld;
+}
+inputState;
+const uint BUTTON_A = 1u, BUTTON_B = 2u, BUTTON_X = 4u, BUTTON_Y = 8u,
+           BUTTON_L = 64u, BUTTON_R = 128u, BUTTON_PLUS = 1024u;
+const uint BUTTON_LEFT = 4096u, BUTTON_UP = 8192u, BUTTON_RIGHT = 16384u,
+           BUTTON_DOWN = 32768u;
+uint inputButtons() { return inputState.pad[2]; }
+uint inputPressed() { return inputButtons() & ~inputState.previousButtons; }
+bool inputConnected() { return (inputState.pad[8] & 1u) != 0u; }
+vec2 inputStick() {
+  vec2 stick =
+      clamp(vec2(int(inputState.pad[4]), int(inputState.pad[5])) / 32767.0,
+            -1.0, 1.0);
+  float magnitude = length(stick);
+  return magnitude <= 0.15
+             ? vec2(0)
+             : stick / magnitude * min(1.0, (magnitude - 0.15) / 0.85);
+}
+uint uiWord(uint index) { return word(index); }
+#include "ui-control.glsl"
+void main() {
+  storage.words[FRAME_COUNTER]++;
+  uiApply();
+  uiInput();
+  inputState.previousButtons = inputButtons();
+  storage.words[NATIVE_READY] = NATIVE_ABI;
+}

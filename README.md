@@ -89,9 +89,18 @@ once on the badge.
 Tests, tools and design notes live in the separate `moonlight-nx2-dev` repository. Its
 parity tests compare the Rust UI and wire code with the C sources under `src/native`.
 
+The shaders are in `src/rust/runtime/shaders`, compiled into `src/rust/runtime/prebuilt`.
+After changing one, with glslc and spirv-val installed:
+
+```sh
+python3 src/rust/build-shaders.py --directory /media/storage2/builds/moonlight/<build-id> --install
+```
+
+`--check` compares the prebuilt files with the sources without compiling.
+
 The Civilization VII payload this app replaces is still under `src/streamer` and
-`src/renderer`: the Rust build takes its shader bundle and glyph atlas from there, and the
-PC bundle its pinned Moonlight sources (`src/streamer/protocol`).
+`src/renderer`: the Rust build takes its glyph atlas from there, and the PC bundle its
+pinned Moonlight sources (`src/streamer/protocol`).
 
 ## Credits
 

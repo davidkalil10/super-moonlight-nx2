@@ -72,16 +72,13 @@ def sources():
     result = {str(path.relative_to(ROOT)): digest(path)
               for path in sorted(ROOT.rglob("*")) if path.is_file()
               and not {"target", "__pycache__", ".git"}.intersection(path.relative_to(ROOT).parts)}
-    assets = APP / "src/renderer/civ7/prebuilt"
-    manifest = json.loads((assets / "renderer.json").read_text())
-    blob = assets / "shaders.bin"
+    manifest = json.loads((ROOT / "runtime/prebuilt/renderer.json").read_text())
+    blob = ROOT / "runtime/prebuilt/shaders.bin"
     if (manifest["format"] != "moonlight.civ7.renderer" or manifest["version"] != 2
             or manifest["blob"]["path"] != blob.name
             or manifest["blob"]["bytes"] != blob.stat().st_size
             or manifest["blob"]["sha256"] != digest(blob)):
-        raise ValueError("Civ7 shader bundle differs from its manifest")
-    for name in ("renderer.json", "shaders.bin"):
-        result[f"../renderer/civ7/prebuilt/{name}"] = digest(assets / name)
+        raise ValueError("Shader bundle differs from its manifest")
     result["../streamer/ui/fonts/glyphs.bin"] = digest(APP / "src/streamer/ui/fonts/glyphs.bin")
     record = json.loads((ROOT / "runtime/prebuilt/ui-text.json").read_text())
     shader = ROOT / "runtime/prebuilt/ui-text.spv"

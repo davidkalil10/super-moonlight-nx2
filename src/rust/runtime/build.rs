@@ -13,10 +13,10 @@ fn checksum(bytes: &[u8]) -> u32 {
 }
 
 fn main() {
-    let source = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap())
-        .join("../../renderer/civ7/prebuilt/shaders.bin");
+    let prebuilt = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap()).join("prebuilt");
+    let source = prebuilt.join("shaders.bin");
     println!("cargo:rerun-if-changed={}", source.display());
-    let bytes = fs::read(source).expect("existing Civ7 shader bundle");
+    let bytes = fs::read(source).expect("shader bundle");
     assert!(bytes.len() >= 544);
     assert_eq!(word(&bytes, 0), 0x4241_4c4d);
     assert_eq!(word(&bytes, 4), 1);
@@ -63,10 +63,9 @@ fn main() {
         generated.push_str("\n];\n");
         previous_end = offset + length;
     }
-    let text =
-        PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap()).join("prebuilt/ui-text.spv");
+    let text = prebuilt.join("ui-text.spv");
     println!("cargo:rerun-if-changed={}", text.display());
-    let bytes = fs::read(text).expect("generated Rust shader");
+    let bytes = fs::read(text).expect("UI text shader");
     assert!(bytes.len() >= 20 && bytes.len() <= 256 * 1024 && bytes.len().is_multiple_of(4));
     assert_eq!(word(&bytes, 0), 0x0723_0203);
     generated.push_str("pub static UI_TEXT: &[u32] = &[\n");
