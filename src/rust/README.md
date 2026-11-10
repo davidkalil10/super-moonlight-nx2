@@ -10,3 +10,6 @@ The command archives `HEAD`, builds the Rust runtime with `--diagnostic producti
 with the pinned Switch 2 SDK and `tools/testship/sdk-interop`, and stores the NRO and receipts in
 `/media/storage2/builds/moonlight/<build-id>/`. The NACP version is derived from `git describe`
 and compacted to fit its version field. `src/rust/nro/icon.png` is embedded in the NRO.
+
+`--sdk-video` builds `--diagnostic production-sdk` instead, against the 2026-11-10 SDK pinned on m4:
+video is decoded through the SDK's video decoder.
