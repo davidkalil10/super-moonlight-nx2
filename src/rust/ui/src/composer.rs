@@ -479,6 +479,17 @@ impl Builder<'_> {
         Some(self.composer.store(key, trim(bitmap)))
     }
 
+    pub(crate) fn text_width(&mut self, label: &str, face: Face) -> u32 {
+        let style = TextStyle {
+            weight: face.weight,
+            tracking: 0.0,
+        };
+        self.composer
+            .glyphs
+            .measure(label, face.size, Some(&style))
+            .map_or(0, |length| length as u32 + 1)
+    }
+
     /// Text in a box `width` wide whose left edge is `x`; `align` places it inside the box.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn put(

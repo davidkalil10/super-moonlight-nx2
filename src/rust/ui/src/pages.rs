@@ -5,12 +5,13 @@ use alloc::format;
 use alloc::string::String;
 
 use crate::composer::{
-    Builder, CONTENT_WIDTH, COVER_HEIGHT, COVER_WIDTH, Error, Face, Keys, SCREEN_WIDTH, SIDE,
+    Builder, CONTENT_WIDTH, Error, Face, Keys, SCREEN_WIDTH, SIDE,
     home_slot, page_count, shown_count,
 };
 use crate::glyphs::Align;
-use crate::model::{APPS_PER_PAGE, HOSTS_PER_PAGE, Model, Screen, is_address, item};
-use crate::page;
+use crate::model::{APPS_PER_PAGE, Address, HOSTS_PER_PAGE, Host, Model, Screen, is_address, item};
+use crate::presence::Presence;
+use crate::page::{self, Shape};
 use crate::readout::{Network, Readout};
 use crate::settings::{Setting, SettingRow};
 
@@ -18,6 +19,7 @@ const TITLE: Face = Face::new(40, 500);
 const STATUS: Face = Face::new(28, 500);
 const NAME: Face = Face::new(40, 700);
 const BODY: Face = Face::new(28, 500);
+const OPTION: Face = Face::new(32, 600);
 const BODY_BOLD: Face = Face::new(28, 700);
 const BUTTON: Face = Face::new(32, 700);
 const HINT: Face = Face::new(24, 500);
@@ -36,8 +38,11 @@ const BUTTON_RADIUS: u32 = 14;
 
 const CARD_WIDTH: u32 = 840;
 const CARD_HEIGHT: u32 = 96;
+const PC_CARD_HEIGHT: u32 = 144;
+const RESUME_HEIGHT: u32 = 88;
+const DOT: u32 = 20;
 const CARD_GAP_X: u32 = 48;
-const CARD_GAP_Y: u32 = 32;
+const CARD_GAP_Y: u32 = 16;
 const CARD_PAD: u32 = 32;
 const KEYPAD_Y: u32 = 430;
 const KEYPAD_WIDTH: u32 = 160;
@@ -46,11 +51,24 @@ const BUTTON_Y: u32 = 640;
 const BUTTON_WIDTH: u32 = 400;
 const BUTTON_GAP: u32 = 48;
 const PAGER_WIDTH: u32 = 300;
-const GRID_Y: u32 = 300;
-const GRID_COLUMNS: u32 = 5;
-const GRID_GAP: u32 = 48;
-const GRID_ROW: u32 = COVER_HEIGHT + 16 + 34 + 24;
-const OVERLAY_BUTTON: u32 = 520;
+const SHELF_Y: u32 = 230;
+const SHELF_GAP: u32 = 16;
+const FOCUS_COVER: (u32, u32) = (400, 225);
+const SHELF_COVER_MAX: u32 = 200;
+const FOCUS_MARGIN: u32 = 12;
+const COVER_RADIUS: u32 = 12;
+const CHIP_HEIGHT: u32 = 48;
+const CHIP_PAD: u32 = 22;
+const SHEET_WIDTH: u32 = 760;
+const SHEET_PAD: u32 = 40;
+const SHEET_MARGIN: u32 = 24;
+const SCREEN_HEIGHT: u32 = 1080;
+const SHEET_RADIUS: u32 = 28;
+const SHEET_GRID_Y: u32 = 236;
+const SHEET_CELL: u32 = 104;
+const SHEET_ITEMS_Y: u32 = 584;
+const SHEET_ITEM: u32 = 76;
+const SHEET_ITEM_GAP: u32 = 12;
 
 const KEY_LABELS: [&str; 12] = [
     "1", "2", "3", "4", "5", "6", "7", "8", "9", ".", "0", "Erase",
@@ -198,7 +216,7 @@ impl Builder<'_> {
     }
 
     fn hosts_page(&mut self, model: &Model) {
-        let keys: Keys = &[("Y", "PC options"), ("X", "Settings"), ("A", "Open")];
+        let keys: Keys = &[("Y", "Options"), ("X", "Settings"), ("A", "Open")];
         let hosts = model.hosts();
         let count = hosts.len() as u32;
         let pages = page_count(count, HOSTS_PER_PAGE);
@@ -220,21 +238,14 @@ impl Builder<'_> {
             },
         );
 
-        let pal = self.pal;
-        let inner = CARD_WIDTH - 2 * CARD_PAD;
         for i in 0..shown {
             let host = &hosts[(start + i) as usize];
-            let (x, y) = card_at(i, BODY_Y + 24, CARD_HEIGHT, CARD_GAP_Y);
-            self.item(item::HOST + start + i, x, y, CARD_WIDTH, CARD_HEIGHT, 0, PANEL_RADIUS);
-            self.fill(x, y, CARD_WIDTH, CARD_HEIGHT, pal.panel, PANEL_RADIUS);
-            self.put(x + CARD_PAD, y + 12, inner, host.name.as_str(), NAME, pal.ink, Align::Left);
-            let mut state = String::from(host.address.as_str());
-            join(&mut state, model.presence(&host.address).label());
-            self.put(x + CARD_PAD, y + 58, inner, &state, HINT, pal.dim, Align::Left);
+            let (x, y) = card_at(i, BODY_Y + 24, PC_CARD_HEIGHT, CARD_GAP_Y);
+            self.pc_card(model, host, item::HOST + start + i, x, y);
         }
 
-        let buttons_y = BODY_Y + 24 + 3 * (CARD_HEIGHT + CARD_GAP_Y);
-        self.button(item::ADD_HOST, SIDE, buttons_y, PAGER_WIDTH, "+  Add PC", false);
+        let buttons_y = BODY_Y + 24 + 3 * (PC_CARD_HEIGHT + CARD_GAP_Y);
+        self.add_card(SIDE, buttons_y, PAGER_WIDTH);
         self.button(
             item::FIND_HOSTS,
             SIDE + PAGER_WIDTH + BUTTON_GAP,
@@ -246,6 +257,77 @@ impl Builder<'_> {
         if pages > 1 {
             self.pager(buttons_y, model.host_page(), pages);
         }
+        if let Some(resume) = model.resume() {
+            self.resume_bar(model, resume.app.as_str(), resume.address);
+        }
+    }
+
+    fn pc_card(&mut self, model: &Model, host: &Host, id: u32, x: u32, y: u32) {
+        let pal = self.pal;
+        let inner = CARD_WIDTH - 2 * CARD_PAD;
+        self.item(id, x, y, CARD_WIDTH, PC_CARD_HEIGHT, 0, PANEL_RADIUS);
+        self.fill(x, y, CARD_WIDTH, PC_CARD_HEIGHT, pal.panel, PANEL_RADIUS);
+        self.put(x + CARD_PAD, y + 10, inner, host.name.as_str(), NAME, pal.ink, Align::Left);
+
+        let presence = model.presence(&host.address);
+        let asleep = model.is_asleep(host);
+        let (dot, mut state) = match presence {
+            Presence::Online => (pal.ok, String::from("Online")),
+            Presence::Waking => (pal.warn, String::from("Waking\u{2026}")),
+            Presence::Offline if asleep => (pal.warn, String::from("Asleep")),
+            Presence::Offline => (pal.line, String::from("Offline")),
+            Presence::Unknown => (pal.line, String::from("Checking\u{2026}")),
+        };
+        if presence == Presence::Online {
+            if let Some(ms) = model.link_ms(&host.address) {
+                join(&mut state, Some(&format!("{ms} ms")));
+            }
+        }
+        self.dot(x + CARD_PAD, y + 74, DOT, dot);
+        self.put(x + CARD_PAD + DOT + 12, y + 62, inner - DOT - 12, &state, BODY, pal.ink, Align::Left);
+
+        let detail = if asleep {
+            String::from("Press A to wake")
+        } else {
+            match model.last_played(&host.address) {
+                Some(app) => format!("Last played: {app}"),
+                None => String::from(host.address.as_str()),
+            }
+        };
+        self.put(x + CARD_PAD, y + 104, inner, &detail, HINT, pal.dim, Align::Left);
+    }
+
+    fn add_card(&mut self, x: u32, y: u32, width: u32) {
+        let pal = self.pal;
+        self.item(item::ADD_HOST, x, y, width, CARD_HEIGHT, 0, PANEL_RADIUS);
+        self.shape(Shape {
+            x,
+            y,
+            w: width,
+            h: CARD_HEIGHT,
+            radius: PANEL_RADIUS,
+            stroke: pal.line,
+            stroke_width: 2,
+            dashed: true,
+            ..Shape::default()
+        });
+        self.put(x, y + 28, width, "+  Add a PC", BUTTON, pal.ink, Align::Center);
+    }
+
+    fn resume_bar(&mut self, model: &Model, app: &str, address: Address) {
+        let pal = self.pal;
+        let name = model
+            .hosts()
+            .iter()
+            .find(|host| host.address == address)
+            .map_or("the PC", |host| host.name.as_str());
+        let y = RULE_BOTTOM - 24 - RESUME_HEIGHT;
+        self.item(item::RESUME_HOST, SIDE, y, CONTENT_WIDTH, RESUME_HEIGHT, 0, PANEL_RADIUS);
+        self.fill(SIDE, y, CONTENT_WIDTH, RESUME_HEIGHT, pal.panel, PANEL_RADIUS);
+        self.dot(SIDE + CARD_PAD, y + 34, DOT, pal.ok);
+        let text = format!("{app} is still running on {name}");
+        self.put(SIDE + CARD_PAD + DOT + 16, y + 24, 1200, &text, BODY_BOLD, pal.ink, Align::Left);
+        self.put(RIGHT - CARD_PAD - 300, y + 24, 300, "Resume", BUTTON, pal.accent, Align::Right);
     }
 
     fn add_host_page(&mut self, model: &Model) {
@@ -392,37 +474,76 @@ impl Builder<'_> {
             self.legend_right(head.saturating_sub(48), FOOT_Y, quit, pal.ink, item::APP + start + i);
         }
 
-        let left = (SCREEN_WIDTH - GRID_COLUMNS * COVER_WIDTH - (GRID_COLUMNS - 1) * GRID_GAP) / 2;
+        let focused = model.app_index().checked_sub(start).filter(|&i| i < shown);
+        let others = shown.saturating_sub(1).max(1);
+        let room = CONTENT_WIDTH - FOCUS_COVER.0 - 2 * FOCUS_MARGIN - others * SHELF_GAP;
+        let small_w = (room / others).min(SHELF_COVER_MAX);
+        let shelf_cover = (small_w, small_w * 9 / 16);
+        let mut x = SIDE;
         for i in 0..shown {
             let app = &apps[(start + i) as usize];
-            let x = left + (i % GRID_COLUMNS) * (COVER_WIDTH + GRID_GAP);
-            let y = GRID_Y + (i / GRID_COLUMNS) * GRID_ROW;
+            let is_focus = Some(i) == focused;
+            let (w, h) = if is_focus { FOCUS_COVER } else { shelf_cover };
+            let y = SHELF_Y + (FOCUS_COVER.1 - h) / 2;
+            if is_focus && i > 0 {
+                x += FOCUS_MARGIN;
+            }
             let is_current = app.id == current;
-            self.item(
-                item::APP + start + i,
-                x,
-                y,
-                COVER_WIDTH,
-                COVER_HEIGHT,
-                0,
-                10,
-            );
+            self.item(item::APP + start + i, x, y, w, h, page::ITEM_REPORTS_FOCUS, COVER_RADIUS);
             match self.cover_tile(app.id, app.name.as_str()) {
-                Some(serial) => self.image(x, y, serial, (0, 0), 10),
+                Some(serial) => self.image(x, y, serial, (w, h), COVER_RADIUS),
                 None => self.error = Some(Error::Cover),
             }
-            if is_current {
-                self.fill(x + 8, y + 8, 112, 30, pal.ok, 15);
-                self.put(x + 8, y + 12, 112, "Running", Face::new(22, 600), pal.ground, Align::Center);
+            if is_current && !is_focus {
+                self.fill(x, y + h + 8, w, 4, pal.ok, 2);
             }
-            let color = if is_current { pal.ok } else { pal.ink };
-            self.put(x, y + COVER_HEIGHT + 16, COVER_WIDTH, app.name.as_str(), BODY, color, Align::Center);
+            x += w + SHELF_GAP;
+            if is_focus {
+                x += FOCUS_MARGIN;
+            }
         }
 
-        let buttons_y = GRID_Y + 2 * GRID_ROW + 8;
+        if let Some(app) = focused.map(|i| &apps[(start + i) as usize]) {
+            let color = if app.id == current { pal.ok } else { pal.ink };
+            let name_y = SHELF_Y + FOCUS_COVER.1 + 40;
+            self.put(SIDE, name_y, CONTENT_WIDTH, app.name.as_str(), NAME, color, Align::Left);
+            if app.id == current {
+                let name_width = self.text_width(app.name.as_str(), NAME).min(CONTENT_WIDTH - 160);
+                let pill_x = SIDE + name_width + 24;
+                self.fill(pill_x, name_y + 8, 112, 32, pal.ok, 16);
+                self.put(pill_x, name_y + 12, 112, "Running", Face::new(22, 600), pal.ground, Align::Center);
+            }
+            self.stream_chips(model, SIDE, SHELF_Y + FOCUS_COVER.1 + 112);
+        }
+
+        let buttons_y = RULE_BOTTOM - 24 - CARD_HEIGHT;
         self.button(item::BACK, SIDE, buttons_y, PAGER_WIDTH, "\u{2039}  PCs", false);
         if pages > 1 {
             self.pager(buttons_y, model.app_page(), pages);
+        }
+    }
+
+    fn stream_chips(&mut self, model: &Model, x: u32, y: u32) {
+        let pal = self.pal;
+        let plan = model.planned_stream();
+        let mbps = plan.bitrate_kbps as f32 / 1000.0;
+        let bitrate = if plan.bitrate_auto {
+            format!("{mbps:.0} Mbps auto")
+        } else {
+            format!("{mbps:.0} Mbps")
+        };
+        let chips = [
+            format!("{}p", plan.height),
+            format!("{} fps", plan.fps),
+            String::from(plan.codec.text()),
+            bitrate,
+        ];
+        let mut at = x;
+        for chip in &chips {
+            let width = self.text_width(chip, BODY) + 2 * CHIP_PAD;
+            self.fill(at, y, width, CHIP_HEIGHT, pal.panel, CHIP_HEIGHT / 2);
+            self.put(at + CHIP_PAD, y + 9, width, chip, BODY, pal.ink, Align::Left);
+            at += width + 12;
         }
     }
 
@@ -586,19 +707,81 @@ impl Builder<'_> {
         let pal = self.pal;
         self.background = pal.scrim;
         self.flags = page::FLAG_OVERLAY | page::FLAG_NO_CHORD;
-        let width = 2 * OVERLAY_BUTTON + BUTTON_GAP;
-        self.fill(SIDE - 40, 300, width + 80, 560, pal.ground, PANEL_RADIUS);
-        let title = model.app().map_or("Moonlight", |a| a.name.as_str());
-        self.put(SIDE, 340, width, title, NAME, pal.ink, Align::Left);
-        self.put(SIDE, 400, width, host_name(model).unwrap_or(""), BODY, pal.dim, Align::Left);
-        self.put(SIDE, 560, width, model.stream_stats(), BODY, pal.dim, Align::Left);
-        if !model.system_status().is_empty() {
-            self.put(SIDE, 600, width, model.system_status(), BODY, pal.dim, Align::Left);
+        let x = SCREEN_WIDTH - SHEET_WIDTH - SHEET_MARGIN;
+        self.fill(x, SHEET_MARGIN, SHEET_WIDTH, SCREEN_HEIGHT - 2 * SHEET_MARGIN, pal.ground, SHEET_RADIUS);
+        let inner = SHEET_WIDTH - 2 * SHEET_PAD;
+        let left = x + SHEET_PAD;
+
+        let first = [
+            (item::RESUME_STREAM, "Resume", None, pal.ink),
+            (
+                item::TOGGLE_STATS,
+                "Show stats on screen",
+                Some(if model.settings().on(Setting::FrameCounter) { "On" } else { "Off" }),
+                pal.ink,
+            ),
+            (item::RETURN_TO_APPS, "Disconnect", None, pal.ink),
+            (item::QUIT_HOST, "Quit app on PC", None, pal.warn),
+        ];
+        for (i, (id, label, value, ink)) in first.into_iter().enumerate() {
+            let y = SHEET_ITEMS_Y + i as u32 * (SHEET_ITEM + SHEET_ITEM_GAP);
+            self.item(id, left, y, inner, SHEET_ITEM, 0, BUTTON_RADIUS);
+            self.fill(left, y, inner, SHEET_ITEM, pal.panel, BUTTON_RADIUS);
+            self.put(left + 28, y + 22, inner - 56, label, OPTION, ink, Align::Left);
+            if let Some(value) = value {
+                self.put(left + 28, y + 22, inner - 56, value, OPTION, pal.dim, Align::Right);
+            }
         }
-        self.button(item::RETURN_TO_APPS, SIDE, 640, OVERLAY_BUTTON, "Disconnect", false);
-        self.button(item::QUIT_HOST, SIDE + OVERLAY_BUTTON + BUTTON_GAP, 640, OVERLAY_BUTTON, "Quit app", false);
-        self.button(item::TOGGLE_STATS, SIDE, 640 + CARD_HEIGHT + 24, OVERLAY_BUTTON, "Toggle stats", false);
-        self.legend_right(RIGHT, FOOT_Y, &[("B", "Hide"), ("A", "Choose")], pal.ink, 0);
+
+        let title = model.app().map_or("Moonlight", |a| a.name.as_str());
+        self.put(left, 64, inner, title, NAME, pal.ink, Align::Left);
+        let minutes = model.stream().session_s / 60;
+        let session = match minutes {
+            0 => String::from("less than a minute"),
+            minutes => format!("{minutes} min"),
+        };
+        let subtitle = format!("{} \u{b7} {session}", host_name(model).unwrap_or(""));
+        self.put(left, 120, inner, &subtitle, BODY, pal.dim, Align::Left);
+        let plan = model.planned_stream();
+        let mode = format!(
+            "{}p{} \u{b7} {} \u{b7} {:.0} Mbps",
+            plan.height,
+            plan.fps,
+            plan.codec.text(),
+            plan.bitrate_kbps as f32 / 1000.0
+        );
+        self.put(left, 160, inner, &mode, BODY, pal.dim, Align::Left);
+        self.fill(left, SHEET_GRID_Y - 24, inner, 2, pal.line, 0);
+
+        let stream = model.stream();
+        let readout = model.readout();
+        let tenths = |value: u32| format!("{}.{}", value / 10, value % 10);
+        let cells = [
+            ("Frame rate", stream.fps_x10.map(tenths)),
+            (
+                "Bitrate",
+                stream.bitrate_kbps.map(|kbps| format!("{} Mbps", tenths(kbps / 100))),
+            ),
+            ("Decode", stream.decode_us.map(|us| format!("{} ms", tenths(us / 100)))),
+            ("Network", stream.network_us.map(|us| format!("{} ms", tenths(us / 100)))),
+            ("Battery", readout.battery_percent.map(|percent| format!("{percent} %"))),
+            (
+                "Wi-Fi",
+                match readout.network {
+                    Some(Network::Wifi(bars)) => Some(format!("{}/3", bars.min(3))),
+                    Some(Network::Wired) => Some(String::from("Wired")),
+                    None => None,
+                },
+            ),
+        ];
+        for (i, (label, value)) in cells.iter().enumerate() {
+            let cx = left + (i as u32 % 2) * (inner / 2);
+            let cy = SHEET_GRID_Y + (i as u32 / 2) * SHEET_CELL;
+            self.put(cx, cy, inner / 2, label, HINT, pal.dim, Align::Left);
+            let text = value.as_deref().unwrap_or("--");
+            self.put(cx, cy + 32, inner / 2, text, NAME, pal.ink, Align::Left);
+        }
+        self.legend_right(SCREEN_WIDTH - SHEET_MARGIN - SHEET_PAD, FOOT_Y, &[("B", "Close"), ("A", "Choose")], pal.ink, 0);
     }
 
     fn error_page(&mut self, model: &Model) {

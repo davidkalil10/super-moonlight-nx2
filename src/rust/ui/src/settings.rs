@@ -108,7 +108,7 @@ impl Codec {
         ["h264", "av1", "hevc"][self as usize]
     }
 
-    fn text(self) -> &'static str {
+    pub fn text(self) -> &'static str {
         ["H.264", "AV1", "HEVC"][self as usize]
     }
 }

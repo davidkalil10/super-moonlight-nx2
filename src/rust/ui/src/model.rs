@@ -6,7 +6,7 @@ use core::fmt::Write;
 use crate::link_choice::LinkChoice;
 use crate::presence::{Presence, Table};
 use crate::readout::{Readout, StreamReadout};
-use crate::settings::{Capabilities, Setting, Settings};
+use crate::settings::{Capabilities, Setting, Settings, StreamOptions};
 use crate::text::Text;
 use crate::theme::Look;
 
@@ -657,12 +657,24 @@ impl Model {
         self.presence.set(address, presence) && self.screen == Screen::Hosts
     }
 
+    /// A PC that did not answer but can be woken: A wakes it before connecting.
+    pub fn is_asleep(&self, host: &Host) -> bool {
+        host.mac.is_some() && self.presence(&host.address) == Presence::Offline
+    }
+
     pub fn link_ms(&self, address: &Address) -> Option<u32> {
         self.presence.link_ms(address)
     }
 
     pub fn set_link_ms(&mut self, address: &Address, ms: u32) -> bool {
         self.presence.set_link_ms(address, ms) && self.screen == Screen::Hosts
+    }
+
+    /// What a launch would stream now: the settings, limited by the network test's choice.
+    pub fn planned_stream(&self) -> StreamOptions {
+        let options = self.settings.stream_options(self.docked, &self.capabilities);
+        self.link_choice
+            .map_or(options, |choice| choice.apply(options))
     }
 
     pub fn link_choice(&self) -> Option<&LinkChoice> {
@@ -845,7 +857,11 @@ impl Model {
         }
         let host = self.host_item(item);
         if let (Op::A, Some(index)) = (op, host) {
-            self.open_host(self.hosts[index], index as u32, step);
+            let chosen = self.hosts[index];
+            if self.is_asleep(&chosen) {
+                step.add(IntentKind::WakeHost, Some(chosen));
+            }
+            self.open_host(chosen, index as u32, step);
             return;
         }
         if let (Op::Y, Some(index)) = (op, host) {
