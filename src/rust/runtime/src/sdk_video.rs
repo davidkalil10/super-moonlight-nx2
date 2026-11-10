@@ -23,8 +23,8 @@ use moonlight_nx2_core::{
 pub const SDK_H264_VERIFIED: bool = true;
 /// AV1 stays out of the stream offer until the diagnostic shows matching sums on the console.
 pub const SDK_AV1_VERIFIED: bool = true;
-/// The service refuses 2160p at initialize (0x17bc6f) for both codecs. Only the docked-modes
-/// build still offers it, for the runs that look for what the service wants.
+/// The service takes 2160p only when configured at 30 (`viddec::session`). Whether it keeps up
+/// with a 60 fps stream is not measured, so only the docked-modes build offers that size.
 pub const SDK_DOCKED_MODES: bool = cfg!(feature = "sdk-video-docked-modes");
 /// 120 fps is not measured on the console yet. Only the 120 Hz build offers it, up to 1440p,
 /// and only on a display that presented at 120 Hz.
@@ -99,8 +99,6 @@ unsafe extern "C" {
         output_format: u32,
         pool_height: u32,
         max_input_bytes: u32,
-        config_width: u32,
-        config_height: u32,
         split_initialize: bool,
     );
 }
@@ -113,9 +111,9 @@ pub struct Tuning {
     pub output_format: u32,
     pub pool_height: u32,
     pub max_input_bytes: u32,
-    /// The size the decoder is configured with, when not the stream's.
-    pub config_size: (u32, u32),
     pub work_mebibytes: usize,
+    /// The rate the decoder is configured with, when not the session rule's.
+    pub frame_rate: u32,
     /// Initialize command by command, so the log names the one that refused.
     pub split_initialize: bool,
     /// No line per unit, for a session that is timed.
@@ -129,8 +127,8 @@ impl Tuning {
         output_format: 0,
         pool_height: 0,
         max_input_bytes: 0,
-        config_size: (0, 0),
         work_mebibytes: 0,
+        frame_rate: 0,
         split_initialize: false,
         quiet: false,
     };
@@ -218,15 +216,19 @@ impl SdkVideo {
 
     fn start(&mut self, access_unit: &[u8]) -> Result<(), BackendError> {
         let config = self.config.ok_or(BackendError::Invalid)?;
-        let session =
-            viddec::session(config.codec, config.display).ok_or(BackendError::Unsupported)?;
+        let session = viddec::session(config.codec, config.display, self.fps)
+            .ok_or(BackendError::Unsupported)?;
         #[cfg(feature = "diagnostic-sdk-modes")]
-        let session = match self.tuning.work_mebibytes {
-            0 => session,
-            mebibytes => viddec::Session {
-                work_bytes: mebibytes << 20,
-                ..session
+        let session = viddec::Session {
+            work_bytes: match self.tuning.work_mebibytes {
+                0 => session.work_bytes,
+                mebibytes => mebibytes << 20,
             },
+            frame_rate: match self.tuning.frame_rate {
+                0 => session.frame_rate,
+                rate => rate,
+            },
+            ..session
         };
         let mut codec_config = [0; viddec::CODEC_CONFIG_MAX];
         let Some(bytes) = viddec::codec_config(config.codec, access_unit, &mut codec_config) else {
@@ -249,7 +251,7 @@ impl SdkVideo {
         let result = unsafe {
             moonlightSdkVideoStart(
                 session.codec,
-                self.fps,
+                session.frame_rate,
                 session.work_bytes,
                 codec_config.as_ptr(),
                 bytes,
@@ -257,8 +259,8 @@ impl SdkVideo {
             )
         };
         log(&format!(
-            "sdk-video: start codec={:?} value={} result=0x{result:x} stage={stage} codec_config_bytes={bytes} work_bytes={} fps={}",
-            config.codec, session.codec, session.work_bytes, self.fps
+            "sdk-video: start codec={:?} value={} result=0x{result:x} stage={stage} codec_config_bytes={bytes} work_bytes={} fps={} stream_fps={}",
+            config.codec, session.codec, session.work_bytes, session.frame_rate, self.fps
         ));
         if result != 0 {
             return Err(BackendError::Refused);
@@ -309,8 +311,6 @@ impl Backend for SdkVideo {
                 tuning.output_format,
                 tuning.pool_height,
                 tuning.max_input_bytes,
-                tuning.config_size.0,
-                tuning.config_size.1,
                 tuning.split_initialize,
             );
         }

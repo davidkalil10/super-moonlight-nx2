@@ -16,7 +16,8 @@ reads a 256x256 baseline JPEG there and shows its default icon for anything else
 video is decoded through the SDK's video decoder. It asks for a 4K layer when docked and offers
 H.264 and AV1 up to 1440p there.
 Adding `--docked-modes` builds `production-sdk-modes`, which also offers 4K when docked. The
-decoder service refuses that size so far.
+decoder service refuses 2160p configured at 60 and takes it at 30, so a 2160p session is
+configured at 30 whatever the stream's rate. Not measured with a real 60 fps stream yet.
 Adding `--hz120` builds `production-sdk-120`, which presents every refresh, asks the display for
 120 Hz and a 1440p layer when docked, and offers 120 fps up to 1440p where the display showed it.
 With both flags (`production-sdk-modes-120`) the docked layer stays 4K. Not measured on the console yet.

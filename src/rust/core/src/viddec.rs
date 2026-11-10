@@ -21,6 +21,24 @@ const AV1_MIME: &[u8] = b"video/av1\0";
 pub struct Session {
     pub codec: u32,
     pub work_bytes: usize,
+    /// The rate the decoder is configured with, which is not always the stream's.
+    pub frame_rate: u32,
+}
+
+/// The service refused 1440p configured at 120 (0x17a26f) on both codecs, and 2160p at 60
+/// (0x17bc6f) where it took 30, on AV1 with frames out and sums matching (2026-11-10). So a
+/// session is configured with the highest rate known to be taken. Whether the decoder then
+/// keeps up with a faster stream is not measured: 120 fps and 2160p stay out of the verified
+/// modes.
+const FRAME_RATE_MAX: u32 = 60;
+const FRAME_RATE_MAX_2160P: u32 = 30;
+
+fn frame_rate(display: Size, fps: u32) -> u32 {
+    if display.width() > 2560 || display.height() > 1440 {
+        fps.min(FRAME_RATE_MAX_2160P)
+    } else {
+        fps.min(FRAME_RATE_MAX)
+    }
 }
 
 /// 64 MiB carried H.264 at 1080p on the console; larger pictures get it once per 1080p of area.
@@ -31,13 +49,17 @@ fn work_bytes_by_area(display: Size) -> usize {
 
 /// `None` for a codec the service has no value for. HEVC is one: the enum skips 2 and the
 /// service refused it at initialize (0x17986f) on 2026-11-10.
-pub fn session(codec: Codec, display: Size) -> Option<Session> {
+pub fn session(codec: Codec, display: Size, fps: u32) -> Option<Session> {
     let (codec, work_bytes) = match codec {
         Codec::H264 => (CODEC_H264, work_bytes_by_area(display)),
         Codec::Av1 => (CODEC_AV1, video_wire::av1_workspace_bytes(display) as usize),
         Codec::Hevc | Codec::Vp9 => return None,
     };
-    Some(Session { codec, work_bytes })
+    Some(Session {
+        codec,
+        work_bytes,
+        frame_rate: frame_rate(display, fps),
+    })
 }
 
 /// Writes the configure buffer for a stream that starts with `first_unit` and returns its

@@ -74,8 +74,6 @@ static struct {
     uint32_t output_format;
     uint32_t pool_height;
     uint32_t max_input_bytes;
-    uint32_t config_width;
-    uint32_t config_height;
     bool split_initialize;
 } tuning;
 
@@ -103,15 +101,12 @@ static Result fail(uint32_t *stage, uint32_t at, Result result)
 }
 
 void moonlightSdkVideoTune(uint32_t input_format, uint32_t output_format, uint32_t pool_height,
-                           uint32_t max_input_bytes, uint32_t config_width,
-                           uint32_t config_height, bool split_initialize)
+                           uint32_t max_input_bytes, bool split_initialize)
 {
     tuning.input_format = input_format;
     tuning.output_format = output_format;
     tuning.pool_height = pool_height;
     tuning.max_input_bytes = max_input_bytes;
-    tuning.config_width = config_width;
-    tuning.config_height = config_height;
     tuning.split_initialize = split_initialize;
 }
 
@@ -239,8 +234,8 @@ Result moonlightSdkVideoStart(uint32_t codec, uint32_t fps, size_t work_bytes,
         .input_format = video.width >= 1920 || video.height >= 1080 ? 3 : 1,
         .output_format = output_format(),
         .output_mode = 1,
-        .width = tuning.config_width ? tuning.config_width : video.width,
-        .height = tuning.config_height ? tuning.config_height : video.height,
+        .width = video.width,
+        .height = video.height,
         .frame_rate = fps,
         .max_input_size = tuning.max_input_bytes ? tuning.max_input_bytes : INPUT_MAX,
     };

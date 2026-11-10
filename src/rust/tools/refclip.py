@@ -91,7 +91,7 @@ def write_sums(out, name, suffix, stream, pts, width=WIDTH, height=HEIGHT, fps=F
     (out / f"{name}.sums").write_text("\n".join(lines) + "\n")
 
 
-def generate(out, only=None, width=WIDTH, height=HEIGHT, frames=FRAMES, fps=FPS):
+def generate(out, only=None, width=WIDTH, height=HEIGHT, frames=FRAMES, fps=FPS, named=None):
     """Clips are named after their codec, then their height and rate when not 1080 and 60."""
     out.mkdir(parents=True, exist_ok=True)
     source = ["-f", "lavfi", "-i", f"testsrc2=size={width}x{height}:rate={fps}",
@@ -104,6 +104,7 @@ def generate(out, only=None, width=WIDTH, height=HEIGHT, frames=FRAMES, fps=FPS)
         name = codec_name
         if (height, fps) != (HEIGHT, FPS):
             name += f"_{height}p" + (str(fps) if fps != FPS else "")
+        name = named or name
         stream = out / f"{name}.{suffix}"
         run(["ffmpeg", "-v", "error", "-y", *source, *encoder, str(stream)])
         raw = stream.read_bytes()
@@ -228,6 +229,7 @@ def main():
     make.add_argument("--size", default=f"{WIDTH}x{HEIGHT}", help="WIDTHxHEIGHT")
     make.add_argument("--frames", type=int, default=FRAMES)
     make.add_argument("--fps", type=int, default=FPS)
+    make.add_argument("--name", help="clip name, with --codec, instead of the one made up")
     again = commands.add_parser("sums")
     again.add_argument("--clips", type=Path, required=True, help="directory of .mlrc clips")
     again.add_argument("--out", type=Path, required=True)
@@ -245,7 +247,7 @@ def main():
     args = parser.parse_args()
     if args.command == "generate":
         width, height = map(int, args.size.split("x"))
-        generate(args.out, args.codec, width, height, args.frames, args.fps)
+        generate(args.out, args.codec, width, height, args.frames, args.fps, args.name)
         return 0
     if args.command == "sums":
         resum(args.clips, args.out)
