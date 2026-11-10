@@ -554,7 +554,7 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
     fn wanted_shape(&self) -> netprobe::Wanted {
         let model = self.client.bridge.model();
         let options = model
-            .settings()
+            .stream_settings()
             .stream_options(model.docked(), model.capabilities());
         netprobe::Wanted {
             width: options.width,
@@ -572,7 +572,7 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
         let model = self.client.bridge.model();
         let capabilities = *model.capabilities();
         let codec = model
-            .settings()
+            .stream_settings()
             .in_use(model.docked(), &capabilities)
             .codec();
         let choice = netprobe::choose(quality, wanted, |_, height, fps| {
@@ -645,7 +645,7 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
             if let Some(quality) = self.link_test.measured
                 && self.link_test.chosen_for != Some(self.wanted_shape())
             {
-                self.choose_link(quality, false);
+                self.choose_link(quality, true);
             }
             return;
         }

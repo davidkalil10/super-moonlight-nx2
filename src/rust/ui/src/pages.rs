@@ -1014,6 +1014,9 @@ impl Builder<'_> {
             }
         }
         self.legend_right(SCREEN_WIDTH - SHEET_PAD, SHEET_FOOT_Y, &[("B", "Close"), ("A", "Choose")], pal.dim, 0);
+        if model.settings().on(Setting::MenuChord) {
+            self.put(left, SHEET_FOOT_Y - 48, inner, "Hold + and \u{2212} to open this menu", HINT, pal.dim, Align::Left);
+        }
 
         let plan = model.planned_stream();
         let badge = format!(
