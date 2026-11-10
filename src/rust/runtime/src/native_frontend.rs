@@ -188,15 +188,12 @@ pub fn run() -> bool {
     log("b2ar: renderer/GPU open returned success");
     #[cfg(feature = "diagnostic-ref-replay")]
     crate::ref_replay::run(&mut renderer);
-    #[cfg(feature = "native-video")]
     let verified = stream_capabilities().supports(
         moonlight_nx2_core::codec::Codec::H264,
         moonlight_nx2_core::codec::Depth::Eight,
         moonlight_nx2_core::codec::Size::new(1920, 1080).unwrap(),
         60,
     );
-    #[cfg(not(feature = "native-video"))]
-    let verified = false;
     log(&format!("frontend: native decoder verified={verified}"));
     if sdk::process_retired() {
         return false;
