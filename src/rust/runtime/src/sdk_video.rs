@@ -15,7 +15,7 @@ use moonlight_nx2_core::{
     annexb,
     codec::{Capabilities, Codec, Depth, Evidence, Mode, Size},
     decoder::{Backend, BackendError, Backing, Config, SURFACES, UNITS},
-    viddec::{self, Session},
+    viddec,
     video_wire::Output,
 };
 
@@ -23,8 +23,8 @@ use moonlight_nx2_core::{
 pub const SDK_H264_VERIFIED: bool = true;
 /// AV1 stays out of the stream offer until the diagnostic shows matching sums on the console.
 pub const SDK_AV1_VERIFIED: bool = true;
-/// 1440p and 4K are not measured on the console yet. Only the docked-modes build offers
-/// them, and only on a docked layer that presented at that size.
+/// The service refuses 2160p at initialize (0x17bc6f) for both codecs. Only the docked-modes
+/// build still offers it, for the runs that look for what the service wants.
 pub const SDK_DOCKED_MODES: bool = cfg!(feature = "sdk-video-docked-modes");
 /// 120 fps is not measured on the console yet. Only the 120 Hz build offers it, up to 1440p,
 /// and only on a display that presented at 120 Hz.
@@ -33,7 +33,7 @@ const FAST_FPS: u32 = if SDK_120HZ { 120 } else { 60 };
 /// Largest size and rate per tier, and whether it is offered.
 const MODES: [(u32, u32, u32, bool); 3] = [
     (1920, 1080, FAST_FPS, true),
-    (2560, 1440, FAST_FPS, SDK_DOCKED_MODES || SDK_120HZ),
+    (2560, 1440, FAST_FPS, true),
     (3840, 2160, 60, SDK_DOCKED_MODES),
 ];
 const SUBMIT_BUSY: u32 = (3603 << 9) | 111;
@@ -65,7 +65,6 @@ unsafe extern "C" {
         width: u32,
         height: u32,
         count: u32,
-        resolution_unlimited: bool,
         images: *mut u32,
         stage: *mut u32,
         sync_result: *mut u32,
@@ -118,9 +117,7 @@ pub fn note_output_formats(size: Size) {
 
 pub struct SdkVideo {
     fps: u32,
-    resolution_unlimited: Option<bool>,
     config: Option<Config>,
-    session: Option<Session>,
     started: bool,
     ready: Option<usize>,
     layout_reported: bool,
@@ -130,21 +127,10 @@ pub struct SdkVideo {
 }
 
 impl SdkVideo {
-    /// A decoder whose creator flag is given instead of following the session rule.
-    #[cfg(feature = "diagnostic-sdk-modes")]
-    pub fn with_resolution_unlimited(fps: u32, resolution_unlimited: bool) -> Self {
-        Self {
-            resolution_unlimited: Some(resolution_unlimited),
-            ..Self::new(fps)
-        }
-    }
-
     pub fn new(fps: u32) -> Self {
         Self {
             fps,
-            resolution_unlimited: None,
             config: None,
-            session: None,
             started: false,
             ready: None,
             layout_reported: false,
@@ -169,7 +155,9 @@ impl SdkVideo {
     }
 
     fn start(&mut self, access_unit: &[u8]) -> Result<(), BackendError> {
-        let (config, session) = self.config.zip(self.session).ok_or(BackendError::Invalid)?;
+        let config = self.config.ok_or(BackendError::Invalid)?;
+        let session =
+            viddec::session(config.codec, config.display).ok_or(BackendError::Unsupported)?;
         let mut codec_config = [0; viddec::CODEC_CONFIG_MAX];
         let Some(bytes) = viddec::codec_config(config.codec, access_unit, &mut codec_config) else {
             log(&format!(
@@ -243,11 +231,6 @@ impl Backend for SdkVideo {
         if !accepted(config.codec) || config.backing != Backing::CpuReference {
             return Err(BackendError::Unsupported);
         }
-        let mut session =
-            viddec::session(config.codec, config.display).ok_or(BackendError::Unsupported)?;
-        if let Some(resolution_unlimited) = self.resolution_unlimited {
-            session.resolution_unlimited = resolution_unlimited;
-        }
         let mut images = [0; SURFACES];
         let mut stage = 0;
         let mut sync_result = 0;
@@ -256,7 +239,6 @@ impl Backend for SdkVideo {
                 config.display.width(),
                 config.display.height(),
                 SURFACES as u32,
-                session.resolution_unlimited,
                 images.as_mut_ptr(),
                 &mut stage,
                 &mut sync_result,
@@ -272,7 +254,6 @@ impl Backend for SdkVideo {
             log("sdk-video: no sync session; frames are taken when their properties arrive");
         }
         self.config = Some(config);
-        self.session = Some(session);
         Ok(images)
     }
 
@@ -393,7 +374,6 @@ impl Backend for SdkVideo {
             self.busy_submits
         ));
         self.config = None;
-        self.session = None;
         self.started = false;
         self.ready = None;
         if result != 0 {

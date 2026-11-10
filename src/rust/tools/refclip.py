@@ -7,7 +7,7 @@ generate: encodes a short 1080p60 testsrc2 clip (moving pattern with a frame clo
           the runtime embeds from runtime/refclip/.
 sums:     rewrites the sums of existing .mlrc clips without encoding them again.
           --size and --frames make a clip of another size, named like h264_2160p.
-          The sdk-modes diagnostic replays those as h264_2160p_capped and _uncapped.
+          The sdk-modes diagnostic replays those.
 compare:  checks the 'ref:' lines of a DUT log against the sums, and optionally an HDMI
           capture (any image ffmpeg reads) against the reference frames by PSNR.
 
@@ -166,8 +166,7 @@ def compare_log(log, reference, required=(), decoder=None, only=None):
             print(f"{codec}: no frame lines")
             passed = False
     for codec, frames in seen.items():
-        clip = re.sub(r"_(capped|uncapped)$", "", codec)
-        path = reference / f"{clip}.sums"
+        path = reference / f"{codec}.sums"
         if not path.exists():
             print(f"{codec}: no reference sums at {path}")
             passed = False

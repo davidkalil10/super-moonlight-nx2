@@ -452,27 +452,28 @@ fn execute(renderer: &mut Renderer, connections: &mut NativeConnections, launch:
                 && blocked_start))
 }
 
-/// The sink and docked-modes builds ask for a 4K layer when docked, so 1440p and 4K can be
-/// verified. The 120 Hz build asks for 1440p there, the largest size a TV shows at 120 Hz. The
-/// sink and 120 Hz builds present every refresh, which also asks the display for 120 Hz.
+/// The SDK decoder and sink builds ask for a 4K layer when docked, the one 1440p was presented
+/// on. The 120 Hz build asks for 1440p there, the largest size a TV shows at 120 Hz, unless it
+/// also offers 4K. The sink and 120 Hz builds present every refresh, which also asks the
+/// display for 120 Hz.
 fn render_config(low_latency: bool) -> Config {
-    let docked_4k = cfg!(any(
-        feature = "diagnostic-frontend",
-        feature = "sdk-video-docked-modes"
-    ));
     let fast = cfg!(any(
         feature = "diagnostic-frontend",
         feature = "sdk-video-120hz"
     ));
-    let window_mode = if docked_4k {
-        WindowMode::PerMode {
-            docked_width: 3840,
-            docked_height: 2160,
-        }
-    } else if fast {
+    let docked_1440p = cfg!(all(
+        feature = "sdk-video-120hz",
+        not(feature = "sdk-video-docked-modes")
+    ));
+    let window_mode = if docked_1440p {
         WindowMode::PerMode {
             docked_width: 2560,
             docked_height: 1440,
+        }
+    } else if cfg!(any(feature = "diagnostic-frontend", feature = "sdk-video")) {
+        WindowMode::PerMode {
+            docked_width: 3840,
+            docked_height: 2160,
         }
     } else {
         WindowMode::Fixed

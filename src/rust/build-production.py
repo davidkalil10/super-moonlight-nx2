@@ -47,7 +47,7 @@ def main():
     parser.add_argument("--sdk-video", action="store_true",
                         help="decode through the 2026-11-10 SDK's video decoder")
     parser.add_argument("--docked-modes", action="store_true",
-                        help="with --sdk-video, offer 1440p and 4K when docked (unmeasured)")
+                        help="with --sdk-video, also offer 4K when docked (the service refuses it)")
     parser.add_argument("--hz120", action="store_true",
                         help="with --sdk-video, present at 120 Hz and offer 120 fps up to 1440p (unmeasured)")
     args = parser.parse_args()

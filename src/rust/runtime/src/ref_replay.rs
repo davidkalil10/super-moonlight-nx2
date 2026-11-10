@@ -31,18 +31,13 @@ const HEVC: &[u8] = include_bytes!("../refclip/hevc.mlrc");
 const CLIPS: [(&str, &[u8]); 2] = [("h264", H264), ("av1", AV1)];
 #[cfg(feature = "diagnostic-native-decode")]
 const CLIPS: [(&str, &[u8]); 3] = [("h264", H264), ("hevc", HEVC), ("av1", AV1)];
-/// Two-frame clips above 1080p, each opened from a capped and then an uncapped decoder creator.
-/// A refused session closes and the next one runs.
+/// Two-frame clips above 1080p. A refused session closes and the next one runs.
 #[cfg(feature = "diagnostic-sdk-modes")]
-const MODE_CLIPS: [(&str, &[u8], bool); 8] = [
-    ("h264_1440p_capped", H264_1440P, false),
-    ("h264_1440p_uncapped", H264_1440P, true),
-    ("h264_2160p_capped", H264_2160P, false),
-    ("h264_2160p_uncapped", H264_2160P, true),
-    ("av1_1440p_capped", AV1_1440P, false),
-    ("av1_1440p_uncapped", AV1_1440P, true),
-    ("av1_2160p_capped", AV1_2160P, false),
-    ("av1_2160p_uncapped", AV1_2160P, true),
+const MODE_CLIPS: [(&str, &[u8]); 4] = [
+    ("av1_1440p", AV1_1440P),
+    ("h264_1440p", H264_1440P),
+    ("av1_2160p", AV1_2160P),
+    ("h264_2160p", H264_2160P),
 ];
 #[cfg(feature = "diagnostic-sdk-modes")]
 const H264_1440P: &[u8] = include_bytes!("../refclip/h264_1440p.mlrc");
@@ -120,10 +115,9 @@ pub fn run(renderer: &mut Renderer) -> bool {
         }
     }
     #[cfg(feature = "diagnostic-sdk-modes")]
-    for (name, bytes, resolution_unlimited) in MODE_CLIPS {
-        let backend =
-            crate::sdk_video::SdkVideo::with_resolution_unlimited(CLIP_FPS, resolution_unlimited);
-        passed &= session(renderer, name, bytes, Some(backend));
+    for (name, bytes) in MODE_CLIPS {
+        let backend = backend(renderer);
+        passed &= session(renderer, name, bytes, backend);
         if stopped() {
             return false;
         }
