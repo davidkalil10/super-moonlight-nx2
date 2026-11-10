@@ -1,5 +1,5 @@
 //! The PC helpers this console is paired with: its own identity and one key per saved PC,
-//! kept in the `pairings` file. Format: lead/PERSISTENT-SESSION.md, section 5.
+//! kept in the `pairings` file. Format: moonlight-nx2-dev/src/rust/secure/README.md, section 5.
 
 use moonlight_nx2_ui::{
     model::{Address, is_address},

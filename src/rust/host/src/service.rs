@@ -1,6 +1,6 @@
 //! The helper as a service: it keeps listening, takes MNS1 handshakes from consoles, pairs a
 //! new console when the PC's user types the code it shows, and hands one authenticated
-//! connection at a time to the control server. Design: lead/PERSISTENT-SESSION.md.
+//! connection at a time to the control server. Design: moonlight-nx2-dev/src/rust/secure/README.md.
 
 use crate::{
     control_server::{Connection, Error as ControlError},

@@ -1,7 +1,7 @@
 //! MNS1: the authenticated, encrypted connection between a paired console and its PC helper.
 //! A SPAKE2 handshake from a short code (pairing) or the stored pairing key (session), key
 //! confirmation over the transcript, then ChaCha20-Poly1305 records. No IO here: both ends
-//! feed and take byte arrays. Design: lead/PERSISTENT-SESSION.md.
+//! feed and take byte arrays. Design: moonlight-nx2-dev/src/rust/secure/README.md.
 
 #![no_std]
 
