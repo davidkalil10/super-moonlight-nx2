@@ -23,8 +23,13 @@ use moonlight_nx2_core::{
 pub const SDK_H264_VERIFIED: bool = true;
 /// AV1 stays out of the stream offer until the diagnostic shows matching sums on the console.
 pub const SDK_AV1_VERIFIED: bool = true;
-/// The service takes 2160p only when configured at 30 (`viddec::session`). Whether it keeps up
-/// with a 60 fps stream is not measured, so only the docked-modes build offers that size.
+/// AV1 at 2160p60, configured at 30 (`viddec::session`): a real stream decoded, showed 914 of
+/// 1139 frames and closed cleanly on the console (3cf0628, 20261110T121625Z-3cf0628-sdk-
+/// integration/docked-modes/collected/runtime-000000629006da48.log).
+pub const SDK_AV1_2160P_VERIFIED: bool = true;
+/// 2160p is offered by the docked-modes build only, until a stream there holds 60 shown
+/// frames a second. H.264 at that size has decoded 60 fed frames a second in the diagnostic
+/// with the decoder full on nearly every turn, and has not streamed.
 pub const SDK_DOCKED_MODES: bool = cfg!(feature = "sdk-video-docked-modes");
 /// 120 fps is not measured on the console yet. Only the 120 Hz build offers it, up to 1440p,
 /// and only on a display that presented at 120 Hz.
@@ -35,7 +40,13 @@ const FAST_FPS: u32 = if SDK_120HZ { 120 } else { 60 };
 const MODES: [(u32, u32, u32, bool, bool); 3] = [
     (1920, 1080, FAST_FPS, true, true),
     (2560, 1440, FAST_FPS, true, true),
-    (3840, 2160, 60, SDK_DOCKED_MODES, SDK_DOCKED_MODES),
+    (
+        3840,
+        2160,
+        60,
+        SDK_AV1_2160P_VERIFIED && SDK_DOCKED_MODES,
+        SDK_DOCKED_MODES,
+    ),
 ];
 const SUBMIT_BUSY: u32 = (3603 << 9) | 111;
 

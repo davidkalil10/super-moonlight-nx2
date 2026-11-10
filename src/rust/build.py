@@ -201,7 +201,7 @@ def build(args):
                 commands[0].append("NATIVE_DECODE=1")
             if args.diagnostic == "native-decode":
                 commands[0].append("BREADCRUMBS=1")
-        diagnostic_sdk = args.diagnostic in ("sdk-decode", "sdk-modes", "sdk-modes-4k", "sdk-modes-rate")
+        diagnostic_sdk = args.diagnostic in ("sdk-decode", "sdk-modes", "sdk-modes-4k", "sdk-modes-rate", "sdk-modes-paced")
         if diagnostic_sdk or args.diagnostic.startswith("production-sdk"):
             if info["sdk"]["version"] != native.SDK_VIDDEC:
                 raise ValueError("The SDK video decoder needs the 2026-11-10 SDK")
@@ -244,7 +244,7 @@ def main():
     parser.add_argument("--revision")
     parser.add_argument("--branch")
     parser.add_argument("--nacp-version", default="0.1.0")
-    parser.add_argument("--diagnostic", choices=("core", "renderer", "display", "display120", "coexist", "io", "audio-cue", "udp", "nvdec", "sdk-backing", "native-decode", "sdk-decode", "sdk-modes", "sdk-modes-4k", "sdk-modes-rate", "ui", "ui-order", "ui-data", "ui-alpha", "ui-text", "ui-text-apps", "ui-text-overlay", "ui-text-interactive", "control", "control-default", "frontend", "frontend-check", "ref-replay", "production", "production-sdk", "production-sdk-modes", "production-sdk-tcp", "production-sdk-120", "production-sdk-120-decode", "production-sdk-modes-120"), default="core")
+    parser.add_argument("--diagnostic", choices=("core", "renderer", "display", "display120", "coexist", "io", "audio-cue", "udp", "nvdec", "sdk-backing", "native-decode", "sdk-decode", "sdk-modes", "sdk-modes-4k", "sdk-modes-rate", "sdk-modes-paced", "ui", "ui-order", "ui-data", "ui-alpha", "ui-text", "ui-text-apps", "ui-text-overlay", "ui-text-interactive", "control", "control-default", "frontend", "frontend-check", "ref-replay", "production", "production-sdk", "production-sdk-modes", "production-sdk-tcp", "production-sdk-120", "production-sdk-120-decode", "production-sdk-modes-120"), default="core")
     parser.add_argument("--sdk-backing-library-dir", type=Path)
     parser.add_argument("--rust-directory", type=Path)
     parser.add_argument("--cargo-home", type=Path)

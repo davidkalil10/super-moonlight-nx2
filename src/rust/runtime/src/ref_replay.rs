@@ -321,6 +321,10 @@ pub fn run(renderer: &mut Renderer) -> bool {
     }
     #[cfg(feature = "diagnostic-sdk-modes")]
     for trial in TRIALS {
+        #[cfg(feature = "diagnostic-sdk-modes-paced")]
+        if trial.feed != Feed::Paced || trial.tuning.frame_rate == trial.fps {
+            continue;
+        }
         let backend = crate::sdk_video::SdkVideo::tuned(trial.fps, trial.tuning);
         passed &= session(renderer, trial.name, trial.clip, Some(backend), trial.feed);
         if stopped() {
