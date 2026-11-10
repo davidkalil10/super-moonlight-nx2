@@ -537,7 +537,7 @@ impl Builder<'_> {
             let cursor = item::SETTING + Setting::Size as u32;
             self.put_when(
                 SIDE,
-                FOOT_Y - 56,
+                FOOT_Y - 76,
                 CONTENT_WIDTH,
                 "1440p and 4K are only available when docked",
                 HINT,
