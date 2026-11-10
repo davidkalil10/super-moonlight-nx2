@@ -36,6 +36,7 @@ native-video = []
 diagnostic-native-decode = ["diagnostic-ref-replay", "native-video"]
 sdk-video = []
 diagnostic-sdk-decode = ["diagnostic-ref-replay", "sdk-video"]
+diagnostic-sdk-modes = ["diagnostic-sdk-decode"]
 sdk-video-docked-modes = ["sdk-video"]
 host-renderer = []
 

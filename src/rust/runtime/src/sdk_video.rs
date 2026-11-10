@@ -126,6 +126,15 @@ pub struct SdkVideo {
 }
 
 impl SdkVideo {
+    /// A decoder whose creator flag is given instead of following the session rule.
+    #[cfg(feature = "diagnostic-sdk-modes")]
+    pub fn with_resolution_unlimited(fps: u32, resolution_unlimited: bool) -> Self {
+        Self {
+            resolution_unlimited: Some(resolution_unlimited),
+            ..Self::new(fps)
+        }
+    }
+
     pub fn new(fps: u32) -> Self {
         Self {
             fps,

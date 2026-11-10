@@ -6,6 +6,8 @@ generate: encodes a short 1080p60 testsrc2 clip (moving pattern with a frame clo
           CRC-32s of the displayed luma and chroma planes. The .mlrc files and sums are what
           the runtime embeds from runtime/refclip/.
 sums:     rewrites the sums of existing .mlrc clips without encoding them again.
+          --size and --frames make a clip of another size, named like h264_2160p.
+          The sdk-modes diagnostic replays those as h264_2160p_capped and _uncapped.
 compare:  checks the 'ref:' lines of a DUT log against the sums, and optionally an HDMI
           capture (any image ffmpeg reads) against the reference frames by PSNR.
 
@@ -52,60 +54,66 @@ def packets(path):
             for index, p in enumerate(result)]
 
 
-def sdk_chroma(chroma):
+def sdk_chroma(chroma, width):
     """The interleaved chroma plane as the SDK video decoder returns it."""
     out = bytearray()
-    for start in range(0, len(chroma), WIDTH):
-        row = chroma[start:start + WIDTH]
+    for start in range(0, len(chroma), width):
+        row = chroma[start:start + width]
         left = row[:2] + row[:-2]
         right = row[2:] + row[-2:]
         out += bytes((a + 6 * b + c) >> 3 for a, b, c in zip(left, row, right))
     return bytes(out)
 
 
-def sums(frame):
-    luma = frame[:WIDTH * HEIGHT]
-    chroma = frame[WIDTH * HEIGHT:]
-    return zlib.crc32(luma), zlib.crc32(chroma), zlib.crc32(sdk_chroma(chroma))
+def sums(frame, width, height):
+    luma = frame[:width * height]
+    chroma = frame[width * height:]
+    return zlib.crc32(luma), zlib.crc32(chroma), zlib.crc32(sdk_chroma(chroma, width))
 
 
-def write_sums(out, name, stream, pts):
+def write_sums(out, name, suffix, stream, pts, width=WIDTH, height=HEIGHT):
     """Decodes an elementary stream into <name>-nv12.yuv and writes <name>.sums."""
     reference = out / f"{name}-nv12.yuv"
-    run(["ffmpeg", "-v", "error", "-y", "-f", CODECS[name][1], "-i", str(stream),
+    run(["ffmpeg", "-v", "error", "-y", "-f", suffix, "-i", str(stream),
          "-f", "rawvideo", "-pix_fmt", "nv12", str(reference)])
     data = reference.read_bytes()
-    if len(data) != FRAMES * FRAME_BYTES:
+    frame_bytes = width * height * 3 // 2
+    if len(data) != len(pts) * frame_bytes:
         raise ValueError(f"{name}: decoded {len(data)} bytes")
-    lines = [f"# {name} {WIDTH}x{HEIGHT}@{FPS} NV12; "
+    lines = [f"# {name} {width}x{height}@{FPS} NV12; "
              "frame pts_us y_crc32 uv_crc32 uv_sdk_crc32"]
-    for index in range(FRAMES):
-        y, uv, uv_sdk = sums(data[index * FRAME_BYTES:(index + 1) * FRAME_BYTES])
-        lines.append(f"{index} {pts[index]} {y:08x} {uv:08x} {uv_sdk:08x}")
+    for index, pts_us in enumerate(pts):
+        frame = data[index * frame_bytes:(index + 1) * frame_bytes]
+        y, uv, uv_sdk = sums(frame, width, height)
+        lines.append(f"{index} {pts_us} {y:08x} {uv:08x} {uv_sdk:08x}")
     (out / f"{name}.sums").write_text("\n".join(lines) + "\n")
 
 
-def generate(out, only=None):
+def generate(out, only=None, width=WIDTH, height=HEIGHT, frames=FRAMES):
+    """Clips are named after their codec, and after their height too when it is not 1080."""
     out.mkdir(parents=True, exist_ok=True)
-    source = ["-f", "lavfi", "-i", f"testsrc2=size={WIDTH}x{HEIGHT}:rate={FPS}",
-              "-frames:v", str(FRAMES), "-pix_fmt", "yuv420p",
+    source = ["-f", "lavfi", "-i", f"testsrc2=size={width}x{height}:rate={FPS}",
+              "-frames:v", str(frames), "-pix_fmt", "yuv420p",
               "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709",
               "-color_range", "tv"]
-    for name, (codec, suffix, encoder) in CODECS.items():
-        if only and name != only:
+    for codec_name, (codec, suffix, encoder) in CODECS.items():
+        if only and codec_name != only:
             continue
+        name = codec_name if height == HEIGHT else f"{codec_name}_{height}p"
         stream = out / f"{name}.{suffix}"
         run(["ffmpeg", "-v", "error", "-y", *source, *encoder, str(stream)])
         raw = stream.read_bytes()
         units = packets(stream)
-        if len(units) != FRAMES:
-            raise ValueError(f"{name}: {len(units)} packets, expected {FRAMES}")
-        clip = bytearray(b"MLRC" + struct.pack("<6I", 1, codec, WIDTH, HEIGHT, FPS, len(units)))
+        if len(units) != frames:
+            raise ValueError(f"{name}: {len(units)} packets, expected {frames}")
+        clip = bytearray(b"MLRC" + struct.pack("<6I", 1, codec, width, height, FPS, len(units)))
         for pos, size, pts_us in units:
             clip += struct.pack("<IQ", size, pts_us) + raw[pos:pos + size]
         (out / f"{name}.mlrc").write_bytes(clip)
-        write_sums(out, name, stream, [pts_us for _, _, pts_us in units])
-        print(f"{name}: {len(clip)} bytes clip, sums in {out / (name + '.sums')}")
+        write_sums(out, name, suffix, stream, [pts_us for _, _, pts_us in units], width, height)
+        largest = max(size for _, size, _ in units)
+        print(f"{name}: {len(clip)} bytes clip, largest unit {largest},"
+              f" sums in {out / (name + '.sums')}")
 
 
 def resum(clips, out):
@@ -124,7 +132,7 @@ def resum(clips, out):
             offset += 12 + size
         path = out / f"{name}.{suffix}"
         path.write_bytes(stream)
-        write_sums(out, name, path, pts)
+        write_sums(out, name, suffix, path, pts)
         print(f"{name}: sums in {out / (name + '.sums')}")
 
 
@@ -158,7 +166,8 @@ def compare_log(log, reference, required=(), decoder=None, only=None):
             print(f"{codec}: no frame lines")
             passed = False
     for codec, frames in seen.items():
-        path = reference / f"{codec}.sums"
+        clip = re.sub(r"_(capped|uncapped)$", "", codec)
+        path = reference / f"{clip}.sums"
         if not path.exists():
             print(f"{codec}: no reference sums at {path}")
             passed = False
@@ -211,6 +220,8 @@ def main():
     make = commands.add_parser("generate")
     make.add_argument("--out", type=Path, required=True)
     make.add_argument("--codec", choices=CODECS)
+    make.add_argument("--size", default=f"{WIDTH}x{HEIGHT}", help="WIDTHxHEIGHT")
+    make.add_argument("--frames", type=int, default=FRAMES)
     again = commands.add_parser("sums")
     again.add_argument("--clips", type=Path, required=True, help="directory of .mlrc clips")
     again.add_argument("--out", type=Path, required=True)
@@ -227,7 +238,8 @@ def main():
                        help="sdk: expect the chroma the SDK video decoder returns")
     args = parser.parse_args()
     if args.command == "generate":
-        generate(args.out, args.codec)
+        width, height = map(int, args.size.split("x"))
+        generate(args.out, args.codec, width, height, args.frames)
         return 0
     if args.command == "sums":
         resum(args.clips, args.out)

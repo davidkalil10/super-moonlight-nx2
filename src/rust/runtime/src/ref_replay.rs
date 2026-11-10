@@ -31,6 +31,27 @@ const HEVC: &[u8] = include_bytes!("../refclip/hevc.mlrc");
 const CLIPS: [(&str, &[u8]); 2] = [("h264", H264), ("av1", AV1)];
 #[cfg(feature = "diagnostic-native-decode")]
 const CLIPS: [(&str, &[u8]); 3] = [("h264", H264), ("hevc", HEVC), ("av1", AV1)];
+/// Two-frame clips above 1080p, each opened from a capped and then an uncapped decoder creator.
+/// A refused session closes and the next one runs.
+#[cfg(feature = "diagnostic-sdk-modes")]
+const MODE_CLIPS: [(&str, &[u8], bool); 8] = [
+    ("h264_1440p_capped", H264_1440P, false),
+    ("h264_1440p_uncapped", H264_1440P, true),
+    ("h264_2160p_capped", H264_2160P, false),
+    ("h264_2160p_uncapped", H264_2160P, true),
+    ("av1_1440p_capped", AV1_1440P, false),
+    ("av1_1440p_uncapped", AV1_1440P, true),
+    ("av1_2160p_capped", AV1_2160P, false),
+    ("av1_2160p_uncapped", AV1_2160P, true),
+];
+#[cfg(feature = "diagnostic-sdk-modes")]
+const H264_1440P: &[u8] = include_bytes!("../refclip/h264_1440p.mlrc");
+#[cfg(feature = "diagnostic-sdk-modes")]
+const H264_2160P: &[u8] = include_bytes!("../refclip/h264_2160p.mlrc");
+#[cfg(feature = "diagnostic-sdk-modes")]
+const AV1_1440P: &[u8] = include_bytes!("../refclip/av1_1440p.mlrc");
+#[cfg(feature = "diagnostic-sdk-modes")]
+const AV1_2160P: &[u8] = include_bytes!("../refclip/av1_2160p.mlrc");
 /// Presents per decoded frame: about half a second at 60 Hz, a quarter at 120 Hz.
 const HOLD_PRESENTS: u32 = 30;
 /// Presents the last frame of each clip stays up, for a still HDMI capture.
@@ -59,29 +80,51 @@ fn backend(renderer: &mut Renderer) -> Option<crate::native_video::NativeVideo> 
 #[cfg(feature = "diagnostic-native-decode")]
 const BACKING: Backing = Backing::NativeGpu;
 
-/// Replays every embedded clip; true when each one decoded, uploaded and closed cleanly.
+/// One session: true when the clip decoded, uploaded and closed cleanly.
+fn session<B: Backend<N>, const N: usize>(
+    renderer: &mut Renderer,
+    name: &'static str,
+    bytes: &[u8],
+    backend: Option<B>,
+) -> bool {
+    log(&format!("b2ar: codec={name} begin"));
+    let Some(clip) = Clip::parse(bytes) else {
+        log(&format!("ref: {name} clip malformed"));
+        return false;
+    };
+    let Some(backend) = backend else {
+        log(&format!("ref: {name} backend unavailable"));
+        return false;
+    };
+    let result = replay(renderer, backend, BACKING, name, &clip);
+    log(&format!("b2ar: codec={name} replay={result}"));
+    log(&format!(
+        "ref: {name} session {}",
+        if result { "PASS" } else { "FAIL" }
+    ));
+    result
+}
+
+fn stopped() -> bool {
+    sdk::process_retired() || !unsafe { sdk::appletMainLoop() }
+}
+
+/// Replays every embedded clip; true when each session passed.
 pub fn run(renderer: &mut Renderer) -> bool {
     let mut passed = true;
     for (name, bytes) in CLIPS {
-        log(&format!("b2ar: codec={name} begin"));
-        let Some(clip) = Clip::parse(bytes) else {
-            log(&format!("ref: {name} clip malformed"));
-            passed = false;
-            continue;
-        };
-        let Some(backend) = backend(renderer) else {
-            log(&format!("ref: {name} backend unavailable"));
-            passed = false;
-            continue;
-        };
-        let result = replay(renderer, backend, BACKING, name, &clip);
-        log(&format!("b2ar: codec={name} replay={result}"));
-        log(&format!(
-            "ref: {name} session {}",
-            if result { "PASS" } else { "FAIL" }
-        ));
-        passed &= result;
-        if sdk::process_retired() || !unsafe { sdk::appletMainLoop() } {
+        let backend = backend(renderer);
+        passed &= session(renderer, name, bytes, backend);
+        if stopped() {
+            return false;
+        }
+    }
+    #[cfg(feature = "diagnostic-sdk-modes")]
+    for (name, bytes, resolution_unlimited) in MODE_CLIPS {
+        let backend =
+            crate::sdk_video::SdkVideo::with_resolution_unlimited(CLIP_FPS, resolution_unlimited);
+        passed &= session(renderer, name, bytes, Some(backend));
+        if stopped() {
             return false;
         }
     }
