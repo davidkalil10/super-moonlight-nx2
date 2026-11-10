@@ -34,6 +34,8 @@ diagnostic-frontend-check = ["frontend"]
 diagnostic-ref-replay = ["diagnostic-frontend"]
 native-video = []
 diagnostic-native-decode = ["diagnostic-ref-replay", "native-video"]
+sdk-video = []
+diagnostic-sdk-decode = ["diagnostic-ref-replay", "sdk-video"]
 host-renderer = []
 
 [dependencies]

@@ -22,7 +22,9 @@ use moonlight_nx2_core::{
     video_wire::Output,
 };
 
-#[cfg(not(feature = "diagnostic-native-decode"))]
+#[cfg(feature = "sdk-video")]
+const CLIPS: [(&str, &[u8]); 1] = [("h264", include_bytes!("../refclip/h264.mlrc"))];
+#[cfg(not(any(feature = "diagnostic-native-decode", feature = "sdk-video")))]
 const CLIPS: [(&str, &[u8]); 2] = [
     ("h264", include_bytes!("../refclip/h264.mlrc")),
     ("av1", include_bytes!("../refclip/av1.mlrc")),
@@ -38,13 +40,19 @@ const HOLD_PRESENTS: u32 = 30;
 /// Presents the last frame of each clip stays up, for a still HDMI capture.
 const FINAL_PRESENTS: u32 = 300;
 const DECODE_WAIT_NS: u64 = 2_000_000_000;
+#[cfg(feature = "sdk-video")]
+const CLIP_FPS: u32 = 60;
 
 /// The backend under test. The sink answers grey frames, so its sums never match; it proves
 /// the plumbing. A real decoder gates these two behind its feature (`diagnostic-native-decode`)
 /// and adds its own constructor and `BACKING` next to them.
-#[cfg(not(feature = "diagnostic-native-decode"))]
+#[cfg(not(any(feature = "diagnostic-native-decode", feature = "sdk-video")))]
 fn backend(_: &mut Renderer) -> Option<crate::video_sink::VideoSink> {
     Some(crate::video_sink::VideoSink::new())
+}
+#[cfg(feature = "sdk-video")]
+fn backend(_: &mut Renderer) -> Option<crate::sdk_video::SdkVideo> {
+    Some(crate::sdk_video::SdkVideo::new(CLIP_FPS))
 }
 #[cfg(not(feature = "diagnostic-native-decode"))]
 const BACKING: Backing = Backing::CpuReference;

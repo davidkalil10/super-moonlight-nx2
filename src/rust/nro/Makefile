@@ -96,6 +96,13 @@ $(BUILD_DIR)/native_owner.o: $(SOURCE_DIR)/native_owner.c
 	$(CC) $(CPPFLAGS) $(CFLAGS) -MMD -MP -c $< -o $@
 endif
 
+ifeq ($(SDK_VIDDEC),1)
+OBJECTS += $(BUILD_DIR)/sdk_viddec.o
+$(OUTPUT).elf: $(BUILD_DIR)/sdk_viddec.o
+$(BUILD_DIR)/sdk_viddec.o: $(SOURCE_DIR)/sdk_viddec.c
+	$(CC) $(CPPFLAGS) $(CFLAGS) -MMD -MP -c $< -o $@
+endif
+
 ifeq ($(BREADCRUMBS),1)
 OBJECTS += $(BUILD_DIR)/breadcrumb.o
 LDFLAGS += -Wl,--wrap=moonlightPlatformLog

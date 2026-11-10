@@ -20,6 +20,12 @@ SDK = {
     "ouncevk": "fd483fb",
     "ouncehen": "3094c24",
 }
+SDK_VIDDEC = {
+    "ounce-sdk": "20261110",
+    "libounce": "cc442785",
+    "ouncevk": "99b78bc",
+    "ouncehen": "ed1c5f0",
+}
 SDK_ARCHIVE_SHA256 = "0dd4be44ad73471969aac593ca1b03179f90e2014e1583c6c6249da4eeeeead7"
 SDK_FILES = (
     "ounce-sdk-version.txt",
@@ -42,8 +48,8 @@ def sdk_version(text):
     if any(len(row) != 2 for row in rows):
         raise ValueError("Malformed ounce-sdk-version.txt")
     version = dict(rows)
-    if len(version) != len(rows) or version != SDK:
-        raise ValueError(f"Expected the 2026-11-09 testship SDK ({SDK}); found {version}")
+    if len(version) != len(rows) or version not in (SDK, SDK_VIDDEC):
+        raise ValueError(f"Expected a pinned testship SDK ({SDK} or {SDK_VIDDEC}); found {version}")
     return version
 
 

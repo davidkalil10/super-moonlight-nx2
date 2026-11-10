@@ -96,7 +96,7 @@ mod udp_diagnostic;
 #[cfg(all(
     target_os = "none",
     feature = "diagnostic-frontend",
-    not(feature = "native-video")
+    not(any(feature = "native-video", feature = "sdk-video"))
 ))]
 mod video_sink;
 
@@ -140,6 +140,8 @@ pub mod sdk;
 pub mod sdk_backing;
 #[cfg(all(target_os = "none", feature = "diagnostic-sdk-backing"))]
 mod sdk_backing_diagnostic;
+#[cfg(all(target_os = "none", feature = "sdk-video"))]
+mod sdk_video;
 #[cfg(any(target_os = "none", feature = "host-renderer"))]
 pub mod stream_stats;
 #[cfg(any(feature = "diagnostic-ui", feature = "host-renderer"))]

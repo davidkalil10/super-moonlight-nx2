@@ -35,10 +35,19 @@ use moonlight_nx2_io::{
 };
 use moonlight_nx2_ui::store::Files;
 
-#[cfg(not(any(feature = "diagnostic-frontend", feature = "native-video")))]
+#[cfg(not(any(
+    feature = "diagnostic-frontend",
+    feature = "native-video",
+    feature = "sdk-video"
+)))]
 type Decoder = crate::gsv::GsvBackend;
-#[cfg(all(feature = "diagnostic-frontend", not(feature = "native-video")))]
+#[cfg(all(
+    feature = "diagnostic-frontend",
+    not(any(feature = "native-video", feature = "sdk-video"))
+))]
 type Decoder = crate::video_sink::VideoSink;
+#[cfg(feature = "sdk-video")]
+type Decoder = crate::sdk_video::SdkVideo;
 #[cfg(feature = "native-video")]
 type Decoder = crate::native_video::NativeVideo;
 #[cfg(feature = "native-video")]
@@ -46,7 +55,11 @@ const SURFACES: usize = decoder::RING;
 #[cfg(not(feature = "native-video"))]
 const SURFACES: usize = decoder::SURFACES;
 
-#[cfg(any(feature = "diagnostic-frontend", feature = "native-video"))]
+#[cfg(any(
+    feature = "diagnostic-frontend",
+    feature = "native-video",
+    feature = "sdk-video"
+))]
 pub(crate) fn decoder_capabilities() -> Capabilities {
     <Decoder as decoder::Backend<SURFACES>>::capabilities()
 }
@@ -191,7 +204,9 @@ impl Stream {
         let backend = renderer
             .native_decoder()
             .map_err(|_| "native renderer owner")?;
-        #[cfg(not(feature = "native-video"))]
+        #[cfg(feature = "sdk-video")]
+        let backend = Decoder::new(descriptor.fps);
+        #[cfg(not(any(feature = "native-video", feature = "sdk-video")))]
         let backend = Decoder::new();
         let buffers = Box::into_raw(Buffers::new(coded));
         let memory = unsafe { &mut *buffers };

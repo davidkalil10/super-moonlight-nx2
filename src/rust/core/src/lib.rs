@@ -1,5 +1,6 @@
 #![no_std]
 
+pub mod annexb;
 pub mod audio;
 pub mod cache;
 pub mod codec;
