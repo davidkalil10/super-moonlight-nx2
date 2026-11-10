@@ -309,6 +309,14 @@ impl<F: Files + Clone> Client<F> {
         self.bridge.set_link(choice, note);
     }
 
+    pub fn set_console_dark(&mut self, dark: Option<bool>) {
+        self.bridge.set_console_dark(dark);
+    }
+
+    pub fn set_readout(&mut self, readout: moonlight_nx2_ui::readout::Readout) {
+        self.bridge.set_readout(readout);
+    }
+
     pub fn set_system_status(&mut self, text: &str) {
         self.bridge.set_system_status(text);
     }

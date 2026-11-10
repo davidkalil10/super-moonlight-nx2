@@ -14,7 +14,7 @@ typedef struct {
     Result opened;
 } ServiceState;
 
-static ServiceState psm_service, ts_service, nifm_service;
+static ServiceState psm_service, ts_service, nifm_service, time_service, set_service, setsys_service;
 static AppletHookCookie hook;
 static bool hooked;
 static bool focus_kept;
@@ -37,6 +37,9 @@ static Result open_once(ServiceState *state, Result (*open)(void))
 }
 
 static Result open_nifm(void) { return nifmInitialize(NifmServiceType_User); }
+static Result open_time(void) { return timeInitialize(); }
+static Result open_set(void) { return setInitialize(); }
+static Result open_setsys(void) { return setsysInitialize(); }
 
 uint32_t moonlightSystemAppletType(void) { return (uint32_t)appletGetAppletType(); }
 
@@ -124,6 +127,48 @@ uint32_t moonlightSystemSubnet(uint8_t address[4], uint8_t mask[4])
     return result;
 }
 
+/* The console's local time of day. */
+uint32_t moonlightSystemClock(uint32_t *hour, uint32_t *minute)
+{
+    Result result = open_once(&time_service, open_time);
+    if (R_FAILED(result))
+        return result;
+    u64 now = 0;
+    result = timeGetCurrentTime(TimeType_LocalSystemClock, &now);
+    if (R_FAILED(result))
+        return result;
+    TimeCalendarTime calendar;
+    TimeCalendarAdditionalInfo info;
+    result = timeToCalendarTimeWithMyRule(now, &calendar, &info);
+    if (R_FAILED(result))
+        return result;
+    *hour = calendar.hour;
+    *minute = calendar.minute;
+    return result;
+}
+
+/* The system colour set: 1 for dark, 0 for light. */
+uint32_t moonlightSystemColorSet(uint32_t *dark)
+{
+    Result result = open_once(&setsys_service, open_setsys);
+    if (R_FAILED(result))
+        return result;
+    ColorSetId id = ColorSetId_Dark;
+    result = setsysGetColorSetId(&id);
+    if (R_SUCCEEDED(result))
+        *dark = id == ColorSetId_Dark;
+    return result;
+}
+
+/* The system language as its LanguageCode, eight characters packed into a u64. */
+uint32_t moonlightSystemLanguage(uint64_t *code)
+{
+    Result result = open_once(&set_service, open_set);
+    if (R_FAILED(result))
+        return result;
+    return setGetSystemLanguage(code);
+}
+
 void moonlightSystemStop(void)
 {
     if (hooked) {
@@ -140,5 +185,12 @@ void moonlightSystemStop(void)
         tsExit();
     if (nifm_service.tried && R_SUCCEEDED(nifm_service.opened))
         nifmExit();
+    if (time_service.tried && R_SUCCEEDED(time_service.opened))
+        timeExit();
+    if (set_service.tried && R_SUCCEEDED(set_service.opened))
+        setExit();
+    if (setsys_service.tried && R_SUCCEEDED(setsys_service.opened))
+        setsysExit();
     psm_service = ts_service = nifm_service = (ServiceState){0};
+    time_service = set_service = setsys_service = (ServiceState){0};
 }

@@ -11,6 +11,7 @@ use moonlight_nx2_app::{
     system_status::{self, LowBattery, Network, Reading},
 };
 use moonlight_nx2_ui::model::{Event, Op, Screen, item};
+use moonlight_nx2_ui::readout::{self as ui_readout, Readout};
 
 unsafe extern "C" {
     fn moonlightSystemAppletType() -> u32;
@@ -24,6 +25,8 @@ unsafe extern "C" {
     fn moonlightSystemTemperature(celsius: *mut i32) -> u32;
     fn moonlightSystemNetwork(kind: *mut u32, bars: *mut u32, status: *mut u32) -> u32;
     fn moonlightSystemSubnet(address: *mut [u8; 4], mask: *mut [u8; 4]) -> u32;
+    fn moonlightSystemClock(hour: *mut u32, minute: *mut u32) -> u32;
+    fn moonlightSystemColorSet(dark: *mut u32) -> u32;
     fn moonlightSystemStop();
 }
 
@@ -91,7 +94,10 @@ pub struct System {
     battery: Source,
     temperature: Source,
     network: Source,
+    clock: Source,
+    color_set: Source,
     reading: Reading,
+    clock_reading: Option<(u8, u8)>,
 }
 
 impl System {
@@ -125,7 +131,10 @@ impl System {
             battery: Source::default(),
             temperature: Source::default(),
             network: Source::default(),
+            clock: Source::default(),
+            color_set: Source::default(),
             reading: Reading::default(),
+            clock_reading: None,
         }
     }
 
@@ -260,6 +269,19 @@ impl System {
                 _ => None,
             };
         }
+        if self.clock.active() {
+            let (mut hour, mut minute) = (0, 0);
+            let result = unsafe { moonlightSystemClock(&mut hour, &mut minute) };
+            let read = self.clock.record("clock", result, &(hour, minute));
+            self.clock_reading = read.then_some((hour as u8, minute as u8));
+        }
+        if self.color_set.active() {
+            let mut dark = 0;
+            let result = unsafe { moonlightSystemColorSet(&mut dark) };
+            let read = self.color_set.record("color set (1 is dark)", result, &dark);
+            app.client.set_console_dark(read.then_some(dark != 0));
+        }
+        app.client.set_readout(self.readout());
         app.client
             .set_system_status(system_status::line(&self.reading).as_str());
         let streaming = app.screen() == Screen::Streaming;
@@ -273,6 +295,18 @@ impl System {
                 "system: low battery toast \"{}\" shown={shown:?}",
                 warning.as_str()
             ));
+        }
+    }
+
+    fn readout(&self) -> Readout {
+        Readout {
+            battery_percent: self.reading.battery_percent,
+            charging: self.reading.charging == Some(true),
+            network: self.reading.network.map(|network| match network {
+                Network::Wifi(bars) => ui_readout::Network::Wifi(bars),
+                Network::Wired => ui_readout::Network::Wired,
+            }),
+            clock: self.clock_reading,
         }
     }
 
