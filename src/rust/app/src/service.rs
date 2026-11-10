@@ -143,6 +143,8 @@ pub enum Action {
     WakeHost(Host),
     /// Measure the link to the PC helper again and pick Auto's stream shape from it.
     TestNetwork,
+    /// Copy the newest runtime log to a dated file in the SD card's logs folder.
+    ExportLogs,
     SaveSettings,
     PauseInput,
     ResumeInput,
@@ -661,6 +663,7 @@ impl Service {
             IntentKind::RefreshHosts => self.act(Action::RefreshHosts),
             IntentKind::WakeHost => self.act(Action::WakeHost(host)),
             IntentKind::TestNetwork => self.act(Action::TestNetwork),
+            IntentKind::ExportLogs => self.act(Action::ExportLogs),
             IntentKind::SaveSettings => self.act(Action::SaveSettings),
             IntentKind::SaveExtras => {}
             IntentKind::PauseInput => {

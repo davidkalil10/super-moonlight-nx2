@@ -30,10 +30,11 @@ pub enum Setting {
     TouchMouse,
     LowLatency,
     Theme,
+    Rumble,
 }
 
 impl Setting {
-    pub const COUNT: usize = 13;
+    pub const COUNT: usize = 14;
     pub const ALL: [Setting; Self::COUNT] = [
         Setting::Size,
         Setting::Fps,
@@ -48,6 +49,7 @@ impl Setting {
         Setting::TouchMouse,
         Setting::LowLatency,
         Setting::Theme,
+        Setting::Rumble,
     ];
 
     pub fn from_index(index: usize) -> Option<Self> {
@@ -68,7 +70,7 @@ impl Setting {
         match self {
             Self::Size | Self::Fps | Self::Bitrate | Self::Codec | Self::Optimise => 0,
             Self::HostAudio => 1,
-            Self::MenuChord | Self::TouchMouse => 2,
+            Self::MenuChord | Self::TouchMouse | Self::Rumble => 2,
             Self::LowLatency => 3,
             Self::QuitOnReturn | Self::StreamInfo | Self::FrameCounter | Self::Theme => 4,
         }
@@ -90,6 +92,7 @@ impl Setting {
             Self::StreamInfo => "Compact: a small badge with the stream mode over the video",
             Self::FrameCounter => "Full: adds the frame rate and delays to the badge",
             Self::Theme => "System follows the console's theme",
+            Self::Rumble => "How strongly the controllers vibrate",
         }
     }
 
@@ -209,6 +212,7 @@ enum RowKind {
     Codec,
     Toggle,
     Theme,
+    Percent,
 }
 
 struct Row {
@@ -259,7 +263,10 @@ const ROWS: [Row; Setting::COUNT] = [
     row("touchMouse", "Touch as mouse", RowKind::Toggle, 2, 0),
     row("lowLatency", "Low latency (restart)", RowKind::Toggle, 2, 0),
     row("theme", "Theme", RowKind::Theme, 3, 0),
+    row("rumble", "Rumble strength", RowKind::Percent, 5, 4),
 ];
+
+const STRENGTHS: [u32; 5] = [0, 25, 50, 75, 100];
 
 fn bitrate_mbps(index: u8) -> f64 {
     5.0 + (index as f64 - 1.0) * 2.5
@@ -460,6 +467,11 @@ impl Settings {
     /// Raw catalog index of `setting`.
     pub fn index(&self, setting: Setting) -> u8 {
         self.value[setting as usize]
+    }
+
+    /// How much of the PC's rumble reaches the controller, in percent.
+    pub fn rumble_percent(&self) -> u32 {
+        STRENGTHS[self.value[Setting::Rumble as usize] as usize]
     }
 
     pub fn theme(&self) -> Preference {
@@ -799,6 +811,7 @@ impl Settings {
                 RowKind::Codec => write!(out, "\"{}\"", codec_at(value).name()),
                 RowKind::Toggle => write!(out, "{}", value != 0),
                 RowKind::Theme => write!(out, "\"{}\"", Preference::from_index(value).saved()),
+                RowKind::Percent => write!(out, "{}", STRENGTHS[value as usize]),
             };
         }
         if self.fps_before_4k != 0 {
@@ -919,6 +932,10 @@ fn match_value(value: Value<'_>, row: &Row) -> Option<u8> {
             .iter()
             .position(|preference| value.string_is(preference.saved()))
             .map(|i| i as u8),
+        RowKind::Percent => STRENGTHS
+            .iter()
+            .position(|&percent| number == Some(f64::from(percent)))
+            .map(|i| i as u8),
     }
 }
 
@@ -961,6 +978,7 @@ impl core::fmt::Display for ValueText<'_> {
             RowKind::Codec => f.write_str(codec_at(value).text()),
             RowKind::Toggle => f.write_str(if value != 0 { "On" } else { "Off" }),
             RowKind::Theme => f.write_str(Preference::from_index(value).label()),
+            RowKind::Percent => write!(f, "{} %", STRENGTHS[value as usize]),
         }
     }
 }

@@ -786,7 +786,9 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
                     self.media.push(MediaRequest::Close)
                 }
                 Effect::Action(Action::Rumble(rumble)) => {
-                    crate::hid::rumble(rumble.player, rumble.low, rumble.high)
+                    let percent = self.client.bridge.model().settings().rumble_percent();
+                    let scaled = |motor: u16| (u32::from(motor) * percent / 100) as u16;
+                    crate::hid::rumble(rumble.player, scaled(rumble.low), scaled(rumble.high))
                 }
                 Effect::Action(Action::TouchNote) => self.client.touch_note(bytes, now_ms)?,
                 Effect::Action(Action::DisplayNote(reason)) => {
@@ -809,6 +811,13 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
                     self.client.set_link(None, note);
                     self.link_test.chosen_for = None;
                     self.link_test.measured = None;
+                }
+                Effect::Action(Action::ExportLogs) => {
+                    self.message = Some(if crate::files::export_log() {
+                        "Log copied to switch/moonlight-nx2/logs on the SD card"
+                    } else {
+                        "The log could not be copied to the SD card"
+                    });
                 }
                 Effect::Action(Action::PauseInput) => crate::hid::stop_rumble(),
                 Effect::Action(Action::ResumeInput) => {}

@@ -60,6 +60,20 @@ fn status(path: &CStr) -> u32 {
     }
 }
 
+/// Copies the newest runtime log into the dated `logs` folder on the SD card.
+#[cfg(target_os = "none")]
+pub fn export_log() -> bool {
+    unsafe extern "C" {
+        fn moonlightPlatformExportLog() -> bool;
+    }
+    unsafe { moonlightPlatformExportLog() }
+}
+
+#[cfg(not(target_os = "none"))]
+pub fn export_log() -> bool {
+    false
+}
+
 #[derive(Clone)]
 pub struct Directory {
     path: CString,

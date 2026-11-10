@@ -8,11 +8,14 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/stat.h>
+#include <dirent.h>
+#include <time.h>
 #include <unistd.h>
 
 #include <switch.h>
 
 #define LOG_DIRECTORY "sdmc:/switch/moonlight-nx2/rust"
+#define EXPORT_DIRECTORY "sdmc:/switch/moonlight-nx2/logs"
 
 /* Controller sources: handheld, then No1 to No8. Rust decides which one plays which player. */
 #define SOURCES 9
@@ -259,6 +262,53 @@ bool moonlightPlatformDumpFile(const char *path, const uint8_t *bytes, size_t le
     bool written = fwrite(bytes, 1, length, file) == length;
     written = fflush(file) == 0 && written;
     return fclose(file) == 0 && written;
+}
+
+static bool newest_log(char *path, size_t size)
+{
+    DIR *directory = opendir(LOG_DIRECTORY);
+    if (!directory)
+        return false;
+    time_t newest = 0;
+    bool found = false;
+    for (struct dirent *entry; (entry = readdir(directory));) {
+        char candidate[160];
+        struct stat info;
+        if (strncmp(entry->d_name, "runtime-", 8) != 0)
+            continue;
+        snprintf(candidate, sizeof(candidate), "%s/%s", LOG_DIRECTORY, entry->d_name);
+        if (stat(candidate, &info) != 0 || (found && info.st_mtime < newest))
+            continue;
+        newest = info.st_mtime;
+        found = snprintf(path, size, "%s", candidate) < (int)size;
+    }
+    closedir(directory);
+    return found;
+}
+
+/* Copies the newest runtime log to sdmc:/switch/moonlight-nx2/logs under a dated name. */
+bool moonlightPlatformExportLog(void)
+{
+    char source[160];
+    char target[160];
+    if (!newest_log(source, sizeof(source)) || !moonlightPlatformDirectoryCreate(EXPORT_DIRECTORY))
+        return false;
+    time_t now = time(NULL);
+    struct tm *local = localtime(&now);
+    char stamp[32];
+    if (!local || strftime(stamp, sizeof(stamp), "%Y%m%d-%H%M%S", local) == 0)
+        snprintf(stamp, sizeof(stamp), "%016" PRIx64, armGetSystemTick());
+    snprintf(target, sizeof(target), "%s/moonlight-%s.log", EXPORT_DIRECTORY, stamp);
+
+    FILE *from = fopen(source, "rb");
+    FILE *to = from ? fopen(target, "wb") : NULL;
+    bool copied = to != NULL;
+    uint8_t buffer[4096];
+    for (size_t count; copied && (count = fread(buffer, 1, sizeof(buffer), from)) > 0;)
+        copied = fwrite(buffer, 1, count, to) == count;
+    if (from)
+        fclose(from);
+    return to && fclose(to) == 0 && copied;
 }
 
 /* Rust fills the pad blocks of `input` from `sources` (SOURCES * SOURCE_BYTES bytes). */

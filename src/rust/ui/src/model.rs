@@ -86,6 +86,7 @@ pub mod item {
     pub const WAKE_HOST: u32 = 19;
     pub const RESUME_STREAM: u32 = 20;
     pub const RESUME_HOST: u32 = 21;
+    pub const EXPORT_LOGS: u32 = 22;
     pub const CATEGORY: u32 = 50000;
     pub const HOST: u32 = 10000;
     pub const APP: u32 = 20000;
@@ -244,6 +245,7 @@ pub enum IntentKind {
     WakeHost,
     TestNetwork,
     SaveExtras,
+    ExportLogs,
 }
 
 impl IntentKind {
@@ -269,6 +271,7 @@ impl IntentKind {
             "wakeHost",
             "testNetwork",
             "saveExtras",
+            "exportLogs",
         ][self as usize]
     }
 }
@@ -1395,6 +1398,7 @@ impl Model {
                 step.add(IntentKind::SaveSettings, None);
             }
             Op::X => step.add(IntentKind::TestNetwork, self.host),
+            Op::A if item == item::EXPORT_LOGS => step.add(IntentKind::ExportLogs, None),
             _ => {}
         }
     }
@@ -1828,6 +1832,28 @@ mod app_options_tests {
             message: None,
         });
         model
+    }
+
+    #[test]
+    fn export_log_row_asks_the_host_to_copy_the_log() {
+        let mut model = browsing();
+        run(&mut model, Op::B, 0, 0);
+        run(&mut model, Op::X, 0, 0);
+        let step = run(&mut model, Op::A, item::EXPORT_LOGS, 0);
+        assert!(step.intents().any(|i| i.kind == IntentKind::ExportLogs));
+    }
+
+    #[test]
+    fn rumble_strength_scales_and_round_trips() {
+        let mut json = crate::json::Json::new();
+        let mut settings = Settings::default();
+        assert_eq!(settings.rumble_percent(), 100);
+        settings = settings
+            .adjust(Setting::Rumble, -1, false, &Capabilities::ALL)
+            .unwrap();
+        assert_eq!(settings.rumble_percent(), 75);
+        let saved = Settings::from_json(settings.to_json().as_str().as_bytes(), &mut json);
+        assert_eq!(saved.rumble_percent(), 75);
     }
 
     fn raise_fps(model: &mut Model) -> Step {

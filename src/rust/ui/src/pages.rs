@@ -47,6 +47,7 @@ const DIALOG_HEIGHT: u32 = 460;
 const DIALOG_BUTTON: u32 = 88;
 const PAIRING_HEIGHT: u32 = 520;
 const CATEGORY_WIDTH: u32 = 460;
+const CONSOLE_CATEGORY: u8 = 4;
 const CATEGORY_HEIGHT: u32 = 80;
 const PANE_GAP: u32 = 58;
 const PANE_X: u32 = SIDE + CATEGORY_WIDTH + PANE_GAP;
@@ -797,6 +798,18 @@ impl Builder<'_> {
         }
     }
 
+    fn export_row(&mut self, slot: u32) {
+        let pal = self.pal;
+        let y = BODY_Y + 16 + slot * (ROW_HEIGHT + ROW_GAP);
+        self.item(item::EXPORT_LOGS, PANE_X, y, PANE_WIDTH, ROW_HEIGHT, 0, PANEL_RADIUS);
+        self.fill(PANE_X + ROW_PAD, y + ROW_HEIGHT, PANE_WIDTH - 2 * ROW_PAD, 2, pal.line, 0);
+        self.put(PANE_X + ROW_PAD, y + 14, 520, "Export log", OPTION, pal.ink, Align::Left);
+        let hint = "Copy the newest log to the logs folder on the SD card";
+        self.put(PANE_X + ROW_PAD, y + 54, PANE_WIDTH - 2 * ROW_PAD - VALUE_WIDTH, hint, HINT, pal.dim, Align::Left);
+        let value_x = PANE_X + PANE_WIDTH - ROW_PAD - VALUE_WIDTH;
+        self.put(value_x, y + 22, VALUE_WIDTH, "Copy", VALUE, pal.accent, Align::Right);
+    }
+
     /// A choice this console cannot make now: greyed, with the reason at the right.
     fn unavailable_row(&mut self, label: &str, reason: &str, y: u32) {
         let pal = self.pal;
@@ -855,6 +868,9 @@ impl Builder<'_> {
         for (slot, row) in (0u32..).zip(shown) {
             self.setting_row(model, row, slot, None);
             count = slot + 1;
+        }
+        if model.category() == CONSOLE_CATEGORY {
+            self.export_row(count);
         }
         if model.category() == 0 && !(model.docked() && model.capabilities().docked_sizes) {
             let mut y = BODY_Y + 16 + count * (ROW_HEIGHT + ROW_GAP) + 14;
