@@ -1,4 +1,4 @@
-//! Control-v1 request payloads (NATIVE-CONTROL-V1.md, "Requests"), written into caller storage.
+//! Control-v1 request payloads (dev docs/NATIVE-CONTROL-V1.md, "Requests"), written into caller storage.
 //! Field order matches the shared fixtures so the bytes compare exactly.
 
 use moonlight_nx2_ui::settings;

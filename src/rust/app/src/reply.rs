@@ -1,4 +1,4 @@
-//! Typed control-v1 replies (NATIVE-CONTROL-V1.md, "Replies and events" and "Stream descriptor").
+//! Typed control-v1 replies (dev docs/NATIVE-CONTROL-V1.md, "Replies and events" and "Stream descriptor").
 //! Envelopes, descriptors and errors are strict. Result values and PIN events pass through
 //! the PC helper's own lines, so only their documented fields are read and others are ignored.
 

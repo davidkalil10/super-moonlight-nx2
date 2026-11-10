@@ -5,7 +5,7 @@ use moonlight_nx2_core::media::{
     Error, HEADER_BYTES, MAX_OUTBOUND_BYTES, MAX_PENDING_ACKS, Parser, Record, TOKEN_BYTES,
 };
 
-/// Longest input record an `input-v1` acknowledgement carries (NATIVE-CONTROL-V1.md).
+/// Longest input record an `input-v1` acknowledgement carries (dev docs/NATIVE-CONTROL-V1.md).
 pub const MAX_INPUT_BYTES: usize = 3840;
 
 /// How the channel acknowledges a record: audio echoes the header, `input-v1` video adds a

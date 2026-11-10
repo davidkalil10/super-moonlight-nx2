@@ -5,7 +5,7 @@ use moonlight_nx2_core::control::{
     self, AUTH_BYTES, Frame, HEADER_BYTES, Kind, MAX_PAYLOAD, Parser,
 };
 
-/// Exact Accepted payload the helper sends (NATIVE-CONTROL-V1.md).
+/// Exact Accepted payload the helper sends (dev docs/NATIVE-CONTROL-V1.md).
 pub const ACCEPTED: &[u8] = br#"{"version":1,"ready":true}"#;
 const INBOX_BYTES: usize = 4096;
 

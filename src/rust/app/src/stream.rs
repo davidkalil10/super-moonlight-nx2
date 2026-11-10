@@ -1,4 +1,4 @@
-//! Stream lifecycle states and descriptor checks (NATIVE-CONTROL-V1.md, "Stream descriptor").
+//! Stream lifecycle states and descriptor checks (dev docs/NATIVE-CONTROL-V1.md, "Stream descriptor").
 //! Playback is only reported after the runtime presents a decoded frame.
 
 use crate::reply::{Descriptor, MediaAck};

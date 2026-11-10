@@ -1,4 +1,4 @@
-//! Strict, borrowed JSON reader for control-v1 replies (NATIVE-CONTROL-V1.md).
+//! Strict, borrowed JSON reader for control-v1 replies (dev docs/NATIVE-CONTROL-V1.md).
 //! `ui::json` is sized for 4 KiB settings records and keeps the last duplicate key; replies run to
 //! 64 KiB and must refuse duplicates, so this validates in place and walks the original bytes.
 
