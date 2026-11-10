@@ -140,6 +140,26 @@ impl Stream {
             client.runtime(moonlight_nx2_app::service::RuntimeEvent::MediaFailed);
             return false;
         };
+        let requested = client.requested_options().map_or_else(
+            || format!("nothing"),
+            |options| {
+                format!(
+                    "{}x{}@{} {} {} kbps",
+                    options.width,
+                    options.height,
+                    options.fps,
+                    options.codec.name(),
+                    options.bitrate_kbps
+                )
+            },
+        );
+        log(&format!(
+            "stream: requested {requested}; negotiated {}x{}@{} {}",
+            descriptor.width,
+            descriptor.height,
+            descriptor.fps,
+            descriptor.codec.name()
+        ));
         let opened = match peer {
             Some(peer) if self.running.is_none() => self.start(
                 &descriptor,

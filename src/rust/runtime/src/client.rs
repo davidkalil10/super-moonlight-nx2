@@ -361,6 +361,10 @@ impl<F: Files + Clone> Client<F> {
         accepted
     }
 
+    pub fn requested_options(&self) -> Option<moonlight_nx2_app::request::Options> {
+        self.driver.service().requested_options()
+    }
+
     pub fn session_epoch(&self) -> Option<moonlight_nx2_app::policy::Epoch> {
         self.driver.session_epoch()
     }

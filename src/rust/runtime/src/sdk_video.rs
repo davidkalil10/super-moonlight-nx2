@@ -12,6 +12,7 @@ use crate::{
 };
 use alloc::format;
 use moonlight_nx2_core::{
+    annexb,
     codec::{Capabilities, Codec, Depth, Evidence, Mode, Size},
     decoder::{Backend, BackendError, Backing, Config, SURFACES, UNITS},
     viddec,
@@ -161,6 +162,15 @@ impl SdkVideo {
             ));
             return Err(BackendError::Invalid);
         };
+        if let Some((width, height)) =
+            annexb::h264_coded_size(access_unit).filter(|_| config.codec == Codec::H264)
+        {
+            log(&format!(
+                "sdk-video: SPS codes {width}x{height}; opened for {}x{}",
+                config.display.width(),
+                config.display.height()
+            ));
+        }
         let mut stage = 0;
         let result = unsafe {
             moonlightSdkVideoStart(
