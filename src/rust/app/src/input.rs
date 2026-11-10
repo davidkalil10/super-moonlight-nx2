@@ -2,8 +2,11 @@
 //! Port of dev legacy/src/streamer/input/input-record.js and touch.js; the Pad ABI never
 //! reaches the socket.
 
-use moonlight_nx2_core::input::{Pad, map_pad, map_pad_with_start_chord, stop_held};
+use moonlight_nx2_core::input::{
+    Pad, face_buttons_by_position, map_pad, map_pad_with_start_chord, stop_held,
+};
 use moonlight_nx2_io::media::MAX_INPUT_BYTES;
+use moonlight_nx2_ui::settings::ButtonLayout;
 
 pub const VERSION: u32 = 1;
 /// Records carrying more players, motion or mouse touches; a v1 host never receives them.
@@ -292,6 +295,7 @@ pub struct Recorder {
     held_extra: [u32; EXTRA_PADS],
     stopped: bool,
     start_chord: u64,
+    layout: ButtonLayout,
 }
 
 impl Default for Recorder {
@@ -318,7 +322,20 @@ impl Recorder {
             held_extra: [0; EXTRA_PADS],
             stopped: false,
             start_chord: chord,
+            layout: ButtonLayout::Nintendo,
         }
+    }
+
+    /// New recorders send the labels like Civ7; the driver sets the saved layout every frame.
+    pub fn set_layout(&mut self, layout: ButtonLayout) {
+        self.layout = layout;
+    }
+
+    fn laid_out(&self, mut pad: Pad) -> Pad {
+        if self.layout == ButtonLayout::Xbox {
+            pad.buttons = face_buttons_by_position(pad.buttons);
+        }
+        pad
     }
 
     /// True after the stop chord; every later call records nothing.
@@ -380,12 +397,12 @@ impl Recorder {
             buttons
         };
         let mapped = if allowed {
-            map_pad_with_start_chord(
+            self.laid_out(map_pad_with_start_chord(
                 pad.connected,
                 u64::from(buttons & !self.held_across_gate),
                 pad.sticks,
                 self.start_chord,
-            )
+            ))
         } else {
             map_pad(pad.connected, 0, [0; 4])
         };
@@ -428,11 +445,11 @@ impl Recorder {
                 buttons
             };
             let mapped = if allowed {
-                map_pad(
+                self.laid_out(map_pad(
                     state.connected,
                     u64::from(buttons & !self.held_extra[slot]),
                     state.sticks,
-                )
+                ))
             } else {
                 map_pad(state.connected, 0, [0; 4])
             };

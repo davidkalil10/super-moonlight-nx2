@@ -32,10 +32,11 @@ pub enum Setting {
     LowLatency,
     Theme,
     Rumble,
+    ButtonLayout,
 }
 
 impl Setting {
-    pub const COUNT: usize = 14;
+    pub const COUNT: usize = 15;
     pub const ALL: [Setting; Self::COUNT] = [
         Setting::Size,
         Setting::Fps,
@@ -51,6 +52,7 @@ impl Setting {
         Setting::LowLatency,
         Setting::Theme,
         Setting::Rumble,
+        Setting::ButtonLayout,
     ];
 
     pub fn from_index(index: usize) -> Option<Self> {
@@ -71,7 +73,7 @@ impl Setting {
         match self {
             Self::Size | Self::Fps | Self::Bitrate | Self::Codec | Self::Optimise => 0,
             Self::HostAudio => 1,
-            Self::MenuChord | Self::TouchMouse | Self::Rumble => 2,
+            Self::MenuChord | Self::TouchMouse | Self::Rumble | Self::ButtonLayout => 2,
             Self::LowLatency => 3,
             Self::QuitOnReturn | Self::StreamInfo | Self::FrameCounter | Self::Theme => 4,
         }
@@ -94,12 +96,23 @@ impl Setting {
             Self::FrameCounter => "Adds the frame rate and delays to the badge",
             Self::Theme => "System follows the console's theme",
             Self::Rumble => "How strongly the controllers vibrate",
+            Self::ButtonLayout => {
+                "Xbox sends each button as the one in the same place, Nintendo by its label"
+            }
         }
     }
 
     fn row(self) -> &'static Row {
         &ROWS[self as usize]
     }
+}
+
+/// How the face buttons reach the PC: Xbox by position, Nintendo by label.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ButtonLayout {
+    #[default]
+    Xbox,
+    Nintendo,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -232,6 +245,7 @@ enum RowKind {
     Toggle,
     Theme,
     Percent,
+    Layout,
 }
 
 struct Row {
@@ -283,9 +297,14 @@ const ROWS: [Row; Setting::COUNT] = [
     row("lowLatency", "Low latency (restart)", RowKind::Toggle, 2, 0),
     row("theme", "Theme", RowKind::Theme, 3, 0),
     row("rumble", "Rumble strength", RowKind::Percent, 5, 4),
+    row("buttons", "Button layout", RowKind::Layout, 2, 0),
 ];
 
 const STRENGTHS: [u32; 5] = [0, 25, 50, 75, 100];
+const LAYOUTS: [(ButtonLayout, &str, &str); 2] = [
+    (ButtonLayout::Xbox, "position", "Xbox"),
+    (ButtonLayout::Nintendo, "labels", "Nintendo"),
+];
 
 fn bitrate_mbps(index: u8) -> f64 {
     5.0 + (index as f64 - 1.0) * 2.5
@@ -341,6 +360,7 @@ pub struct StreamOptions {
     pub frame_counter: bool,
     /// Touches drive the PC mouse instead of touch input.
     pub touch_mouse: bool,
+    pub button_layout: ButtonLayout,
     pub launchable: bool,
     /// The size was left to the dock state and the network test (Resolution: Automatic).
     pub size_auto: bool,
@@ -491,6 +511,10 @@ impl Settings {
     /// How much of the PC's rumble reaches the controller, in percent.
     pub fn rumble_percent(&self) -> u32 {
         STRENGTHS[self.value[Setting::Rumble as usize] as usize]
+    }
+
+    pub fn button_layout(&self) -> ButtonLayout {
+        LAYOUTS[self.value[Setting::ButtonLayout as usize] as usize].0
     }
 
     pub fn theme(&self) -> Preference {
@@ -831,6 +855,7 @@ impl Settings {
                 RowKind::Toggle => write!(out, "{}", value != 0),
                 RowKind::Theme => write!(out, "\"{}\"", Preference::from_index(value).saved()),
                 RowKind::Percent => write!(out, "{}", STRENGTHS[value as usize]),
+                RowKind::Layout => write!(out, "\"{}\"", LAYOUTS[value as usize].1),
             };
         }
         if self.fps_before_4k != 0 {
@@ -906,6 +931,7 @@ impl Settings {
             stream_info: used.on(Setting::StreamInfo),
             frame_counter: used.on(Setting::FrameCounter),
             touch_mouse: used.on(Setting::TouchMouse),
+            button_layout: used.button_layout(),
             launchable: caps.codec(codec),
             size_auto: self.size_auto(),
         }
@@ -955,6 +981,10 @@ fn match_value(value: Value<'_>, row: &Row) -> Option<u8> {
             .iter()
             .position(|&percent| number == Some(f64::from(percent)))
             .map(|i| i as u8),
+        RowKind::Layout => LAYOUTS
+            .iter()
+            .position(|&(_, saved, _)| value.string_is(saved))
+            .map(|i| i as u8),
     }
 }
 
@@ -998,6 +1028,7 @@ impl core::fmt::Display for ValueText<'_> {
             RowKind::Toggle => f.write_str(if value != 0 { "On" } else { "Off" }),
             RowKind::Theme => f.write_str(Preference::from_index(value).label()),
             RowKind::Percent => write!(f, "{} %", STRENGTHS[value as usize]),
+            RowKind::Layout => f.write_str(LAYOUTS[value as usize].2),
         }
     }
 }

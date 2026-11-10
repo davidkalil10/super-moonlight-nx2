@@ -1848,6 +1848,7 @@ mod add_host_tests {
 #[cfg(test)]
 mod app_options_tests {
     use super::*;
+    use crate::settings::ButtonLayout;
 
     fn run(model: &mut Model, op: Op, item: u32, value: i32) -> Step {
         model.reduce(&Event::Command { op, item, value })
@@ -1929,6 +1930,25 @@ mod app_options_tests {
         run(&mut model, Op::Edit, item::SETTING + Setting::Fps as u32, 0);
         run(&mut model, Op::X, 0, 0);
         assert_eq!(model.screen(), Screen::AppOptions);
+    }
+
+    #[test]
+    fn button_layout_defaults_to_xbox_and_round_trips() {
+        let mut json = crate::json::Json::new();
+        let old = Settings::from_json(br#"{"version":8,"touchMouse":true}"#, &mut json);
+        assert_eq!(old.button_layout(), ButtonLayout::Xbox);
+        let nintendo = old
+            .adjust(Setting::ButtonLayout, 1, false, &Capabilities::ALL)
+            .unwrap();
+        assert_eq!(nintendo.button_layout(), ButtonLayout::Nintendo);
+        let options = nintendo.stream_options(false, &Capabilities::ALL);
+        assert_eq!(options.button_layout, ButtonLayout::Nintendo);
+        let saved = Settings::from_json(nintendo.to_json().as_str().as_bytes(), &mut json);
+        assert_eq!(saved.button_layout(), ButtonLayout::Nintendo);
+        let xbox = saved
+            .adjust(Setting::ButtonLayout, -1, false, &Capabilities::ALL)
+            .unwrap();
+        assert_eq!(xbox.button_layout(), ButtonLayout::Xbox);
     }
 
     fn raise_fps(model: &mut Model) -> Step {

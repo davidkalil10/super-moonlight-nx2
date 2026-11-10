@@ -273,12 +273,14 @@ impl Driver {
         touches: Option<&'a Touches>,
     ) -> FrameInput<'a> {
         let streaming = self.service.phase() == crate::stream::Phase::Streaming;
+        let options = ui.stream_options();
+        self.recorder.set_layout(options.button_layout);
         FrameInput {
             recorder: &mut self.recorder,
             pad,
             extra,
             touches,
-            touch_mouse: streaming && ui.stream_options().touch_mouse,
+            touch_mouse: streaming && options.touch_mouse,
             allowed: streaming && ui.allow_input(),
             failed: false,
         }
