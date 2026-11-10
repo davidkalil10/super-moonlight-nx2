@@ -84,12 +84,21 @@ impl Pending {
                 if self.operation == OperationName::Pair {
                     log_pair_stderr(self.stderr.line().ok_or(())?);
                 }
+                if self.operation == OperationName::Cover {
+                    log_cover_stderr(self.stderr.line().ok_or(())?);
+                }
                 self.stderr.consume().map_err(|_| ())?;
             } else if used == 0 {
                 return Err(());
             }
         }
         Ok(())
+    }
+}
+
+fn log_cover_stderr(line: &[u8]) {
+    if let Some(detail) = line.strip_prefix(b"moonlight-worker cover ") {
+        eprintln!("cover: worker {}", String::from_utf8_lossy(detail));
     }
 }
 

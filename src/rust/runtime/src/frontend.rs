@@ -488,7 +488,17 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
                     .host()
                     .is_some_and(|selected| selected.address == host.address)
             {
-                if self.client.install_cover(app, &png) {
+                let installed = self.client.install_cover(app, &png);
+                crate::render_platform::log(&alloc::format!(
+                    "cover: app={app} bytes={} {}",
+                    png.len(),
+                    if installed {
+                        "installed"
+                    } else {
+                        "not decodable"
+                    }
+                ));
+                if installed {
                     if let Some(cache) = self.cover_cache.as_ref() {
                         let _ = cache.write(&host, app, &png);
                     }

@@ -721,6 +721,17 @@ impl Controller {
                                 },
                             }
                         };
+                        match &result {
+                            crate::bridge::Event::Result { value, .. } => eprintln!(
+                                "cover: app={} offset={} ok total={}",
+                                request.app, request.offset, value["total"]
+                            ),
+                            crate::bridge::Event::Failure { code, .. } => eprintln!(
+                                "cover: app={} offset={} failed {code:?}",
+                                request.app, request.offset
+                            ),
+                            _ => {}
+                        }
                         return Ok(Some(Event::Management(result)));
                     }
                     if let Some(start) = self.session.backend_mut().preflight.take() {

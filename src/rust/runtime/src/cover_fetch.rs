@@ -122,6 +122,9 @@ impl Fetcher {
         let pending = self.pending.as_mut().unwrap();
         pending.request = None;
         let app = pending.app;
+        if let Err(error) = result {
+            crate::render_platform::log(&format!("cover: app={app} failed {error:?}"));
+        }
         match result {
             Ok(true) => {
                 let pending = self.pending.take().unwrap();
