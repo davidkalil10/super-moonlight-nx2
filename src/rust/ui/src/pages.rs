@@ -229,7 +229,7 @@ impl Builder<'_> {
         let flags = if greyed { page::ITEM_GREYED } else { 0 };
         self.item(id, x, y, width, height, flags, BUTTON_RADIUS);
         let (fill, ink) = if greyed {
-            (pal.ground, pal.line)
+            (pal.ground, pal.faint)
         } else {
             (pal.panel, pal.ink)
         };
@@ -756,10 +756,10 @@ impl Builder<'_> {
         }
         self.item(item::SETTING + row.setting as u32, x, y, pane, ROW_HEIGHT, flags, PANEL_RADIUS);
         self.fill(x + ROW_PAD, y + ROW_HEIGHT, pane - 2 * ROW_PAD, 2, pal.line, 0);
-        let ink = if row.greyed { pal.line } else { pal.ink };
+        let ink = if row.greyed { pal.faint } else { pal.ink };
         let inherited = own == Some(false);
         let value_ink = if row.greyed {
-            pal.line
+            pal.faint
         } else if inherited {
             pal.dim
         } else {
@@ -807,7 +807,7 @@ impl Builder<'_> {
         let hint = "Copy the newest log to the logs folder on the SD card";
         self.put(PANE_X + ROW_PAD, y + 54, PANE_WIDTH - 2 * ROW_PAD - VALUE_WIDTH, hint, HINT, pal.dim, Align::Left);
         let value_x = PANE_X + PANE_WIDTH - ROW_PAD - VALUE_WIDTH;
-        self.put(value_x, y + 22, VALUE_WIDTH, "Copy", VALUE, pal.accent, Align::Right);
+        self.put(value_x - 38, y + 22, VALUE_WIDTH, "Copy", VALUE, pal.accent, Align::Right);
     }
 
     /// A choice this console cannot make now: greyed, with the reason at the right.
