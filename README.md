@@ -1,71 +1,92 @@
 # moonlight-nx2
 
 Stream PC games from Sunshine to Nintendo Switch 2, with controller, touch and stereo audio.
-Runs through the CivSwitch loader in Civilization VII.
 
-An additional native NRO target for the 9 November testship SDK is in development.
-See [Native Switch 2 port](NATIVE.md) for builds and device validation.
+The console side is a homebrew NRO written in Rust (`src/rust`). It decodes AV1 or H.264
+with the console's video decoder and talks to a small helper on the PC, which sits beside
+Sunshine and speaks the Moonlight protocol for it.
 
 ## Build
 
-On Linux, install Node.js 22.12+, Git, CMake, a C compiler, Make and Podman.
-GitHub and GitLab SSH access is needed to fetch the source.
+The NRO is built on the arm64 builder `m4`, from the committed `HEAD`, against the pinned
+Switch 2 SDK and Rust toolchain:
 
 ```sh
-git clone git@gitlab.com:Azkali/moonlight-nx2.git
-cd moonlight-nx2
-npm ci
-npm run bundle -- --host HOST_IP
+python3 src/rust/build-production.py
 ```
 
-Replace `HOST_IP` with this computer's LAN IP. The build creates a complete bundle under
-`dist/` and prints its path and launch command. [Build options](BUILDING.md).
+The NRO and its receipts land in `/media/storage2/builds/moonlight/<build-id>/`.
+`--hz120` builds the variant that presents at 120 Hz and offers 120 fps, `--hz120 --decode120`
+the one that measures the decoder at 120 fps on a 60 Hz display, and `--tcp-video` keeps video
+on TCP instead of UDP. Those three are test builds.
+
+The PC bundle is built on x86_64 Linux with Git and Podman:
+
+```sh
+python3 src/rust/build-pc-bundle.py
+```
+
+It compiles the helper and the Sunshine worker in a pinned image and packs them with the
+launcher, the licences and a manifest into `moonlight-nx2-pc-<revision>-x86_64.tar.gz`.
 
 ## Run
 
-You need Sunshine on your gaming PC, Node.js 22.12+ on the computer running the bundle,
-and the CivSwitch loader open on your Switch. Container bundles also need Podman.
-
-From the generated bundle directory, run:
+On the PC, with Sunshine installed, unpack the bundle and run:
 
 ```sh
-node launch.mjs SWITCH_IP
+./moonlight-nx2-pc setup
+./moonlight-nx2-pc serve
 ```
 
-Replace `SWITCH_IP` with your Switch's IP address. Choose your PC in Moonlight, pair it
-using the PIN in Sunshine, then select a game.
+Copy `moonlight-nx2-rust.nro` to `switch/` on the SD card and start it from the homebrew
+menu. Choose the PC. The first time the console shows an eight-digit code; type it on the PC:
 
-- **Hold L+R**: open the stream menu (unless **Hold L+R for menu** is off).
-- **L+R+Minus+Plus**: stop streaming and return to the apps. This always works, so with the
-  menu off it is the way to end a stream.
+```sh
+./moonlight-nx2-pc pair 12345678
+```
+
+Then pair with Sunshine once, with the PIN the console shows, and pick a game. The bundle's
+[README](src/rust/host/bundle/README.md) covers the service, the firewall port and display
+matching.
+
+## Stream controls
+
+- **Hold Plus+Minus for a second**: open the stream menu, unless **Hold + and - for menu**
+  is off. Plus and Minus still reach the PC while held.
+- **L+R+Minus+Plus**: stop the stream at once and return to the apps. It always works.
 
 ## Options
 
-Open **Settings** in Moonlight before launching a game.
+Open **Settings** before launching a game. An app can keep its own picture options.
 
 | Option | Choices |
 | --- | --- |
-| Resolution | 720p, 1080p; 1440p and 4K when docked with AV1 |
-| Frame rate | 60 or 120 fps; 4K is limited to 60 fps |
-| Bitrate | Auto, or 5–40 Mbps |
-| Codec | AV1 or H.264 |
+| Resolution | Automatic, 720p, 1080p; 1440p and 4K when docked |
+| Frame rate | 60 fps; 120 fps in the 120 Hz test build |
+| Bitrate | Auto from the network test, or 5–40 Mbps |
+| Codec | AV1, with H.264 as the fallback |
+| Optimise game settings | The PC display follows the stream's size and rate |
 | Play audio on the PC | On / Off |
-| Optimise game settings | Request host resolution matching; requires host display automation |
+| Hold + and - for menu | On / Off |
+| Touch as mouse | Touches move the PC mouse instead of sending touch |
+| Low latency | Applies after restarting the app |
 | Quit host app on return | On / Off |
-| Hold L+R for menu | On (default) / Off: off, L+R goes to the game and only L+R+Minus+Plus stops the stream |
-| Stream info badge | On / Off |
-| Frame counter | On / Off: presented, skipped and dropped frames each second, and `console N ms`, the console's mean time from a frame arriving to its present (decode and display, not the network or the PC) |
+| Show stats on screen | Off, Compact (the stream mode) or Full (with frame rate and delays) |
+| Theme | System, light or dark |
+| Rumble | Strength of the controller vibration |
 
-Selecting 4K remembers your previous frame rate and restores it at smaller resolutions.
-After choosing 1440p or 4K, fully close and reopen the console app once.
-Undocking from 4K switches the menu and stream to 1080p120; docking restores 4K60.
+4K streams at 60 fps and needs AV1.
 
 ## Touch
 
-Touch works in handheld mode only. It needs **Native Pen/Touch Support** enabled under Input in
+Touch works in handheld mode. It needs **Native Pen/Touch Support** enabled under Input in
 Sunshine ([`native_pen_touch`](https://docs.lizardbyte.dev/projects/sunshine/latest/md_docs_2configuration.html#native_pen_touch)),
-and on Linux Sunshine needs access to uinput. The game must accept touch input; if the PC
-takes no touch, the stream says so once on the badge.
+and on Linux Sunshine needs access to uinput. If the PC takes no touch, the stream says so
+once on the badge.
+
+## Development
+
+Tests, tools and design notes live in the separate `moonlight-nx2-dev` repository.
 
 ## Credits
 

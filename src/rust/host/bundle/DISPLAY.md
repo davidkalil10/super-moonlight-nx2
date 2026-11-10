@@ -19,19 +19,12 @@ When the display cannot follow, the stream starts anyway and the console shows w
 
 | reason | meaning |
 |---|---|
-| `unsupported` | no display control the host can drive (`kscreen-doctor` missing or no desktop session) |
+| `unsupported` | no display control the host can drive: it needs KDE Plasma's `kscreen-doctor` (Wayland or X11) and a desktop session |
 | `remote_pc` | the stream's PC is not the computer the host runs on |
 | `config` | `display.json` cannot be read |
 | `no_output` | the output is missing, or there are several and none is primary |
 | `no_mode` | the output lists no mode of that size within 0.5 Hz of the rate |
 | `failed` | the change was refused, timed out or did not take within two seconds |
-
-## Backends
-
-`display::Backend` is the seam: `current`, `plan` (read only) and `commit`. The one
-backend is KDE Plasma through `kscreen-doctor` (Wayland and X11). It finds the desktop's
-Wayland socket in `$XDG_RUNTIME_DIR` when the host runs outside the session, as a user
-service does.
 
 ## display.json
 

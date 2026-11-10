@@ -23,7 +23,7 @@ BUILDS = Path("/media/storage2/builds/moonlight")
 BUNDLE_SOURCE = "src/rust/host/bundle"
 SOURCE_PATHS = ["LICENSE", "src/rust", "src/streamer/protocol"]
 BINARIES = ["moonlight-nx2-host", "moonlight-nx2-upstream-worker"]
-LAUNCHER_FILES = ["moonlight-nx2-pc", "moonlight-nx2-pc.service", "README.md"]
+LAUNCHER_FILES = ["moonlight-nx2-pc", "moonlight-nx2-pc.service", "README.md", "DISPLAY.md"]
 # The workspace pins a public crate by its SSH URL; the image has no key to fetch it with.
 PUBLIC_GIT = {
     "CARGO_NET_GIT_FETCH_WITH_CLI": "true",
@@ -233,7 +233,6 @@ def main():
     wrapper = (source / BUNDLE_SOURCE / "worker").read_text().replace("@IMAGE@", image)
     (bundle / "worker").write_text(wrapper)
     (bundle / "worker").chmod(0o755)
-    shutil.copy(source / "src/rust/host/DISPLAY.md", bundle / "DISPLAY.md")
     shutil.copy(source / "LICENSE", bundle / "LICENSE")
     (bundle / "source").mkdir()
     shutil.copy(archive, bundle / "source" / archive.name)
