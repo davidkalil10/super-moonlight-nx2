@@ -18,6 +18,7 @@ pub fn process_retired() -> bool {
 pub const BAD_INPUT: u32 = (11 << 9) | 345;
 
 unsafe extern "C" {
+    pub fn armDCacheFlush(address: *mut c_void, bytes: usize);
     pub fn appletMainLoop() -> bool;
     pub fn svcSleepThread(ns: i64);
     pub fn svcExitProcess() -> !;

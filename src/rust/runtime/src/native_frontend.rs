@@ -309,6 +309,9 @@ fn execute(renderer: &mut Renderer, connections: &mut NativeConnections, launch:
                 break;
             }
         };
+        if frame.published {
+            let _ = renderer.flush_page(app.client.bridge.shown_page());
+        }
         let now_ms = now / 1_000_000;
         for request in app.take_media() {
             match request {

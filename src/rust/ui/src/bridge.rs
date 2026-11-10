@@ -570,6 +570,15 @@ impl<F: Files> Bridge<F> {
         Ok(true)
     }
 
+    /// The storage bytes of the page last shown, for the owner to write back from its cache.
+    pub fn shown_page(&self) -> core::ops::Range<usize> {
+        let start = page_buffer(self.sequence & 1).start;
+        let bytes = self.placed[(self.sequence & 1) as usize]
+            .as_ref()
+            .map_or(0, page::Placement::bytes);
+        start..start + bytes
+    }
+
     /// Up to `capacity` queued intents, oldest first.
     pub fn take_intents(&mut self, capacity: usize) -> impl Iterator<Item = Intent> + '_ {
         let count = self.intents.len().min(capacity);

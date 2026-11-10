@@ -9,6 +9,15 @@ pub(crate) use crate::{
     sdk::{process_retired, retire_process},
 };
 
+pub fn flush_cpu_cache(address: *mut u8, bytes: usize) {
+    #[cfg(target_os = "none")]
+    unsafe {
+        crate::sdk::armDCacheFlush(address.cast(), bytes);
+    }
+    #[cfg(not(target_os = "none"))]
+    let _ = (address, bytes);
+}
+
 pub fn now_ns() -> u64 {
     #[cfg(target_os = "none")]
     {

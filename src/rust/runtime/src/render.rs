@@ -2,7 +2,7 @@ extern crate alloc;
 
 use crate::{
     cache_file,
-    render_platform::{self as sdk, log},
+    render_platform::{self as sdk, flush_cpu_cache, log},
 };
 use alloc::{boxed::Box, format, vec::Vec};
 use ash::{Entry, vk};
@@ -16,6 +16,11 @@ use moonlight_nx2_core::{
     cache,
     frame::{self, Frame},
 };
+
+const UI_CONTROL_OFFSET: usize = 0xc000;
+const UI_CONTROL_END: usize = UI_CONTROL_OFFSET + 4096;
+const BADGE_WORDS_OFFSET: usize = 0xb100;
+const BADGE_AREA_BYTES: usize = 960 * 64 * 4;
 
 mod shaders {
     include!(concat!(env!("OUT_DIR"), "/shaders.rs"));
@@ -170,6 +175,13 @@ struct Buffer {
 impl Buffer {
     fn bytes_mut(&mut self) -> &mut [u8] {
         unsafe { core::slice::from_raw_parts_mut(self.mapped, self.bytes) }
+    }
+
+    fn flush(&mut self, range: core::ops::Range<usize>) {
+        let end = range.end.min(self.bytes);
+        if range.start < end {
+            flush_cpu_cache(unsafe { self.mapped.add(range.start) }, end - range.start);
+        }
     }
 
     fn destroy(&mut self, device: &ash::Device) {
@@ -431,7 +443,14 @@ impl Renderer {
     pub fn storage_mut(&mut self) -> Result<&mut [u8], Error> {
         self.active()?;
         self.objects.wait_all()?;
+        self.objects.storage.flush(frame::VIDEO_BASE..UI_CONTROL_END);
         Ok(self.objects.storage.bytes_mut())
+    }
+
+    pub fn flush_page(&mut self, range: core::ops::Range<usize>) -> Result<(), Error> {
+        self.active()?;
+        self.objects.storage.flush(range);
+        Ok(())
     }
 
     pub fn input_mut(&mut self) -> Result<&mut [u8], Error> {
@@ -1698,7 +1717,17 @@ impl Objects {
         Ok(())
     }
 
+    fn flush_ui_writes(&mut self) {
+        self.storage.flush(frame::VIDEO_BASE..UI_CONTROL_END);
+        let words = &self.storage.bytes_mut()[BADGE_WORDS_OFFSET..BADGE_WORDS_OFFSET + 4];
+        if words != [0; 4] {
+            self.storage
+                .flush(frame::BADGE_OFFSET..frame::BADGE_OFFSET + BADGE_AREA_BYTES);
+        }
+    }
+
     fn present(&mut self, interactive: bool) -> Result<(), Error> {
+        self.flush_ui_writes();
         if self.rebuild {
             self.wait_all()?;
             self.destroy_targets();
