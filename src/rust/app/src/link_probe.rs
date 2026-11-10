@@ -14,6 +14,8 @@ pub struct Prober {
     session: Option<Session>,
     waiting: Option<u32>,
     drain_until_us: u64,
+    rates: [u32; netprobe::MAX_CHUNKS],
+    rate_count: usize,
 }
 
 impl Prober {
@@ -27,6 +29,11 @@ impl Prober {
 
     pub fn waiting_id(&self) -> Option<u32> {
         self.waiting
+    }
+
+    /// The rate of each throughput reply of the last finished measurement, slowest first.
+    pub fn rates(&self) -> &[u32] {
+        &self.rates[..self.rate_count]
     }
 
     pub fn start(&mut self, now_us: u64) {
@@ -60,6 +67,9 @@ impl Prober {
             };
             match session.step(now_us) {
                 Step::Done(outcome) => {
+                    let rates = session.rates();
+                    self.rate_count = rates.len();
+                    self.rates[..rates.len()].copy_from_slice(rates);
                     self.session = None;
                     self.drain_until_us = now_us.saturating_add(DRAIN_US);
                     return Some(outcome);

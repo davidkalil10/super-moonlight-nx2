@@ -22,17 +22,18 @@ pub struct LinkChoice {
 }
 
 impl LinkChoice {
-    /// Auto bitrate takes the measured choice; it never goes above what the settings ask for.
-    /// A fixed bitrate is the user's override and is left alone.
+    /// Auto bitrate takes the measured bitrate; it never goes above what the settings ask for.
+    /// The size and rate the settings ask for are kept: the test only chose a size when it
+    /// was made for these very options with the size left to it. A fixed bitrate is the
+    /// user's override and is left alone.
     pub fn apply(&self, mut options: StreamOptions) -> StreamOptions {
         if !options.bitrate_auto {
             return options;
         }
-        if self.height < options.height {
+        if options.size_auto && self.height < options.height {
             options.width = self.width;
             options.height = self.height;
         }
-        options.fps = options.fps.min(self.fps);
         options.bitrate_kbps = options.bitrate_kbps.min(self.bitrate_kbps);
         options
     }

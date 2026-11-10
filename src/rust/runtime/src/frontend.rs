@@ -561,6 +561,7 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
             height: options.height,
             fps: options.fps,
             codec: moonlight_nx2_app::service::options_of(&options).codec,
+            size_auto: options.size_auto,
         }
     }
 
@@ -656,6 +657,10 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
         );
         match outcome {
             Some(netprobe::Outcome::Measured(quality)) => {
+                crate::render_platform::log(&alloc::format!(
+                    "netprobe: reply rates kbps {:?}",
+                    self.link_test.prober.rates()
+                ));
                 self.link_test.measured = Some(quality);
                 self.choose_link(quality, true);
             }

@@ -315,6 +315,8 @@ pub struct StreamOptions {
     /// Touches drive the PC mouse instead of touch input.
     pub touch_mouse: bool,
     pub launchable: bool,
+    /// The size was left to the network test. No setting says so yet: a chosen size is kept.
+    pub size_auto: bool,
 }
 
 /// Helper arguments for a launch.
@@ -808,6 +810,7 @@ impl Settings {
             frame_counter: used.on(Setting::FrameCounter),
             touch_mouse: used.on(Setting::TouchMouse),
             launchable: caps.codec(codec),
+            size_auto: false,
         }
     }
 }

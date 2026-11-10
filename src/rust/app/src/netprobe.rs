@@ -197,6 +197,11 @@ impl Session {
         self.rate_count += 1;
     }
 
+    /// The rate of each throughput reply so far, in kbps. Sorted once the session is done.
+    pub fn rates(&self) -> &[u32] {
+        &self.rates[..self.rate_count]
+    }
+
     /// The helper answered the request with an error.
     pub fn refused(&mut self) {
         self.outstanding = None;
@@ -216,9 +221,11 @@ impl Session {
         } else {
             rtts.sort_unstable();
             rates.sort_unstable();
+            // A reply that waited for the caller's next slice reads slow, never fast, so the
+            // upper quartile is closer to the link than the median.
             Outcome::Measured(LinkQuality {
                 hop: Hop::Stream,
-                throughput_kbps: rates[rates.len() / 2],
+                throughput_kbps: rates[rates.len() * 3 / 4],
                 rtt_us: rtts[rtts.len() / 2],
                 jitter_us: rtts[rtts.len() - 1] - rtts[0],
                 loss_permille: None,
@@ -283,13 +290,15 @@ pub enum Grade {
     Weak,
 }
 
-/// The stream shape the settings ask for; Auto never goes above it.
+/// The stream shape the settings ask for. Its rate is always kept, and its size too unless
+/// the size was left to the link (`size_auto`); then Auto may pick a smaller one, never larger.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Wanted {
     pub width: u32,
     pub height: u32,
     pub fps: u32,
     pub codec: Codec,
+    pub size_auto: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -299,13 +308,17 @@ pub struct AutoChoice {
     pub fps: u32,
     pub bitrate_kbps: u32,
     pub grade: Grade,
+    /// The link carries less than the shape is worth starting with.
+    pub starved: bool,
     pub quality: LinkQuality,
 }
 
 const SIZES: [(u32, u32); 4] = [(3840, 2160), (2560, 1440), (1920, 1080), (1280, 720)];
 
-/// Picks the largest shape the link carries, among the wanted one and the smaller modes the
-/// decoder and display offer (`offered`), and its bitrate.
+/// Picks the bitrate the link carries for the wanted shape. When the size was left to the
+/// link, it first picks the largest size the link carries among the wanted one and the smaller
+/// modes the decoder and display offer (`offered`). A chosen size on a link too weak for it
+/// keeps the size and is graded weak.
 pub fn choose(
     quality: LinkQuality,
     wanted: Wanted,
@@ -314,12 +327,11 @@ pub fn choose(
     let usable = quality.usable_kbps();
     let full = |shape: (u32, u32, u32)| auto_bitrate(shape.0, shape.1, shape.2, wanted.codec);
     let wanted_shape = (wanted.width, wanted.height, wanted.fps);
-    let rates = [wanted.fps, 60];
     let shapes = SIZES
         .iter()
         .filter(|size| size.1 <= wanted.height)
-        .flat_map(|size| rates.iter().map(move |fps| (size.0, size.1, *fps)))
-        .filter(|shape| shape.2 <= wanted.fps)
+        .map(|size| (size.0, size.1, wanted.fps))
+        .filter(|shape| *shape == wanted_shape || wanted.size_auto)
         .filter(|shape| *shape == wanted_shape || offered(shape.0, shape.1, shape.2));
 
     let mut carried: Option<(u32, u32, u32)> = None;
@@ -338,7 +350,7 @@ pub fn choose(
     let bitrate_kbps = full(shape)
         .min(usable / STEP_KBPS * STEP_KBPS)
         .max(FLOOR_KBPS);
-    let grade = if shape != wanted_shape {
+    let grade = if shape != wanted_shape || carried.is_none() {
         Grade::Weak
     } else if bitrate_kbps < full(shape) {
         Grade::Fair
@@ -351,6 +363,7 @@ pub fn choose(
         fps: shape.2,
         bitrate_kbps,
         grade,
+        starved: carried.is_none(),
         quality,
     }
 }
@@ -384,5 +397,8 @@ pub fn note(choice: &AutoChoice) -> Note {
     let _ = write!(out, "): {}p{} at ", choice.height, choice.fps);
     write_mbps(&mut out, choice.bitrate_kbps);
     out.push_str(" Mbps");
+    if choice.starved {
+        out.push_str(", may stutter");
+    }
     out
 }
