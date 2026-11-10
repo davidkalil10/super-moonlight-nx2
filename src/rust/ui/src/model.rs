@@ -1,4 +1,4 @@
-//! Console UI state machine of src/native/ui/model.c: events in, model and intents out.
+//! Console UI state machine of dev reference/native/ui/model.c: events in, model and intents out.
 //! Host work (list, pair, launch, quit) stays with the caller as intents.
 
 use alloc::vec::Vec;

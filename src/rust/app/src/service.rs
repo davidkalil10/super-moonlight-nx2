@@ -1,6 +1,7 @@
 //! Application controller: UI intents to control-v1 requests, correlated replies to UI events,
-//! and the stream lifecycle. Behaviour follows src/streamer/ui/service.js; the wire contract is
-//! dev docs/NATIVE-CONTROL-V1.md. All work per call is bounded; nothing is retried or replayed.
+//! and the stream lifecycle. Behaviour follows dev legacy/src/streamer/ui/service.js; the wire
+//! contract is dev docs/NATIVE-CONTROL-V1.md. All work per call is bounded; nothing is retried
+//! or replayed.
 
 use crate::dock;
 use crate::link::{Link, LinkError};

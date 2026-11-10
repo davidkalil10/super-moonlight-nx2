@@ -1,6 +1,6 @@
-//! The stream badge of src/streamer/civ7/rate-badge.js: composed RGBA in the renderer's third
-//! frame area, its rectangle in the badge words, shown for a duration or for the whole stream.
-//! Port of ui/badge.c.
+//! The stream badge of dev legacy/src/streamer/civ7/rate-badge.js: composed RGBA in the
+//! renderer's third frame area, its rectangle in the badge words, shown for a duration or for
+//! the whole stream. Port of ui/badge.c.
 
 use alloc::vec::Vec;
 use core::fmt::Write;

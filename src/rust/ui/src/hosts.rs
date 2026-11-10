@@ -1,5 +1,6 @@
-//! The saved hosts and the removed list of hosts.json. Port of src/streamer/ui/hosts.js and
-//! the remember/remove steps of service.js; rules in src/streamer/ui/CLAUDE.md, "Hosts".
+//! The saved hosts and the removed list of hosts.json. Port of
+//! dev legacy/src/streamer/ui/hosts.js and the remember/remove steps of service.js; rules in
+//! dev docs/src/streamer/ui/CLAUDE.md, "Hosts".
 
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -339,7 +340,8 @@ impl HostBook {
     }
 
     /// Hosts mDNS found are appended unless they are the same PC as a saved or removed one
-    /// (merge in src/streamer/ui/discover.js); saved entries stay unchanged. True when added.
+    /// (merge in dev legacy/src/streamer/ui/discover.js); saved entries stay unchanged. True
+    /// when added.
     pub fn discovered(&mut self, found: &[Host]) -> Result<bool, Error> {
         let mut added = false;
         for host in found {

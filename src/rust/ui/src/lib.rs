@@ -1,5 +1,5 @@
 //! Console UI: the screen state machine, settings and their store, and the page composer.
-//! Port of src/native/ui; parity tests live in moonlight-nx2-dev/src/rust/ui.
+//! Port of dev reference/native/ui; parity tests live in moonlight-nx2-dev/src/rust/ui.
 
 #![no_std]
 

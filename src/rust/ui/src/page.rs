@@ -1,5 +1,6 @@
 //! The UI page format ui.glsl reads: header, item/text/image tables, then a body of glyph
-//! strips and RGBA images. Port of ui/page.c, which follows src/streamer/ui/page-encode.js.
+//! strips and RGBA images. Port of ui/page.c, which follows
+//! dev legacy/src/streamer/ui/page-encode.js.
 
 pub const MAGIC: u32 = 0x4750_4248;
 pub const HEADER_WORDS: usize = 16;

@@ -1,6 +1,7 @@
-//! The console half of the UI (src/streamer/civ7/console-ui.js) over the renderer's storage:
-//! shader commands into the model, composed pages into the buffer not shown, the header words.
-//! Port of ui/bridge.c. Every call takes the storage, so no borrow of it outlives the call.
+//! The console half of the UI (dev legacy/src/streamer/civ7/console-ui.js) over the renderer's
+//! storage: shader commands into the model, composed pages into the buffer not shown, the
+//! header words. Port of ui/bridge.c. Every call takes the storage, so no borrow of it outlives
+//! the call.
 
 use alloc::vec::Vec;
 

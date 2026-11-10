@@ -1,7 +1,7 @@
 //! One mDNS query for the `_nvstream._tcp.local` hosts Sunshine and GeForce Experience announce,
 //! answers collected for a short window and turned into host candidates. Port of
-//! src/streamer/ui/discover.js; the console sends the query itself from an unbound UDP port, so
-//! the question asks for a unicast answer (QU) and responders reply to that port.
+//! dev legacy/src/streamer/ui/discover.js; the console sends the query itself from an unbound
+//! UDP port, so the question asks for a unicast answer (QU) and responders reply to that port.
 
 use alloc::string::String;
 use alloc::vec::Vec;

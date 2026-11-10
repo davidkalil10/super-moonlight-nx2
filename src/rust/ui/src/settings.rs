@@ -1,4 +1,5 @@
-//! Settings catalog, adjustment rules, save format and stream options of src/native/ui/settings.c.
+//! Settings catalog, adjustment rules, save format and stream options of
+//! dev reference/native/ui/settings.c.
 
 use core::fmt::Write;
 

@@ -1,7 +1,7 @@
 //! PNG decoding to RGBA8 and the box-art cover tile: the art fitted whole over a blurred, dimmed
-//! fill of itself. Port of decodePng and tile in src/streamer/ui/glyph-raster.js; the resampling
-//! (triangle filter through premultiplied alpha) and the blur (three box passes per axis) only
-//! approximate Pillow's Lanczos and Gaussian, they are not bit exact.
+//! fill of itself. Port of decodePng and tile in dev legacy/src/streamer/ui/glyph-raster.js;
+//! the resampling (triangle filter through premultiplied alpha) and the blur (three box passes
+//! per axis) only approximate Pillow's Lanczos and Gaussian, they are not bit exact.
 
 use alloc::vec;
 use alloc::vec::Vec;

@@ -1,6 +1,6 @@
 //! The console UI pages: one layout per model screen, painted through a bitmap cache whose
 //! entry serials are the page block identities. Port of ui/composer.c, after
-//! src/streamer/ui/page-composer.js.
+//! dev legacy/src/streamer/ui/page-composer.js.
 
 use alloc::format;
 use alloc::string::String;

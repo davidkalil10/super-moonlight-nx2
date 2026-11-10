@@ -836,8 +836,9 @@ fn rate_pending(session: &Session, launch: Option<&Launch>, fps: u32, reason: Re
         bitrate_after,
     }
 }
-/// The stream info badge of a session, as streamInfoText in src/streamer/civ7/application.js:
-/// "1080p120 · AV1 · 30 Mbps" (bitrate rounded to tenths, a whole number shown without them).
+/// The stream info badge of a session, as streamInfoText in
+/// dev legacy/src/streamer/civ7/application.js: "1080p120 · AV1 · 30 Mbps" (bitrate rounded to
+/// tenths, a whole number shown without them).
 pub fn stream_info_text(options: &Options) -> metrics::Line {
     use core::fmt::Write;
     let mut text = metrics::Line::new();

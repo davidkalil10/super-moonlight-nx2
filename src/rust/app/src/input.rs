@@ -1,5 +1,6 @@
 //! Client input recorder: the version-1 JSON input record sent with each video acknowledgement.
-//! Port of src/streamer/input/input-record.js and touch.js; the Pad ABI never reaches the socket.
+//! Port of dev legacy/src/streamer/input/input-record.js and touch.js; the Pad ABI never
+//! reaches the socket.
 
 use moonlight_nx2_core::input::{Pad, map_pad, map_pad_with_start_chord, stop_held};
 use moonlight_nx2_io::media::MAX_INPUT_BYTES;
