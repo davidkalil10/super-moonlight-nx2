@@ -47,7 +47,9 @@ const CATEGORY_WIDTH: u32 = 460;
 const CATEGORY_HEIGHT: u32 = 80;
 const PANE_X: u32 = SIDE + CATEGORY_WIDTH + 48;
 const PANE_WIDTH: u32 = CONTENT_WIDTH - CATEGORY_WIDTH - 48;
-const ROW_HEIGHT: u32 = 104;
+const ROW_HEIGHT: u32 = 96;
+const ROW_GAP: u32 = 10;
+const LOCKED_ROW_HEIGHT: u32 = 56;
 const VALUE_WIDTH: u32 = 420;
 const BUTTON_RADIUS: u32 = 14;
 
@@ -111,6 +113,11 @@ fn join(out: &mut String, part: Option<&str>) {
         out.push_str(" \u{b7} ");
     }
     out.push_str(part);
+}
+
+/// Why a row cannot be changed right now, when it cannot.
+fn locked_reason(row: &SettingRow) -> Option<&'static str> {
+    (row.setting == Setting::Fps && !row.adjustable).then_some("Fixed for 4K")
 }
 
 fn host_name(model: &Model) -> Option<&str> {
@@ -680,7 +687,7 @@ impl Builder<'_> {
         let pal = self.pal;
         let editing = model.editing() == Some(row.setting);
         let x = PANE_X;
-        let y = BODY_Y + 16 + slot * (ROW_HEIGHT + 12);
+        let y = BODY_Y + 16 + slot * (ROW_HEIGHT + ROW_GAP);
         let mut flags = 0;
         if row.adjustable {
             flags |= page::ITEM_ADJUSTABLE;
@@ -698,18 +705,17 @@ impl Builder<'_> {
         self.put(x + CARD_PAD, y + 14, 520, row.setting.label(), OPTION, ink, Align::Left);
         let hint = if row.setting == Setting::Size && model.settings().size_auto() {
             "Picked from the network test and the dock"
-        } else if row.setting == Setting::Size && !model.docked() {
-            "1440p and 4K: docked only"
         } else {
             row.setting.hint()
         };
         let hint_width = PANE_WIDTH - 2 * CARD_PAD - VALUE_WIDTH;
-        self.put(x + CARD_PAD, y + 58, hint_width, hint, HINT, pal.dim, Align::Left);
+        self.put(x + CARD_PAD, y + 54, hint_width, hint, HINT, pal.dim, Align::Left);
 
         let value_x = x + PANE_WIDTH - CARD_PAD - VALUE_WIDTH;
-        let value_y = y + 26;
-        if row.greyed {
-            self.put(value_x, value_y, VALUE_WIDTH, "Not available yet", BODY, pal.line, Align::Right);
+        let value_y = y + 22;
+        if let Some(reason) = locked_reason(row) {
+            self.put(value_x, y + 12, VALUE_WIDTH, row.value.as_str(), VALUE, pal.dim, Align::Right);
+            self.put(value_x, y + 58, VALUE_WIDTH, reason, HINT, pal.dim, Align::Right);
         } else if !row.adjustable {
             self.put(value_x, value_y, VALUE_WIDTH, row.value.as_str(), VALUE, ink, Align::Right);
         } else {
@@ -724,6 +730,30 @@ impl Builder<'_> {
                 editing && row.can_right,
             );
         }
+    }
+
+    /// A choice this console cannot make now: greyed, with the reason at the right.
+    fn unavailable_row(&mut self, label: &str, reason: &str, y: u32) {
+        let pal = self.pal;
+        self.fill(PANE_X, y, PANE_WIDTH, LOCKED_ROW_HEIGHT, pal.ground, PANEL_RADIUS);
+        self.outline_row(y);
+        self.put(PANE_X + CARD_PAD, y + 12, 520, label, BODY, pal.dim, Align::Left);
+        let width = VALUE_WIDTH;
+        self.put(PANE_X + PANE_WIDTH - CARD_PAD - width, y + 12, width, reason, BODY, pal.dim, Align::Right);
+    }
+
+    fn outline_row(&mut self, y: u32) {
+        let pal = self.pal;
+        self.shape(Shape {
+            x: PANE_X,
+            y,
+            w: PANE_WIDTH,
+            h: LOCKED_ROW_HEIGHT,
+            radius: PANEL_RADIUS,
+            stroke: pal.line,
+            stroke_width: 2,
+            ..Shape::default()
+        });
     }
 
     fn settings_page(&mut self, model: &Model, settings_error: Option<&str>) {
@@ -756,8 +786,17 @@ impl Builder<'_> {
             },
         );
         self.category_list(model);
+        let mut count = 0;
         for (slot, row) in (0u32..).zip(shown) {
             self.setting_row(model, row, slot);
+            count = slot + 1;
+        }
+        if model.category() == 0 && !(model.docked() && model.capabilities().docked_sizes) {
+            let mut y = BODY_Y + 16 + count * (ROW_HEIGHT + ROW_GAP);
+            for size in ["1440p", "4K"] {
+                self.unavailable_row(size, "Docked only", y);
+                y += LOCKED_ROW_HEIGHT + ROW_GAP;
+            }
         }
     }
 
