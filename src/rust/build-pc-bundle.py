@@ -7,9 +7,6 @@ Cargo.lock pins. Compilation runs without network access.
 """
 
 import argparse
-import datetime
-import hashlib
-import json
 import os
 from pathlib import Path
 import platform
@@ -18,8 +15,9 @@ import shutil
 import subprocess
 import sys
 
+from build import BUILDS, digest, git, output, utc_stamp, write_json
+
 APP = Path(__file__).resolve().parents[2]
-BUILDS = Path("/media/storage2/builds/moonlight")
 BUNDLE_SOURCE = "src/rust/host/bundle"
 SOURCE_PATHS = ["LICENSE", "src/rust", "src/streamer/protocol"]
 BINARIES = ["moonlight-nx2-host", "moonlight-nx2-upstream-worker"]
@@ -42,18 +40,6 @@ UPSTREAM_TERMS = {
     "moonlight-common-c": "GPL-3.0-or-later",
     "moonlight-common-c/enet": "MIT",
 }
-
-
-def digest(path):
-    result = hashlib.sha256()
-    with path.open("rb") as source:
-        for block in iter(lambda: source.read(1024 * 1024), b""):
-            result.update(block)
-    return result.hexdigest()
-
-
-def output(command, **kwargs):
-    return subprocess.check_output(command, text=True, **kwargs).strip()
 
 
 class Build:
@@ -171,8 +157,8 @@ def main():
         if not shutil.which(program):
             raise SystemExit(f"Install {program} before building")
 
-    revision = output(["git", "-C", str(APP), "rev-parse", "HEAD"])
-    stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    revision = git("rev-parse", "HEAD")
+    stamp = utc_stamp()
     directory = (args.directory or BUILDS / f"{stamp}-{revision[:7]}-pc-bundle").resolve()
     directory.mkdir(parents=True)
     build = Build(directory)
@@ -190,15 +176,15 @@ def main():
     build.run("Fetching the pinned upstream sources",
               ["bash", str(source / "src/streamer/protocol/fetch.sh"), str(directory / "upstream")])
     upstreams = [{"name": name,
-                  "url": output(["git", "-C", str(directory / "upstream" / name), "remote", "get-url", "origin"]),
-                  "commit": output(["git", "-C", str(directory / "upstream" / name), "rev-parse", "HEAD"])}
+                  "url": output("git", "-C", directory / "upstream" / name, "remote", "get-url", "origin"),
+                  "commit": output("git", "-C", directory / "upstream" / name, "rev-parse", "HEAD")}
                  for name in UPSTREAMS]
 
     containerfile = source / BUNDLE_SOURCE / "Containerfile"
     image = f"localhost/moonlight-nx2-pc:{digest(containerfile)[:12]}"
     build.run("Building the image", ["podman", "build", "-t", image, "-f", str(containerfile),
                                      str(containerfile.parent)])
-    image_id = output(["podman", "image", "inspect", "--format", "{{.Id}}", image])
+    image_id = output("podman", "image", "inspect", "--format", "{{.Id}}", image)
 
     environment = {
         "CARGO_HOME": "/work/cargo-home", "CARGO_TARGET_DIR": "/work/target",
@@ -267,23 +253,23 @@ def main():
         },
         "files": files,
     }
-    (bundle / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+    write_json(bundle / "manifest.json", manifest)
 
     build.run("Checking the packed bundle", [sys.executable, "-B", str(bundle / "moonlight-nx2-pc"), "--help"])
     package = directory / f"moonlight-nx2-pc-{revision[:7]}-x86_64.tar.gz"
     build.run("Writing the archive", ["tar", "--sort=name", "--owner=0", "--group=0", "--numeric-owner",
-                                      f"--mtime=@{output(['git', '-C', str(APP), 'log', '-1', '--format=%ct', revision])}",
+                                      f"--mtime=@{git('log', '-1', '--format=%ct', revision)}",
                                       "-czf", str(package), "-C", str(directory),
                                       "--transform", f"s,^bundle,moonlight-nx2-pc-{revision[:7]},", "bundle"])
     sums = "".join(f"{digest(path)}  {path.relative_to(directory)}\n" for path in
                    [package, bundle / "manifest.json", *[bundle / "bin" / name for name in BINARIES]])
     (directory / "SHA256SUMS").write_text(sums)
-    (directory / "BUILD-INFO.json").write_text(json.dumps({
-        "sourceRevision": revision, "branch": output(["git", "-C", str(APP), "branch", "--show-current"]),
+    write_json(directory / "BUILD-INFO.json", {
+        "sourceRevision": revision, "branch": git("branch", "--show-current"),
         "builder": platform.node(), "targetArchitecture": "x86_64 Linux",
         "command": [sys.executable, *sys.argv], "commands": build.commands,
         "image": manifest["image"], "pins": manifest["pins"],
-    }, indent=2) + "\n")
+    })
     print(sums, end="")
     print(f"Bundle: {bundle}")
     print(f"Next: {bundle / 'moonlight-nx2-pc'} setup")

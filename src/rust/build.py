@@ -12,6 +12,7 @@ import subprocess
 
 ROOT = Path(__file__).resolve().parent
 APP = ROOT.parents[1]
+BUILDS = Path("/media/storage2/builds/moonlight")
 TARGET = "aarch64-unknown-none"
 RUST_COMMIT = "6efa357bff60d192688e02de0c78cae24a7f3a55"
 SDK = {
@@ -47,7 +48,27 @@ STAGE_DIAGNOSTICS = ("core", "renderer", "display", "display120", "io", "audio-c
 
 
 def digest(path):
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+    result = hashlib.sha256()
+    with path.open("rb") as source:
+        for block in iter(lambda: source.read(1024 * 1024), b""):
+            result.update(block)
+    return result.hexdigest()
+
+
+def output(*command):
+    return subprocess.check_output([str(word) for word in command], text=True).strip()
+
+
+def git(*arguments):
+    return output("git", "-C", APP, *arguments)
+
+
+def utc_stamp():
+    return datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+
+
+def write_json(path, value):
+    path.write_text(json.dumps(value, indent=2) + "\n")
 
 
 def sources():
@@ -107,7 +128,7 @@ def source_revision(override):
         if len(override) != 40 or any(char not in "0123456789abcdef" for char in override):
             raise ValueError("--revision must be a full Git commit hash")
         return override
-    return subprocess.check_output(["git", "-C", str(APP), "rev-parse", "HEAD"], text=True).strip()
+    return git("rev-parse", "HEAD")
 
 
 def run(command, env, log, commands):
@@ -136,17 +157,15 @@ def build(args):
     info["source_branch"] = args.branch
     if info["source_branch"] is None:
         try:
-            info["source_branch"] = subprocess.check_output(
-                ["git", "-C", str(APP), "branch", "--show-current"], text=True,
-                stderr=subprocess.DEVNULL).strip() or "detached"
+            info["source_branch"] = git("branch", "--show-current") or "detached"
         except subprocess.CalledProcessError:
             info["source_branch"] = "unknown"
     commands = []
     artifact = None
     if args.stage in ("host", "rust"):
-        rustc = subprocess.check_output(["rustc", "--version", "--verbose"], text=True).strip()
+        rustc = output("rustc", "--version", "--verbose")
         info["rustc"] = rustc
-        info["cargo"] = subprocess.check_output(["cargo", "--version"], text=True).strip()
+        info["cargo"] = output("cargo", "--version")
         env["CARGO_TARGET_DIR"] = str(directory / "cargo")
         if args.cargo_home:
             if not args.cargo_home.is_absolute():
@@ -158,7 +177,7 @@ def build(args):
             env["RUSTFLAGS"] = "-C relocation-model=pic -D warnings"
             info["rustflags"] = env["RUSTFLAGS"]
             info["target"] = TARGET
-            sysroot = Path(subprocess.check_output(["rustc", "--print", "sysroot"], text=True).strip())
+            sysroot = Path(output("rustc", "--print", "sysroot"))
             manifest = sysroot / "lib/rustlib/multirust-channel-manifest.toml"
             info["rust_distribution_sha256"] = digest(manifest)
             commands = [["cargo", "build", "--manifest-path", str(ROOT / "Cargo.toml"),
@@ -180,8 +199,8 @@ def build(args):
                                ("input.c", "native.h", "control/wire.c", "control/wire.h", "media/parser.c", "media.h", "audio/queue.c", "audio/queue.h", "codec/untile.c", "codec/untile.h", "codec/wire.c", "codec/wire.h", "renderer/frame.c", "renderer/frame.h", "renderer/layout.h", "renderer/cache.h", "renderer.h")]
             reference_files.append(APP / "src/streamer/input/controller.js")
             reference_files.append(APP / "package.json")
-            info["node"] = subprocess.check_output(["node", "--version"], text=True).strip()
-            info["cc"] = subprocess.check_output(["cc", "--version"], text=True).splitlines()[0]
+            info["node"] = output("node", "--version")
+            info["cc"] = output("cc", "--version").splitlines()[0]
             test_files = [path for path in tests.parent.rglob("*") if path.is_file()]
             info["reference_sources"] = {str(path.relative_to(APP)): digest(path) for path in reference_files}
             info["test_sources"] = {str(path.relative_to(dev)): digest(path) for path in test_files}
@@ -203,7 +222,7 @@ def build(args):
         info["rust_build"] = rust
         info["sdk"] = installed_sdk(args.devkitpro)
         compiler = args.devkitpro / "devkitA64/bin/aarch64-none-elf-gcc"
-        info["compiler"] = subprocess.check_output([str(compiler), "--version"], text=True).splitlines()[0]
+        info["compiler"] = output(compiler, "--version").splitlines()[0]
         info["target"] = "aarch64-none-elf"
         env["DEVKITPRO"] = str(args.devkitpro)
         env["PATH"] = str(args.devkitpro / "tools/bin") + os.pathsep + env.get("PATH", "")
@@ -234,7 +253,7 @@ def build(args):
         print((directory / "build.log").read_text())
         raise
     finally:
-        (directory / "BUILD-INFO.json").write_text(json.dumps(info, indent=2) + "\n")
+        write_json(directory / "BUILD-INFO.json", info)
 
 
 def main():
