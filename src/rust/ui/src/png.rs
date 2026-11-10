@@ -941,6 +941,55 @@ mod tests {
         assert!(decode(&encode(&header(3, 2, 8, 6, 2), &[], &raw)).is_none());
     }
 
+    fn gray_gradient(width: usize, height: usize) -> Vec<Vec<u8>> {
+        (0..height)
+            .map(|y| {
+                (0..width)
+                    .map(|x| (30 + (x * 120 / width + y * 120 / height) / 2) as u8)
+                    .collect()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn gray_cover_with_mixed_filters_decodes_exactly_and_tiles_smoothly() {
+        let rows = gray_gradient(60, 80);
+        let expected: Vec<u8> = rows
+            .concat()
+            .iter()
+            .flat_map(|&gray| [gray, gray, gray, 255])
+            .collect();
+        for filters in [&[4u8, 1, 2, 3, 0][..], &[4], &[3, 4, 4, 2]] {
+            let png = encode(&header(60, 80, 8, 0, 0), &[], &filtered(&rows, 1, filters));
+            assert_eq!(decode(&png).unwrap().bytes, expected, "filters {filters:?}");
+            let tile = tile(&png, 40, 60).unwrap();
+            let gray = |x: usize, y: usize| i32::from(tile.bytes[(y * 40 + x) * 4]);
+            for y in 1..59 {
+                for x in 1..39 {
+                    let around = [gray(x - 1, y), gray(x + 1, y), gray(x, y - 1), gray(x, y + 1)];
+                    assert!(
+                        around.iter().any(|&other| (gray(x, y) - other).abs() <= 3),
+                        "isolated pixel at {x},{y} with filters {filters:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_damaged_cover_is_refused_instead_of_decoded_wrongly() {
+        let rows = gray_gradient(60, 80);
+        let raw = filtered(&rows, 1, &[4]);
+        let mut stream = zlib(&raw);
+        stream[2 + 5 + 1000] ^= 0x40;
+        let mut damaged = SIGNATURE.to_vec();
+        chunk(&mut damaged, b"IHDR", &header(60, 80, 8, 0, 0));
+        chunk(&mut damaged, b"IDAT", &stream);
+        chunk(&mut damaged, b"IEND", &[]);
+        assert!(decode(&damaged).is_none());
+        assert!(tile(&damaged, 40, 60).is_none());
+    }
+
     fn solid(width: usize, height: usize, rgba: [u8; 4]) -> Vec<u8> {
         let rows: Vec<Vec<u8>> = (0..height).map(|_| rgba.repeat(width)).collect();
         encode(
