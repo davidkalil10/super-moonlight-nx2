@@ -15,6 +15,7 @@
 #include <switch.h>
 
 #define LOG_DIRECTORY "sdmc:/switch/moonlight-nx2/rust"
+#define PATH_BYTES 320
 #define EXPORT_DIRECTORY "sdmc:/switch/moonlight-nx2/logs"
 
 /* Controller sources: handheld, then No1 to No8. Rust decides which one plays which player. */
@@ -272,7 +273,7 @@ static bool newest_log(char *path, size_t size)
     time_t newest = 0;
     bool found = false;
     for (struct dirent *entry; (entry = readdir(directory));) {
-        char candidate[160];
+        char candidate[PATH_BYTES];
         struct stat info;
         if (strncmp(entry->d_name, "runtime-", 8) != 0)
             continue;
@@ -289,8 +290,8 @@ static bool newest_log(char *path, size_t size)
 /* Copies the newest runtime log to sdmc:/switch/moonlight-nx2/logs under a dated name. */
 bool moonlightPlatformExportLog(void)
 {
-    char source[160];
-    char target[160];
+    char source[PATH_BYTES];
+    char target[PATH_BYTES];
     if (!newest_log(source, sizeof(source)) || !moonlightPlatformDirectoryCreate(EXPORT_DIRECTORY))
         return false;
     time_t now = time(NULL);
