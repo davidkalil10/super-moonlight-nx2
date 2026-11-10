@@ -997,14 +997,16 @@ impl Model {
             }
             return;
         }
-        if op == Op::A && item == item::RETURN_TO_APPS {
+        let quit_on_return =
+            item == item::RETURN_TO_APPS && self.settings.on(Setting::QuitOnReturn);
+        if op == Op::A && item == item::RETURN_TO_APPS && !quit_on_return {
             self.screen = Screen::Connecting;
             self.overlay = false;
             step.changed = true;
             step.add(IntentKind::StopStream, None);
             return;
         }
-        if op == Op::A && item == item::QUIT_HOST {
+        if op == Op::A && (quit_on_return || item == item::QUIT_HOST) {
             self.screen = Screen::Quitting;
             self.overlay = false;
             step.changed = true;
@@ -1241,12 +1243,7 @@ mod stream_menu_tests {
         assert!(closed.intents().any(|i| i.kind == IntentKind::ResumeInput));
         assert!(model.allow_input());
         command(&mut model, Op::Chord, 0);
-        if !model.settings.on(Setting::QuitOnReturn) {
-            model.settings = model
-                .settings
-                .adjust(Setting::QuitOnReturn, 1, model.docked, &model.capabilities)
-                .unwrap();
-        }
+        assert!(!model.settings.on(Setting::QuitOnReturn));
         let disconnect = command(&mut model, Op::A, item::RETURN_TO_APPS);
         assert!(
             disconnect
@@ -1259,6 +1256,35 @@ mod stream_menu_tests {
         let quit = command(&mut model, Op::A, item::QUIT_HOST);
         assert!(quit.intents().any(|i| i.kind == IntentKind::StopStream));
         assert!(quit.intents().any(|i| i.kind == IntentKind::QuitHost));
+    }
+
+    fn streaming_with(setting: Setting, direction: i32) -> Model {
+        let mut model = Model::new(&[], Settings::default(), Capabilities::default());
+        model.settings = model
+            .settings
+            .adjust(setting, direction, model.docked, &model.capabilities)
+            .unwrap();
+        model.screen = Screen::Streaming;
+        model
+    }
+
+    #[test]
+    fn disconnect_quits_the_host_app_when_quit_on_return_is_on() {
+        let mut model = streaming_with(Setting::QuitOnReturn, 1);
+        command(&mut model, Op::Chord, 0);
+        let disconnect = command(&mut model, Op::A, item::RETURN_TO_APPS);
+        assert_eq!(model.screen(), Screen::Quitting);
+        let kinds: alloc::vec::Vec<_> = disconnect.intents().map(|i| i.kind).collect();
+        assert_eq!(kinds, [IntentKind::StopStream, IntentKind::QuitHost]);
+    }
+
+    #[test]
+    fn chord_is_ignored_when_the_menu_setting_is_off() {
+        let mut model = streaming_with(Setting::MenuChord, -1);
+        let step = command(&mut model, Op::Chord, 0);
+        assert!(!model.overlay());
+        assert_eq!(step.intents().count(), 0);
+        assert!(model.allow_input());
     }
 }
 
