@@ -15,6 +15,7 @@ diagnostic-sdk-modes = ["diagnostic-sdk-decode"]
 sdk-video-120-decode = ["frontend"]
 video-tcp = []
 ui-pattern = ["frontend"]
+ui-uncached = ["ui-pattern"]
 host-renderer = []
 
 [dependencies]

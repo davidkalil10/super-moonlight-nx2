@@ -449,7 +449,10 @@ impl Renderer {
 
     pub fn flush_page(&mut self, range: core::ops::Range<usize>) -> Result<(), Error> {
         self.active()?;
+        #[cfg(feature = "ui-pattern")]
+        let range = frame::UI_OFFSET..frame::STORAGE_BYTES;
         self.objects.storage.flush(range);
+        self.objects.flush_mapped(false);
         Ok(())
     }
 
@@ -693,19 +696,29 @@ impl Objects {
                 .get_physical_device_memory_properties(self.physical);
             let host =
                 vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT;
+            for index in 0..properties.memory_type_count as usize {
+                log(&format!(
+                    "render: memory type {index} flags {:#x} heap {} allowed {}",
+                    properties.memory_types[index].property_flags.as_raw(),
+                    properties.memory_types[index].heap_index,
+                    requirements.memory_type_bits & (1 << index) != 0
+                ));
+            }
             let mut chosen = None;
             for wanted in [host | vk::MemoryPropertyFlags::DEVICE_LOCAL, host] {
                 chosen = (0..properties.memory_type_count).find(|index| {
+                    let flags = properties.memory_types[*index as usize].property_flags;
                     requirements.memory_type_bits & (1 << index) != 0
-                        && properties.memory_types[*index as usize]
-                            .property_flags
-                            .contains(wanted)
+                        && flags.contains(wanted)
+                        && !(cfg!(feature = "ui-uncached")
+                            && flags.contains(vk::MemoryPropertyFlags::HOST_CACHED))
                 });
                 if chosen.is_some() {
                     break;
                 }
             }
             let chosen = chosen.ok_or(Error::Unsupported)?;
+            log(&format!("render: buffer memory type {chosen} bytes {bytes}"));
             buffer.memory = create!(
                 device.allocate_memory(
                     &vk::MemoryAllocateInfo::default()
@@ -724,6 +737,7 @@ impl Objects {
             .cast();
             buffer.bytes = bytes;
             buffer.bytes_mut().fill(0);
+            buffer.flush(0..bytes);
             if storage && !self.storage_path {
                 for (index, format) in [vk::Format::R8_UNORM, vk::Format::R8G8_UNORM]
                     .iter()
@@ -1717,7 +1731,18 @@ impl Objects {
         Ok(())
     }
 
+    fn flush_mapped(&self, input: bool) {
+        let buffer = if input { &self.input } else { &self.storage };
+        let range = vk::MappedMemoryRange::default()
+            .memory(buffer.memory)
+            .offset(0)
+            .size(vk::WHOLE_SIZE);
+        let _ = unsafe { self.device().flush_mapped_memory_ranges(&[range]) };
+    }
+
     fn flush_ui_writes(&mut self) {
+        self.input.flush(0..frame::INPUT_BYTES);
+        self.flush_mapped(true);
         self.storage.flush(frame::VIDEO_BASE..UI_CONTROL_END);
         let words = &self.storage.bytes_mut()[BADGE_WORDS_OFFSET..BADGE_WORDS_OFFSET + 4];
         if words != [0; 4] {

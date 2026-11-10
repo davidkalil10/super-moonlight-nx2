@@ -40,11 +40,15 @@ def main():
                         help="keep video on TCP instead of UDP")
     parser.add_argument("--ui-pattern", action="store_true",
                         help="L+R+X+Y steps through two test pages that show how the console draws known art")
+    parser.add_argument("--ui-uncached", action="store_true",
+                        help="the pattern build with the UI buffers in non-cached host memory")
     parser.add_argument("--diagnostic", choices=SDK_DIAGNOSTICS,
                         help="build this decoder diagnostic instead of the app")
     parser.add_argument("--trials", choices=TRIALS, default=TRIALS[0],
                         help="the sessions an sdk-modes diagnostic runs")
     args = parser.parse_args()
+    if args.ui_uncached and not args.ui_pattern:
+        parser.error("--ui-uncached goes with --ui-pattern")
     if args.ui_pattern and (args.decode120 or args.tcp_video or args.diagnostic):
         parser.error("--ui-pattern goes alone")
     if args.diagnostic and (args.decode120 or args.tcp_video):
@@ -57,7 +61,7 @@ def main():
     if args.tcp_video:
         diagnostic += "-tcp"
     if args.ui_pattern:
-        diagnostic += "-pattern"
+        diagnostic += "-uncached" if args.ui_uncached else "-pattern"
     name = diagnostic
     if diagnostic == "sdk-modes" and args.trials != TRIALS[0]:
         name += f"-{args.trials}"
