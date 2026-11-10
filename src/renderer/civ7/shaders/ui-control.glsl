@@ -86,7 +86,7 @@ bool uiValid(uint base, uint epoch, uint sequence) {
       sourceWidth = r.z;
       sourceHeight = r.w;
     }
-    if (!uiRectOk(r, 320u, 180u) || sourceWidth > 320u || sourceHeight == 0u ||
+    if (!uiRectOk(r, 480u, 270u) || sourceWidth > 320u || sourceHeight == 0u ||
         sourceHeight > 180u || (offset & 3u) != 0u ||
         offset + sourceWidth * sourceHeight * 4u > body ||
         uiWord(base + UI_IMAGES + i * 8u + 5u) != 1u)

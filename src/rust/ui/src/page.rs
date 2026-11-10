@@ -20,6 +20,8 @@ pub const SCREEN_HEIGHT: u32 = 1080;
 pub const MAX_TEXT_HEIGHT: u32 = 96;
 pub const MAX_IMAGE_WIDTH: u32 = 320;
 pub const MAX_IMAGE_HEIGHT: u32 = 180;
+pub const MAX_SHOWN_WIDTH: u32 = 480;
+pub const MAX_SHOWN_HEIGHT: u32 = 270;
 pub const FORMAT_RGBA8: u32 = 1;
 
 pub const FLAG_OVERLAY: u32 = 1;
@@ -31,6 +33,7 @@ pub const ITEM_CURRENT: u32 = 2;
 pub const ITEM_ADJUSTABLE: u32 = 4;
 pub const ITEM_PENDING: u32 = 8;
 pub const ITEM_EDITING: u32 = 16;
+pub const ITEM_REPORTS_FOCUS: u32 = 32;
 
 const FNV_OFFSET_BASIS: u32 = 2_166_136_261;
 const FNV_PRIME: u32 = 16_777_619;
@@ -407,7 +410,7 @@ impl<'a> Page<'a> {
 
         for image in self.images() {
             let (shown_w, shown_h) = image.shown_size();
-            let small = shown_w <= MAX_IMAGE_WIDTH && shown_h <= MAX_IMAGE_HEIGHT;
+            let small = shown_w <= MAX_SHOWN_WIDTH && shown_h <= MAX_SHOWN_HEIGHT;
             let source = image.w <= MAX_IMAGE_WIDTH && image.h <= MAX_IMAGE_HEIGHT;
             if !small || !source || !in_screen(image.x, image.y, shown_w, shown_h) {
                 return Err(Error::ImageRect);
