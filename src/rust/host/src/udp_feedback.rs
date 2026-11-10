@@ -28,6 +28,8 @@ pub struct Feedback {
 impl Feedback {
     pub fn new(socket: TcpStream) -> io::Result<Self> {
         socket.set_nonblocking(true)?;
+        #[cfg(target_os = "linux")]
+        crate::socket_options::apply(&socket, crate::socket_options::Class::Video)?;
         Ok(Self {
             socket,
             parser: Parser::new(),

@@ -33,6 +33,14 @@ pub struct Channel {
 impl Channel {
     pub fn new(socket: TcpStream, mode: Mode) -> io::Result<Self> {
         socket.set_nonblocking(true)?;
+        #[cfg(target_os = "linux")]
+        crate::socket_options::apply(
+            &socket,
+            match mode {
+                Mode::VideoInput => crate::socket_options::Class::Video,
+                Mode::Audio => crate::socket_options::Class::Audio,
+            },
+        )?;
         Ok(Self {
             socket,
             mode,

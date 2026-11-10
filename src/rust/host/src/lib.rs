@@ -18,6 +18,8 @@ pub mod probe;
 #[cfg(unix)]
 pub mod relay;
 pub mod response;
+#[cfg(target_os = "linux")]
+pub mod socket_options;
 pub mod status;
 #[cfg(unix)]
 pub mod stream;

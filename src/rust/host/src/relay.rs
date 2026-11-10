@@ -597,6 +597,7 @@ impl Relay {
                     | io::ErrorKind::ConnectionAborted
                     | io::ErrorKind::ConnectionReset
                     | io::ErrorKind::NotConnected
+                    | io::ErrorKind::TimedOut
                     | io::ErrorKind::UnexpectedEof
                     | io::ErrorKind::WriteZero
             ),
@@ -607,6 +608,7 @@ impl Relay {
                     | io::ErrorKind::ConnectionAborted
                     | io::ErrorKind::ConnectionReset
                     | io::ErrorKind::NotConnected
+                    | io::ErrorKind::TimedOut
                     | io::ErrorKind::UnexpectedEof
             ),
             _ => false,
@@ -1050,6 +1052,19 @@ mod rumble_tests {
         ] {
             assert!(!touch_unsupported(&other));
         }
+    }
+
+    #[test]
+    fn a_peer_timeout_is_a_media_disconnect() {
+        use crate::{channel, relay::Error, relay::Relay, udp_feedback};
+        let timed_out = || std::io::Error::from(std::io::ErrorKind::TimedOut);
+        assert!(Relay::is_media_disconnect(&Error::Channel(
+            channel::Error::Io(timed_out())
+        )));
+        assert!(Relay::is_media_disconnect(&Error::UdpFeedback(
+            udp_feedback::Error::Io(timed_out())
+        )));
+        assert!(!Relay::is_media_disconnect(&Error::Io(timed_out())));
     }
 
     #[test]

@@ -52,6 +52,9 @@ impl<'a> Connection<'a> {
         payload_storage: &'a mut [u8],
     ) -> Result<Self, Error> {
         socket.set_nonblocking(true).map_err(Error::Io)?;
+        #[cfg(target_os = "linux")]
+        crate::socket_options::apply(&socket, crate::socket_options::Class::Control)
+            .map_err(Error::Io)?;
         let bind = socket.local_addr().map_err(Error::Io)?.ip();
         let peer = socket.peer_addr().map_err(Error::Io)?.ip();
         let parser = Parser::new(payload_storage).map_err(Error::Frame)?;
