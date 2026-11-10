@@ -127,6 +127,8 @@ pub(super) fn fetch(
     }
     let mut download = Download::default();
     unsafe {
+        // Sunshine answers one HTTPS client at a time, so the session connection goes first.
+        native::http_cleanup();
         let settings = [
             curl_easy_setopt(handle.0, URL, url.as_ptr()),
             curl_easy_setopt(handle.0, CERT, cert.as_ptr()),
@@ -152,15 +154,23 @@ pub(super) fn fetch(
         }
         let status = curl_easy_perform(handle.0);
         if download.exceeded {
+            eprintln!("moonlight-worker cover app={app} over {MAX_COVER_BYTES} bytes");
             return Err(WorkerError::TooLarge);
         }
         if status != 0 {
+            eprintln!("moonlight-worker cover app={app} curl={status}");
             return Err(WorkerError::Failed);
         }
     }
-    cover::validate_png(&download.bytes).map_err(|error| match error {
-        cover::Error::TooLarge => WorkerError::TooLarge,
-        _ => WorkerError::Failed,
+    cover::validate_png(&download.bytes).map_err(|error| {
+        eprintln!(
+            "moonlight-worker cover app={app} rejected bytes={}",
+            download.bytes.len()
+        );
+        match error {
+            cover::Error::TooLarge => WorkerError::TooLarge,
+            _ => WorkerError::Failed,
+        }
     })?;
     let mut digest = [0u8; 32];
     if unsafe {
@@ -220,7 +230,7 @@ mod tests {
     }
 
     #[test]
-    fn fetches_cover_from_fake_https_server() {
+    fn fetches_cover_after_the_session_request() {
         let dir =
             std::env::temp_dir().join(format!("moonlight-cover-https-{}", std::process::id()));
         std::fs::create_dir(&dir).unwrap();
@@ -253,18 +263,25 @@ mod tests {
         let script = r#"
 import http.server, pathlib, ssl, sys
 class Handler(http.server.BaseHTTPRequestHandler):
+ protocol_version='HTTP/1.1'
  def do_GET(self):
-  assert self.path.startswith('/appasset?') and 'appid=7' in self.path
-  body=bytearray(70000)
-  body[:16]=b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR'
-  body[16:20]=(600).to_bytes(4,'big')
-  body[20:24]=(800).to_bytes(4,'big')
+  if self.path.startswith('/serverinfo'):
+   body=b'<root/>'
+  else:
+   assert self.path.startswith('/appasset?') and 'appid=7' in self.path
+   body=bytearray(70000)
+   body[:16]=b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR'
+   body[16:20]=(600).to_bytes(4,'big')
+   body[20:24]=(800).to_bytes(4,'big')
+   self.server.served=True
   self.send_response(200); self.send_header('Content-Length',str(len(body))); self.end_headers(); self.wfile.write(body)
  def log_message(self,*args): pass
 server=http.server.HTTPServer(('127.0.0.1',0),Handler)
+server.served=False
 ctx=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER); ctx.load_cert_chain(sys.argv[1],sys.argv[2])
 server.socket=ctx.wrap_socket(server.socket,server_side=True)
-pathlib.Path(sys.argv[3]).write_text(str(server.server_port)); server.handle_request()
+pathlib.Path(sys.argv[3]).write_text(str(server.server_port))
+while not server.served: server.handle_request()
 "#;
         let mut server = Server(
             Command::new("python3")
@@ -288,6 +305,14 @@ pathlib.Path(sys.argv[3]).write_text(str(server.server_port)); server.handle_req
         let mut data: native::SERVER_DATA = unsafe { std::mem::zeroed() };
         data.paired = true;
         data.httpsPort = port;
+        let keys = CString::new(dir.as_os_str().as_bytes()).unwrap();
+        let info = CString::new(format!("https://127.0.0.1:{port}/serverinfo")).unwrap();
+        unsafe {
+            assert_eq!(native::http_init(keys.as_ptr(), 0), 0);
+            let reply = native::http_create_data();
+            assert_eq!(native::http_request(info.as_ptr().cast_mut(), reply), 0);
+            native::http_free_data(reply);
+        }
         assert!(fetch(&data, c"127.0.0.1", &dir, 7).is_ok());
         assert!(server.0.wait().unwrap().success());
         std::fs::remove_dir_all(dir).unwrap();
