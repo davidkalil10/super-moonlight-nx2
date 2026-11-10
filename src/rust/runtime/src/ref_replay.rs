@@ -337,6 +337,17 @@ impl<B: Backend<N>, const N: usize> Backend<N> for Checksummed<B, N> {
             self.frames,
             self.stamps.get(surface).copied().unwrap_or(0) / 1000
         ));
+        if self.frames == 0 {
+            let last_row = &out[(height - 1) * stride..];
+            log(&format!(
+                "ref: {} first frame top={:08x} bottom={:08x} luma={:02x?} chroma={:02x?}",
+                self.name,
+                crc32(out, stride, width, 1),
+                crc32(last_row, stride, width, 1),
+                &out[..8],
+                &chroma_bytes[..8]
+            ));
+        }
         self.frames += 1;
         Ok(())
     }
