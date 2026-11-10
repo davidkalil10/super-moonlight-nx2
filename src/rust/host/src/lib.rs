@@ -17,6 +17,7 @@ pub mod management;
 pub mod probe;
 #[cfg(unix)]
 pub mod relay;
+pub mod relay_stats;
 pub mod response;
 #[cfg(target_os = "linux")]
 pub mod socket_options;

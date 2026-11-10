@@ -161,6 +161,7 @@ pub struct Relay {
     video_budget_exhausted: bool,
     video_readable: bool,
     telemetry: Option<crate::telemetry::Producer>,
+    stats: crate::relay_stats::RelayStats,
 }
 
 impl Relay {
@@ -283,6 +284,7 @@ impl Relay {
             video_budget_exhausted: false,
             video_readable: false,
             telemetry: None,
+            stats: crate::relay_stats::RelayStats::new(),
         })
     }
     pub fn video_addr(&self) -> Result<SocketAddr, Error> {
@@ -311,6 +313,14 @@ impl Relay {
             self.video_readable = self.probe_video_readable()?;
             Ok(event)
         });
+        if self.connected
+            && !self.finished
+            && let Some(line) =
+                self.stats
+                    .line(now, self.video_window.size(), self.video_queue.len())
+        {
+            eprintln!("{line}");
+        }
         if result.is_err()
             && let Err(error) = self.cancel()
         {
@@ -654,6 +664,7 @@ impl Relay {
             self.pending_input
                 .push_back(br#"{"type":"request-idr"}"#.to_vec());
             self.idr_pending = false;
+            self.stats.idr_requested();
         }
         if let Some(line) = self.pending_input.pop_front() {
             self.idr_inflight = line == br#"{"type":"request-idr"}"#;
@@ -820,12 +831,15 @@ impl Relay {
                     keyframe
                 }
             };
+            let queued = self.video_queue.len();
             match self
                 .video_queue
                 .offer(record.header, keyframe, record.payload, now)
             {
                 crate::video_queue::Outcome::Accepted { request_idr }
                 | crate::video_queue::Outcome::Dropped { request_idr } => {
+                    self.stats
+                        .offered((queued + 1).saturating_sub(self.video_queue.len()));
                     self.idr_pending |= request_idr;
                     self.video.consume().map_err(Error::Media)?;
                     self.current_keyframe = None;
@@ -849,6 +863,7 @@ impl Relay {
         if let Some(unit) = self.video_queue.front() {
             match channel.queue(unit.header, &unit.payload) {
                 Ok(()) => {
+                    self.stats.sent(unit.payload.len());
                     self.video_sent.push_back((unit.header.sequence, now));
                     self.video_queue.sent(now);
                 }
@@ -864,8 +879,9 @@ impl Relay {
             if sequence != ack.header.sequence {
                 return Err(Error::Invalid);
             }
-            self.video_window
-                .sample(now.saturating_duration_since(sent));
+            let elapsed = now.saturating_duration_since(sent);
+            self.video_window.sample(elapsed);
+            self.stats.acknowledged(elapsed);
             self.video_queue.acknowledged(ack.header.sequence, now);
             if !self.stopping && !ack.input.is_empty() {
                 let output = self.input.apply(ack.input).map_err(Error::Input)?;
@@ -921,10 +937,12 @@ impl Relay {
             let (_, sent) = self.video_sent.remove(index).expect("known UDP frame");
             self.udp_keyframes.retain(|key| *key != frame);
             if lost {
+                self.stats.lost();
                 self.idr_pending |= self.video_queue.lost(header.sequence, now);
             } else if acknowledged {
-                self.video_window
-                    .sample(now.saturating_duration_since(sent));
+                let elapsed = now.saturating_duration_since(sent);
+                self.video_window.sample(elapsed);
+                self.stats.acknowledged(elapsed);
                 self.video_queue.acknowledged(header.sequence, now);
             }
             if !self.stopping && !input.is_empty() {
@@ -958,6 +976,7 @@ impl Relay {
             feedback
                 .expect(frame, unit.header)
                 .map_err(Error::UdpFeedback)?;
+            self.stats.sent(unit.payload.len());
             self.video_sent.push_back((frame, now));
             if unit.keyframe {
                 self.udp_keyframes.push(frame);
