@@ -728,7 +728,6 @@ impl Model {
             uniqueid: Address::new(),
             mac: None,
         };
-        step.add(IntentKind::RememberHost, Some(typed));
         self.open_host(typed, self.host_index, step);
     }
 
@@ -1321,7 +1320,7 @@ mod add_host_tests {
     use super::*;
 
     #[test]
-    fn new_ip_is_remembered_before_connecting() {
+    fn new_ip_is_not_remembered_until_the_pc_answers() {
         let mut model = Model::new(&[], Settings::default(), Capabilities::default());
         model.screen = Screen::AddHost;
         model.entry = Text::of("192.168.1.7");
@@ -1331,9 +1330,9 @@ mod add_host_tests {
             value: 0,
         });
         let intents: alloc::vec::Vec<_> = step.intents().collect();
-        assert_eq!(intents.len(), 2);
-        assert_eq!(intents[0].kind, IntentKind::RememberHost);
-        assert_eq!(intents[1].kind, IntentKind::List);
+        assert_eq!(intents.len(), 1);
+        assert_eq!(intents[0].kind, IntentKind::List);
         assert_eq!(intents[0].host.unwrap().address.as_str(), "192.168.1.7");
+        assert!(model.hosts().is_empty());
     }
 }
