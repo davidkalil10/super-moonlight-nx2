@@ -859,6 +859,7 @@ pub fn stream_info_text(options: &Options) -> metrics::Line {
 }
 
 fn badge(session: &Session, preferences: StreamOptions) -> Feedback {
+    use core::fmt::Write;
     let mut text = metrics::Line::new();
     if (preferences.height, preferences.fps) != (session.options.height, session.options.fps) {
         text = metrics::rate_text(
@@ -867,8 +868,18 @@ fn badge(session: &Session, preferences: StreamOptions) -> Feedback {
             session.options.height,
             session.options.fps,
         );
-    } else if preferences.stream_info {
-        text = stream_info_text(&session.options);
+    }
+    if preferences.stream_info {
+        let separator = if text.as_str().is_empty() {
+            ""
+        } else {
+            " \u{b7} "
+        };
+        let _ = write!(
+            text,
+            "{separator}{}",
+            stream_info_text(&session.options).as_str()
+        );
     }
     Feedback::Badge {
         epoch: session.epoch,
