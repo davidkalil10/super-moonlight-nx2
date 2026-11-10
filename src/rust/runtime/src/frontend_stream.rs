@@ -367,6 +367,19 @@ impl Stream {
             "stream: video units={} bytes={} presented={} dropped={}",
             stats.accepted_units, stats.accepted_bytes, stats.presented, stats.dropped
         ));
+        let [submit, poll, output, readback, upload, present] = crate::stream_stats::take_stages();
+        let time = |stage: crate::stream_stats::StageTime| {
+            format!("{}x{}/{}", stage.count, stage.mean_us, stage.max_us)
+        };
+        log(&format!(
+            "stream: stages count x mean/max us submit={} poll={} output={} readback={} upload={} present={}",
+            time(submit),
+            time(poll),
+            time(output),
+            time(readback),
+            time(upload),
+            time(present)
+        ));
     }
 
     pub fn close<F: Files + Clone>(&mut self, client: &mut Client<F>) {

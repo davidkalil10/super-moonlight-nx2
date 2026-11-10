@@ -5,7 +5,11 @@
 
 extern crate alloc;
 
-use crate::{device::log, sdk};
+use crate::{
+    device::log,
+    sdk,
+    stream_stats::{self, Stage},
+};
 use alloc::format;
 use moonlight_nx2_core::{
     annexb,
@@ -264,6 +268,7 @@ impl Backend for SdkVideo {
         }
         let (luma, chroma) = out.split_at_mut(luma_bytes);
         let mut layout = Layout::default();
+        let read_start_ns = unsafe { sdk::moonlightNowNs() };
         let result = unsafe {
             moonlightSdkVideoRead(
                 surface as u32,
@@ -274,6 +279,9 @@ impl Backend for SdkVideo {
                 &mut layout,
             )
         };
+        stream_stats::stage(Stage::Readback, read_start_ns, unsafe {
+            sdk::moonlightNowNs()
+        });
         if !self.layout_reported || result != 0 {
             self.layout_reported = true;
             log(&format!("sdk-video: image {layout:?}"));

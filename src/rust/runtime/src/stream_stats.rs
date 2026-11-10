@@ -1,5 +1,5 @@
-//! Latest `StreamStats`, input age and the pending IDR request, published by the video path for
-//! the frontend to read each frame.
+//! Latest `StreamStats`, input age, per-stage times and the pending IDR request, published by
+//! the video path for the frontend to read each frame.
 
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use moonlight_nx2_core::stats::StreamStats;
@@ -63,6 +63,7 @@ pub fn clear() {
     VALID.store(false, Ordering::Release);
     IDR_WANTED.store(false, Ordering::Release);
     take_input();
+    take_stages();
 }
 
 pub fn input_sampled(now_ns: u64) {
@@ -86,6 +87,71 @@ pub fn take_input() -> (u32, u32) {
     let max = INPUT_MAX_US.swap(0, Ordering::Relaxed);
     let mean = sum.checked_div(u64::from(count)).unwrap_or(0);
     (u32::try_from(mean).unwrap_or(u32::MAX), max)
+}
+
+/// Where a frame's time goes between its unit arriving and its present returning.
+#[derive(Clone, Copy)]
+pub enum Stage {
+    /// Handing one unit to the decoder.
+    Submit,
+    /// One decoder poll, with or without a frame.
+    Poll,
+    /// From a unit's submission until its frame is taken; a multiple of the loop period.
+    Output,
+    /// Copying a decoded frame out of the decoder's image.
+    Readback,
+    /// Putting a frame in the renderer's upload slot.
+    Upload,
+    /// One present call.
+    Present,
+}
+
+const STAGES: usize = 6;
+
+#[derive(Clone, Copy, Default)]
+pub struct StageTime {
+    pub count: u32,
+    pub mean_us: u32,
+    pub max_us: u32,
+}
+
+struct StageTotal {
+    sum_us: AtomicU64,
+    count: AtomicU32,
+    max_us: AtomicU32,
+}
+
+static STAGE_TOTALS: [StageTotal; STAGES] = [const {
+    StageTotal {
+        sum_us: AtomicU64::new(0),
+        count: AtomicU32::new(0),
+        max_us: AtomicU32::new(0),
+    }
+}; STAGES];
+
+pub fn stage(stage: Stage, started_ns: u64, ended_ns: u64) {
+    let elapsed_us = u32::try_from(ended_ns.saturating_sub(started_ns) / 1000).unwrap_or(u32::MAX);
+    let total = &STAGE_TOTALS[stage as usize];
+    total
+        .sum_us
+        .fetch_add(u64::from(elapsed_us), Ordering::Relaxed);
+    total.count.fetch_add(1, Ordering::Relaxed);
+    total.max_us.fetch_max(elapsed_us, Ordering::Relaxed);
+}
+
+/// The stage times since the last call, in `Stage` order.
+pub fn take_stages() -> [StageTime; STAGES] {
+    core::array::from_fn(|index| {
+        let total = &STAGE_TOTALS[index];
+        let sum_us = total.sum_us.swap(0, Ordering::Relaxed);
+        let count = total.count.swap(0, Ordering::Relaxed);
+        let mean_us = sum_us.checked_div(u64::from(count)).unwrap_or(0);
+        StageTime {
+            count,
+            mean_us: u32::try_from(mean_us).unwrap_or(u32::MAX),
+            max_us: total.max_us.swap(0, Ordering::Relaxed),
+        }
+    })
 }
 
 pub fn request_idr() {

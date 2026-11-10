@@ -6,6 +6,7 @@ extern crate alloc;
 use crate::{
     render::{self, Renderer},
     render_platform as platform,
+    stream_stats::{self, Stage},
 };
 use alloc::format;
 use core::cell::Cell;
@@ -294,7 +295,9 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
         if decision == Decision::Skip {
             return Ok(());
         }
-        match self.decoder.submit(bytes, header.pts_us) {
+        let submitted = self.decoder.submit(bytes, header.pts_us);
+        stream_stats::stage(Stage::Submit, submitted_ns, platform::now_ns());
+        match submitted {
             Ok(()) => {
                 let Some(index) = self.arrivals.iter().position(Option::is_none) else {
                     return Err(self.fail(Error::Decoder(decoder::Error::Uncertain)));
@@ -406,10 +409,10 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
         self.release_bound(renderer)?;
         self.recovery.tick(platform::now_ns() / 1_000_000);
         self.forward_idr_request();
-        let frame = self
-            .decoder
-            .poll()
-            .map_err(|error| self.fail(Error::Decoder(error)))?;
+        let poll_start_ns = platform::now_ns();
+        let frame = self.decoder.poll();
+        stream_stats::stage(Stage::Poll, poll_start_ns, platform::now_ns());
+        let frame = frame.map_err(|error| self.fail(Error::Decoder(error)))?;
         let Some(info) = frame else {
             return Ok(false);
         };
@@ -428,6 +431,7 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
         let arrival = self.arrivals[index].unwrap().received_us;
         let submitted_ns = self.arrivals[index].unwrap().submitted_ns;
         let decoded_ns = platform::now_ns();
+        stream_stats::stage(Stage::Output, submitted_ns, poll_start_ns);
         self.stats.dropped += index as u64;
         if index != 0 {
             self.recovery.lose(decoded_ns / 1_000_000);
@@ -444,7 +448,9 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
                 .map_err(|error| self.fail(Error::Decoder(error)))?;
             return Ok(false);
         }
-        if !self.upload(renderer, &info)? {
+        let uploaded = self.upload(renderer, &info);
+        stream_stats::stage(Stage::Upload, decoded_ns, platform::now_ns());
+        if !uploaded? {
             self.stats.dropped += 1;
             return Ok(false);
         }
@@ -465,7 +471,9 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
     ) -> Result<bool, Error> {
         self.active()?;
         let present_start_ns = platform::now_ns();
-        match renderer.present(interactive) {
+        let shown = renderer.present(interactive);
+        stream_stats::stage(Stage::Present, present_start_ns, platform::now_ns());
+        match shown {
             Ok(()) => {
                 let presented = self.pending;
                 self.pending = false;
