@@ -656,6 +656,21 @@ impl Builder<'_> {
         });
     }
 
+    /// A flat rectangle drawn as a stretched one-pixel image, which keeps the shape table free.
+    pub(crate) fn solid(&mut self, (x, y, w, h): (u32, u32, u32, u32), color: u32, radius: u32) {
+        let key = format!("s\x1f{color:08x}");
+        let serial = self.composer.lookup(&key).unwrap_or_else(|| {
+            let bitmap = Bitmap {
+                width: 1,
+                height: 1,
+                channels: 4,
+                bytes: color.to_le_bytes().to_vec(),
+            };
+            self.composer.store_sized(key, bitmap, 0, 0, 4)
+        });
+        self.image(x, y, serial, (w, h), radius);
+    }
+
     /// The tile for `app`: its box art, or a letter tile on a colour taken from its name.
     pub(crate) fn cover_tile(&mut self, id: u32, name: &str) -> Option<u64> {
         let art = self

@@ -75,6 +75,18 @@ const RESUME_PAD: u32 = 34;
 const RESUME_APP_MAX: u32 = 700;
 const PLUS_PILL: (u32, u32) = (62, 40);
 const DOT: u32 = 20;
+const STATUS_CENTRE: u32 = 33;
+const SHEET_ICON_CENTRE: u32 = 15;
+const ICON_TEXT_GAP: u32 = 10;
+const SIGNAL_BAR: u32 = 9;
+const SIGNAL_GAP: u32 = 4;
+const SIGNAL_HEIGHT: u32 = 34;
+const SIGNAL_WIDTH: u32 = 3 * SIGNAL_BAR + 2 * SIGNAL_GAP;
+const BATTERY_WIDTH: u32 = 56;
+const BATTERY_HEIGHT: u32 = 30;
+const BATTERY_INSET: u32 = 6;
+const CHARGE_MARK: u32 = 14;
+const LOW_BATTERY: u32 = 15;
 const KEYPAD_Y: u32 = 430;
 const KEYPAD_WIDTH: u32 = 160;
 const KEYPAD_GAP: u32 = 24;
@@ -156,6 +168,10 @@ fn locked_reason(row: &SettingRow) -> Option<&'static str> {
     }
 }
 
+fn battery_width(charging: bool) -> u32 {
+    BATTERY_WIDTH + 6 + if charging { CHARGE_MARK + 8 } else { 0 }
+}
+
 fn host_name(model: &Model) -> Option<&str> {
     model.host().map(|h| h.name.as_str())
 }
@@ -165,22 +181,6 @@ fn pc_slot(i: u32) -> (u32, u32) {
         SIDE + (i % PCS_PER_ROW) * (PC_CARD_WIDTH + PC_GAP),
         BODY_Y + 16 + (i / PCS_PER_ROW) * (PC_CARD_HEIGHT + PC_ROW_GAP),
     )
-}
-
-fn status_items(readout: &Readout) -> Vec<String> {
-    let mut items = Vec::new();
-    match readout.network {
-        Some(Network::Wifi(bars)) => items.push(format!("Wi-Fi {}/3", bars.min(3))),
-        Some(Network::Wired) => items.push(String::from("Wired")),
-        None => {}
-    }
-    if let Some(percent) = readout.battery_percent {
-        items.push(format!("{percent} %"));
-    }
-    if let Some((hours, minutes)) = readout.clock {
-        items.push(format!("{hours}:{minutes:02}"));
-    }
-    items
 }
 
 /// What a screen puts in the shared frame.
@@ -194,14 +194,106 @@ struct Chrome<'a> {
 }
 
 impl Builder<'_> {
+    fn status_bar(&mut self, readout: &Readout) {
+        let pal = self.pal;
+        let centre = HEAD_Y + STATUS_CENTRE;
+        let mut right = RIGHT;
+        if let Some((hours, minutes)) = readout.clock {
+            let clock = format!("{hours}:{minutes:02}");
+            let width = self.text_width(&clock, STATUS) + 2;
+            right = right.saturating_sub(width);
+            self.put(right, HEAD_Y + 14, width, &clock, STATUS, pal.dim, Align::Left);
+            right = right.saturating_sub(STATUS_GAP);
+        }
+        if let Some(percent) = readout.battery_percent {
+            let text = format!("{percent}%");
+            let width = self.text_width(&text, HINT) + 2;
+            right = right.saturating_sub(width);
+            self.put(right, centre - 14, width, &text, HINT, pal.dim, Align::Left);
+            right = right.saturating_sub(battery_width(readout.charging) + ICON_TEXT_GAP);
+            self.battery_icon(right, centre, percent, readout.charging, pal.dim);
+            right = right.saturating_sub(STATUS_GAP);
+        }
+        match readout.network {
+            Some(Network::Wifi(bars)) => {
+                right = right.saturating_sub(SIGNAL_WIDTH);
+                self.signal_icon(right, centre, bars, pal.dim);
+            }
+            Some(Network::Wired) => {
+                let width = self.text_width("Wired", STATUS) + 2;
+                right = right.saturating_sub(width);
+                self.put(right, HEAD_Y + 14, width, "Wired", STATUS, pal.dim, Align::Left);
+            }
+            None => {}
+        }
+    }
+
+    /// Three rising bars, `bars` of them lit, left edge at `x` and centred on `centre`.
+    fn signal_icon(&mut self, x: u32, centre: u32, bars: u32, lit: u32) {
+        let pal = self.pal;
+        let bottom = centre + SIGNAL_HEIGHT / 2;
+        for i in 0..3u32 {
+            let height = SIGNAL_HEIGHT * (i + 1) / 3;
+            let color = if i < bars.min(3) { lit } else { pal.line };
+            let at = (x + i * (SIGNAL_BAR + SIGNAL_GAP), bottom - height, SIGNAL_BAR, height);
+            self.solid(at, color, 2);
+        }
+    }
+
+    /// A battery filled to `percent`, with a plus before it while charging.
+    fn battery_icon(&mut self, x: u32, centre: u32, percent: u32, charging: bool, lit: u32) {
+        let pal = self.pal;
+        let mut left = x;
+        if charging {
+            let middle = centre;
+            self.solid((left, middle - 2, CHARGE_MARK, 4), pal.ok, 1);
+            self.solid((left + CHARGE_MARK / 2 - 2, middle - CHARGE_MARK / 2, 4, CHARGE_MARK), pal.ok, 1);
+            left += CHARGE_MARK + 8;
+        }
+        let top = centre - BATTERY_HEIGHT / 2;
+        self.shape(Shape {
+            x: left,
+            y: top,
+            w: BATTERY_WIDTH,
+            h: BATTERY_HEIGHT,
+            radius: 6,
+            stroke: lit,
+            stroke_width: 3,
+            ..Shape::default()
+        });
+        let inner = BATTERY_WIDTH - 2 * BATTERY_INSET;
+        let filled = (inner * percent.min(100) / 100).max(if percent > 0 { 4 } else { 0 });
+        let color = if charging {
+            pal.ok
+        } else if percent <= LOW_BATTERY {
+            pal.warn
+        } else {
+            lit
+        };
+        if filled > 0 {
+            let at = (left + BATTERY_INSET, top + BATTERY_INSET, filled, BATTERY_HEIGHT - 2 * BATTERY_INSET);
+            self.solid(at, color, 2);
+        }
+        self.solid((left + BATTERY_WIDTH + 2, centre - 6, 4, 12), lit, 2);
+    }
+
     fn frame(&mut self, model: &Model, chrome: &Chrome) {
         let pal = self.pal;
         self.background = pal.ground;
         self.cursor_home = chrome.cursor_home;
         self.flags = chrome.flags;
 
-        self.dot(SIDE, HEAD_Y, LOGO, pal.dim);
-        self.dot(SIDE + 10, HEAD_Y + 10, LOGO - 20, pal.ink);
+        self.shape(Shape {
+            x: SIDE,
+            y: HEAD_Y,
+            w: LOGO,
+            h: LOGO,
+            fill: pal.ink,
+            radius: LOGO / 2,
+            stroke: pal.dim,
+            stroke_width: 10,
+            ..Shape::default()
+        });
         self.put(
             SIDE + LOGO + 27,
             HEAD_Y + 3,
@@ -211,13 +303,7 @@ impl Builder<'_> {
             pal.ink,
             Align::Left,
         );
-        let mut right = RIGHT;
-        for item in status_items(model.readout()).iter().rev() {
-            let width = self.text_width(item, STATUS) + 2;
-            right = right.saturating_sub(width);
-            self.put(right, HEAD_Y + 14, width, item, STATUS, pal.dim, Align::Left);
-            right = right.saturating_sub(STATUS_GAP);
-        }
+        self.status_bar(model.readout());
         self.fill(SIDE, RULE_TOP, CONTENT_WIDTH, 2, pal.line, 0);
         self.fill(SIDE, RULE_BOTTOM, CONTENT_WIDTH, 2, pal.line, 0);
 
@@ -1020,15 +1106,6 @@ impl Builder<'_> {
             ),
             ("Decode", stream.decode_us.map(|us| format!("{} ms", tenths(us / 100)))),
             ("Network", stream.network_us.map(|us| format!("{} ms", tenths(us / 100)))),
-            ("Battery", readout.battery_percent.map(|percent| format!("{percent} %"))),
-            (
-                "Wi-Fi",
-                match readout.network {
-                    Some(Network::Wifi(bars)) => Some(format!("{}/3", bars.min(3))),
-                    Some(Network::Wired) => Some(String::from("Wired")),
-                    None => None,
-                },
-            ),
         ];
         let cell_width = inner / 2;
         for (i, (label, value)) in cells.iter().enumerate() {
@@ -1039,6 +1116,7 @@ impl Builder<'_> {
             let text = value.as_deref().unwrap_or("--");
             self.put(at, cy, cell_width.saturating_sub(at - cx), text, HINT, pal.ink, Align::Left);
         }
+        self.sheet_status(readout, left, inner / 2);
 
         let items = [
             (item::RESUME_STREAM, "Resume", None, pal.ink),
@@ -1078,6 +1156,32 @@ impl Builder<'_> {
         self.fill(BADGE_X, BADGE_Y, width, BADGE_HEIGHT, badge_color, BADGE_HEIGHT / 2);
         self.dot(BADGE_X + BADGE_PAD, BADGE_Y + (BADGE_HEIGHT - DOT) / 2, DOT, pal.ok);
         self.put(BADGE_X + BADGE_PAD + DOT + 19, BADGE_Y + 10, width, &badge, HINT, pal.ink, Align::Left);
+    }
+
+    /// The battery and Wi-Fi cells of the sheet, drawn as the header's icons.
+    fn sheet_status(&mut self, readout: &Readout, left: u32, cell_width: u32) {
+        let pal = self.pal;
+        let row = SHEET_GRID_Y + 2 * SHEET_CELL;
+        let centre = row + SHEET_ICON_CENTRE;
+        self.put(left, row, cell_width, "Battery", HINT, pal.dim, Align::Left);
+        let label = self.text_width("Battery", HINT) + 12;
+        match readout.battery_percent {
+            Some(percent) => {
+                let at = left + label;
+                self.battery_icon(at, centre, percent, readout.charging, pal.ink);
+                let text_x = at + battery_width(readout.charging) + ICON_TEXT_GAP;
+                self.put(text_x, row, cell_width, &format!("{percent}%"), HINT, pal.ink, Align::Left);
+            }
+            None => self.put(left + label, row, cell_width, "--", HINT, pal.ink, Align::Left),
+        }
+        let x = left + cell_width;
+        self.put(x, row, cell_width, "Wi-Fi", HINT, pal.dim, Align::Left);
+        let label = self.text_width("Wi-Fi", HINT) + 12;
+        match readout.network {
+            Some(Network::Wifi(bars)) => self.signal_icon(x + label, centre, bars, pal.ink),
+            Some(Network::Wired) => self.put(x + label, row, cell_width, "Wired", HINT, pal.ink, Align::Left),
+            None => self.put(x + label, row, cell_width, "--", HINT, pal.ink, Align::Left),
+        }
     }
 
     fn error_page(&mut self, model: &Model) {
