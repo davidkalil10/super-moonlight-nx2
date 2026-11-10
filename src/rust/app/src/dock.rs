@@ -2,7 +2,11 @@
 //! per-session shape rules (civ7/stream-fallback.js `sessionSize`, `launchRate`). The restart on
 //! a confirmed change lives in the service; saved settings are never touched here.
 
-use crate::request::{Codec, Options};
+use crate::{
+    request::{Codec, Options},
+    stream,
+};
+use moonlight_nx2_core::codec::Capabilities;
 
 /// A changed reading switches only when a second read this long after the first agrees.
 pub const CONFIRM_MS: u64 = 100;
@@ -80,21 +84,25 @@ impl Monitor {
     }
 }
 
-/// The size and rate one session asks for: above 1080p only docked on AV1, and at most 60 fps
-/// above 1440p. Applied after the UI's `in_use`, which keeps the saved preference.
-pub fn session_options(options: Options, docked: bool) -> Options {
+/// The size and rate one session asks for: above 1080p only docked, on AV1 or in a mode the
+/// decoder has verified, and at most 60 fps above 1440p. Applied after the UI's `in_use`, which
+/// keeps the saved preference.
+pub fn session_options(options: Options, docked: bool, verified: &Capabilities) -> Options {
     let mut session = options;
-
-    let fits = options.height <= BASE_HEIGHT || (docked && options.codec == Codec::Av1);
-    if !fits {
-        session.width = BASE_WIDTH;
-        session.height = BASE_HEIGHT;
-    }
-
     if session.height > FAST_HEIGHT {
         session.fps = session.fps.min(60);
     }
-    session
+
+    let fits = options.height <= BASE_HEIGHT
+        || (docked && (options.codec == Codec::Av1 || stream::supported(verified, &session)));
+    if fits {
+        return session;
+    }
+    Options {
+        width: BASE_WIDTH,
+        height: BASE_HEIGHT,
+        ..options
+    }
 }
 
 /// Active area inside a retained display layer, as render-mode.js `apply` requests it.

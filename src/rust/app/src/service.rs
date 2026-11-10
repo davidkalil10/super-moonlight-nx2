@@ -492,7 +492,7 @@ impl Service {
             return;
         };
 
-        let mut options = dock::session_options(options_of(settings), docked);
+        let mut options = dock::session_options(options_of(settings), docked, &self.capabilities);
         options.transport = self
             .requested
             .map_or(self.transport, |requested| requested.transport);
@@ -916,7 +916,8 @@ impl Service {
             return;
         }
 
-        let mut options = dock::session_options(options_of(settings), self.docked);
+        let mut options =
+            dock::session_options(options_of(settings), self.docked, &self.capabilities);
         options.transport = self.transport;
         self.automatic_start = false;
         self.start_stream(host, app, options, self.telemetry);
