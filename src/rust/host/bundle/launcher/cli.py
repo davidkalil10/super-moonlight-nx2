@@ -1,5 +1,6 @@
 """moonlight-nx2-pc: set up, start and keep the PC side of Moonlight for Switch 2 running."""
 import argparse
+import os
 import signal
 import socket
 import subprocess
@@ -57,9 +58,7 @@ def setup(args):
     for key in ("console", "sunshine", "address", "console_port"):
         if getattr(args, key) is not None:
             chosen[key] = getattr(args, key)
-    if "console" not in chosen:
-        raise SystemExit("Give the console's address: setup --console CONSOLE_IP")
-    chosen.setdefault("address", local_address(chosen["console"]))
+    chosen.setdefault("address", local_address(chosen.get("console") or "192.0.2.1"))
     chosen.setdefault("sunshine", chosen["address"])
     if args.worker:
         chosen["worker"] = args.worker
@@ -85,8 +84,10 @@ def setup(args):
         chosen = settings.save(chosen)
     except settings.Invalid as error:
         raise SystemExit(f"Not saved: {error}") from None
+    console_note = (f"console {chosen['console']}:{chosen['console_port']}" if chosen["console"]
+                    else "no console address (only needed for `start`)")
     print(f"saved {paths.config_dir() / settings.FILE}: this PC {chosen['address']}, "
-          f"Sunshine {chosen['sunshine']}, console {chosen['console']}:{chosen['console_port']}")
+          f"Sunshine {chosen['sunshine']}, {console_note}")
     if args.install_service:
         install_service(bundle)
 
@@ -96,6 +97,8 @@ def imports(chosen):
 
 
 def send_session(chosen, session, replace):
+    if not chosen["console"]:
+        raise SystemExit("This needs the console's address: setup --console CONSOLE_IP")
     target = console.FtpConsole(chosen["console"], chosen["console_port"])
     try:
         return console.stage(target, session, replace, imports(chosen))
@@ -120,7 +123,38 @@ def start(args):
     print("Start Moonlight on the console now. This host serves that one launch.")
 
 
-def serve(_):
+def serve(args):
+    """Runs the service paired consoles connect to, until it is told to stop."""
+    if args.staged:
+        return serve_staged()
+    chosen = settings.load()
+    host.verify(paths.BUNDLE)
+    environment = dict(os.environ, MOONLIGHT_NX2_WORKER=chosen["worker"])
+    process = subprocess.Popen(host.service_command(paths.BUNDLE, chosen, args.port), env=environment)
+
+    def end(*_):
+        process.terminate()
+
+    signal.signal(signal.SIGTERM, end)
+    signal.signal(signal.SIGINT, end)
+    print(f"service {process.pid}: paired consoles connect to port {args.port}; "
+          "pair a new one with `moonlight-nx2-pc pair CODE`", flush=True)
+    code = process.wait()
+    if code not in (0, -signal.SIGTERM):
+        raise SystemExit(f"The service ended with {code}")
+
+
+def pairing(args):
+    """pair, consoles and unpair: passed to the service, or to its files when none runs."""
+    words = [args.command, *([args.value] if getattr(args, "value", None) else [])]
+    result = host.ask(paths.BUNDLE, *words)
+    print(result.stdout, end="")
+    if result.returncode != 0:
+        raise SystemExit(result.stderr.strip() or f"{args.command} failed")
+
+
+def serve_staged():
+    """Keeps a one-launch host ready and stages its session over the console's FTP server."""
     chosen = settings.load()
     host.verify(paths.BUNDLE)
     stopping = False
@@ -200,7 +234,19 @@ def main(argv=None):
     command.add_argument("--timeout", type=int, help="end the host after this many seconds")
     command.set_defaults(run=start)
 
-    commands.add_parser("serve", help="keep a host ready, launch after launch").set_defaults(run=serve)
+    command = commands.add_parser("serve", help="serve paired consoles until stopped")
+    command.add_argument("--port", type=int, default=host.SERVICE_PORT,
+                         help=f"the port consoles connect to (default {host.SERVICE_PORT})")
+    command.add_argument("--staged", action="store_true",
+                         help="the earlier way: one host per launch, session sent over FTP")
+    command.set_defaults(run=serve)
+    command = commands.add_parser("pair", help="pair the console that shows this code")
+    command.add_argument("value", metavar="CODE", help="the eight digits on the console")
+    command.set_defaults(run=pairing)
+    commands.add_parser("consoles", help="list the paired consoles").set_defaults(run=pairing)
+    command = commands.add_parser("unpair", help="forget a paired console")
+    command.add_argument("value", metavar="ID", help="the start of its id from `consoles`, or all")
+    command.set_defaults(run=pairing)
     commands.add_parser("stop", help="stop the running host").set_defaults(run=stop)
     commands.add_parser("status", help="show the last run, its log and the display").set_defaults(run=status)
 

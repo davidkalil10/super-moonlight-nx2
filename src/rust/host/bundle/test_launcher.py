@@ -270,6 +270,9 @@ class Settings(Scratch):
 
 FAKE_HOST = """#!/bin/sh
 if [ "$1" = display ]; then echo "backend: fake"; echo "current: DP-2 1920x1080@60.000 scale 1"; exit 0; fi
+if [ "$1" = serve ]; then echo "$@" > "$(dirname "$0")/../arguments"; echo "READY 39381"; exit 0; fi
+if [ "$1" = consoles ]; then echo "c1c1 192.0.2.10 1"; echo ok; exit 0; fi
+if [ "$1" = pair ]; then echo "$@" > "$(dirname "$0")/../arguments"; echo "the code did not match" >&2; exit 1; fi
 head -c 64 > "$(dirname "$0")/../token"
 echo "$@" > "$(dirname "$0")/../arguments"
 echo "$MOONLIGHT_NX2_WORKER" > "$(dirname "$0")/../worker-mode"
@@ -344,6 +347,24 @@ class Bundle(Scratch):
         self.assertIn(f"ExecStart={self.bundle}/moonlight-nx2-pc serve", unit)
         self.assertIn(f"ExecStopPost={self.bundle}/bin/moonlight-nx2-host display restore", unit)
         self.assertNotIn("@BUNDLE@", unit)
+
+    def test_setup_needs_no_console_and_serve_runs_the_service_on_the_fixed_port(self):
+        self.run_cli("setup", "--address", "192.0.2.2", "--worker", "native", "--match-display")
+        self.assertIsNone(settings.load()["console"])
+        with self.assertRaisesRegex(SystemExit, "needs the console's address"):
+            self.run_cli("start")
+        self.run_cli("serve")
+        self.assertEqual((self.bundle / "arguments").read_text().split(),
+                         ["serve", "--listen", "0.0.0.0:39381", "--state", str(self.config / "helper"),
+                          "--match-display", str(self.bundle / "worker")])
+
+    def test_pairing_commands_go_to_the_host_and_report_its_refusal(self):
+        self.run_cli("setup", "--address", "192.0.2.2", "--worker", "native")
+        self.assertEqual(self.run_cli("consoles"), "c1c1 192.0.2.10 1\nok\n")
+        with self.assertRaisesRegex(SystemExit, "the code did not match"):
+            self.run_cli("pair", "12345678")
+        self.assertEqual((self.bundle / "arguments").read_text().split(),
+                         ["pair", "--state", str(self.config / "helper"), "12345678"])
 
     def test_setup_again_keeps_earlier_choices_and_imports_nothing_unasked(self):
         self.run_cli("setup", "--console", "192.0.2.10", "--address", "192.0.2.2", "--worker", "native",

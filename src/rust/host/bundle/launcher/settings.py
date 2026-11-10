@@ -16,7 +16,9 @@ class Invalid(ValueError):
 
 
 def check(settings):
-    def address(key):
+    def address(key, optional=False):
+        if optional and settings.get(key) is None:
+            return None
         try:
             return str(ipaddress.IPv4Address(settings.get(key)))
         except ValueError:
@@ -37,7 +39,7 @@ def check(settings):
         "version": VERSION,
         "address": address("address"),
         "sunshine": address("sunshine"),
-        "console": address("console"),
+        "console": address("console", optional=True),
         "console_port": port,
         "match_display": settings.get("match_display", False),
         "import_civ7": settings.get("import_civ7", False),

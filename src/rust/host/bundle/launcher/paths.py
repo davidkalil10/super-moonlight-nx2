@@ -15,6 +15,11 @@ def config_dir():
     return base("XDG_CONFIG_HOME", ".config") / NAME
 
 
+def helper_dir():
+    """The service's identity and the consoles it is paired with."""
+    return config_dir() / "helper"
+
+
 def state_dir():
     return base("XDG_STATE_HOME", ".local/state") / NAME
 

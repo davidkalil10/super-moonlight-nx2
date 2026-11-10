@@ -1,4 +1,5 @@
-"""Starts and tracks the host process. One host serves one console launch."""
+"""Starts and tracks the host process: one host per console launch, or the service that
+keeps serving paired consoles."""
 import hashlib
 import json
 import os
@@ -14,6 +15,7 @@ from . import paths
 HOST = "bin/moonlight-nx2-host"
 WORKER = "bin/moonlight-nx2-upstream-worker"
 READY_SECONDS = 8
+SERVICE_PORT = 39381
 
 
 class Failed(Exception):
@@ -79,6 +81,21 @@ def stop(info, seconds=7):
             return True
         time.sleep(0.05)
     return False
+
+
+def service_command(bundle, settings, port=SERVICE_PORT):
+    """The command line of the service that paired consoles connect to."""
+    command = [str(bundle / HOST), "serve", "--listen", f"0.0.0.0:{port}",
+               "--state", str(paths.helper_dir())]
+    if settings["match_display"]:
+        command.append("--match-display")
+    return [*command, str(bundle / "worker")]
+
+
+def ask(bundle, *words):
+    """Runs a pairing command (pair, consoles, unpair) against the service or its files."""
+    return subprocess.run([str(bundle / HOST), words[0], "--state", str(paths.helper_dir()), *words[1:]],
+                          capture_output=True, text=True)
 
 
 def start(bundle, settings, timeout=None):
