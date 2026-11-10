@@ -73,6 +73,6 @@ takes no touch, the stream says so once on the badge.
 - [Sunshine](https://github.com/LizardByte/Sunshine) — game streaming host.
 - [ENet](https://github.com/cgutman/enet) — networking.
 - [libnx2](https://gitlab.com/Azkali/libnx2) — Switch 2 tooling.
-- [Sora](https://github.com/sora-xor/sora-font) — font.
+- [M PLUS Rounded 1c](https://github.com/coz-m/MPLUS_FONTS) — font.
 
 See [LICENSE](LICENSE) and the [font licence](src/streamer/ui/fonts/OFL.txt).

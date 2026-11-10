@@ -118,7 +118,7 @@ rebuilds it with Pillow and `glyphs.py reference` rebuilds the test fixture in m
   else draws DejaVu's missing-glyph box, as text.py does without a CJK font. Greek and Cyrillic
   took the atlas from 323 KB to 519 KB deflated (1.4 to 2.4 MB inflated).
 - Kerning is one pair list per face and weight in 1/64 px at 1000 px, scaled with Math.round,
-  plus a signed byte per pair and size for HarfBuzz's own rounding. Sora's f-ligatures are
+  plus a signed byte per pair and size for HarfBuzz's own rounding. the UI face's f-ligatures are
   found by rendering every pair and stored as glyphs.
 - Format (little-endian, then zlib): header `HBGA`, version 1, combo, table and ring counts;
   24-byte combos (size, weight, ascent, descent, glyph count, records, corrections); 12-byte

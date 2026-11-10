@@ -4,8 +4,8 @@ glyph atlas and the raster test reference from it; the runtime paints with glyph
 
 Run alone it reads one JSON request per line on stdin and answers each with an 8-byte header (width,
 height as little-endian u32) followed by the pixels: alpha-8 for a text strip, RGBA8 for a
-tile. Layout stays in pages.js; this process only paints. Text is Sora (fonts/, OFL) at
-the asked weight; a character Sora lacks falls back to DejaVu, then to a CJK font when the PC
+tile. Layout stays in pages.js; this process only paints. Text is M PLUS Rounded 1c (fonts/, OFL) at
+the asked weight; a character it lacks falls back to DejaVu, then to a CJK font when the PC
 has one.
 
 Requests and what each answers with:
@@ -28,7 +28,10 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageOps
 
-SORA = Path(__file__).resolve().parent / "fonts" / "Sora.ttf"
+FONTS = Path(__file__).resolve().parent / "fonts"
+ROUNDED = {500: FONTS / "MPLUSRounded1c-Medium.ttf", 700: FONTS / "MPLUSRounded1c-Bold.ttf"}
+# The heaviest weight that still draws with the Medium file.
+MEDIUM_UP_TO = 600
 FALLBACKS = [
     "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
     "/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf",
@@ -63,19 +66,19 @@ glyphs = {}
 
 
 def font(size, weight=600):
-    """Sora at the weight, or DejaVu (weight None, or Sora missing)."""
-    key = (size, weight if SORA.exists() else None)
+    """M PLUS Rounded 1c, Medium up to MEDIUM_UP_TO and Bold above, or DejaVu (weight None)."""
+    key = (size, weight)
     if key not in fonts:
-        if key[1] is None:
+        if weight is None:
             fonts[key] = ImageFont.truetype(FALLBACK_PATH, size)
         else:
-            fonts[key] = ImageFont.truetype(str(SORA), size)
-            fonts[key].set_variation_by_axes([weight])
+            path = ROUNDED[500 if weight <= MEDIUM_UP_TO else 700]
+            fonts[key] = ImageFont.truetype(str(path), size)
     return fonts[key]
 
 
 def chain(size, weight):
-    """The faces tried in order for each character: Sora, DejaVu, then CJK if present."""
+    """The faces tried in order for each character: the UI face, DejaVu, then CJK if present."""
     faces = [font(size, weight), font(size, None)]
     if CJK_PATH:
         key = (size, "cjk", weight)

@@ -56,7 +56,7 @@ function createGlyphRaster(atlas, {inflate} = {}) {
   const faces = new Map();
 
   /**
-   * The kern tables a combo of `weight` uses, in file order: its Sora weight and DejaVu.
+   * The kern tables a combo of `weight` uses, in file order: its the UI face weight and DejaVu.
    * @param {number} weight
    */
   function tablesFor(weight) {

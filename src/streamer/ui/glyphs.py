@@ -34,7 +34,7 @@ text.CJK_PATH = None
 
 UI_SYMBOLS = "…‹›◂▸‘’“”–—•€™œŒŸ−"
 # Modern Greek and the Cyrillic of Russian, Ukrainian, Belarusian, Serbian, Macedonian and
-# Bulgarian; Sora has neither, so DejaVu draws them, as text.py does.
+# Bulgarian; M PLUS Rounded has them, DejaVu is the fallback otherwise, so DejaVu draws them, as text.py does.
 GREEK = "ΆΈΉΊΌΎΏΐ" + "".join(chr(c) for c in range(0x391, 0x3CF) if c != 0x3A2)
 CYRILLIC = "".join(chr(c) for c in range(0x400, 0x460)) + "Ґґ"
 CHARSET = [chr(c) for c in range(0x20, 0x7F)] + [chr(c) for c in range(0xA0, 0x100)]
@@ -102,7 +102,7 @@ def is_ligature(face, pieces):
 
 
 def find_ligatures(weight):
-    """Sequences Sora shapes into one glyph: pairs, then a pair and one more character."""
+    """Sequences the UI face shapes into one glyph: pairs, then a pair and one more character."""
     face = text.font(LIGATURE_PROBE_SIZE, weight)
     faces = text.chain(LIGATURE_PROBE_SIZE, weight)
     sora = [c for c in CHARSET if not c.isspace() and text.face_for(faces, c) is face]

@@ -43,7 +43,7 @@ function createRaster() {
      * @param {number} size
      * @param {number} width
      * @param {'left' | 'center' | 'right'} [align]
-     * @param {{weight?: number, tracking?: number}} [style] Sora weight (500 to 700) and px
+     * @param {{weight?: number, tracking?: number}} [style] the UI face weight (500 to 700) and px
      *   between letters
      */
     text: (text, size, width, align = 'left', style = {}) =>
