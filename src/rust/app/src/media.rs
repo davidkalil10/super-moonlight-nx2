@@ -689,13 +689,10 @@ impl<'a, S: Socket, D: Device, VC: VideoChannel> Media<'a, S, D, VC> {
             return Ok(());
         };
 
-        match pcm.pump(now_ms) {
-            Ok(()) | Err(Error::Again) | Err(Error::Ended) => {}
-            Err(error) => return Err(Failure::Media(Stream::Pcm, error)),
-        }
+        pump_pcm(pcm, now_ms)?;
 
         let Some(output) = self.audio.as_mut() else {
-            return drain_pcm(pcm, &mut self.held_pcm, progress);
+            return drain_pcm(pcm, &mut self.held_pcm, progress, now_ms);
         };
 
         for _ in 0..PCM_RECORDS_PER_STEP {
@@ -710,6 +707,7 @@ impl<'a, S: Socket, D: Device, VC: VideoChannel> Media<'a, S, D, VC> {
             pcm.consume()
                 .map_err(|error| Failure::Media(Stream::Pcm, error))?;
             progress.pcm_records += 1;
+            pump_pcm(pcm, now_ms)?;
         }
 
         output.pump(now_ms).map_err(Failure::Audio)?;
@@ -752,11 +750,21 @@ impl<'a, S: Socket, D: Device, VC: VideoChannel> Media<'a, S, D, VC> {
     }
 }
 
+/// The channel holds one record: pumping after a record is taken reads the next one, so a step
+/// takes all that arrived, up to `PCM_RECORDS_PER_STEP`.
+fn pump_pcm<S: Socket>(pcm: &mut Channel<'_, S>, now_ms: u64) -> Result<(), Failure> {
+    match pcm.pump(now_ms) {
+        Ok(()) | Err(Error::Again | Error::Ended) => Ok(()),
+        Err(error) => Err(Failure::Media(Stream::Pcm, error)),
+    }
+}
+
 /// Without an audio device, PCM is read and acknowledged unplayed so the PC never waits on it.
 fn drain_pcm<S: Socket>(
     pcm: &mut Channel<'_, S>,
     held: &mut Option<[u8; HEADER_BYTES]>,
     progress: &mut Progress,
+    now_ms: u64,
 ) -> Result<(), Failure> {
     if !retry_pcm_ack(pcm, held)? {
         return Ok(());
@@ -779,6 +787,7 @@ fn drain_pcm<S: Socket>(
             }
             Err(error) => return Err(Failure::Media(Stream::Pcm, error)),
         }
+        pump_pcm(pcm, now_ms)?;
     }
     Ok(())
 }
