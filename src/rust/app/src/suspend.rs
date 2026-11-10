@@ -6,6 +6,9 @@ use moonlight_nx2_ui::model::Screen;
 
 /// Time after the return for the stop and the app list to finish before giving up.
 pub const RESUME_LIMIT_MS: u64 = 15_000;
+/// A stream still on screen this long after it was paused is asked to stop once more. A stop
+/// asked for in a stream's first second has been seen to end the PC's side only.
+pub const STOP_AGAIN_MS: u64 = 3_000;
 
 pub const ENDED_LINK: &str =
     "The PC connection ended while the console was away; import a new PC connection to continue";
@@ -53,6 +56,7 @@ enum State {
     Paused {
         app: u32,
         returned_ms: Option<u64>,
+        stop_asked_ms: u64,
     },
 }
 
@@ -79,22 +83,39 @@ impl Suspend {
                 self.state = State::Paused {
                     app,
                     returned_ms: now.in_focus.then_some(now.now_ms),
+                    stop_asked_ms: now.now_ms,
                 };
                 Command::Pause
             }
-            State::Paused { app, returned_ms } => {
+            State::Paused {
+                app,
+                returned_ms,
+                stop_asked_ms,
+            } => {
                 if !now.in_focus {
                     self.state = State::Paused {
                         app,
                         returned_ms: None,
+                        stop_asked_ms,
                     };
                     return Command::None;
                 }
                 let returned_ms = returned_ms.unwrap_or(now.now_ms);
+                let still_shown = streaming
+                    && now.now_ms.saturating_sub(stop_asked_ms) >= STOP_AGAIN_MS
+                    && now.now_ms.saturating_sub(returned_ms) < RESUME_LIMIT_MS;
                 self.state = State::Paused {
                     app,
                     returned_ms: Some(returned_ms),
+                    stop_asked_ms: if still_shown {
+                        now.now_ms
+                    } else {
+                        stop_asked_ms
+                    },
                 };
+                if still_shown {
+                    return Command::Pause;
+                }
                 let command = self.returned(now, app, returned_ms);
                 if command != Command::None || self.left(now.screen) {
                     self.state = State::Active;
