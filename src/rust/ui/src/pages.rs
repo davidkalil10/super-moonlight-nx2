@@ -851,27 +851,37 @@ impl Builder<'_> {
     }
 
     /// A choice this console cannot make now: greyed, with the reason at the right.
-    fn unavailable_row(&mut self, label: &str, reason: &str, y: u32) {
-        let pal = self.pal;
-        self.fill(PANE_X, y, PANE_WIDTH, LOCKED_ROW_HEIGHT, pal.ground, PANEL_RADIUS);
-        self.outline_row(y);
-        self.put(PANE_X + ROW_PAD, y + 12, 520, label, BODY, pal.dim, Align::Left);
-        let width = VALUE_WIDTH;
-        self.put(PANE_X + PANE_WIDTH - ROW_PAD - width, y + 12, width, reason, BODY, pal.dim, Align::Right);
-    }
-
-    fn outline_row(&mut self, y: u32) {
+    fn unavailable_row(&mut self, label: &str, reason: &str, (x, y, width): (u32, u32, u32)) {
         let pal = self.pal;
         self.shape(Shape {
-            x: PANE_X,
+            x,
             y,
-            w: PANE_WIDTH,
+            w: width,
             h: LOCKED_ROW_HEIGHT,
+            fill: pal.ground,
             radius: PANEL_RADIUS,
             stroke: pal.line,
             stroke_width: 2,
             ..Shape::default()
         });
+        self.put(x + ROW_PAD, y + 8, 520, label, BODY, pal.faint, Align::Left);
+        self.put(x + width - ROW_PAD - VALUE_WIDTH, y + 8, VALUE_WIDTH, reason, BODY, pal.faint, Align::Right);
+    }
+
+    /// The picture choices this console or its current mode does not offer, below the rows.
+    fn unavailable_picture(&mut self, model: &Model, x: u32, width: u32, rows: u32) {
+        let mut locked = Vec::new();
+        if !(model.docked() && model.capabilities().docked_sizes) {
+            locked.extend([("1440p", "Docked only"), ("4K", "Docked only")]);
+        }
+        if !model.capabilities().fps120 {
+            locked.push(("120 fps", "Not available"));
+        }
+        let mut y = BODY_Y + 16 + rows * (ROW_HEIGHT + ROW_GAP) + 14;
+        for (label, reason) in locked {
+            self.unavailable_row(label, reason, (x, y, width));
+            y += LOCKED_ROW_HEIGHT + ROW_GAP;
+        }
     }
 
     fn settings_page(&mut self, model: &Model, settings_error: Option<&str>) {
@@ -912,12 +922,8 @@ impl Builder<'_> {
         if model.category() == CONSOLE_CATEGORY {
             self.export_row(count);
         }
-        if model.category() == 0 && !(model.docked() && model.capabilities().docked_sizes) {
-            let mut y = BODY_Y + 16 + count * (ROW_HEIGHT + ROW_GAP) + 14;
-            for size in ["1440p", "4K"] {
-                self.unavailable_row(size, "Docked only", y);
-                y += LOCKED_ROW_HEIGHT + ROW_GAP;
-            }
+        if model.category() == 0 {
+            self.unavailable_picture(model, PANE_X, PANE_WIDTH, count);
         }
     }
 
@@ -945,6 +951,7 @@ impl Builder<'_> {
             let own = stream.index(setting) != model.settings().index(setting);
             self.setting_row(model, &rows[setting as usize], slot, Some(own));
         }
+        self.unavailable_picture(model, SIDE, CONTENT_WIDTH, OVERRIDABLE.len() as u32);
     }
 
     fn quit_confirm_page(&mut self, model: &Model) {
