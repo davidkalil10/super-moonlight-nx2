@@ -71,12 +71,12 @@ pub fn create_surface(
         if let Some(rates) = config.frame_rates {
             let code =
                 crate::sdk::nwindowSetFrameRates(window, rates.at_120hz, rates.at_60hz, rates.vrr);
-            if code != 0 {
-                log(&alloc::format!(
-                    "render: window frame rates result=0x{code:x}"
-                ));
-                return Err(vk::Result::ERROR_INITIALIZATION_FAILED);
-            }
+            log(&alloc::format!(
+                "render: window frame rates {}/{} vrr={} result=0x{code:x}",
+                rates.at_120hz,
+                rates.at_60hz,
+                rates.vrr
+            ));
         }
         ash::nn::vi_surface::Instance::load(entry, instance).create_vi_surface(
             &vk::ViSurfaceCreateInfoNN::default().window(window),
@@ -98,10 +98,9 @@ pub fn release_layer(rates_requested: bool) -> u32 {
             let window = crate::sdk::nwindowGetDefault();
             if rates_requested {
                 let result = crate::sdk::nwindowSetSwapInterval(window, 1);
-                if result != 0 {
-                    return result;
-                }
-                log("render: window interval restored to1/60, 120Hz request withdrawn");
+                log(&alloc::format!(
+                    "render: window interval back to 1/60 result=0x{result:x}"
+                ));
             }
             crate::sdk::nwindowReleaseVi2Layer(window)
         }
