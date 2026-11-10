@@ -1501,9 +1501,11 @@ impl Model {
             return;
         }
         let menu = matches!(self.screen, Screen::Hosts | Screen::Apps | Screen::AppOptions);
-        if op == Op::X && menu && self.editing.is_none() {
+        let editing_option = self.screen == Screen::AppOptions && self.editing.is_some();
+        if op == Op::X && menu && !editing_option {
             self.from = self.screen;
             self.screen = Screen::Settings;
+            self.editing = None;
             step.changed = true;
             return;
         }
