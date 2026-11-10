@@ -226,6 +226,7 @@ pub struct UpstreamStatus {
 pub enum EventClass {
     UpstreamStatus,
     Rumble,
+    Touch,
     Lifecycle,
     Unknown,
     Unclassifiable,
@@ -258,6 +259,8 @@ pub fn classify_event(payload: &[u8]) -> EventClass {
         EventClass::UpstreamStatus
     } else if event.string_is("rumble") {
         EventClass::Rumble
+    } else if event.string_is("touch") {
+        EventClass::Touch
     } else if ["connected", "stopped", "stream_failed"]
         .iter()
         .any(|name| event.string_is(name))
@@ -298,6 +301,10 @@ pub enum Reply<'a> {
     UpstreamStatus(UpstreamStatus),
     /// ID 0: the PC rumbled `player` (0 = player 1, up to 7); 0/0 stops the motors.
     Rumble(Rumble),
+    /// ID 0: whether the PC's Sunshine takes touch input.
+    Touch {
+        supported: bool,
+    },
     /// `message` is the host's text: empty when absent, oversized or not plain text.
     Failure {
         code: Code,
@@ -365,6 +372,14 @@ fn lifecycle(root: Value<'_>) -> Result<Reply<'_>, Error> {
     }
     if event.string_is("rumble") {
         return rumble(root).map(Reply::Rumble);
+    }
+    if event.string_is("touch") {
+        exact_keys(root, &["event", "supported"])?;
+        let supported = root
+            .member("supported")
+            .and_then(|flag| flag.as_bool())
+            .ok_or(Error::Shape)?;
+        return Ok(Reply::Touch { supported });
     }
     if event.string_is("stream_failed") {
         exact_keys(root, &["event", "start_id", "code", "message"])?;

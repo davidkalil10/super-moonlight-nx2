@@ -563,6 +563,7 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
                 Effect::Action(Action::Rumble(rumble)) => {
                     crate::hid::rumble(rumble.player, rumble.low, rumble.high)
                 }
+                Effect::Action(Action::TouchNote) => self.client.touch_note(bytes, now_ms)?,
                 Effect::Action(Action::Exit) => self.exit = true,
                 Effect::Action(Action::RetireProcess) => {
                     crate::render_platform::retire_process();

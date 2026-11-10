@@ -70,6 +70,27 @@ impl Badge {
         true
     }
 
+    /// Shows `line` over the active stream; a badge that stays comes back after it.
+    pub fn note(
+        &mut self,
+        glyphs: &mut Glyphs,
+        storage: &mut [u8; badge::STORAGE_BYTES],
+        active: Option<Epoch>,
+        line: &str,
+        now_ns: u64,
+    ) {
+        if active.is_none() {
+            return;
+        }
+        if self.epoch != active {
+            self.stop(storage);
+            self.epoch = active;
+        }
+        self.controller
+            .get_or_insert_with(|| badge::Controller::start("", badge::NOTE_MS, false))
+            .note(glyphs, storage, line, now_ns);
+    }
+
     pub fn frame(
         &mut self,
         glyphs: &mut Glyphs,

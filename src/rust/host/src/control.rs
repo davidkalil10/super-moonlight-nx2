@@ -307,6 +307,10 @@ impl<'a> Connection<'a> {
                 });
                 response::encode(Kind::Event, 0, &value, out)
             }),
+            controller::Event::TouchUnsupported => self.enqueue(now, |out| {
+                let value = json!({"event": "touch", "supported": false});
+                response::encode(Kind::Event, 0, &value, out)
+            }),
         }
     }
     pub fn close(&mut self) -> Result<(), Error> {

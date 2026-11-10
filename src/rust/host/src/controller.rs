@@ -437,6 +437,8 @@ pub enum Event {
     },
     /// The PC rumbled a player; sent as an ID-0 event that older clients ignore.
     Rumble(relay::Rumble),
+    /// The PC takes no touch; an ID-0 event the client turns into a note.
+    TouchUnsupported,
 }
 
 pub struct Controller {
@@ -785,6 +787,9 @@ impl Controller {
                     return Ok(Some(Event::Connected));
                 }
                 Ok(Some(relay::Event::Rumble(rumble))) => return Ok(Some(Event::Rumble(rumble))),
+                Ok(Some(relay::Event::TouchUnsupported)) => {
+                    return Ok(Some(Event::TouchUnsupported));
+                }
                 Ok(Some(relay::Event::Stopped)) => {
                     let id = backend.stopping.take().filter(|id| *id != 0);
                     backend.relay = None;

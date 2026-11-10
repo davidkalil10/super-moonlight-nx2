@@ -42,6 +42,8 @@ pub enum Event {
     Connected,
     Stopped,
     Rumble(Rumble),
+    /// The PC's Sunshine takes no touch; reported once per stream.
+    TouchUnsupported,
 }
 
 /// Players the client rumbles (1 to 8 as controllers 0 to 7).
@@ -52,6 +54,12 @@ pub struct Rumble {
     pub controller: u8,
     pub low: u16,
     pub high: u16,
+}
+
+/// Reads a worker `{"event":"touch","supported":false}` status line.
+fn touch_unsupported(value: &serde_json::Value) -> bool {
+    value.get("event").and_then(|v| v.as_str()) == Some("touch")
+        && value.get("supported").and_then(|v| v.as_bool()) == Some(false)
 }
 
 impl Rumble {
@@ -71,6 +79,13 @@ impl Rumble {
             high: u16::try_from(field("high")?).ok()?,
         })
     }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TouchNote {
+    Unknown,
+    Pending,
+    Sent,
 }
 
 /// Latest rumble per controller, in arrival order; a newer value replaces a queued one.
@@ -130,6 +145,7 @@ pub struct Relay {
     input: input::Forwarder,
     pending_input: VecDeque<Vec<u8>>,
     rumble: VecDeque<Rumble>,
+    touch_note: TouchNote,
     input_inflight: bool,
     stopping: bool,
     stop_started: bool,
@@ -251,6 +267,7 @@ impl Relay {
             input: input::Forwarder::new(),
             pending_input: VecDeque::new(),
             rumble: VecDeque::new(),
+            touch_note: TouchNote::Unknown,
             input_inflight: false,
             stopping: false,
             stop_started: false,
@@ -523,6 +540,11 @@ impl Relay {
         }
         if self.stopping {
             self.rumble.clear();
+            return Ok(None);
+        }
+        if self.touch_note == TouchNote::Pending {
+            self.touch_note = TouchNote::Sent;
+            return Ok(Some(Event::TouchUnsupported));
         }
         Ok(self.rumble.pop_front().map(Event::Rumble))
     }
@@ -714,6 +736,9 @@ impl Relay {
                         && let Some(rumble) = Rumble::parse(&value)
                     {
                         queue_rumble(&mut self.rumble, rumble);
+                    }
+                    if self.touch_note == TouchNote::Unknown && touch_unsupported(&value) {
+                        self.touch_note = TouchNote::Pending;
                     }
                     if value.get("event").and_then(|v| v.as_str()) == Some("terminated")
                         && !self.stop_started
@@ -989,7 +1014,7 @@ pub fn media_deadline(now: Instant) -> Instant {
 
 #[cfg(test)]
 mod rumble_tests {
-    use super::{Rumble, VecDeque, queue_rumble};
+    use super::{Rumble, VecDeque, queue_rumble, touch_unsupported};
     use serde_json::json;
 
     #[test]
@@ -1010,6 +1035,20 @@ mod rumble_tests {
             json!({"event":"connected"}),
         ] {
             assert_eq!(Rumble::parse(&bad), None);
+        }
+    }
+
+    #[test]
+    fn only_a_refused_touch_line_raises_the_touch_note() {
+        assert!(touch_unsupported(
+            &json!({"event":"touch","supported":false})
+        ));
+        for other in [
+            json!({"event":"touch","supported":true}),
+            json!({"event":"touch"}),
+            json!({"event":"rumble","supported":false}),
+        ] {
+            assert!(!touch_unsupported(&other));
         }
     }
 

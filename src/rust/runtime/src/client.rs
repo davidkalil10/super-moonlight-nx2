@@ -407,6 +407,18 @@ impl<F: Files + Clone> Client<F> {
         }
     }
 
+    /// The PC takes no touch: says so over the stream, as the Civ7 badge does.
+    pub fn touch_note(&mut self, bytes: &mut [u8], now_ms: u64) -> Result<(), Error> {
+        self.badge.note(
+            self.composer.glyphs_mut(),
+            badge_storage(bytes)?,
+            self.driver.session_epoch(),
+            moonlight_nx2_ui::badge::TOUCH_NOTE,
+            now_ms.saturating_mul(1_000_000),
+        );
+        Ok(())
+    }
+
     pub fn paint_policy(
         &mut self,
         bytes: &mut [u8],
