@@ -6,7 +6,8 @@
 #include <string.h>
 #include <switch.h>
 
-#define WORK_BYTES (64u * 1024 * 1024)
+#define WORK_BYTES_1080P (64ull * 1024 * 1024)
+#define PIXELS_1080P (1920ull * 1088)
 #define INPUT_MAX (1024u * 1024)
 #define WORK_RESTORE_POLLS 1000
 #define ACQUISITIONS_NOTED 8
@@ -140,6 +141,14 @@ Result moonlightSdkVideoOpen(uint32_t width, uint32_t height, uint32_t count, ui
     return 0;
 }
 
+/* 64 MiB carried 1080p on the console; larger pictures get it once per 1080p of area. */
+static uint64_t work_bytes(void)
+{
+    uint64_t pixels = (uint64_t)video.width * video.height;
+
+    return WORK_BYTES_1080P * ((pixels + PIXELS_1080P - 1) / PIXELS_1080P);
+}
+
 Result moonlightSdkVideoStart(uint32_t fps, const void *codec_config, size_t codec_config_bytes,
                               uint32_t *stage)
 {
@@ -153,15 +162,17 @@ Result moonlightSdkVideoStart(uint32_t fps, const void *codec_config, size_t cod
         .frame_rate = fps,
         .max_input_size = INPUT_MAX,
     };
+    uint64_t bytes = work_bytes();
     Result result;
 
     if (!video.decoder_open || video.started || video.work)
         return fail(stage, STAGE_INITIALIZE, MAKERESULT(Module_Libnx, LibnxError_BadInput));
-    video.work = memalign(0x1000, WORK_BYTES);
+    note("sdk-video: before work memory bytes=%llu", (unsigned long long)bytes);
+    video.work = memalign(0x1000, bytes);
     if (!video.work)
         return fail(stage, STAGE_WORK_MEMORY, MAKERESULT(Module_Libnx, LibnxError_OutOfMemory));
     note("sdk-video: before initialize work=%p", video.work);
-    result = viddecDecoderInitialize(&video.decoder, &config, video.work, WORK_BYTES, codec_config,
+    result = viddecDecoderInitialize(&video.decoder, &config, video.work, bytes, codec_config,
                                      codec_config_bytes);
     if (R_FAILED(result))
         return fail(stage, STAGE_INITIALIZE, result);
