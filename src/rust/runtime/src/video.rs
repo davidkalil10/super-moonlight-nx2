@@ -433,6 +433,26 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
         }
     }
 
+    /// Submits a unit. When the decoder has no room for it, a finished frame is taken first and
+    /// the unit is offered once more, so it goes in on the turn it arrived. Left waiting, it
+    /// would go in next turn together with that turn's unit, their two frames would finish
+    /// together, fill the decoder again and keep every later turn in the same step of two.
+    pub fn submit_draining(
+        &mut self,
+        renderer: &mut Renderer,
+        header: &Header,
+        bytes: &[u8],
+        received_us: Option<u64>,
+    ) -> Result<(), Error> {
+        match self.submit_timed(header, bytes, received_us) {
+            Err(Error::Decoder(decoder::Error::Again)) => {
+                self.poll_upload(renderer)?;
+                self.submit_timed(header, bytes, received_us)
+            }
+            result => result,
+        }
+    }
+
     pub fn poll_upload(&mut self, renderer: &mut Renderer) -> Result<bool, Error> {
         self.active()?;
         self.release_bound(renderer)?;
@@ -627,7 +647,10 @@ impl<B: Backend<N>, const N: usize> Tick<'_, '_, B, N> {
         bytes: &[u8],
         received_us: Option<u64>,
     ) -> moonlight_nx2_app::media::Submit {
-        match self.video.submit_timed(header, bytes, received_us) {
+        match self
+            .video
+            .submit_draining(self.renderer, header, bytes, received_us)
+        {
             Ok(()) => moonlight_nx2_app::media::Submit::Accepted,
             Err(Error::Decoder(decoder::Error::Again)) => moonlight_nx2_app::media::Submit::Busy,
             Err(_) => moonlight_nx2_app::media::Submit::Failed,
