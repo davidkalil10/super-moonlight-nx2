@@ -17,7 +17,7 @@ use alloc::{boxed::Box, format, vec};
 use core::cell::Cell;
 use moonlight_nx2_app::{
     media::{Closed, Media, Memory, UdpMedia},
-    policy::{Epoch, Observation},
+    policy::{Epoch, Observation, Telemetry},
     reply::Descriptor,
     request::Transport,
     stream::{AUDIO_CHUNK_BYTES, core_codec},
@@ -27,6 +27,7 @@ use moonlight_nx2_core::{
     decoder::{self, Backing, FrameRegistration},
     frame::Matrix,
     media::MAX_OUTBOUND_BYTES,
+    recovery,
 };
 use moonlight_nx2_io::{
     audio::{SLOT_BYTES, SLOTS, Slots},
@@ -105,6 +106,28 @@ struct Running {
     draining: bool,
     last_record_ms: Option<u64>,
     silent: bool,
+}
+
+impl Running {
+    fn counters(&self) -> (video::Stats, recovery::Counters) {
+        match &self.session {
+            Active::Tcp(session) => (session.video_stats(), session.video_recovery()),
+            Active::Udp(session) => (session.video_stats(), session.video_recovery()),
+        }
+    }
+
+    /// What the console can measure for the bitrate and frame-rate policies: frames it decoded
+    /// but never showed or skipped while waiting for a keyframe, and the keyframes it asked for.
+    fn telemetry(&self, now_ms: u64) -> Telemetry {
+        let (stats, recovery) = self.counters();
+        let dropped = stats.dropped.saturating_add(recovery.frames_skipped);
+        Telemetry {
+            at_us: now_ms.saturating_mul(1000),
+            dropped_total: u32::try_from(dropped).unwrap_or(u32::MAX),
+            idr_requests: recovery.idr_requests,
+            ..Telemetry::default()
+        }
+    }
 }
 
 /// Device media for the composed frontend, driven by the controller's OpenMedia and
@@ -354,6 +377,9 @@ impl Stream {
         {
             running.last_record_ms = Some(now_ms);
         }
+        if result.is_ok() {
+            client.observe(running.epoch, Observation::Telemetry(running.telemetry(now_ms)));
+        }
         let quiet = running
             .last_record_ms
             .is_some_and(|last| now_ms.saturating_sub(last) > MEDIA_SILENCE_MS);
@@ -379,13 +405,15 @@ impl Stream {
         let Some(running) = self.running.as_ref() else {
             return;
         };
-        let stats = match &running.session {
-            Active::Tcp(session) => session.video_stats(),
-            Active::Udp(session) => session.video_stats(),
-        };
+        let (stats, recovery) = running.counters();
         log(&format!(
-            "stream: video units={} bytes={} presented={} dropped={}",
-            stats.accepted_units, stats.accepted_bytes, stats.presented, stats.dropped
+            "stream: video units={} bytes={} presented={} dropped={} skipped={} idr_requests={}",
+            stats.accepted_units,
+            stats.accepted_bytes,
+            stats.presented,
+            stats.dropped,
+            recovery.frames_skipped,
+            recovery.idr_requests
         ));
         let [submit, poll, output, readback, upload, present] = crate::stream_stats::take_stages();
         let time = |stage: crate::stream_stats::StageTime| {

@@ -61,6 +61,10 @@ impl<'a, B: Backend<N>, S: Socket, D: Device, V: VideoChannel, const N: usize>
         self.video.stats()
     }
 
+    pub fn video_recovery(&self) -> moonlight_nx2_core::recovery::Counters {
+        self.video.recovery()
+    }
+
     pub fn begin_drain(&mut self, now_ms: u64) {
         if let Some(media) = self.media.as_mut() {
             self.closing = true;
