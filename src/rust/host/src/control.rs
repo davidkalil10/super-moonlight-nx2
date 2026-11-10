@@ -219,6 +219,14 @@ impl<'a> Connection<'a> {
                             out,
                         )
                     })?,
+                    Ok(Started::ProbeReady { sequence, bytes }) => self.enqueue(now, |out| {
+                        response::result(
+                            id,
+                            response::OperationName::Probe,
+                            &crate::probe::reply(sequence, bytes),
+                            out,
+                        )
+                    })?,
                     Err(controller::Error::Session(error)) => {
                         let code = match error {
                             crate::Error::InvalidRequest

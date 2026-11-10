@@ -31,6 +31,12 @@ pub enum Request {
     },
     Stop,
     Idr,
+    Probe {
+        #[serde(default)]
+        sequence: u32,
+        #[serde(default)]
+        bytes: u32,
+    },
 }
 
 #[derive(Deserialize)]
@@ -104,6 +110,10 @@ impl Request {
             Self::Quit { host } => Operation::Quit { host },
             Self::Stop => Operation::Stop,
             Self::Idr => Operation::Idr,
+            Self::Probe { sequence, bytes } => Operation::Probe {
+                sequence: *sequence,
+                bytes: *bytes,
+            },
             Self::Start { host, app, options } => Operation::Start {
                 host,
                 app,

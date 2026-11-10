@@ -14,6 +14,7 @@ pub mod input;
 pub mod listener;
 pub mod mac;
 pub mod management;
+pub mod probe;
 #[cfg(unix)]
 pub mod relay;
 pub mod response;
@@ -87,6 +88,11 @@ pub enum Operation<'a> {
     },
     Stop,
     Idr,
+    /// Link measurement for the console: echo `sequence` with `bytes` of padding.
+    Probe {
+        sequence: u32,
+        bytes: u32,
+    },
 }
 
 impl Operation<'_> {
@@ -112,6 +118,7 @@ impl Operation<'_> {
                     && (1..=1_000_000).contains(&options.bitrate_kbps)
             }
             Self::Stop | Self::Idr => true,
+            Self::Probe { bytes, .. } => bytes <= probe::MAX_BYTES,
         }
     }
 }

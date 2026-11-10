@@ -33,6 +33,7 @@ pub enum Started {
     StartPending,
     StopPending,
     IdrReady { queued: bool },
+    ProbeReady { sequence: u32, bytes: u32 },
 }
 
 pub struct Descriptor {
@@ -362,6 +363,7 @@ impl Backend for HostBackend {
                     queued: relay.request_idr(Instant::now()),
                 })
             }
+            Operation::Probe { sequence, bytes } => Ok(Started::ProbeReady { sequence, bytes }),
             op => {
                 self.management
                     .start(id, op)
