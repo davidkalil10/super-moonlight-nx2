@@ -157,11 +157,11 @@ const SESSION_LIMIT_MS: u64 = 10_000;
 /// Pause before a refused key is tried once more: the helper may still be storing it.
 const KEY_RETRY_MS: u64 = 500;
 const PAIRING_LIMIT_MS: u64 = 125_000;
-const HELPER_SILENT: &str =
-    "The PC helper did not answer; check that moonlight-nx2-pc serve is running";
-const CODE_REFUSED: &str = "The code typed on the PC did not match; open the PC to try again";
+const HELPER_SILENT: &str = "No Moonlight helper answered on this PC";
+const CODE_REFUSED: &str = "The code typed on the PC did not match";
 const PAIRING_OFF: &str = "The PC is not pairing consoles right now; try again in ten minutes";
-const PAIRING_TIMED_OUT: &str = "No code was typed on the PC in time; open the PC to try again";
+const PAIRING_TIMED_OUT: &str = "No code was typed on the PC in time";
+const FIRST_RUN: &str = "Start moonlight-nx2-pc serve on the PC, then choose it here to pair";
 const HELPER_VERSION: &str = "The PC helper speaks another version; update both sides";
 const KEY_NOT_SAVED: &str = "The PC was paired but its key could not be saved";
 
@@ -273,7 +273,12 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
             decoder: Default::default(),
             display: DisplayCapabilities::default(),
         });
-        let message = import_error;
+        let message = import_error.or_else(|| {
+            (authorization.is_none()
+                && pairings.count() == 0
+                && client.bridge.model().message().is_none())
+            .then_some(FIRST_RUN)
+        });
         Ok(Self {
             client,
             control: None,
@@ -598,13 +603,7 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
             (None, None) => &[],
         };
         let socket = SecureSocket::secured(socket, mode, console, secret, &mut random);
-        if let Some(code) = code {
-            let digits = core::str::from_utf8(&code).unwrap_or("");
-            self.text = Some(Message::of(&alloc::format!(
-                "Pairing code {} {}. On the PC run: moonlight-nx2-pc pair {digits}",
-                &digits[..4],
-                &digits[4..]
-            )));
+        if code.is_some() {
             self.client
                 .driver
                 .service_mut()
@@ -700,13 +699,23 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
             return;
         };
         let pairing = handshake.code.is_some();
+        if let Some(code) = &handshake.code {
+            let left_s = handshake.deadline_ms.saturating_sub(now_ms).div_ceil(1000);
+            self.client
+                .bridge
+                .set_helper_code(core::str::from_utf8(code).ok(), Some(left_s as u32));
+        }
         let progress = if cancelled {
             Err(IoError::Failed)
         } else {
             handshake.socket.poll_connect()
         };
+        let waiting = progress == Ok(false) && now_ms < handshake.deadline_ms;
+        if pairing && !waiting {
+            self.client.bridge.set_helper_code(None, None);
+        }
         match progress {
-            Ok(false) if now_ms < handshake.deadline_ms => {
+            Ok(false) if waiting => {
                 self.handshake = Some(handshake);
                 return;
             }
@@ -746,10 +755,7 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
         };
         match failure {
             _ if rejected && !pairing && !handshake.second => {
-                self.key_retry = Some((
-                    again(Auth::KeyAgain),
-                    now_ms.saturating_add(KEY_RETRY_MS),
-                ));
+                self.key_retry = Some((again(Auth::KeyAgain), now_ms.saturating_add(KEY_RETRY_MS)));
             }
             _ if rejected && !pairing => self.connect(connections, again(Auth::Setup), now_ms),
             Some(secure::Error::Confirm) => self.link_failed(CODE_REFUSED),
