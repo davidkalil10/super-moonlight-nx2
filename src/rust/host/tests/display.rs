@@ -1,4 +1,7 @@
-use moonlight_nx2_core::control::{Frame, Header, Kind};
+mod common;
+
+use common::frame;
+use moonlight_nx2_core::control::Kind;
 use moonlight_nx2_host::{
     Codec, StreamOptions, Transport,
     controller::{Controller, Event, Started},
@@ -9,12 +12,10 @@ use moonlight_nx2_host::{
         kscreen::{Kscreen, parse_outputs},
         saved::Store,
     },
-    helper::Helper,
 };
 use serde_json::{Value, json};
 use std::{
     fs,
-    net::{IpAddr, Ipv4Addr},
     os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
     sync::{
@@ -690,13 +691,6 @@ fn outputs_parse_tolerates_numeric_ids_and_rejects_broken_modes() {
     assert!(parse_outputs("{}").is_err());
 }
 
-fn frame(kind: Kind, id: u32, payload: &[u8]) -> Frame<'_> {
-    Frame {
-        header: Header::new(kind, id, payload.len()).unwrap(),
-        payload,
-    }
-}
-
 fn start_request(sops: bool) -> Vec<u8> {
     json!({"op": "start", "host": "127.0.0.1", "app": "Desktop", "options": {
         "width": 1920, "height": 1080, "fps": 60, "bitrate_kbps": 20000, "codec": "h264",
@@ -706,14 +700,7 @@ fn start_request(sops: bool) -> Vec<u8> {
 }
 
 fn controller() -> Controller {
-    let helper = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/paired-helper");
-    let ip = IpAddr::V4(Ipv4Addr::LOCALHOST);
-    let mut controller =
-        Controller::new([b'a'; 64], Helper::new(&helper).unwrap(), ip, ip).unwrap();
-    controller
-        .authenticate(frame(Kind::Auth, 0, &[b'a'; 64]))
-        .unwrap();
-    controller
+    common::controller(&Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/paired-helper"))
 }
 
 fn start(controller: &mut Controller, id: u32, sops: bool) {

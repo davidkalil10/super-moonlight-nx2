@@ -1,25 +1,19 @@
-use moonlight_nx2_core::control::{Frame, Header, Kind};
+mod common;
+
+use common::{controller, frame};
+use moonlight_nx2_core::control::Kind;
 use moonlight_nx2_host::{
     bridge,
     controller::{Controller, Event, Started},
     cover::{CHUNK_BYTES, encode_base64},
-    helper::Helper,
     management::OperationName,
     response::Code,
 };
 use std::{
     fs,
-    net::{IpAddr, Ipv4Addr},
     os::unix::fs::PermissionsExt,
     time::{Duration, Instant},
 };
-
-fn frame(kind: Kind, id: u32, payload: &[u8]) -> Frame<'_> {
-    Frame {
-        header: Header::new(kind, id, payload.len()).unwrap(),
-        payload,
-    }
-}
 
 fn result(controller: &mut Controller) -> bridge::Event {
     let deadline = Instant::now() + Duration::from_secs(10);
@@ -53,12 +47,7 @@ fn cover_fetch_is_chunked_cached_and_correlated() {
     ));
     fs::write(&fixture, script).unwrap();
     fs::set_permissions(&fixture, fs::Permissions::from_mode(0o700)).unwrap();
-    let ip = IpAddr::V4(Ipv4Addr::LOCALHOST);
-    let mut controller =
-        Controller::new([b'a'; 64], Helper::new(&fixture).unwrap(), ip, ip).unwrap();
-    controller
-        .authenticate(frame(Kind::Auth, 0, &[b'a'; 64]))
-        .unwrap();
+    let mut controller = controller(&fixture);
     assert!(matches!(
         controller
             .request(frame(
@@ -154,12 +143,7 @@ print(json.dumps({'event':'cover_done','sha256':hashlib.sha256(png).hexdigest()}
 "##;
     fs::write(&fixture, script).unwrap();
     fs::set_permissions(&fixture, fs::Permissions::from_mode(0o700)).unwrap();
-    let ip = IpAddr::V4(Ipv4Addr::LOCALHOST);
-    let mut controller =
-        Controller::new([b'a'; 64], Helper::new(&fixture).unwrap(), ip, ip).unwrap();
-    controller
-        .authenticate(frame(Kind::Auth, 0, &[b'a'; 64]))
-        .unwrap();
+    let mut controller = controller(&fixture);
     assert!(matches!(
         controller
             .request(frame(
@@ -196,12 +180,7 @@ fn closing_during_cover_fetch_reaps_helper() {
     )
     .unwrap();
     fs::set_permissions(&fixture, fs::Permissions::from_mode(0o700)).unwrap();
-    let ip = IpAddr::V4(Ipv4Addr::LOCALHOST);
-    let mut controller =
-        Controller::new([b'a'; 64], Helper::new(&fixture).unwrap(), ip, ip).unwrap();
-    controller
-        .authenticate(frame(Kind::Auth, 0, &[b'a'; 64]))
-        .unwrap();
+    let mut controller = controller(&fixture);
     assert!(matches!(
         controller
             .request(frame(
