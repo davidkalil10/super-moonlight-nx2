@@ -7,7 +7,8 @@ generate: encodes a short 1080p60 testsrc2 clip (moving pattern with a frame clo
           the runtime embeds from runtime/refclip/.
 sums:     rewrites the sums of existing .mlrc clips without encoding them again.
 compare:  checks the 'ref:' lines of a DUT log against the sums, and optionally an HDMI
-          capture (any image ffmpeg reads) against the reference frames by PSNR.
+          capture (any image ffmpeg reads) against the reference frames by PSNR. A session
+          named like av1_mime is checked against the clip before the underscore.
 
 The SDK video decoder returns exact luma, but its chroma comes back filtered along each row:
 floor((left + 6 * sample + right) / 8) per U and V, edges repeated. The last sums column is the
@@ -157,7 +158,7 @@ def compare_log(log, reference, required=(), decoder=None):
             print(f"{codec}: no frame lines")
             passed = False
     for codec, frames in seen.items():
-        path = reference / f"{codec}.sums"
+        path = reference / f"{codec.split('_')[0]}.sums"
         if not path.exists():
             print(f"{codec}: no reference sums at {path}")
             passed = False

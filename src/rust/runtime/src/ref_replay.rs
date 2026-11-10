@@ -22,19 +22,30 @@ use moonlight_nx2_core::{
     video_wire::Output,
 };
 
+const H264: &[u8] = include_bytes!("../refclip/h264.mlrc");
+const AV1: &[u8] = include_bytes!("../refclip/av1.mlrc");
+#[cfg(any(feature = "diagnostic-native-decode", feature = "sdk-video"))]
+const HEVC: &[u8] = include_bytes!("../refclip/hevc.mlrc");
+
+/// One session per entry. The SDK decoder replays AV1 once per configure buffer candidate and
+/// leaves the HEVC guess for last; a name's part before `_` is its clip.
 #[cfg(feature = "sdk-video")]
-const CLIPS: [(&str, &[u8]); 1] = [("h264", include_bytes!("../refclip/h264.mlrc"))];
+const CLIPS: [(&str, &[u8], Variant); 5] = [
+    ("h264", H264, Variant::Mime),
+    ("av1_mime", AV1, Variant::Mime),
+    ("av1_seqhdr", AV1, Variant::SequenceHeader),
+    ("av1_empty", AV1, Variant::Empty),
+    ("hevc_codec2", HEVC, Variant::Mime),
+];
+#[cfg(feature = "sdk-video")]
+type Variant = moonlight_nx2_core::viddec::Av1Config;
+#[cfg(not(feature = "sdk-video"))]
+type Variant = ();
 #[cfg(not(any(feature = "diagnostic-native-decode", feature = "sdk-video")))]
-const CLIPS: [(&str, &[u8]); 2] = [
-    ("h264", include_bytes!("../refclip/h264.mlrc")),
-    ("av1", include_bytes!("../refclip/av1.mlrc")),
-];
+const CLIPS: [(&str, &[u8], Variant); 2] = [("h264", H264, ()), ("av1", AV1, ())];
 #[cfg(feature = "diagnostic-native-decode")]
-const CLIPS: [(&str, &[u8]); 3] = [
-    ("h264", include_bytes!("../refclip/h264.mlrc")),
-    ("hevc", include_bytes!("../refclip/hevc.mlrc")),
-    ("av1", include_bytes!("../refclip/av1.mlrc")),
-];
+const CLIPS: [(&str, &[u8], Variant); 3] =
+    [("h264", H264, ()), ("hevc", HEVC, ()), ("av1", AV1, ())];
 /// Presents per decoded frame: about half a second at 60 Hz, a quarter at 120 Hz.
 const HOLD_PRESENTS: u32 = 30;
 /// Presents the last frame of each clip stays up, for a still HDMI capture.
@@ -47,17 +58,19 @@ const CLIP_FPS: u32 = 60;
 /// the plumbing. A real decoder gates these two behind its feature (`diagnostic-native-decode`)
 /// and adds its own constructor and `BACKING` next to them.
 #[cfg(not(any(feature = "diagnostic-native-decode", feature = "sdk-video")))]
-fn backend(_: &mut Renderer) -> Option<crate::video_sink::VideoSink> {
+fn backend(_: &mut Renderer, _: Variant) -> Option<crate::video_sink::VideoSink> {
     Some(crate::video_sink::VideoSink::new())
 }
 #[cfg(feature = "sdk-video")]
-fn backend(_: &mut Renderer) -> Option<crate::sdk_video::SdkVideo> {
-    Some(crate::sdk_video::SdkVideo::new(CLIP_FPS))
+fn backend(_: &mut Renderer, av1_config: Variant) -> Option<crate::sdk_video::SdkVideo> {
+    Some(crate::sdk_video::SdkVideo::with_av1_config(
+        CLIP_FPS, av1_config,
+    ))
 }
 #[cfg(not(feature = "diagnostic-native-decode"))]
 const BACKING: Backing = Backing::CpuReference;
 #[cfg(feature = "diagnostic-native-decode")]
-fn backend(renderer: &mut Renderer) -> Option<crate::native_video::NativeVideo> {
+fn backend(renderer: &mut Renderer, _: Variant) -> Option<crate::native_video::NativeVideo> {
     renderer.native_decoder().ok()
 }
 #[cfg(feature = "diagnostic-native-decode")]
@@ -66,24 +79,32 @@ const BACKING: Backing = Backing::NativeGpu;
 /// Replays every embedded clip; true when each one decoded, uploaded and closed cleanly.
 pub fn run(renderer: &mut Renderer) -> bool {
     let mut passed = true;
-    for (name, bytes) in CLIPS {
+    for (name, bytes, variant) in CLIPS {
         log(&format!("b2ar: codec={name} begin"));
         let Some(clip) = Clip::parse(bytes) else {
             log(&format!("ref: {name} clip malformed"));
             passed = false;
             continue;
         };
-        let Some(backend) = backend(renderer) else {
+        let Some(backend) = backend(renderer, variant) else {
             log(&format!("ref: {name} backend unavailable"));
             passed = false;
             continue;
         };
         let result = replay(renderer, backend, BACKING, name, &clip);
         log(&format!("b2ar: codec={name} replay={result}"));
+        log(&format!(
+            "ref: {name} session {}",
+            if result { "PASS" } else { "FAIL" }
+        ));
         passed &= result;
         if sdk::process_retired() || !unsafe { sdk::appletMainLoop() } {
             return false;
         }
+    }
+    #[cfg(feature = "diagnostic-sdk-decode")]
+    if let Some(size) = Size::new(1920, 1088) {
+        crate::sdk_video::note_output_formats(size);
     }
     log(&format!("ref: replay done passed={passed}"));
     passed
