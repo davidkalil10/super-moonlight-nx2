@@ -1,0 +1,6 @@
+# Builds and, in container mode, runs the PC bundle's binaries.
+FROM quay.io/fedora/fedora@sha256:12151022b0ec7cb4d70ae14e4a4d319377323265d7198b69dd53ec92713198d5
+RUN dnf install -y --setopt=install_weak_deps=False \
+      cmake gcc gcc-c++ make pkgconf-pkg-config git-core clang bindgen-cli rust cargo \
+      openssl-devel libcurl-devel expat-devel libuuid-devel opus-devel \
+ && dnf clean all

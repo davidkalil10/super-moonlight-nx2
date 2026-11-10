@@ -3,6 +3,8 @@ moonlight-nx2 carries work under the GNU General Public License, version 3:
 - src/streamer/protocol/: the hbmoonlight protocol client, built against the pinned
   moonlight-stream sources fetch.sh checks out (moonlight-embedded, moonlight-common-c with
   its enet fork). Those upstreams are GPL-3.0; the helper is distributed under the same terms.
+- src/rust/host/src/upstream_worker/: the Rust upstream worker, linked against the same
+  pinned sources and distributed under the same terms, as is the PC bundle that carries it.
 
 The licence text follows.
 
