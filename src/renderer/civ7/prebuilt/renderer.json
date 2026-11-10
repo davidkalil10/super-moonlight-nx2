@@ -37,11 +37,11 @@
       "pageBytes": 4194304,
       "pages": 2,
       "vertices": 6,
-      "instances": 106,
+      "instances": 128,
       "blending": "source-alpha"
     },
     "badge": {
-      "instance": 106,
+      "instance": 128,
       "words": {
         "visible": 45312,
         "x": 45316,
@@ -109,15 +109,15 @@
   },
   "blob": {
     "path": "shaders.bin",
-    "bytes": 80144,
-    "sha256": "eeb6077d009d7eedff545cfe7fb148e7bdf253b5845f9f303412c0fdb0f432d4"
+    "bytes": 90992,
+    "sha256": "479886df5b422d9d052a89619f173427b5c847d4039e0db4ef80600e91408720"
   },
   "sources": {
     "publish.comp": "229bde753bc835c376e0fa0f1d0b7b9cb271ccdac9887d22a972f9db97df24ef",
     "storage.glsl": "81c18548664c68dfcf7bb9b2ce683234dbcd08b161a6c1756555ace8a912d3e6",
-    "ui-control.glsl": "b27362edb2d15a0c907c5a5f4eebf4ae4eb32872a23bea562831fbf0fed63ee0",
-    "ui.frag": "a8c0dff07b50f4c609c8f35d8a6f67ee3418989dd9a462af2199225f35fb8c08",
-    "ui.vert": "8a00c933c615a384e4efa773b455bdc6bd616f3730db624ca05ce073952d2d7c",
+    "ui-control.glsl": "876683e2c67e713782fbbe681504eb807439a5e96f614694cbe51075d1497ecc",
+    "ui.frag": "ce9b4c207d6dd686e05188d522929ae64e98c4f95bf28723e183bf4275554f1d",
+    "ui.vert": "11b8ef7ae3a3897d010a06bb30c9ed62c2fbb521dca039d8d73b29341bd79b97",
     "video-storage.frag": "bd7c0b6877d11fafa3d691d01498d5039651f434d6dcba9fdcf7ed66d0b5fdb9",
     "video.frag": "eb48b715e2c0bbfa9591cf40c0757dbd65b166ca1e8effed1b4cd53cb0f880d5",
     "video.glsl": "bdc0b6a4ea437eecfd441581344dc8d671afbc99a1f5f444e3a993c643edec38",

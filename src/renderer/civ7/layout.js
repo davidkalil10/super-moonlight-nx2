@@ -34,8 +34,8 @@ export const UI = ring.UI;
 /** Where createInputReader writes the pad and touch state, then the compute shader's scratch. */
 export const INPUT = {pad: 0, touch: 128, previousButtons: 784, chordFrames: 788, stickRepeat: 792, touchHeld: 796};
 
-/** Background, 24 covers, 48 text strips, 32 items or cursor, the busy indicator. */
-export const UI_INSTANCES = 106;
+/** Background, 22 shapes, 24 images, 48 text strips, 32 items or cursor, the busy indicator. */
+export const UI_INSTANCES = 128;
 /** The rate badge quad follows the page instances. */
 export const BADGE_INSTANCE = UI_INSTANCES;
 

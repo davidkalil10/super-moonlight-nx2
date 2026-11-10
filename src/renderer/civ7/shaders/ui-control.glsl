@@ -3,15 +3,16 @@ const uint UI_HDR_EPOCH = 1u, UI_HDR_SEQUENCE = 2u, UI_HDR_FLAGS = 3u,
            UI_HDR_ITEMS = 4u, UI_HDR_TEXTS = 5u, UI_HDR_IMAGES = 6u;
 const uint UI_HDR_BODY = 7u, UI_HDR_BACKGROUND = 8u, UI_HDR_HOME = 9u,
            UI_HDR_CHECKSUM = 10u;
-const uint UI_ITEMS = 16u, UI_TEXTS = 272u, UI_IMAGES = 656u,
+const uint UI_HDR_SHAPES = 11u, UI_HDR_ACCENT = 12u;
+const uint UI_ITEMS = 16u, UI_TEXTS = 272u, UI_IMAGES = 656u, UI_SHAPES = 848u,
            UI_TABLES_END = 1024u, UI_BODY = 1024u;
 const uint UI_MAX_ITEMS = 32u, UI_MAX_TEXTS = 48u, UI_MAX_IMAGES = 24u,
-           UI_MAX_BODY = UI_PAGE_WORDS * 4u - 4096u;
+           UI_MAX_SHAPES = 22u, UI_MAX_BODY = UI_PAGE_WORDS * 4u - 4096u;
 const uint UI_FLAG_OVERLAY = 1u, UI_FLAG_HIDE_CURSOR = 2u, UI_FLAG_NO_CHORD = 4u;
 const uint UI_ITEM_GREYED = 1u, UI_ITEM_CURRENT = 2u, UI_ITEM_ADJUSTABLE = 4u,
-           UI_ITEM_PENDING = 8u, UI_ITEM_EDITING = 16u;
+           UI_ITEM_PENDING = 8u, UI_ITEM_EDITING = 16u, UI_ITEM_REPORTS_FOCUS = 32u;
 const uint UI_OP_A = 1u, UI_OP_B = 2u, UI_OP_X = 3u, UI_OP_Y = 4u,
-           UI_OP_ADJUST = 5u, UI_OP_CHORD = 6u, UI_OP_EDIT = 7u;
+           UI_OP_ADJUST = 5u, UI_OP_CHORD = 6u, UI_OP_EDIT = 7u, UI_OP_FOCUS = 8u;
 const uint UI_CHORD_FRAMES = 60u, UI_STICK_REPEAT = 12u;
 
 uint uiPageBase(uint page) { return UI_BASE + page * UI_PAGE_WORDS; }
@@ -52,8 +53,9 @@ bool uiValid(uint base, uint epoch, uint sequence) {
     return false;
   uint items = uiWord(base + UI_HDR_ITEMS), texts = uiWord(base + UI_HDR_TEXTS),
        images = uiWord(base + UI_HDR_IMAGES), body = uiWord(base + UI_HDR_BODY);
+  uint shapes = uiWord(base + UI_HDR_SHAPES);
   if (items > UI_MAX_ITEMS || texts > UI_MAX_TEXTS || images > UI_MAX_IMAGES ||
-      body > UI_MAX_BODY)
+      shapes > UI_MAX_SHAPES || body > UI_MAX_BODY)
     return false;
   if (uiWord(base + UI_HDR_HOME) >= max(items, 1u))
     return false;
@@ -78,11 +80,21 @@ bool uiValid(uint base, uint epoch, uint sequence) {
   for (uint i = 0u; i < images; i++) {
     uvec4 r = uiRect(base, UI_IMAGES, i, 0u);
     uint offset = uiWord(base + UI_IMAGES + i * 8u + 4u);
-    if (!uiRectOk(r, 320u, 180u) || (offset & 3u) != 0u ||
-        offset + r.z * r.w * 4u > body ||
+    uint sourceWidth = uiWord(base + UI_IMAGES + i * 8u + 6u) & 65535u,
+         sourceHeight = uiWord(base + UI_IMAGES + i * 8u + 7u);
+    if (sourceWidth == 0u) {
+      sourceWidth = r.z;
+      sourceHeight = r.w;
+    }
+    if (!uiRectOk(r, 320u, 180u) || sourceWidth > 320u || sourceHeight == 0u ||
+        sourceHeight > 180u || (offset & 3u) != 0u ||
+        offset + sourceWidth * sourceHeight * 4u > body ||
         uiWord(base + UI_IMAGES + i * 8u + 5u) != 1u)
       return false;
   }
+  for (uint i = 0u; i < shapes; i++)
+    if (!uiRectOk(uiRect(base, UI_SHAPES, i, 0u), 1920u, 1080u))
+      return false;
   return true;
 }
 uint uiItemId(uint base, uint index) {
@@ -276,5 +288,8 @@ void uiInput() {
       storage.words[UI_OVERLAY] = 0u;
     uiCommand(UI_OP_B, 0u, 0u);
   }
+  if (!sent && items > 0u && cursor != uiWord(UI_CURSOR) &&
+      (uiItemFlags(base, cursor) & UI_ITEM_REPORTS_FOCUS) != 0u)
+    uiCommand(UI_OP_FOCUS, uiItemId(base, cursor), 0u);
   storage.words[UI_CURSOR] = cursor;
 }
