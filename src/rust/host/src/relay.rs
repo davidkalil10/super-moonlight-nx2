@@ -322,6 +322,11 @@ impl Relay {
                     .line(now, self.video_window.size(), self.video_queue.len())
         {
             eprintln!("{line}");
+            if self.audio_channel.is_some() {
+                let dropped = self.pcm.dropped_bytes() / assemble::PCM_BYTES as u64;
+                let queued = self.pcm.buffered_bytes() / assemble::PCM_BYTES;
+                eprintln!("{}", self.stats.audio_line(dropped, queued));
+            }
         }
         if result.is_err()
             && let Err(error) = self.cancel()
@@ -1041,7 +1046,10 @@ impl Relay {
             .map_err(Error::Media)?
         {
             match channel.queue(header, payload) {
-                Ok(()) => self.pcm.consume().map_err(Error::Media)?,
+                Ok(()) => {
+                    self.pcm.consume().map_err(Error::Media)?;
+                    self.stats.audio_sent();
+                }
                 Err(channel::Error::Busy) => {}
                 Err(error) => return Err(Error::Channel(error)),
             }
@@ -1049,6 +1057,7 @@ impl Relay {
         channel.pump().map_err(Error::Channel)?;
         if channel.ack().map_err(Error::Channel)?.is_some() {
             channel.consume_ack().map_err(Error::Channel)?;
+            self.stats.audio_acknowledged();
         }
         Ok(())
     }

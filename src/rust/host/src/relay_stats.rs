@@ -16,9 +16,17 @@ struct Second {
     acknowledgement_ms: Vec<f64>,
 }
 
+#[derive(Default)]
+struct AudioSecond {
+    sent: u32,
+    acknowledged: u32,
+    dropped_before: u64,
+}
+
 pub struct RelayStats {
     started: Option<Instant>,
     second: Second,
+    audio: AudioSecond,
 }
 
 impl RelayStats {
@@ -26,6 +34,7 @@ impl RelayStats {
         Self {
             started: None,
             second: Second::default(),
+            audio: AudioSecond::default(),
         }
     }
 
@@ -53,6 +62,30 @@ impl RelayStats {
 
     pub fn idr_requested(&mut self) {
         self.second.idr_requests += 1;
+    }
+
+    pub fn audio_sent(&mut self) {
+        self.audio.sent += 1;
+    }
+
+    pub fn audio_acknowledged(&mut self) {
+        self.audio.acknowledged += 1;
+    }
+
+    /// The audio line for the second `line` just closed. `dropped` is the count of chunks
+    /// discarded since the stream began because the console took them too slowly.
+    pub fn audio_line(&mut self, dropped: u64, queued: usize) -> String {
+        let line = format!(
+            "relay: audio sent={} acked={} dropped={} queued={queued}",
+            self.audio.sent,
+            self.audio.acknowledged,
+            dropped - self.audio.dropped_before,
+        );
+        self.audio = AudioSecond {
+            dropped_before: dropped,
+            ..AudioSecond::default()
+        };
+        line
     }
 
     /// The closed second's line, at most once a second.
@@ -119,6 +152,24 @@ mod tests {
         assert_eq!(
             stats.line(start + PERIOD * 2, 2, 0).unwrap(),
             "relay: offered=0 sent=0 acked=0 dropped=0 lost=0 idr=0 kbps=0 ack_ms p50=0.0 p90=0.0 max=0.0 window=2 queued=0"
+        );
+    }
+
+    #[test]
+    fn the_audio_line_counts_each_second_on_its_own() {
+        let mut stats = RelayStats::new();
+        for _ in 0..3 {
+            stats.audio_sent();
+        }
+        stats.audio_acknowledged();
+        assert_eq!(
+            stats.audio_line(40, 2),
+            "relay: audio sent=3 acked=1 dropped=40 queued=2"
+        );
+        stats.audio_sent();
+        assert_eq!(
+            stats.audio_line(45, 0),
+            "relay: audio sent=1 acked=0 dropped=5 queued=0"
         );
     }
 }
