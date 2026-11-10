@@ -93,6 +93,47 @@ unsafe extern "C" {
     fn moonlightSdkVideoClose(stage: *mut u32) -> u32;
     #[cfg(feature = "diagnostic-sdk-decode")]
     fn moonlightSdkVideoNoteFormats(width: u32, height: u32);
+    #[cfg(feature = "diagnostic-sdk-modes")]
+    fn moonlightSdkVideoTune(
+        input_format: u32,
+        output_format: u32,
+        pool_height: u32,
+        max_input_bytes: u32,
+        config_width: u32,
+        config_height: u32,
+        split_initialize: bool,
+    );
+}
+
+/// What a diagnostic session changes from the stream's own choices. Zero keeps the choice.
+#[cfg(feature = "diagnostic-sdk-modes")]
+#[derive(Clone, Copy)]
+pub struct Tuning {
+    pub input_format: u32,
+    pub output_format: u32,
+    pub pool_height: u32,
+    pub max_input_bytes: u32,
+    /// The size the decoder is configured with, when not the stream's.
+    pub config_size: (u32, u32),
+    pub work_mebibytes: usize,
+    /// Initialize command by command, so the log names the one that refused.
+    pub split_initialize: bool,
+    /// No line per unit, for a session that is timed.
+    pub quiet: bool,
+}
+
+#[cfg(feature = "diagnostic-sdk-modes")]
+impl Tuning {
+    pub const NONE: Self = Self {
+        input_format: 0,
+        output_format: 0,
+        pool_height: 0,
+        max_input_bytes: 0,
+        config_size: (0, 0),
+        work_mebibytes: 0,
+        split_initialize: false,
+        quiet: false,
+    };
 }
 
 fn verified(codec: Codec) -> bool {
@@ -117,6 +158,8 @@ pub fn note_output_formats(size: Size) {
 
 pub struct SdkVideo {
     fps: u32,
+    #[cfg(feature = "diagnostic-sdk-modes")]
+    tuning: Tuning,
     config: Option<Config>,
     started: bool,
     ready: Option<usize>,
@@ -127,9 +170,28 @@ pub struct SdkVideo {
 }
 
 impl SdkVideo {
+    #[cfg(feature = "diagnostic-sdk-modes")]
+    pub fn tuned(fps: u32, tuning: Tuning) -> Self {
+        Self {
+            tuning,
+            ..Self::new(fps)
+        }
+    }
+
+    /// Whether the diagnostic's line per unit is wanted.
+    #[cfg(feature = "diagnostic-sdk-decode")]
+    fn chatty(&self) -> bool {
+        #[cfg(feature = "diagnostic-sdk-modes")]
+        return !self.tuning.quiet;
+        #[cfg(not(feature = "diagnostic-sdk-modes"))]
+        true
+    }
+
     pub fn new(fps: u32) -> Self {
         Self {
             fps,
+            #[cfg(feature = "diagnostic-sdk-modes")]
+            tuning: Tuning::NONE,
             config: None,
             started: false,
             ready: None,
@@ -158,6 +220,14 @@ impl SdkVideo {
         let config = self.config.ok_or(BackendError::Invalid)?;
         let session =
             viddec::session(config.codec, config.display).ok_or(BackendError::Unsupported)?;
+        #[cfg(feature = "diagnostic-sdk-modes")]
+        let session = match self.tuning.work_mebibytes {
+            0 => session,
+            mebibytes => viddec::Session {
+                work_bytes: mebibytes << 20,
+                ..session
+            },
+        };
         let mut codec_config = [0; viddec::CODEC_CONFIG_MAX];
         let Some(bytes) = viddec::codec_config(config.codec, access_unit, &mut codec_config) else {
             log(&format!(
@@ -231,6 +301,19 @@ impl Backend for SdkVideo {
         if !accepted(config.codec) || config.backing != Backing::CpuReference {
             return Err(BackendError::Unsupported);
         }
+        #[cfg(feature = "diagnostic-sdk-modes")]
+        unsafe {
+            let tuning = self.tuning;
+            moonlightSdkVideoTune(
+                tuning.input_format,
+                tuning.output_format,
+                tuning.pool_height,
+                tuning.max_input_bytes,
+                tuning.config_size.0,
+                tuning.config_size.1,
+                tuning.split_initialize,
+            );
+        }
         let mut images = [0; SURFACES];
         let mut stage = 0;
         let mut sync_result = 0;
@@ -266,10 +349,12 @@ impl Backend for SdkVideo {
             .and_then(|timestamp| i64::try_from(timestamp).ok())
             .ok_or(BackendError::Invalid)?;
         #[cfg(feature = "diagnostic-sdk-decode")]
-        log(&format!(
-            "b2ar: before submit pts_us={pts_us} bytes={}",
-            bytes.len()
-        ));
+        if self.chatty() {
+            log(&format!(
+                "b2ar: before submit pts_us={pts_us} bytes={}",
+                bytes.len()
+            ));
+        }
         let result = unsafe { moonlightSdkVideoSubmit(bytes.as_ptr(), bytes.len(), timestamp_ns) };
         if result == SUBMIT_BUSY {
             self.busy_submits += 1;
@@ -288,7 +373,7 @@ impl Backend for SdkVideo {
         })?;
         if ready {
             #[cfg(feature = "diagnostic-sdk-decode")]
-            if self.ready != Some(surface) {
+            if self.ready != Some(surface) && self.chatty() {
                 log(&format!("b2ar: ready surface={surface}"));
             }
             self.ready = Some(surface);
@@ -300,7 +385,9 @@ impl Backend for SdkVideo {
         let surface = self.ready.take().ok_or(BackendError::Invalid)?;
         let mut properties = Properties::default();
         #[cfg(feature = "diagnostic-sdk-decode")]
-        log(&format!("b2ar: before output surface={surface}"));
+        if self.chatty() {
+            log(&format!("b2ar: before output surface={surface}"));
+        }
         check("output properties", unsafe {
             moonlightSdkVideoOutput(surface as u32, &mut properties)
         })?;

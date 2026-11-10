@@ -24,6 +24,8 @@ enum {
     STAGE_STOP,
     STAGE_WORK_RESTORE,
     STAGE_POOL_CLOSE,
+    STAGE_CONFIGURE,
+    STAGE_SUBMISSION_EVENT,
 };
 
 typedef struct {
@@ -66,6 +68,17 @@ static struct {
     bool started;
 } video;
 
+/* What a diagnostic session changes for its next open. Zero keeps the stream's choice. */
+static struct {
+    uint32_t input_format;
+    uint32_t output_format;
+    uint32_t pool_height;
+    uint32_t max_input_bytes;
+    uint32_t config_width;
+    uint32_t config_height;
+    bool split_initialize;
+} tuning;
+
 void moonlightPlatformLog(const uint8_t *message, size_t bytes);
 
 __attribute__((format(printf, 1, 2))) static void note(const char *format, ...)
@@ -89,6 +102,24 @@ static Result fail(uint32_t *stage, uint32_t at, Result result)
     return result;
 }
 
+void moonlightSdkVideoTune(uint32_t input_format, uint32_t output_format, uint32_t pool_height,
+                           uint32_t max_input_bytes, uint32_t config_width,
+                           uint32_t config_height, bool split_initialize)
+{
+    tuning.input_format = input_format;
+    tuning.output_format = output_format;
+    tuning.pool_height = pool_height;
+    tuning.max_input_bytes = max_input_bytes;
+    tuning.config_width = config_width;
+    tuning.config_height = config_height;
+    tuning.split_initialize = split_initialize;
+}
+
+static uint32_t output_format(void)
+{
+    return tuning.output_format ? tuning.output_format : ViddecOutputFormat_Nv12;
+}
+
 Result moonlightSdkVideoOpen(uint32_t width, uint32_t height, uint32_t count, uint32_t *images,
                              uint32_t *stage, Result *sync_result)
 {
@@ -108,8 +139,9 @@ Result moonlightSdkVideoOpen(uint32_t width, uint32_t height, uint32_t count, ui
     video.count = count;
     video.width = width;
     video.height = height;
-    result = viddecMakeImagePreference(&preference, width, height, ViddecOutputFormat_Nv12,
-                                       ViddecTilingMode_PitchLinear);
+    result = viddecMakeImagePreference(&preference, width,
+                                       tuning.pool_height ? tuning.pool_height : height,
+                                       output_format(), ViddecTilingMode_PitchLinear);
     if (R_FAILED(result))
         return fail(stage, STAGE_PREFERENCE, result);
     result = viddecGetImagePoolSize(&preference, count, &bytes, &alignment);
@@ -139,33 +171,105 @@ Result moonlightSdkVideoOpen(uint32_t width, uint32_t height, uint32_t count, ui
     return 0;
 }
 
+/*
+ * viddecDecoderInitialize command by command, so a refusal names the one that refused: the
+ * decoder is created with its work memory and formats (217), then configured with the size,
+ * rate and codec buffer (117), then hands out its submission event (19). The ids below are the
+ * wire tags less the 16 tipcDispatch adds.
+ */
+static Result initialize_split(const ViddecDecoderConfig *config, size_t work_bytes,
+                               const void *codec_config, size_t codec_config_bytes,
+                               uint32_t *stage)
+{
+    const struct {
+        uint64_t work_bytes;
+        uint32_t codec;
+        uint32_t input_format;
+        uint32_t output_format;
+        uint32_t output_mode;
+    } create = {work_bytes, config->codec, config->input_format, config->output_format,
+                config->output_mode};
+    const struct {
+        uint32_t width;
+        uint32_t height;
+        uint32_t frame_rate;
+        uint32_t max_input_bytes;
+        uint8_t reserved[16];
+    } configure = {config->width & 0xffff, config->height & 0xffff, config->frame_rate,
+                   (uint32_t)config->max_input_size, {0}};
+    TipcService *session = &video.decoder.s;
+    TransferMemory memory;
+    Handle event = INVALID_HANDLE;
+    Result result = tmemCreateFromMemory(&memory, video.work, work_bytes, Perm_None);
+
+    if (R_FAILED(result))
+        return fail(stage, STAGE_WORK_MEMORY, result);
+    *stage = STAGE_INITIALIZE;
+    result = tipcDispatchIn(session, 201, create, .in_num_handles = 1,
+                            .in_handles = {memory.handle});
+    note("sdk-video: create (217) result=0x%x", (unsigned)result);
+    if (R_SUCCEEDED(result)) {
+        video.decoder.initialized = true;
+        *stage = STAGE_CONFIGURE;
+        result = tipcDispatchIn(session, 101, configure,
+                                .buffer_attrs = {SfBufferAttr_In | SfBufferAttr_HipcMapAlias},
+                                .buffers = {{codec_config, codec_config_bytes}});
+        note("sdk-video: configure (117) result=0x%x", (unsigned)result);
+        if (R_SUCCEEDED(result)) {
+            *stage = STAGE_SUBMISSION_EVENT;
+            result = tipcDispatch(session, 3, .out_handle_attrs = {SfOutHandleAttr_HipcCopy},
+                                  .out_handles = &event);
+        }
+        if (R_SUCCEEDED(result)) {
+            eventLoadRemote(&video.decoder.submission_ready, event, true);
+        } else {
+            tipcDispatch(session, 115);
+            video.decoder.initialized = false;
+        }
+    }
+    tmemCloseHandle(&memory);
+    return result;
+}
+
 Result moonlightSdkVideoStart(uint32_t codec, uint32_t fps, size_t work_bytes,
                               const void *codec_config, size_t codec_config_bytes, uint32_t *stage)
 {
     ViddecDecoderConfig config = {
         .codec = codec,
         .input_format = video.width >= 1920 || video.height >= 1080 ? 3 : 1,
-        .output_format = ViddecOutputFormat_Nv12,
+        .output_format = output_format(),
         .output_mode = 1,
-        .width = video.width,
-        .height = video.height,
+        .width = tuning.config_width ? tuning.config_width : video.width,
+        .height = tuning.config_height ? tuning.config_height : video.height,
         .frame_rate = fps,
-        .max_input_size = INPUT_MAX,
+        .max_input_size = tuning.max_input_bytes ? tuning.max_input_bytes : INPUT_MAX,
     };
     Result result;
 
     if (!video.decoder_open || video.started || video.work || work_bytes < 0x4000 ||
         work_bytes % 0x1000)
         return fail(stage, STAGE_INITIALIZE, MAKERESULT(Module_Libnx, LibnxError_BadInput));
+    if (tuning.input_format)
+        config.input_format = tuning.input_format;
+    note("sdk-video: config codec=%u input_format=%u output_format=%u %ux%u fps=%u max_input=%llu",
+         (unsigned)config.codec, (unsigned)config.input_format, (unsigned)config.output_format,
+         (unsigned)config.width, (unsigned)config.height, (unsigned)config.frame_rate,
+         (unsigned long long)config.max_input_size);
     note("sdk-video: before work memory bytes=%zu", work_bytes);
     video.work = memalign(0x1000, work_bytes);
     if (!video.work)
         return fail(stage, STAGE_WORK_MEMORY, MAKERESULT(Module_Libnx, LibnxError_OutOfMemory));
     note("sdk-video: before initialize work=%p", video.work);
-    result = viddecDecoderInitialize(&video.decoder, &config, video.work, work_bytes, codec_config,
-                                     codec_config_bytes);
-    if (R_FAILED(result))
-        return fail(stage, STAGE_INITIALIZE, result);
+    if (tuning.split_initialize) {
+        result = initialize_split(&config, work_bytes, codec_config, codec_config_bytes, stage);
+        if (R_FAILED(result))
+            return result;
+    } else {
+        result = viddecDecoderInitialize(&video.decoder, &config, video.work, work_bytes,
+                                         codec_config, codec_config_bytes);
+        if (R_FAILED(result))
+            return fail(stage, STAGE_INITIALIZE, result);
+    }
     note("sdk-video: before register");
     for (uint32_t slot = 0; slot < video.count; slot++) {
         result = viddecDecoderRegisterImage(&video.decoder, slot,

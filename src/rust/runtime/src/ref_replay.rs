@@ -31,14 +31,154 @@ const HEVC: &[u8] = include_bytes!("../refclip/hevc.mlrc");
 const CLIPS: [(&str, &[u8]); 2] = [("h264", H264), ("av1", AV1)];
 #[cfg(feature = "diagnostic-native-decode")]
 const CLIPS: [(&str, &[u8]); 3] = [("h264", H264), ("hevc", HEVC), ("av1", AV1)];
-/// Two-frame clips above 1080p. A refused session closes and the next one runs.
+/// One diagnostic session on the SDK decoder: a clip, the rate the decoder is told, how the
+/// clip is fed and what the session changes from a stream's own choices.
 #[cfg(feature = "diagnostic-sdk-modes")]
-const MODE_CLIPS: [(&str, &[u8]); 4] = [
-    ("av1_1440p", AV1_1440P),
-    ("h264_1440p", H264_1440P),
-    ("av1_2160p", AV1_2160P),
-    ("h264_2160p", H264_2160P),
+struct Trial {
+    name: &'static str,
+    clip: &'static [u8],
+    fps: u32,
+    feed: Feed,
+    tuning: Tuning,
+}
+#[cfg(feature = "diagnostic-sdk-modes")]
+use crate::sdk_video::Tuning;
+
+#[cfg(feature = "diagnostic-sdk-modes")]
+const fn trial(name: &'static str, clip: &'static [u8], tuning: Tuning) -> Trial {
+    Trial {
+        name,
+        clip,
+        fps: CLIP_FPS,
+        feed: Feed::Held,
+        tuning,
+    }
+}
+
+/// Two-frame clips above 1080p, then 1440p at 120 units a second on a display that turns at
+/// its own rate. A refused session closes and the next one runs.
+#[cfg(all(
+    feature = "diagnostic-sdk-modes",
+    not(feature = "diagnostic-sdk-modes-4k")
+))]
+const TRIALS: [Trial; 6] = [
+    trial("av1_1440p", AV1_1440P, Tuning::NONE),
+    trial("h264_1440p", H264_1440P, Tuning::NONE),
+    trial("av1_2160p", AV1_2160P, Tuning::NONE),
+    trial("h264_2160p", H264_2160P, Tuning::NONE),
+    paced("av1_1440p120", AV1_1440P120),
+    paced("h264_1440p120", H264_1440P120),
 ];
+#[cfg(all(
+    feature = "diagnostic-sdk-modes",
+    not(feature = "diagnostic-sdk-modes-4k")
+))]
+const fn paced(name: &'static str, clip: &'static [u8]) -> Trial {
+    Trial {
+        fps: 120,
+        feed: Feed::Paced,
+        ..trial(
+            name,
+            clip,
+            Tuning {
+                quiet: true,
+                ..Tuning::NONE
+            },
+        )
+    }
+}
+#[cfg(all(
+    feature = "diagnostic-sdk-modes",
+    not(feature = "diagnostic-sdk-modes-4k")
+))]
+const AV1_1440P120: &[u8] = include_bytes!("../refclip/av1_1440p120.mlrc");
+#[cfg(all(
+    feature = "diagnostic-sdk-modes",
+    not(feature = "diagnostic-sdk-modes-4k")
+))]
+const H264_1440P120: &[u8] = include_bytes!("../refclip/h264_1440p120.mlrc");
+
+/// What the service refuses at 2160p (0x17bc6f), one difference from a stream's session at a
+/// time, AV1 first: it is the codec the retail client decoded at this size. Every session
+/// initializes command by command; the first two prove that path at a size that works.
+#[cfg(feature = "diagnostic-sdk-modes-4k")]
+const TRIALS: [Trial; 20] = [
+    trial("av1_1440p_split", AV1_1440P, SPLIT),
+    trial("h264_1440p_split", H264_1440P, SPLIT),
+    trial("av1_2160p_split", AV1_2160P, SPLIT),
+    trial("av1_2160p_in1", AV1_2160P, RETAIL_INPUT),
+    at_30("av1_2160p_30", AV1_2160P, SPLIT),
+    at_30("av1_2160p_in1_30", AV1_2160P, RETAIL_INPUT),
+    trial("av1_2160p_as1440", AV1_2160P, configured(2560, 1440)),
+    trial("av1_2160p_as1600", AV1_2160P, configured(2560, 1600)),
+    trial("av1_2160p_as1800", AV1_2160P, configured(3200, 1800)),
+    trial(
+        "av1_2160p_work308",
+        AV1_2160P,
+        Tuning {
+            work_mebibytes: 308,
+            ..SPLIT
+        },
+    ),
+    trial(
+        "av1_2160p_input4m",
+        AV1_2160P,
+        Tuning {
+            max_input_bytes: 4 << 20,
+            ..SPLIT
+        },
+    ),
+    trial(
+        "av1_2160p_pool2176",
+        AV1_2160P,
+        Tuning {
+            pool_height: 2176,
+            ..SPLIT
+        },
+    ),
+    trial("av1_2160p_rgba", AV1_2160P, output(2)),
+    trial("av1_2160p_hdr", AV1_2160P, output(4)),
+    trial("av1_2160p_format5", AV1_2160P, output(5)),
+    trial("h264_2160p_split", H264_2160P, SPLIT),
+    trial("h264_2160p_in1", H264_2160P, RETAIL_INPUT),
+    at_30("h264_2160p_30", H264_2160P, SPLIT),
+    trial("h264_2160p_as1440", H264_2160P, configured(2560, 1440)),
+    trial("h264_2160p_as1800", H264_2160P, configured(3200, 1800)),
+];
+#[cfg(feature = "diagnostic-sdk-modes-4k")]
+const SPLIT: Tuning = Tuning {
+    split_initialize: true,
+    ..Tuning::NONE
+};
+/// The retail client's AV1 session at 2160p sent input format 1; a stream sends 3 from 1080p up.
+#[cfg(feature = "diagnostic-sdk-modes-4k")]
+const RETAIL_INPUT: Tuning = Tuning {
+    input_format: 1,
+    ..SPLIT
+};
+/// The decoder is told a smaller size than the 2160p pool and stream have.
+#[cfg(feature = "diagnostic-sdk-modes-4k")]
+const fn configured(width: u32, height: u32) -> Tuning {
+    Tuning {
+        config_size: (width, height),
+        ..SPLIT
+    }
+}
+/// An output the pipeline cannot read back: only the start result counts.
+#[cfg(feature = "diagnostic-sdk-modes-4k")]
+const fn output(format: u32) -> Tuning {
+    Tuning {
+        output_format: format,
+        ..SPLIT
+    }
+}
+#[cfg(feature = "diagnostic-sdk-modes-4k")]
+const fn at_30(name: &'static str, clip: &'static [u8], tuning: Tuning) -> Trial {
+    Trial {
+        fps: 30,
+        ..trial(name, clip, tuning)
+    }
+}
 #[cfg(feature = "diagnostic-sdk-modes")]
 const H264_1440P: &[u8] = include_bytes!("../refclip/h264_1440p.mlrc");
 #[cfg(feature = "diagnostic-sdk-modes")]
@@ -81,6 +221,7 @@ fn session<B: Backend<N>, const N: usize>(
     name: &'static str,
     bytes: &[u8],
     backend: Option<B>,
+    feed: Feed,
 ) -> bool {
     log(&format!("b2ar: codec={name} begin"));
     let Some(clip) = Clip::parse(bytes) else {
@@ -91,7 +232,7 @@ fn session<B: Backend<N>, const N: usize>(
         log(&format!("ref: {name} backend unavailable"));
         return false;
     };
-    let result = replay(renderer, backend, BACKING, name, &clip);
+    let result = replay(renderer, backend, BACKING, name, &clip, feed);
     log(&format!("b2ar: codec={name} replay={result}"));
     log(&format!(
         "ref: {name} session {}",
@@ -109,15 +250,15 @@ pub fn run(renderer: &mut Renderer) -> bool {
     let mut passed = true;
     for (name, bytes) in CLIPS {
         let backend = backend(renderer);
-        passed &= session(renderer, name, bytes, backend);
+        passed &= session(renderer, name, bytes, backend, Feed::Held);
         if stopped() {
             return false;
         }
     }
     #[cfg(feature = "diagnostic-sdk-modes")]
-    for (name, bytes) in MODE_CLIPS {
-        let backend = backend(renderer);
-        passed &= session(renderer, name, bytes, backend);
+    for trial in TRIALS {
+        let backend = crate::sdk_video::SdkVideo::tuned(trial.fps, trial.tuning);
+        passed &= session(renderer, trial.name, trial.clip, Some(backend), trial.feed);
         if stopped() {
             return false;
         }
@@ -130,13 +271,30 @@ pub fn run(renderer: &mut Renderer) -> bool {
     passed
 }
 
-/// Feeds one clip's access units in order and logs the decoder's output sums.
+/// How a clip's units reach the decoder.
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub enum Feed {
+    /// One unit at a time, each frame summed and held on screen.
+    Held,
+    /// Units at the clip's own rate with one present a refresh, timed and not summed.
+    #[cfg_attr(
+        any(
+            not(feature = "diagnostic-sdk-modes"),
+            feature = "diagnostic-sdk-modes-4k"
+        ),
+        allow(dead_code)
+    )]
+    Paced,
+}
+
+/// Feeds one clip's access units in order and logs the decoder's output sums or its timing.
 pub fn replay<B: Backend<N>, const N: usize>(
     renderer: &mut Renderer,
     backend: B,
     backing: Backing,
     name: &'static str,
     clip: &Clip<'_>,
+    feed: Feed,
 ) -> bool {
     let (Some(display), Some(coded)) = (
         Size::new(clip.width, clip.height),
@@ -177,7 +335,7 @@ pub fn replay<B: Backend<N>, const N: usize>(
     let mut first = vec![0; coded.nv12_bytes()];
     let mut second = vec![0; coded.nv12_bytes()];
     let retired = Cell::new(false);
-    let checked = Checksummed::new(backend, name);
+    let checked = Checksummed::new(backend, name, feed == Feed::Held);
     let mut video = match Video::open(
         checked,
         config,
@@ -195,7 +353,10 @@ pub fn replay<B: Backend<N>, const N: usize>(
         "ref: {name} {}x{}@{} units={} backing={backing:?}",
         clip.width, clip.height, clip.fps, clip.units
     ));
-    let result = feed(renderer, &mut video, clip);
+    let result = match feed {
+        Feed::Held => feed_held(renderer, &mut video, clip),
+        Feed::Paced => feed_paced(renderer, &mut video, name, clip),
+    };
     let stats = video.stats();
     let closed = video.close();
     log(&format!(
@@ -205,7 +366,72 @@ pub fn replay<B: Backend<N>, const N: usize>(
     result.is_ok() && closed.is_ok() && stats.decoded == u64::from(clip.units)
 }
 
-fn feed<B: Backend<N>, const N: usize>(
+/// Submits each unit when its timestamp is due, as a stream at the clip's rate would, and
+/// presents once a turn. Logs how the decoder kept up.
+fn feed_paced<B: Backend<N>, const N: usize>(
+    renderer: &mut Renderer,
+    video: &mut Video<'_, B, N>,
+    name: &str,
+    clip: &Clip<'_>,
+) -> Result<(), video::Error> {
+    let now = || unsafe { sdk::moonlightNowNs() };
+    let _ = crate::stream_stats::take_stages();
+    let start_ns = now();
+    let mut units = clip.iter().enumerate().peekable();
+    let mut turns = 0u32;
+    let mut busy = 0u32;
+    let mut end_ns = None;
+    loop {
+        while let Some(&(index, (pts_us, unit))) = units.peek() {
+            if now() < start_ns + pts_us * 1000 {
+                break;
+            }
+            let header = Header {
+                payload_bytes: unit.len() as u32,
+                sequence: index as u32,
+                pts_us,
+            };
+            match video.submit_draining(renderer, &header, unit, None) {
+                Ok(()) => units.next(),
+                Err(video::Error::Decoder(decoder::Error::Again)) => {
+                    busy += 1;
+                    break;
+                }
+                Err(error) => return Err(error),
+            };
+        }
+        step(renderer, video)?;
+        turns += 1;
+        if units.peek().is_none() {
+            let deadline = *end_ns.get_or_insert_with(|| now() + DECODE_WAIT_NS);
+            if !video.pending() || now() >= deadline {
+                break;
+            }
+        }
+    }
+    let elapsed_ms = (now() - start_ns) / 1_000_000;
+    let stats = video.stats();
+    let [submit, poll, output, readback, upload, present] = crate::stream_stats::take_stages();
+    let time = |stage: crate::stream_stats::StageTime| {
+        format!("{}x{}/{}", stage.count, stage.mean_us, stage.max_us)
+    };
+    log(&format!(
+        "ref: {name} paced {}@{} in {elapsed_ms} ms turns={turns} busy_turns={busy} decoded={} presented={} caught_up={} dropped={}",
+        clip.units, clip.fps, stats.decoded, stats.presented, stats.caught_up, stats.dropped
+    ));
+    log(&format!(
+        "ref: {name} stages count x mean/max us submit={} poll={} output={} readback={} upload={} present={}",
+        time(submit),
+        time(poll),
+        time(output),
+        time(readback),
+        time(upload),
+        time(present)
+    ));
+    Ok(())
+}
+
+fn feed_held<B: Backend<N>, const N: usize>(
     renderer: &mut Renderer,
     video: &mut Video<'_, B, N>,
     clip: &Clip<'_>,
@@ -320,10 +546,11 @@ pub struct Checksummed<B, const N: usize> {
     images: [u32; N],
     stamps: [u64; N],
     frames: u32,
+    sums: bool,
 }
 
 impl<B: Backend<N>, const N: usize> Checksummed<B, N> {
-    pub fn new(inner: B, name: &'static str) -> Self {
+    pub fn new(inner: B, name: &'static str, sums: bool) -> Self {
         Self {
             inner,
             name,
@@ -331,6 +558,7 @@ impl<B: Backend<N>, const N: usize> Checksummed<B, N> {
             images: [0; N],
             stamps: [0; N],
             frames: 0,
+            sums,
         }
     }
 }
@@ -361,6 +589,9 @@ impl<B: Backend<N>, const N: usize> Backend<N> for Checksummed<B, N> {
 
     fn readback(&mut self, surface: usize, out: &mut [u8]) -> Result<(), BackendError> {
         self.inner.readback(surface, out)?;
+        if !self.sums {
+            return Ok(());
+        }
         let config = self.config.ok_or(BackendError::Invalid)?;
         let stride = config.coded.width() as usize;
         let (width, height) = (
