@@ -98,9 +98,12 @@ python3 src/rust/build-shaders.py --directory /media/storage2/builds/moonlight/<
 
 `--check` compares the prebuilt files with the sources without compiling.
 
+The fonts and the glyph atlas made from them are in `src/rust/ui/fonts`. With Pillow
+installed, `python3 src/rust/ui/fonts/glyphs.py atlas` rewrites `glyphs.bin`.
+
 The Civilization VII payload this app replaces is still under `src/streamer` and
-`src/renderer`: the Rust build takes its glyph atlas from there, and the PC bundle its
-pinned Moonlight sources (`src/streamer/protocol`).
+`src/renderer`: the PC bundle takes its pinned Moonlight sources from there
+(`src/streamer/protocol`).
 
 ## Credits
 
@@ -110,4 +113,4 @@ pinned Moonlight sources (`src/streamer/protocol`).
 - [libnx2](https://gitlab.com/Azkali/libnx2) — Switch 2 tooling.
 - [M PLUS Rounded 1c](https://github.com/coz-m/MPLUS_FONTS) — font.
 
-See [LICENSE](LICENSE) and the [font licence](src/streamer/ui/fonts/OFL.txt).
+See [LICENSE](LICENSE) and the [font licence](src/rust/ui/fonts/OFL.txt).

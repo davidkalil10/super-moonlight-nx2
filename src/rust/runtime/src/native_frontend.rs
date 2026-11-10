@@ -227,7 +227,7 @@ fn execute(renderer: &mut Renderer, connections: &mut NativeConnections, launch:
         verified,
         start,
     } = launch;
-    const ATLAS: &[u8] = include_bytes!("../../../streamer/ui/fonts/glyphs.bin");
+    const ATLAS: &[u8] = include_bytes!("../../ui/fonts/glyphs.bin");
     let mut snapshot = renderer.display().ok();
     let docked = snapshot.is_some_and(|display| display.operation_mode == 1);
     let mut app = match renderer.storage_mut().ok().and_then(|bytes| {

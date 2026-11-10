@@ -1,4 +1,4 @@
-//! Text strips, button legends and letter tiles from the deflated glyph atlas fonts/glyphs.bin,
+//! Text strips, button legends and letter tiles from the deflated glyph atlas ui/fonts/glyphs.bin,
 //! byte for byte as src/streamer/ui/glyph-raster.js paints them. Port of ui/glyphs.c; Rust never
 //! fuses multiply-adds, so the float steps round like the JS doubles.
 

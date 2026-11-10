@@ -79,7 +79,6 @@ def sources():
             or manifest["blob"]["bytes"] != blob.stat().st_size
             or manifest["blob"]["sha256"] != digest(blob)):
         raise ValueError("Shader bundle differs from its manifest")
-    result["../streamer/ui/fonts/glyphs.bin"] = digest(APP / "src/streamer/ui/fonts/glyphs.bin")
     record = json.loads((ROOT / "runtime/prebuilt/ui-text.json").read_text())
     shader = ROOT / "runtime/prebuilt/ui-text.spv"
     if (record["format"] != "moonlight.rust.ui-text" or record["version"] != 1
