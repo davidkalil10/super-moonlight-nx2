@@ -15,7 +15,7 @@ use moonlight_nx2_core::{
 };
 
 /// Enable only in a commit citing matching pixel sums and a clean close on the console.
-pub const SDK_H264_VERIFIED: bool = false;
+pub const SDK_H264_VERIFIED: bool = true;
 const CODEC_CONFIG_BYTES: usize = 1024;
 const SUBMIT_BUSY: u32 = (3603 << 9) | 111;
 
