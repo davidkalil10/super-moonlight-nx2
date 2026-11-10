@@ -14,7 +14,7 @@ use alloc::format;
 use moonlight_nx2_core::{
     annexb,
     codec::{Capabilities, Codec, Depth, Evidence, Mode, Size},
-    decoder::{Backend, BackendError, Backing, Config, SURFACES, UNITS},
+    decoder::{Backend, BackendError, Config, SURFACES, UNITS},
     viddec,
     video_wire::Output,
 };
@@ -311,7 +311,7 @@ impl Backend for SdkVideo {
     }
 
     fn open(&mut self, config: Config) -> Result<[u32; SURFACES], BackendError> {
-        if !accepted(config.codec) || config.backing != Backing::CpuReference {
+        if !accepted(config.codec) {
             return Err(BackendError::Unsupported);
         }
         #[cfg(feature = "diagnostic-sdk-modes")]

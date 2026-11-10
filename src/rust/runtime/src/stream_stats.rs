@@ -11,7 +11,6 @@ const FIELDS: usize = 12;
 
 static VALID: AtomicBool = AtomicBool::new(false);
 static IDR_WANTED: AtomicBool = AtomicBool::new(false);
-static ZERO_COPY: AtomicBool = AtomicBool::new(false);
 static LATEST: [AtomicU32; FIELDS] = [const { AtomicU32::new(0) }; FIELDS];
 static SAMPLED_NS: AtomicU64 = AtomicU64::new(0);
 static INPUT_SUM_US: AtomicU64 = AtomicU64::new(0);
@@ -34,7 +33,6 @@ pub fn latest() -> Option<StreamStats> {
         input_max_us: field(7),
         presented: field(8),
         dropped: field(9),
-        zero_copy: ZERO_COPY.load(Ordering::Relaxed),
         idr_requests: field(10),
         frames_skipped: field(11),
     })
@@ -58,7 +56,6 @@ pub fn publish(stats: StreamStats) {
     for (slot, value) in LATEST.iter().zip(fields) {
         slot.store(value, Ordering::Relaxed);
     }
-    ZERO_COPY.store(stats.zero_copy, Ordering::Relaxed);
     VALID.store(true, Ordering::Release);
 }
 

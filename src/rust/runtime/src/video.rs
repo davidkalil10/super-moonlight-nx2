@@ -1,5 +1,5 @@
-//! Stream video: decoder submission, loss recovery, presentation of decoded frames (bound in
-//! place or copied) and pacing statistics.
+//! Stream video: decoder submission, loss recovery, presentation of decoded frames copied out
+//! of the decoder and pacing statistics.
 
 extern crate alloc;
 
@@ -12,7 +12,7 @@ use alloc::format;
 use core::cell::Cell;
 use moonlight_nx2_core::{
     codec::{Capabilities, Codec, Depth},
-    decoder::{self, Backend, Decoder, FrameInfo, FrameToken, SURFACES},
+    decoder::{self, Backend, Decoder, FrameInfo, SURFACES},
     frame::{Frame, Layout, Matrix, Plane},
     media::Header,
     recovery::{self, Decision, Recovery},
@@ -45,7 +45,6 @@ pub struct Stats {
     /// not a loss.
     pub caught_up: u64,
     pub presented: u64,
-    pub zero_copy: u64,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -110,7 +109,6 @@ impl Timing {
             input_max_us,
             presented: clamp(self.frames),
             dropped: clamp(stats.dropped.saturating_sub(self.dropped_start)),
-            zero_copy: stats.zero_copy != 0,
             idr_requests: clamp(recovery.idr_requests),
             frames_skipped: clamp(recovery.frames_skipped),
         });
@@ -133,8 +131,6 @@ const STAGING_WAIT_NS: u64 = 2_000_000;
 
 pub struct Video<'a, B: Backend<N>, const N: usize = SURFACES> {
     decoder: Decoder<'a, B, N>,
-    /// Frames are copied out of the decoder into an upload slot, not bound.
-    copied: bool,
     codec: Codec,
     recovery: Recovery,
     matrix: Matrix,
@@ -143,7 +139,6 @@ pub struct Video<'a, B: Backend<N>, const N: usize = SURFACES> {
     closed: bool,
     stats: Stats,
     arrivals: [Option<Arrival>; decoder::UNITS],
-    bound: [Option<FrameToken>; N],
     pending_arrival: Option<u64>,
     pending_timing: Option<(u64, u64)>,
     timing: Timing,
@@ -181,7 +176,6 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
         };
         Ok(Self {
             decoder,
-            copied: config.decoder.backing == decoder::Backing::CpuReference,
             codec: config.decoder.codec,
             recovery: Recovery::default(),
             matrix: config.matrix,
@@ -190,16 +184,11 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
             closed: false,
             stats: Stats::default(),
             arrivals: [None; decoder::UNITS],
-            bound: [None; N],
             pending_arrival: None,
             pending_timing: None,
             timing: Timing::default(),
             presentation: None,
         })
-    }
-
-    pub fn set_zero_copy(&mut self, enabled: bool) {
-        self.decoder.set_zero_copy(enabled);
     }
 
     pub fn stats(&self) -> Stats {
@@ -301,44 +290,7 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
         self.recovery.counters()
     }
 
-    fn release_bound(&mut self, renderer: &mut Renderer) -> Result<(), Error> {
-        for surface in 0..N {
-            let Some(token) = self.bound[surface] else {
-                continue;
-            };
-            if native_busy(renderer, surface).map_err(|error| self.fail(Error::Renderer(error)))? {
-                continue;
-            }
-            self.bound[surface] = None;
-            self.decoder
-                .release(token)
-                .map_err(|error| self.fail(Error::Decoder(error)))?;
-        }
-        Ok(())
-    }
-
     fn upload(&mut self, renderer: &mut Renderer, info: &FrameInfo) -> Result<bool, Error> {
-        if let (Some(image), Some(surface)) = (info.bound, info.token.surface()) {
-            let uploaded = native_upload(renderer, surface, image, info, self.matrix);
-            return match uploaded {
-                Ok(()) => {
-                    self.bound[surface] = Some(info.token);
-                    self.stats.zero_copy += 1;
-                    Ok(true)
-                }
-                Err(render::Error::Busy) => {
-                    self.decoder
-                        .release(info.token)
-                        .map_err(|error| self.fail(Error::Decoder(error)))?;
-                    Ok(false)
-                }
-                Err(error) => {
-                    let _ = self.decoder.release(info.token);
-                    Err(self.fail(Error::Renderer(error)))
-                }
-            };
-        }
-
         let bytes = match self.decoder.frame(info.token) {
             Ok(bytes) => bytes,
             Err(error) => return Err(self.fail(Error::Decoder(error))),
@@ -425,15 +377,13 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
 
     pub fn poll_upload(&mut self, renderer: &mut Renderer) -> Result<bool, Error> {
         self.active()?;
-        self.release_bound(renderer)?;
         self.recovery.tick(platform::now_ns() / 1_000_000);
         self.forward_idr_request();
         let poll_start_ns = platform::now_ns();
-        let (staged_slot, frame) = match renderer.staging(STAGING_WAIT_NS) {
-            Ok(Some((slot, staging))) => (Some(slot), self.decoder.poll_into(Some(staging))),
-            // A copied frame with no slot to go to would be read back and thrown away.
-            Ok(None) if self.copied => return Ok(false),
-            Ok(None) => (None, self.decoder.poll()),
+        let (slot, frame) = match renderer.staging(STAGING_WAIT_NS) {
+            Ok(Some((slot, staging))) => (slot, self.decoder.poll_into(Some(staging))),
+            // A frame with no slot to go to would be read back and thrown away.
+            Ok(None) => return Ok(false),
             Err(error) => return Err(self.fail(Error::Renderer(error))),
         };
         stream_stats::stage(Stage::Poll, poll_start_ns, platform::now_ns());
@@ -448,9 +398,6 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
             .iter()
             .position(|entry| entry.is_some_and(|arrival| arrival.pts_us == info.pts_us))
         else {
-            if info.bound.is_some() {
-                let _ = self.decoder.release(info.token);
-            }
             return Err(self.fail(Error::Decoder(decoder::Error::Invalid)));
         };
         let arrival = self.arrivals[index].unwrap().received_us;
@@ -473,9 +420,10 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
                 .map_err(|error| self.fail(Error::Decoder(error)))?;
             return Ok(false);
         }
-        let uploaded = match staged_slot.filter(|_| info.staged) {
-            Some(slot) => self.publish_staged(renderer, slot, &info),
-            None => self.upload(renderer, &info),
+        let uploaded = if info.staged {
+            self.publish_staged(renderer, slot, &info)
+        } else {
+            self.upload(renderer, &info)
         };
         stream_stats::stage(Stage::Upload, decoded_ns, platform::now_ns());
         if !uploaded? {
@@ -543,13 +491,6 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
         if platform::process_retired() {
             self.decoder.retire();
         }
-        for token in self.bound.iter_mut().filter_map(Option::take) {
-            if let Err(error) = self.decoder.release(token) {
-                self.decoder.retire();
-                platform::retire_process();
-                return Err(self.fail(Error::Decoder(error)));
-            }
-        }
         if let Err(error) = self.decoder.close() {
             self.decoder.retire();
             platform::retire_process();
@@ -557,7 +498,6 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
         }
         self.closed = true;
         self.arrivals.fill(None);
-        self.bound.fill(None);
         self.pending_arrival = None;
         self.pending_timing = None;
         crate::stream_stats::clear();
@@ -659,18 +599,4 @@ impl<B: Backend<N>, const N: usize> moonlight_nx2_app::media::Decoder for Tick<'
             Err(_) => moonlight_nx2_app::media::Poll::Failed,
         }
     }
-}
-
-fn native_busy(_renderer: &mut Renderer, _surface: usize) -> Result<bool, render::Error> {
-    Ok(false)
-}
-
-fn native_upload(
-    _renderer: &mut Renderer,
-    _surface: usize,
-    _image: moonlight_nx2_core::untile::Image,
-    _info: &FrameInfo,
-    _matrix: Matrix,
-) -> Result<(), render::Error> {
-    Err(render::Error::Unsupported)
 }

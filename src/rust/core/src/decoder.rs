@@ -1,9 +1,8 @@
 //! Decoder session over a `Backend`: bounded submission, a surface ring of N images, and frames
-//! either read back into caller memory or bound in place for the presenter.
+//! read back into caller memory for the presenter.
 
 use crate::{
     codec::{Codec, Size},
-    untile,
     video_wire::Output,
 };
 use core::{
@@ -13,7 +12,6 @@ use core::{
 };
 
 pub const SURFACES: usize = 2;
-pub const RING: usize = 4;
 pub const FRAMES: usize = 2;
 pub const UNITS: usize = 2;
 pub const INPUT_MAX: usize = 1024 * 1024;
@@ -62,26 +60,12 @@ pub enum Error {
     Closed,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum FrameRegistration {
-    Register,
-    Observed(u64),
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Backing {
-    CpuReference,
-    NativeGpu,
-}
-
 #[derive(Clone, Copy, Debug)]
 pub struct Config {
     pub codec: Codec,
     pub coded: Size,
     pub display: Size,
     pub timeout_ms: u64,
-    pub frame_registration: FrameRegistration,
-    pub backing: Backing,
 }
 
 pub trait Backend<const N: usize = SURFACES> {
@@ -100,10 +84,6 @@ pub trait Backend<const N: usize = SURFACES> {
     fn release(&mut self, surface: usize) -> Result<(), BackendError>;
     fn close(&mut self) -> Result<(), BackendError>;
     fn now_ms(&self) -> u64;
-
-    fn bind(&mut self, _surface: usize) -> Result<Option<untile::Image>, BackendError> {
-        Ok(None)
-    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -111,13 +91,6 @@ pub struct FrameToken {
     owner: u64,
     index: usize,
     generation: u64,
-    bound: bool,
-}
-
-impl FrameToken {
-    pub fn surface(self) -> Option<usize> {
-        self.bound.then_some(self.index)
-    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -128,7 +101,6 @@ pub struct FrameInfo {
     pub service_color: u32,
     pub coded: Size,
     pub display: Size,
-    pub bound: Option<untile::Image>,
     /// The frame was read into the caller's staging memory, not into a held frame.
     pub staged: bool,
 }
@@ -174,13 +146,11 @@ pub struct Decoder<'a, B: Backend<N>, const N: usize = SURFACES> {
     retired: &'a Cell<bool>,
     frames: [&'a mut [u8]; FRAMES],
     held: [Option<FrameToken>; FRAMES],
-    bound: [Option<FrameToken>; N],
     images: [u32; N],
     queued: Queue<N>,
     arrived: [Option<Output>; N],
     pending: [Option<Pending>; UNITS],
     generation: u64,
-    zero_copy: bool,
     failed: bool,
     uncertain: bool,
     closed: bool,
@@ -221,13 +191,11 @@ impl<'a, B: Backend<N>, const N: usize> Decoder<'a, B, N> {
             retired,
             frames,
             held: [None; FRAMES],
-            bound: [None; N],
             images: [0; N],
             queued: Queue::full(),
             arrived: [None; N],
             pending: [None; UNITS],
             generation: 0,
-            zero_copy: false,
             failed: false,
             uncertain: false,
             closed: false,
@@ -252,10 +220,6 @@ impl<'a, B: Backend<N>, const N: usize> Decoder<'a, B, N> {
                 }
             }
         }
-    }
-
-    pub fn set_zero_copy(&mut self, enabled: bool) {
-        self.zero_copy = enabled;
     }
 
     fn fail(&mut self, error: BackendError) -> Error {
@@ -330,7 +294,7 @@ impl<'a, B: Backend<N>, const N: usize> Decoder<'a, B, N> {
             if index == surface {
                 return Ok(output);
             }
-            if self.arrived[index].is_some() || self.bound[index].is_some() {
+            if self.arrived[index].is_some() {
                 return Err(self.fail(BackendError::Malformed));
             }
             self.arrived[index] = Some(output);
@@ -338,13 +302,12 @@ impl<'a, B: Backend<N>, const N: usize> Decoder<'a, B, N> {
         Err(self.fail(BackendError::Malformed))
     }
 
-    fn next_token(&mut self, index: usize, bound: bool) -> FrameToken {
+    fn next_token(&mut self, index: usize) -> FrameToken {
         self.generation += 1;
         FrameToken {
             owner: self.owner,
             index,
             generation: self.generation,
-            bound,
         }
     }
 
@@ -362,10 +325,9 @@ impl<'a, B: Backend<N>, const N: usize> Decoder<'a, B, N> {
         let Some(surface) = self.queued.front() else {
             return Ok(None);
         };
-        let frame = self.held.iter().position(Option::is_none);
-        if frame.is_none() && !self.zero_copy {
+        let Some(frame) = self.held.iter().position(Option::is_none) else {
             return Ok(None);
-        }
+        };
         if self.generation == u64::MAX {
             self.failed = true;
             return Err(Error::Failed);
@@ -402,45 +364,22 @@ impl<'a, B: Backend<N>, const N: usize> Decoder<'a, B, N> {
             return Err(self.fail(BackendError::Malformed));
         };
 
-        let bound = if self.zero_copy {
-            match self.backend.bind(surface) {
-                Ok(bound) => bound,
-                Err(error) => return Err(self.fail(error)),
-            }
-        } else {
-            None
+        let staged = staging.is_some();
+        let bytes = self.config.coded.nv12_bytes();
+        let target = match staging {
+            Some(staging) => &mut staging[..bytes],
+            None => &mut self.frames[frame][..bytes],
         };
-        let staged = bound.is_none() && staging.is_some();
-        let token = match (bound, frame) {
-            (Some(_), _) => {
-                self.queued.pop();
-                let token = self.next_token(surface, true);
-                self.bound[surface] = Some(token);
-                token
-            }
-            (None, Some(frame)) => {
-                let bytes = self.config.coded.nv12_bytes();
-                let target = match staging {
-                    Some(staging) => &mut staging[..bytes],
-                    None => &mut self.frames[frame][..bytes],
-                };
-                if let Err(error) = self.backend.readback(surface, target) {
-                    return Err(self.fail(error));
-                }
-                if let Err(error) = self.backend.release(surface) {
-                    return Err(self.fail(error));
-                }
-                self.queued.pop();
-                self.queued.push(surface);
-                let token = self.next_token(frame, false);
-                self.held[frame] = Some(token);
-                token
-            }
-            (None, None) => {
-                self.failed = true;
-                return Err(Error::Invalid);
-            }
-        };
+        if let Err(error) = self.backend.readback(surface, target) {
+            return Err(self.fail(error));
+        }
+        if let Err(error) = self.backend.release(surface) {
+            return Err(self.fail(error));
+        }
+        self.queued.pop();
+        self.queued.push(surface);
+        let token = self.next_token(frame);
+        self.held[frame] = Some(token);
 
         let pts_us = self.pending[unit].unwrap().pts_us;
         self.pending.rotate_left(unit + 1);
@@ -454,7 +393,6 @@ impl<'a, B: Backend<N>, const N: usize> Decoder<'a, B, N> {
             service_color: output.color,
             coded: self.config.coded,
             display: self.config.display,
-            bound,
             staged,
         }))
     }
@@ -463,10 +401,7 @@ impl<'a, B: Backend<N>, const N: usize> Decoder<'a, B, N> {
         if self.closed {
             return Err(Error::Closed);
         }
-        if token.bound
-            || token.owner != self.owner
-            || self.held.get(token.index) != Some(&Some(token))
-        {
+        if token.owner != self.owner || self.held.get(token.index) != Some(&Some(token)) {
             return Err(Error::Invalid);
         }
         Ok(&self.frames[token.index][..self.config.coded.nv12_bytes()])
@@ -479,25 +414,10 @@ impl<'a, B: Backend<N>, const N: usize> Decoder<'a, B, N> {
         if token.owner != self.owner {
             return Err(Error::Invalid);
         }
-        if !token.bound {
-            if self.held.get(token.index) != Some(&Some(token)) {
-                return Err(Error::Invalid);
-            }
-            self.held[token.index] = None;
-            return Ok(());
-        }
-
-        if self.bound.get(token.index) != Some(&Some(token)) {
+        if self.held.get(token.index) != Some(&Some(token)) {
             return Err(Error::Invalid);
         }
-        if self.uncertain {
-            return Err(Error::Uncertain);
-        }
-        self.bound[token.index] = None;
-        if let Err(error) = self.backend.release(token.index) {
-            return Err(self.fail(error));
-        }
-        self.queued.push(token.index);
+        self.held[token.index] = None;
         Ok(())
     }
 
@@ -515,7 +435,6 @@ impl<'a, B: Backend<N>, const N: usize> Decoder<'a, B, N> {
                 unsafe { ManuallyDrop::drop(&mut self.backend) };
                 self.closed = true;
                 self.held.fill(None);
-                self.bound.fill(None);
                 Ok(())
             }
             Err(error) => {

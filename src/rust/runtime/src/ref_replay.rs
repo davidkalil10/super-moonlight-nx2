@@ -17,7 +17,7 @@ use alloc::{format, vec};
 use core::cell::Cell;
 use moonlight_nx2_core::{
     codec::{Capabilities, Codec, Depth, Evidence, Mode, Size},
-    decoder::{self, Backend, BackendError, Backing, Config, FrameRegistration},
+    decoder::{self, Backend, BackendError, Config},
     frame::Matrix,
     media::Header,
     video_wire::Output,
@@ -259,7 +259,7 @@ fn session<B: Backend<N>, const N: usize>(
         log(&format!("ref: {name} clip malformed"));
         return false;
     };
-    let result = replay(renderer, backend, Backing::CpuReference, name, &clip, feed);
+    let result = replay(renderer, backend, name, &clip, feed);
     log(&format!("b2ar: codec={name} replay={result}"));
     log(&format!(
         "ref: {name} session {}",
@@ -317,7 +317,6 @@ pub enum Feed {
 pub fn replay<B: Backend<N>, const N: usize>(
     renderer: &mut Renderer,
     backend: B,
-    backing: Backing,
     name: &'static str,
     clip: &Clip<'_>,
     feed: Feed,
@@ -341,8 +340,6 @@ pub fn replay<B: Backend<N>, const N: usize>(
             coded,
             display,
             timeout_ms: DECODE_WAIT_NS / 1_000_000,
-            frame_registration: FrameRegistration::Register,
-            backing,
         },
         fps: clip.fps,
         matrix: Matrix::Bt709,
@@ -376,7 +373,7 @@ pub fn replay<B: Backend<N>, const N: usize>(
         }
     };
     log(&format!(
-        "ref: {name} {}x{}@{} units={} backing={backing:?}",
+        "ref: {name} {}x{}@{} units={} backing=CpuReference",
         clip.width, clip.height, clip.fps, clip.units
     ));
     let result = match feed {

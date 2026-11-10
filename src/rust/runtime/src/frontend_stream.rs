@@ -24,7 +24,7 @@ use moonlight_nx2_app::{
 };
 use moonlight_nx2_core::{
     codec::{Capabilities, Size},
-    decoder::{self, Backing, FrameRegistration},
+    decoder,
     frame::Matrix,
     media::MAX_OUTBOUND_BYTES,
     recovery,
@@ -201,8 +201,6 @@ impl Stream {
                 coded,
                 display,
                 timeout_ms: 2000,
-                frame_registration: FrameRegistration::Register,
-                backing: Backing::CpuReference,
             },
             fps: descriptor.fps,
             matrix: Matrix::Bt709,

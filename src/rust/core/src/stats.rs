@@ -12,7 +12,6 @@ pub struct StreamStats {
     pub input_max_us: u32,
     pub presented: u32,
     pub dropped: u32,
-    pub zero_copy: bool,
     pub idr_requests: u32,
     pub frames_skipped: u32,
 }
