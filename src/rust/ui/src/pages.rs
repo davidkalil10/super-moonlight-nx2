@@ -696,7 +696,9 @@ impl Builder<'_> {
         self.fill(x, y, PANE_WIDTH, ROW_HEIGHT, fill, PANEL_RADIUS);
         let ink = if row.greyed { pal.line } else { pal.ink };
         self.put(x + CARD_PAD, y + 14, 520, row.setting.label(), OPTION, ink, Align::Left);
-        let hint = if row.setting == Setting::Size && !model.docked() {
+        let hint = if row.setting == Setting::Size && model.settings().size_auto() {
+            "Picked from the network test and the dock"
+        } else if row.setting == Setting::Size && !model.docked() {
             "1440p and 4K: docked only"
         } else {
             row.setting.hint()

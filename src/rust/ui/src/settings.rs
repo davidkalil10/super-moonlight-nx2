@@ -233,7 +233,7 @@ const fn row(id: &'static str, label: &'static str, kind: RowKind, count: u8, fa
 }
 
 const ROWS: [Row; Setting::COUNT] = [
-    row("size", "Resolution", RowKind::Size, 4, Size::P1080 as u8),
+    row("size", "Resolution", RowKind::Size, 5, AUTO_SIZE),
     row("fps", "Frame rate", RowKind::Fps, 2, 0),
     Row {
         former_default: Some(7),
@@ -315,7 +315,7 @@ pub struct StreamOptions {
     /// Touches drive the PC mouse instead of touch input.
     pub touch_mouse: bool,
     pub launchable: bool,
-    /// The size was left to the network test. No setting says so yet: a chosen size is kept.
+    /// The size was left to the dock state and the network test (Resolution: Automatic).
     pub size_auto: bool,
 }
 
@@ -403,8 +403,18 @@ impl Default for Settings {
 }
 
 impl Settings {
+    /// The saved size. Automatic reads as the largest, which is what it asks for until the
+    /// console and the link have had their say.
     pub fn size(&self) -> Size {
-        Size::ALL[self.value[Setting::Size as usize] as usize]
+        Size::ALL
+            .get(self.value[Setting::Size as usize] as usize)
+            .copied()
+            .unwrap_or(Size::P2160)
+    }
+
+    /// The size is left to the dock state and the network test.
+    pub fn size_auto(&self) -> bool {
+        self.value[Setting::Size as usize] == AUTO_SIZE
     }
 
     pub fn fps(&self) -> u32 {
@@ -477,7 +487,7 @@ impl Settings {
     }
 
     fn clamp_4k(&mut self, before: f64) {
-        if self.size() != Size::P2160 {
+        if !self.chose_4k() {
             return;
         }
 
@@ -495,7 +505,12 @@ impl Settings {
     }
 
     fn locked(&self, setting: Setting) -> bool {
-        setting == Setting::Fps && self.size() == Size::P2160
+        setting == Setting::Fps && self.chose_4k()
+    }
+
+    /// 2160p picked by name. Automatic may resolve to it and still keeps its own rate rules.
+    fn chose_4k(&self) -> bool {
+        !self.size_auto() && self.size() == Size::P2160
     }
 
     /// Steps `setting` left or right past values this console does not offer.
@@ -514,7 +529,9 @@ impl Settings {
         let step = if direction > 0 { 1 } else { -1 };
         let current = self.in_use(docked, caps);
         let mode_setting = matches!(setting, Setting::Size | Setting::Fps | Setting::Codec);
-        let mut index = if mode_setting {
+        let mut index = if setting == Setting::Size && self.size_auto() {
+            AUTO_SIZE
+        } else if mode_setting {
             current.value[setting as usize]
         } else {
             self.value[setting as usize]
@@ -525,7 +542,7 @@ impl Settings {
             if offered(row, index as u8, docked, caps) {
                 let mut candidate = if mode_setting { current } else { *self };
                 candidate.value[setting as usize] = index as u8;
-                if !mode_setting {
+                if !mode_setting || (setting == Setting::Size && index as u8 == AUTO_SIZE) {
                     selected = Some(candidate);
                 } else {
                     selected = candidate.compatible_mode(setting, docked, caps, &current);
@@ -537,8 +554,12 @@ impl Settings {
             index += step;
         }
         let mut out = selected?;
+        if self.size_auto() && setting != Setting::Size {
+            out.value[Setting::Size as usize] = AUTO_SIZE;
+            return Some(out);
+        }
         let to_4k = setting == Setting::Size && index == Size::P2160 as i32;
-        let from_4k = setting == Setting::Size && self.size() == Size::P2160;
+        let from_4k = setting == Setting::Size && self.chose_4k();
         if to_4k {
             out.fps_before_4k = self.fps();
             out.value[Setting::Fps as usize] = 0;
@@ -589,10 +610,25 @@ impl Settings {
     /// The settings a stream would use on this console right now.
     pub fn in_use(&self, docked: bool, caps: &Capabilities) -> Settings {
         let mut out = *self;
+        if out.size_auto() {
+            out.capability_fallback(caps);
+            out.largest_size(docked && caps.docked_sizes, caps);
+        }
         out.dock_fallback(docked && caps.docked_sizes);
         out.capability_fallback(caps);
         out.mode_fallback(docked, caps);
         out
+    }
+
+    /// Automatic: the largest size this dock state plays at the saved rate and codec.
+    fn largest_size(&mut self, docked: bool, caps: &Capabilities) {
+        let fits = |size: &&Size| {
+            (docked || !size.docked_only())
+                && !(**size == Size::P2160 && self.fps() == 120)
+                && caps.mode(self.codec(), **size, self.fps())
+        };
+        let size = Size::ALL.iter().rev().find(fits).unwrap_or(&Size::P1080);
+        self.value[Setting::Size as usize] = *size as u8;
     }
 
     fn dock_fallback(&mut self, docked: bool) {
@@ -686,6 +722,10 @@ impl Settings {
         let saved = self.value[setting as usize];
         let in_use = used.value[setting as usize];
 
+        if setting == Setting::Size && self.size_auto() {
+            let _ = write!(out, "{}", value_text(setting, self, saved));
+            return out;
+        }
         if matches!(setting, Setting::Codec | Setting::Size | Setting::Fps)
             && !caps.mode(used.codec(), used.size(), used.fps())
         {
@@ -727,6 +767,7 @@ impl Settings {
         for (row, &value) in ROWS.iter().zip(&self.value) {
             let _ = write!(out, ",\"{}\":", row.id);
             let _ = match row.kind {
+                RowKind::Size if value == AUTO_SIZE => write!(out, "\"auto\""),
                 RowKind::Size => write!(out, "\"{}\"", Size::ALL[value as usize].saved()),
                 RowKind::Fps => write!(out, "{}", RATES[value as usize]),
                 RowKind::Bitrate if value == AUTO_BITRATE => write!(out, "\"auto\""),
@@ -764,7 +805,7 @@ impl Settings {
         }
         args.push(Arg::Static("--staggered"));
         args.push(Arg::Static("--socket-audio"));
-        if saved.size() == Size::P2160 {
+        if saved.chose_4k() {
             args.push(Arg::Static("--undocked-fps"));
             args.push(Arg::Static("120"));
         }
@@ -810,7 +851,7 @@ impl Settings {
             frame_counter: used.on(Setting::FrameCounter),
             touch_mouse: used.on(Setting::TouchMouse),
             launchable: caps.codec(codec),
-            size_auto: false,
+            size_auto: self.size_auto(),
         }
     }
 }
@@ -824,12 +865,13 @@ fn codec_at(value: u8) -> Codec {
 }
 
 fn short_size(value: u8) -> &'static str {
-    ["", "", "1440p", "4K"][value as usize]
+    ["", "", "1440p", "4K", "Automatic"][value as usize]
 }
 
 fn match_value(value: Value<'_>, row: &Row) -> Option<u8> {
     let number = value.number();
     match row.kind {
+        RowKind::Size if value.string_is("auto") => Some(AUTO_SIZE),
         RowKind::Size => Size::ALL
             .iter()
             .position(|size| value.string_is(size.saved()))
@@ -858,6 +900,7 @@ fn match_value(value: Value<'_>, row: &Row) -> Option<u8> {
 
 fn offered(row: &Row, value: u8, docked: bool, caps: &Capabilities) -> bool {
     match row.kind {
+        RowKind::Size if value == AUTO_SIZE => true,
         RowKind::Size => !Size::ALL[value as usize].docked_only() || (docked && caps.docked_sizes),
         RowKind::Fps => RATES[value as usize] != 120 || caps.fps120,
         RowKind::Codec => caps.codec(codec_at(value)),
@@ -898,12 +941,16 @@ impl core::fmt::Display for ValueText<'_> {
     }
 }
 
-const SIZE_TEXT: [&str; 4] = [
+const SIZE_TEXT: [&str; 5] = [
     "1280 \u{d7} 720",
     "1920 \u{d7} 1080",
     "2560 \u{d7} 1440 (docked)",
     "3840 \u{d7} 2160 (docked, 60 fps)",
+    "Automatic",
 ];
+/// The size row's last value: the largest size the dock state plays, lowered by the network
+/// test when the link cannot carry it.
+pub const AUTO_SIZE: u8 = 4;
 
 #[cfg(test)]
 mod verified_tests {
