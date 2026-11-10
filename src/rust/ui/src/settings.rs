@@ -595,9 +595,13 @@ impl Settings {
                     if !caps.mode(codec, size, fps) {
                         continue;
                     }
-                    let score = u8::from(codec == self.codec()) * 4
-                        + u8::from(size == self.size()) * 2
-                        + u8::from(fps == self.fps());
+                    // Closest to the saved mode; between equals, the largest picture.
+                    let score = (
+                        u8::from(codec == self.codec()) * 4
+                            + u8::from(size == self.size()) * 2
+                            + u8::from(fps == self.fps()),
+                        size as u8,
+                    );
                     if best.is_none_or(|(old, _, _, _)| score > old) {
                         best = Some((score, codec, size, fps));
                     }

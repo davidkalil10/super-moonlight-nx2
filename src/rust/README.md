@@ -13,14 +13,13 @@ and compacted to fit its version field. `src/rust/nro/icon.jpg` is embedded in t
 reads a 256x256 baseline JPEG there and shows its default icon for anything else.
 
 `--sdk-video` builds `--diagnostic production-sdk` instead, against the 2026-11-10 SDK pinned on m4:
-video is decoded through the SDK's video decoder. It asks for a 4K layer when docked and offers
-H.264 and AV1 up to 1440p there.
-Adding `--docked-modes` builds `production-sdk-modes`, which also offers 4K when docked. The
-decoder service refuses 2160p configured at 60 and takes it at 30, so a 2160p session is
-configured at 30 whatever the stream's rate. Not measured with a real 60 fps stream yet.
+video is decoded through the SDK's video decoder. Docked, it asks for a 4K layer and offers
+1440p on AV1 and H.264 and 2160p on AV1; handheld stops at 1080p. The decoder service takes a
+2160p session only when it is configured at 30, so that is what it is told whatever the
+stream's rate.
 Adding `--hz120` builds `production-sdk-120`, which presents every refresh, asks the display for
 120 Hz and a 1440p layer when docked, and offers 120 fps up to 1440p where the display showed it.
-With both flags (`production-sdk-modes-120`) the docked layer stays 4K. Not measured on the console yet.
+Not measured on the console yet.
 Adding `--decode120` to `--hz120` builds `production-sdk-120-decode`, which offers 120 fps on a
 60 Hz display too: two units a refresh, the newer frame shown. It measures the decoder at 120
 units a second (`stream: video` and `stream: stages` lines) and is not for playing.

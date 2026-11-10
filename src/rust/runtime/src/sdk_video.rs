@@ -27,10 +27,9 @@ pub const SDK_AV1_VERIFIED: bool = true;
 /// 1139 frames and closed cleanly on the console (3cf0628, 20261110T121625Z-3cf0628-sdk-
 /// integration/docked-modes/collected/runtime-000000629006da48.log).
 pub const SDK_AV1_2160P_VERIFIED: bool = true;
-/// 2160p is offered by the docked-modes build only, until a stream there holds 60 shown
-/// frames a second. H.264 at that size has decoded 60 fed frames a second in the diagnostic
-/// with the decoder full on nearly every turn, and has not streamed.
-pub const SDK_DOCKED_MODES: bool = cfg!(feature = "sdk-video-docked-modes");
+/// H.264 at 2160p decoded 60 fed frames a second in the diagnostic with the decoder full on
+/// nearly every turn, and has not streamed: 2160p is AV1 only.
+pub const SDK_H264_2160P_VERIFIED: bool = false;
 /// 120 fps is not measured on the console yet. Only the 120 Hz build offers it, up to 1440p,
 /// and only on a display that presented at 120 Hz.
 pub const SDK_120HZ: bool = cfg!(feature = "sdk-video-120hz");
@@ -44,8 +43,8 @@ const MODES: [(u32, u32, u32, bool, bool); 3] = [
         3840,
         2160,
         60,
-        SDK_AV1_2160P_VERIFIED && SDK_DOCKED_MODES,
-        SDK_DOCKED_MODES,
+        SDK_AV1_2160P_VERIFIED,
+        SDK_H264_2160P_VERIFIED,
     ),
 ];
 const SUBMIT_BUSY: u32 = (3603 << 9) | 111;

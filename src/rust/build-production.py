@@ -46,8 +46,6 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--sdk-video", action="store_true",
                         help="decode through the 2026-11-10 SDK's video decoder")
-    parser.add_argument("--docked-modes", action="store_true",
-                        help="with --sdk-video, also offer 4K when docked (configured at 30, unmeasured at 60)")
     parser.add_argument("--hz120", action="store_true",
                         help="with --sdk-video, present at 120 Hz and offer 120 fps up to 1440p (unmeasured)")
     parser.add_argument("--decode120", action="store_true",
@@ -55,15 +53,13 @@ def main():
     parser.add_argument("--tcp-video", action="store_true",
                         help="with --sdk-video alone, keep video on TCP instead of UDP")
     args = parser.parse_args()
-    if (args.docked_modes or args.hz120 or args.tcp_video) and not args.sdk_video:
-        parser.error("--docked-modes, --hz120 and --tcp-video need --sdk-video")
-    if args.tcp_video and (args.docked_modes or args.hz120):
+    if (args.hz120 or args.tcp_video) and not args.sdk_video:
+        parser.error("--hz120 and --tcp-video need --sdk-video")
+    if args.tcp_video and args.hz120:
         parser.error("--tcp-video goes with --sdk-video alone")
-    if args.decode120 and (args.docked_modes or not args.hz120):
+    if args.decode120 and not args.hz120:
         parser.error("--decode120 goes with --sdk-video --hz120")
     diagnostic = "production-sdk" if args.sdk_video else "production"
-    if args.docked_modes:
-        diagnostic += "-modes"
     if args.hz120:
         diagnostic += "-120"
     if args.decode120:

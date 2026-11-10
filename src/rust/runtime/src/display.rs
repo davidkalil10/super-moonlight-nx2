@@ -126,9 +126,10 @@ const FAST_STREAM_AT_60HZ: bool = cfg!(feature = "sdk-video-120-decode");
 /// change not confirmed yet reads 60 Hz for less than that.
 const SLOW_SECONDS: u32 = 3;
 
-/// The per-second present rate and the display modes it verified, one set per operation mode.
-/// A mode counts as verified once a full second presented on pace at the layer's size; the set
-/// of the other operation mode is kept, so docking back reuses what was already shown.
+/// The per-second present rate and the display modes of each operation mode. Sizes are shown
+/// at 60 from the start, up to 1080p handheld and 2160p docked. A rate above 60 counts once a
+/// full second presented on pace at the layer's size; the set of the other operation mode is
+/// kept, so docking back reuses what was already shown.
 pub struct Probe {
     docked: bool,
     verified: [moonlight_nx2_app::policy::DisplayCapabilities; 2],
@@ -140,11 +141,24 @@ pub struct Probe {
 }
 
 impl Probe {
+    /// Every size up to the largest of its operation mode is shown at 60 from the start: the
+    /// layer scales, so only rates above 60 wait for the display to present them.
     pub fn new(docked: bool, now_ns: u64, presented: u64) -> Self {
+        use moonlight_nx2_app::policy::{DisplayEvidence, DisplayMode};
+        let best = [(1920, 1080, 60), (3840, 2160, 60)];
+        let mut verified: [moonlight_nx2_app::policy::DisplayCapabilities; 2] = Default::default();
+        for (set, (best_width, best_height, fps)) in verified.iter_mut().zip(best) {
+            for (width, height) in SIZES {
+                if width <= best_width && height <= best_height {
+                    let mode = DisplayMode { width, height, fps };
+                    set.record(mode, DisplayEvidence::PresentedAndCloseVerified);
+                }
+            }
+        }
         Self {
             docked,
-            verified: Default::default(),
-            best: [(0, 0, 0); 2],
+            verified,
+            best,
             slow_seconds: 0,
             second_ns: now_ns,
             presented,
