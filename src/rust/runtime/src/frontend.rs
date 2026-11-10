@@ -289,6 +289,11 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
         self.peer
     }
 
+    /// The PC helper connection is open and authenticated.
+    pub fn link_up(&self) -> bool {
+        self.control.is_some() && self.authenticated
+    }
+
     pub fn take_media(&mut self) -> Vec<MediaRequest> {
         core::mem::take(&mut self.media)
     }

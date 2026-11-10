@@ -273,6 +273,45 @@ impl<F: Files + Clone> Client<F> {
         self.bridge.set_status(text);
     }
 
+    pub fn set_presence(
+        &mut self,
+        address: &moonlight_nx2_ui::model::Address,
+        presence: moonlight_nx2_ui::presence::Presence,
+    ) {
+        self.bridge.set_presence(address, presence);
+    }
+
+    pub fn set_link(
+        &mut self,
+        choice: Option<moonlight_nx2_ui::link_choice::LinkChoice>,
+        note: &str,
+    ) {
+        self.bridge.set_link(choice, note);
+    }
+
+    pub fn set_system_status(&mut self, text: &str) {
+        self.bridge.set_system_status(text);
+    }
+
+    /// Stops the stream as the stop chord does; the app keeps running on the PC.
+    pub fn stop_stream(&mut self) {
+        let stop = moonlight_nx2_ui::model::Intent {
+            kind: moonlight_nx2_ui::model::IntentKind::StopStream,
+            host: None,
+            app: None,
+        };
+        self.driver.dispatch_intent(&View(&mut self.bridge), &stop);
+    }
+
+    /// A one-line note over the stream, such as the low-battery warning.
+    pub fn toast(&mut self, bytes: &mut [u8], line: &str, now_ns: u64) -> Result<bool, Error> {
+        let storage = badge_storage(bytes)?;
+        let active = self.driver.session_epoch();
+        self.badge
+            .note(self.composer.glyphs_mut(), storage, active, line, now_ns);
+        Ok(active.is_some())
+    }
+
     pub fn has_cover(&self, app: u32) -> bool {
         self.composer.has_cover(app)
     }

@@ -142,6 +142,8 @@ pub mod sdk_backing;
 mod sdk_backing_diagnostic;
 #[cfg(all(target_os = "none", feature = "sdk-video"))]
 mod sdk_video;
+#[cfg(all(target_os = "none", feature = "frontend"))]
+mod system;
 #[cfg(any(target_os = "none", feature = "host-renderer"))]
 pub mod stream_stats;
 #[cfg(any(feature = "diagnostic-ui", feature = "host-renderer"))]

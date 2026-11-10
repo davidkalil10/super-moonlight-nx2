@@ -281,6 +281,7 @@ fn execute(renderer: &mut Renderer, connections: &mut NativeConnections, launch:
     let (mut polled, mut last_mode, mut pending) = (start, None, false);
     display_context(&mut app, docked, probe.capabilities());
     let mut stream = Stream::new(stream_capabilities());
+    let mut system = crate::system::System::start(unsafe { sdk::moonlightNowNs() } / 1_000_000);
     let mut second = start;
     while unsafe { sdk::appletMainLoop() } && !app.exiting() && !sdk::process_retired() {
         let now = unsafe { sdk::moonlightNowNs() };
@@ -343,9 +344,12 @@ fn execute(renderer: &mut Renderer, connections: &mut NativeConnections, launch:
         stream.pump(&mut app.client, now_ms);
         let compute = app.client.needs_ui_compute(&input, &frame);
         let presented = stream.step(&mut app.client, renderer, &input, now_ms, compute);
+        system.tick(&mut app, renderer, now_ms);
         app.client
             .update_native_stats(crate::stream_stats::latest());
-        if !presented
+        if !system.in_focus() {
+            unsafe { sdk::svcSleepThread(16_000_000) };
+        } else if !presented
             && let Err(error) = renderer.present(compute)
             && error != crate::render::Error::Busy
         {
@@ -429,6 +433,7 @@ fn execute(renderer: &mut Renderer, connections: &mut NativeConnections, launch:
         }
     }
     stream.close(&mut app.client);
+    system.stop();
     let changed = *app.client.bridge.model().settings() != original;
     let final_settings = *app.client.bridge.model().settings();
     let closed = app.close(renderer);
