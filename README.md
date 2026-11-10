@@ -86,9 +86,6 @@ once on the badge.
 
 ## Development
 
-Tests, tools and design notes live in the separate `moonlight-nx2-dev` repository, with
-the C sources its parity tests compare the Rust UI and wire code with.
-
 The shaders are in `src/rust/runtime/shaders`, compiled into `src/rust/runtime/prebuilt`.
 After changing one, with glslc and spirv-val installed:
 
@@ -104,8 +101,9 @@ installed, `python3 src/rust/ui/fonts/glyphs.py atlas` rewrites `glyphs.bin`.
 `src/rust/host/upstream` pins the Moonlight sources the Sunshine worker is built from:
 `fetch.sh` checks them out and `CMakeLists.txt` builds their library.
 
-The Civilization VII payload this app replaces is still under `src/streamer` and
-`src/renderer`. Nothing in the builds reads it.
+Tests, lab tools and design notes live in the separate `moonlight-nx2-dev` repository. It
+also keeps the C sources its parity tests compare the Rust UI and wire code with, and the
+Civilization VII payload, Node service and C helper this app replaced.
 
 ## Credits
 
