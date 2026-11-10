@@ -133,6 +133,10 @@ pub enum Action {
     ForgetHost(Host),
     RenameHost(Host),
     RefreshHosts,
+    /// Send the Wake-on-LAN packet for this PC before the list that follows opens it.
+    WakeHost(Host),
+    /// Measure the link to the PC helper again and pick Auto's stream shape from it.
+    TestNetwork,
     SaveSettings,
     PauseInput,
     ResumeInput,
@@ -627,6 +631,8 @@ impl Service {
             IntentKind::RemoveHost => self.act(Action::ForgetHost(host)),
             IntentKind::RenameHost => self.act(Action::RenameHost(host)),
             IntentKind::RefreshHosts => self.act(Action::RefreshHosts),
+            IntentKind::WakeHost => self.act(Action::WakeHost(host)),
+            IntentKind::TestNetwork => self.act(Action::TestNetwork),
             IntentKind::SaveSettings => self.act(Action::SaveSettings),
             IntentKind::PauseInput => {
                 self.input_paused = true;
