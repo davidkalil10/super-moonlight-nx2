@@ -125,6 +125,7 @@ impl Running {
         let dropped = stats.dropped.saturating_add(recovery.frames_skipped);
         Telemetry {
             at_us: now_ms.saturating_mul(1000),
+            decoded_total: Some(stats.decoded),
             dropped_total: u32::try_from(dropped).unwrap_or(u32::MAX),
             idr_requests: recovery.idr_requests,
             ..Telemetry::default()

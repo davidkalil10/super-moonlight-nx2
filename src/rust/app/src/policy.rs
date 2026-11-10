@@ -146,6 +146,9 @@ impl Remote {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Telemetry {
     pub at_us: u64,
+    /// Frames the decoder has put out. With it the frame-rate guard judges the decoder, not
+    /// the display: a 120 fps stream on a 60 Hz display shows 60 and still keeps up.
+    pub decoded_total: Option<u64>,
     pub dropped_total: u32,
     pub idr_requests: u64,
     pub queue_age_us: Option<u32>,
@@ -713,7 +716,7 @@ impl State {
             });
         let sample = metrics::GuardSample {
             at_ms: now_us / 1000,
-            presented: session.presented,
+            presented: telemetry.decoded_total.unwrap_or(session.presented),
             dropped: u64::from(telemetry.dropped_total),
             idr_requests: telemetry.idr_requests,
             queue_age_ms: f64::from(telemetry.queue_age_us.unwrap_or(0)) / 1000.0,

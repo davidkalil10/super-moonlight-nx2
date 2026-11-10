@@ -79,6 +79,16 @@ impl<L: Link> Link for SingleList<L> {
 
 impl<F: Files> Ui for View<'_, F> {
     fn reduce(&mut self, event: &Event<'_>) -> Step {
+        match event {
+            Event::Failed { message, back_apps } => crate::render_platform::log(&alloc::format!(
+                "frontend: failed: {} back_apps={back_apps:?}",
+                message.unwrap_or("no message")
+            )),
+            Event::ConnectionLost { .. } => {
+                crate::render_platform::log("frontend: connection lost")
+            }
+            _ => {}
+        }
         self.0.reduce(event)
     }
 
@@ -473,6 +483,21 @@ impl<F: Files + Clone> Client<F> {
         bytes: &mut [u8],
         feedback: moonlight_nx2_app::policy::Feedback,
     ) -> Result<bool, Error> {
+        if let moonlight_nx2_app::policy::Feedback::Reconfigure {
+            reason,
+            options,
+            result,
+            ..
+        } = feedback
+        {
+            crate::render_platform::log(&alloc::format!(
+                "policy: {reason:?} asks for {}x{}@{} {} kbps: {result:?}",
+                options.width,
+                options.height,
+                options.fps,
+                options.bitrate_kbps
+            ));
+        }
         if let moonlight_nx2_app::policy::Feedback::Metrics { epoch, report } = feedback
             && self.driver.session_epoch() == Some(epoch)
         {
