@@ -5,10 +5,13 @@ mod linux {
         control_server::{Connection, Error},
         display,
         helper::Helper,
+        pairing_store::{Store, hex},
+        service,
     };
     use std::{
         io::{self, Read, Write},
         net::{SocketAddr, TcpListener},
+        path::{Path, PathBuf},
         sync::atomic::{AtomicBool, Ordering, compiler_fence},
         thread,
         time::{Duration, Instant},
@@ -34,6 +37,158 @@ mod linux {
 
     pub fn display_command(arguments: &[String]) -> Result<(), String> {
         display::cli::run(arguments)
+    }
+
+    const SERVICE_USAGE: &str = "usage: moonlight-nx2-host serve [--listen ADDRESS:PORT] [--state DIRECTORY] [--match-display] WORKER
+       moonlight-nx2-host pair [--state DIRECTORY] CODE
+       moonlight-nx2-host consoles [--state DIRECTORY]
+       moonlight-nx2-host unpair [--state DIRECTORY] ID|all";
+
+    fn default_state() -> Result<PathBuf, String> {
+        let config = std::env::var_os("XDG_CONFIG_HOME")
+            .map(PathBuf::from)
+            .filter(|path| path.is_absolute())
+            .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))
+            .ok_or("neither XDG_CONFIG_HOME nor HOME is set")?;
+        Ok(config.join("moonlight-nx2").join("helper"))
+    }
+
+    struct ServiceArguments {
+        listen: SocketAddr,
+        state: PathBuf,
+        match_display: bool,
+        words: Vec<String>,
+    }
+
+    fn service_arguments(arguments: &[String]) -> Result<ServiceArguments, String> {
+        let mut parsed = ServiceArguments {
+            listen: SocketAddr::from(([0, 0, 0, 0], service::DEFAULT_PORT)),
+            state: default_state()?,
+            match_display: false,
+            words: Vec::new(),
+        };
+        let mut words = arguments.iter();
+        while let Some(word) = words.next() {
+            match word.as_str() {
+                "--listen" => {
+                    parsed.listen = words
+                        .next()
+                        .and_then(|value| value.parse().ok())
+                        .ok_or("--listen takes ADDRESS:PORT")?
+                }
+                "--state" => {
+                    parsed.state = words
+                        .next()
+                        .map(PathBuf::from)
+                        .filter(|path| path.is_absolute())
+                        .ok_or("--state takes an absolute directory")?
+                }
+                "--match-display" => parsed.match_display = true,
+                _ => parsed.words.push(word.clone()),
+            }
+        }
+        Ok(parsed)
+    }
+
+    fn serve(arguments: ServiceArguments) -> Result<(), String> {
+        let [worker] = arguments.words.as_slice() else {
+            return Err(SERVICE_USAGE.into());
+        };
+        let helper =
+            Helper::new(PathBuf::from(worker)).map_err(|_| "the worker path must be absolute")?;
+        signals().map_err(|_| "cannot install signal handlers")?;
+        if arguments.match_display {
+            display::Session::from_environment().restore();
+        }
+        let mut service = service::Service::bind(arguments.listen, &arguments.state)
+            .map_err(|error| format!("cannot start the service: {error}"))?;
+        let port = service
+            .port()
+            .map_err(|_| "cannot read the listener address")?;
+        println!("READY {port}");
+        io::stdout()
+            .flush()
+            .map_err(|_| "cannot report readiness")?;
+        service
+            .serve(&helper, arguments.match_display, &STOP)
+            .map_err(|error| format!("the service stopped: {error:?}"))
+    }
+
+    /// Asks the running service; `offline` answers from the files when none runs.
+    fn ask(
+        state: &Path,
+        command: &str,
+        wait: Duration,
+        offline: impl FnOnce(&Store) -> io::Result<String>,
+    ) -> Result<(), String> {
+        let text = match service::ask(state, command, wait) {
+            Ok(text) => text,
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused
+                ) =>
+            {
+                Store::open(state)
+                    .and_then(|store| offline(&store))
+                    .map_err(|error| format!("{error}"))?
+            }
+            Err(error) => return Err(format!("the service did not answer: {error}")),
+        };
+        let (body, status) = match text.trim_end().rsplit_once('\n') {
+            Some((body, status)) => (body, status),
+            None => ("", text.trim_end()),
+        };
+        if !body.is_empty() {
+            println!("{body}");
+        }
+        match status.strip_prefix("error ") {
+            Some(reason) => Err(reason.to_string()),
+            None => {
+                println!("{status}");
+                Ok(())
+            }
+        }
+    }
+
+    pub fn service_command(command: &str, arguments: &[String]) -> Result<(), String> {
+        let arguments = service_arguments(arguments)?;
+        let state = arguments.state.clone();
+        match (command, arguments.words.as_slice()) {
+            ("serve", _) => serve(arguments),
+            ("pair", [code]) => ask(
+                &state,
+                &format!("pair {code}"),
+                Duration::from_secs(20),
+                |_| {
+                    Err(io::Error::other(
+                        "the service is not running; start it first",
+                    ))
+                },
+            ),
+            ("consoles", []) => ask(&state, "consoles", Duration::from_secs(5), |store| {
+                Ok(store
+                    .consoles()?
+                    .iter()
+                    .map(|console| {
+                        format!(
+                            "{} {} {}\n",
+                            hex(&console.id),
+                            console.address,
+                            console.paired_at
+                        )
+                    })
+                    .chain(["ok\n".to_string()])
+                    .collect())
+            }),
+            ("unpair", [prefix]) => ask(
+                &state,
+                &format!("unpair {prefix}"),
+                Duration::from_secs(5),
+                |store| Ok(format!("ok {}\n", store.remove(prefix)?)),
+            ),
+            _ => Err(SERVICE_USAGE.into()),
+        }
     }
 
     pub fn run() -> Result<(), &'static str> {
@@ -177,11 +332,23 @@ mod linux {
 #[cfg(target_os = "linux")]
 fn main() {
     let mut arguments = std::env::args_os().skip(1);
-    if arguments.next().is_some_and(|word| word == "display") {
+    let command = arguments
+        .next()
+        .map(|word| word.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    if matches!(
+        command.as_str(),
+        "display" | "serve" | "pair" | "consoles" | "unpair"
+    ) {
         let arguments: Vec<String> = arguments
             .map(|word| word.to_string_lossy().into_owned())
             .collect();
-        if let Err(message) = linux::display_command(&arguments) {
+        let outcome = if command == "display" {
+            linux::display_command(&arguments)
+        } else {
+            linux::service_command(&command, &arguments)
+        };
+        if let Err(message) = outcome {
             eprintln!("{message}");
             std::process::exit(1);
         }

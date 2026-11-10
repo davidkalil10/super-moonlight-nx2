@@ -16,17 +16,23 @@ pub mod input;
 pub mod listener;
 pub mod mac;
 pub mod management;
+#[cfg(unix)]
+pub mod pairing_store;
 pub mod probe;
 #[cfg(unix)]
 pub mod relay;
 pub mod relay_stats;
 pub mod response;
 #[cfg(target_os = "linux")]
+pub mod service;
+#[cfg(target_os = "linux")]
 pub mod socket_options;
 pub mod status;
 #[cfg(unix)]
 pub mod stream;
 mod telemetry;
+#[cfg(unix)]
+pub mod transport;
 pub mod udp_control;
 pub mod udp_endpoint;
 pub mod udp_feedback;

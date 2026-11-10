@@ -15,6 +15,7 @@ required-features = ["upstream-worker"]
 
 [dependencies]
 moonlight-nx2-core = { path = "../core" }
+moonlight-nx2-secure = { path = "../secure" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 libc = "0.2"

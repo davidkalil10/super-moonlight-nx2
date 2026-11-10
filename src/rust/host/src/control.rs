@@ -8,7 +8,7 @@ use moonlight_nx2_core::control::{self, Kind, Parser};
 use serde_json::json;
 use std::{
     io::{self, Read},
-    net::{Shutdown, TcpStream},
+    net::TcpStream,
     sync::atomic::{Ordering, compiler_fence},
     time::{Duration, Instant},
 };
@@ -16,6 +16,9 @@ use std::{
 #[path = "write_queue.rs"]
 mod write_queue;
 use write_queue::WriteQueue;
+
+use crate::transport::{SecureStream, Transport};
+use std::io::Write as _;
 
 const INPUT_BYTES: usize = 8192;
 const MAX_QUEUED: usize = 4;
@@ -32,7 +35,7 @@ pub enum Error {
 }
 
 pub struct Connection<'a> {
-    socket: TcpStream,
+    socket: Transport,
     parser: Parser<'a>,
     controller: Controller,
     input: [u8; INPUT_BYTES],
@@ -45,18 +48,43 @@ pub struct Connection<'a> {
 }
 
 impl<'a> Connection<'a> {
+    /// The one-shot path: the console proves itself with the token in its Auth frame.
     pub fn new(
         socket: TcpStream,
         token: [u8; 64],
         helper: Helper,
         payload_storage: &'a mut [u8],
     ) -> Result<Self, Error> {
-        socket.set_nonblocking(true).map_err(Error::Io)?;
+        Self::over(Transport::Plain(socket), token, helper, payload_storage)
+    }
+
+    /// A paired console's session: the handshake already authenticated both ends.
+    pub fn secure(
+        stream: SecureStream,
+        helper: Helper,
+        payload_storage: &'a mut [u8],
+    ) -> Result<Self, Error> {
+        Self::over(
+            Transport::Secure(Box::new(stream)),
+            moonlight_nx2_secure::SESSION_TOKEN,
+            helper,
+            payload_storage,
+        )
+    }
+
+    fn over(
+        socket: Transport,
+        token: [u8; 64],
+        helper: Helper,
+        payload_storage: &'a mut [u8],
+    ) -> Result<Self, Error> {
+        let tcp = socket.socket();
+        tcp.set_nonblocking(true).map_err(Error::Io)?;
         #[cfg(target_os = "linux")]
-        crate::socket_options::apply(&socket, crate::socket_options::Class::Control)
+        crate::socket_options::apply(tcp, crate::socket_options::Class::Control)
             .map_err(Error::Io)?;
-        let bind = socket.local_addr().map_err(Error::Io)?.ip();
-        let peer = socket.peer_addr().map_err(Error::Io)?.ip();
+        let bind = tcp.local_addr().map_err(Error::Io)?.ip();
+        let peer = tcp.peer_addr().map_err(Error::Io)?.ip();
         let parser = Parser::new(payload_storage).map_err(Error::Frame)?;
         let controller = Controller::new(token, helper, bind, peer).map_err(Error::Controller)?;
         Ok(Self {
@@ -140,7 +168,7 @@ impl<'a> Connection<'a> {
     }
     fn check_full_queue_peer(&self) -> Result<(), Error> {
         let mut byte = [0; 1];
-        match self.socket.peek(&mut byte) {
+        match self.socket.socket().peek(&mut byte) {
             Ok(0) => Err(Error::Closed),
             Ok(_) => Ok(()),
             Err(error)
@@ -157,6 +185,11 @@ impl<'a> Connection<'a> {
     fn pump_inner(&mut self, now: Instant) -> Result<(), Error> {
         if !self.authenticated && now >= self.auth_deadline {
             return Err(Error::Closed);
+        }
+        match self.socket.flush() {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
+            Err(error) => return Err(Error::Io(error)),
         }
         self.flush(now)?;
         if self.output.len() == MAX_QUEUED {
@@ -336,7 +369,7 @@ impl<'a> Connection<'a> {
         if self.closed {
             return Ok(());
         }
-        let _ = self.socket.shutdown(Shutdown::Both);
+        self.socket.shutdown();
         let cleanup = self.controller.close().map_err(Error::Controller);
         for byte in &mut self.input {
             unsafe { std::ptr::write_volatile(byte, 0) };
