@@ -2,33 +2,8 @@
 
 #[cfg(all(target_os = "none", feature = "host-renderer"))]
 compile_error!("host-renderer is only for host parity tests");
-#[cfg(any(
-    all(feature = "diagnostic-renderer", feature = "diagnostic-io"),
-    all(feature = "diagnostic-ui", feature = "diagnostic-renderer"),
-    all(feature = "diagnostic-ui", feature = "diagnostic-io"),
-    all(feature = "diagnostic-ui-data", feature = "diagnostic-ui-order"),
-    all(feature = "diagnostic-ui-alpha", feature = "diagnostic-ui-text"),
-    all(feature = "diagnostic-udp", feature = "diagnostic-renderer"),
-    all(feature = "diagnostic-udp", feature = "diagnostic-io"),
-    all(feature = "diagnostic-udp", feature = "diagnostic-ui"),
-    all(feature = "frontend", feature = "diagnostic-renderer"),
-    all(feature = "frontend", feature = "diagnostic-ui"),
-    all(feature = "frontend", feature = "diagnostic-io"),
-    all(feature = "frontend", feature = "diagnostic-udp")
-))]
-compile_error!("select one device diagnostic mode");
-
-#[cfg(all(
-    feature = "diagnostic-audio-cue",
-    any(
-        feature = "diagnostic-renderer",
-        feature = "diagnostic-io",
-        feature = "diagnostic-udp",
-        feature = "diagnostic-ui",
-        feature = "frontend"
-    )
-))]
-compile_error!("Audio cue is a separate diagnostic mode");
+#[cfg(all(target_os = "none", not(feature = "frontend")))]
+compile_error!("device builds are the frontend");
 
 use moonlight_nx2_core::input::{self, Pad};
 
@@ -38,27 +13,21 @@ use ash as _;
 use moonlight_nx2_app as _;
 #[cfg(not(target_os = "none"))]
 use moonlight_nx2_io as _;
-#[cfg(not(any(feature = "diagnostic-ui", feature = "host-renderer")))]
+#[cfg(not(feature = "host-renderer"))]
 use moonlight_nx2_ui as _;
 
-#[cfg(all(target_os = "none", feature = "diagnostic-audio-cue"))]
-mod audio_cue_diagnostic;
 #[cfg(target_os = "none")]
 pub mod audio_device;
 #[cfg(target_os = "none")]
 mod device;
 #[cfg(all(target_os = "none", feature = "frontend"))]
 mod frontend_stream;
-#[cfg(all(target_os = "none", feature = "diagnostic-io"))]
-mod io_diagnostic;
 #[cfg(all(target_os = "none", feature = "frontend"))]
 mod native_frontend;
 #[cfg(target_os = "none")]
 pub mod net;
 #[cfg(all(target_os = "none", feature = "diagnostic-sdk-decode"))]
 mod ref_replay;
-#[cfg(all(target_os = "none", feature = "diagnostic-udp"))]
-mod udp_diagnostic;
 
 #[cfg(any(target_os = "none", feature = "host-renderer"))]
 mod cache_file;
@@ -94,8 +63,6 @@ mod sdk_video;
 pub mod stream_stats;
 #[cfg(all(target_os = "none", feature = "frontend"))]
 mod system;
-#[cfg(any(feature = "diagnostic-ui", feature = "host-renderer"))]
-pub mod ui_diagnostic;
 #[cfg(any(target_os = "none", feature = "host-renderer"))]
 pub mod video;
 

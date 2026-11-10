@@ -269,21 +269,6 @@ bool moonlightPlatformDirectoryExclusive(const char *path)
     return mkdir(path, 0777) == 0;
 }
 
-bool moonlightPlatformDumpFile(const char *path, const uint8_t *bytes, size_t length)
-{
-    int fd = open(path, O_WRONLY | O_CREAT | O_EXCL, 0666);
-    if (fd < 0)
-        return false;
-    FILE *file = fdopen(fd, "wb");
-    if (!file) {
-        close(fd);
-        return false;
-    }
-    bool written = fwrite(bytes, 1, length, file) == length;
-    written = fflush(file) == 0 && written;
-    return fclose(file) == 0 && written;
-}
-
 static bool newest_log(char *path, size_t size)
 {
     DIR *directory = opendir(LOG_DIRECTORY);

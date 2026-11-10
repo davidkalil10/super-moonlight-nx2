@@ -17,10 +17,6 @@ use moonlight_nx2_core::{
     frame::{self, Frame},
 };
 
-pub const UI_CONTROL_OFFSET: usize = 0xc000;
-pub const UI_CONTROL_BYTES: usize = 4096;
-pub const UI_COPY_BYTES: usize = UI_CONTROL_BYTES + frame::UI_PAGE_BYTES * frame::UI_PAGES;
-
 mod shaders {
     include!(concat!(env!("OUT_DIR"), "/shaders.rs"));
 }
@@ -97,16 +93,9 @@ impl From<frame::Error> for Error {
     }
 }
 
-#[derive(Clone, Copy)]
-pub enum UiDraws {
-    Instanced,
-    Separate,
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum UiShader {
     Standard,
-    Alpha,
     Text,
 }
 
@@ -124,8 +113,6 @@ pub struct Config {
     pub prefer_storage: bool,
     pub upload_wait_ns: u64,
     pub cache_path: Option<&'static CStr>,
-    pub ui_draws: UiDraws,
-    pub capture_ui: bool,
     pub ui_shader: UiShader,
     pub window_mode: crate::display::WindowMode,
     pub frame_rates: Option<crate::display::FrameRates>,
@@ -140,8 +127,6 @@ impl Default for Config {
             prefer_storage: false,
             upload_wait_ns: 0,
             cache_path: None,
-            ui_draws: UiDraws::Instanced,
-            capture_ui: false,
             ui_shader: UiShader::Text,
             window_mode: crate::display::WindowMode::Fixed,
             frame_rates: None,
@@ -228,10 +213,8 @@ struct Objects {
     queue: vk::Queue,
     input: Buffer,
     storage: Buffer,
-    #[cfg(any(feature = "host-renderer", feature = "diagnostic-ui-data"))]
+    #[cfg(feature = "host-renderer")]
     readback: Buffer,
-    #[cfg(any(feature = "host-renderer", feature = "diagnostic-ui-data"))]
-    ui_readback: Buffer,
     texel_views: [vk::BufferView; 2],
     storage_path: bool,
     set_layout: vk::DescriptorSetLayout,
@@ -266,14 +249,6 @@ pub struct Renderer {
 
 impl Renderer {
     pub fn open(config: Config) -> Result<Self, Error> {
-        if config.capture_ui
-            && !cfg!(any(
-                feature = "host-renderer",
-                feature = "diagnostic-ui-data"
-            ))
-        {
-            return Err(Error::Unsupported);
-        }
         if moonlight_nx2_core::codec::Size::new(config.width, config.height).is_none()
             || config.frame_rates.is_some_and(|rates| !rates.valid())
         {
@@ -315,10 +290,8 @@ impl Renderer {
                 queue: vk::Queue::null(),
                 input: Buffer::default(),
                 storage: Buffer::default(),
-                #[cfg(any(feature = "host-renderer", feature = "diagnostic-ui-data"))]
+                #[cfg(feature = "host-renderer")]
                 readback: Buffer::default(),
-                #[cfg(any(feature = "host-renderer", feature = "diagnostic-ui-data"))]
-                ui_readback: Buffer::default(),
                 texel_views: [vk::BufferView::null(); 2],
                 storage_path: true,
                 set_layout: vk::DescriptorSetLayout::null(),
@@ -461,25 +434,10 @@ impl Renderer {
         Ok(self.objects.storage.bytes_mut())
     }
 
-    pub fn ui_snapshot(&mut self) -> Result<Vec<u8>, Error> {
-        let bytes = self.storage_mut()?;
-        let mut copy = Vec::with_capacity(UI_COPY_BYTES);
-        copy.extend_from_slice(&bytes[UI_CONTROL_OFFSET..UI_CONTROL_OFFSET + UI_CONTROL_BYTES]);
-        copy.extend_from_slice(&bytes[frame::UI_OFFSET..]);
-        Ok(copy)
-    }
-
     pub fn input_mut(&mut self) -> Result<&mut [u8], Error> {
         self.active()?;
         self.objects.wait_all()?;
         Ok(self.objects.input.bytes_mut())
-    }
-
-    pub fn set_ui_draws(&mut self, draws: UiDraws) -> Result<(), Error> {
-        self.active()?;
-        self.objects.wait_all()?;
-        self.objects.config.ui_draws = draws;
-        Ok(())
     }
 
     pub fn display(&self) -> Result<crate::display::Snapshot, Error> {
@@ -494,7 +452,7 @@ impl Renderer {
         }
     }
 
-    #[cfg(any(feature = "host-renderer", feature = "diagnostic-ui-data"))]
+    #[cfg(feature = "host-renderer")]
     pub fn readback(&mut self) -> Result<Vec<u8>, Error> {
         self.active()?;
         self.objects.wait_all()?;
@@ -508,16 +466,6 @@ impl Renderer {
             }
         }
         Ok(pixels)
-    }
-
-    #[cfg(any(feature = "host-renderer", feature = "diagnostic-ui-data"))]
-    pub fn ui_readback(&mut self) -> Result<Vec<u8>, Error> {
-        self.active()?;
-        self.objects.wait_all()?;
-        if !self.objects.config.capture_ui || self.objects.info.presented == 0 {
-            return Err(Error::Invalid);
-        }
-        Ok(self.objects.ui_readback.bytes_mut().to_vec())
     }
 
     #[cfg(feature = "host-renderer")]
@@ -689,10 +637,6 @@ impl Objects {
         let device = self.device().clone();
         self.create_buffer(&device, false)?;
         self.create_buffer(&device, true)?;
-        #[cfg(any(feature = "host-renderer", feature = "diagnostic-ui-data"))]
-        if self.config.capture_ui {
-            self.create_download_buffer(true)?;
-        }
         self.create_descriptors()?;
         self.create_pipelines()?;
         self.create_flights()?;
@@ -711,11 +655,6 @@ impl Objects {
             let usage = vk::BufferUsageFlags::STORAGE_BUFFER
                 | if storage {
                     vk::BufferUsageFlags::UNIFORM_TEXEL_BUFFER
-                        | if self.config.capture_ui {
-                            vk::BufferUsageFlags::TRANSFER_SRC
-                        } else {
-                            vk::BufferUsageFlags::empty()
-                        }
                 } else {
                     vk::BufferUsageFlags::empty()
                 };
@@ -891,7 +830,6 @@ impl Objects {
             shaders::UI_VERTEX,
             match self.config.ui_shader {
                 UiShader::Standard => shaders::UI_FRAGMENT,
-                UiShader::Alpha => shaders::UI_ALPHA,
                 UiShader::Text => shaders::UI_TEXT,
             },
         ] {
@@ -1081,7 +1019,6 @@ impl Objects {
             shaders::UI_VERTEX,
             match self.config.ui_shader {
                 UiShader::Standard => shaders::UI_FRAGMENT,
-                UiShader::Alpha => shaders::UI_ALPHA,
                 UiShader::Text => shaders::UI_TEXT,
             },
         ];
@@ -1372,8 +1309,8 @@ impl Objects {
         self.info.width = self.extent.width;
         self.info.height = self.extent.height;
         self.info.swapchain_images = self.targets.len();
-        #[cfg(any(feature = "host-renderer", feature = "diagnostic-ui-data"))]
-        self.create_download_buffer(false)?;
+        #[cfg(feature = "host-renderer")]
+        self.create_download_buffer()?;
         self.info.format = self.format.format.as_raw() as u32;
         log(&format!(
             "render: swapchain {}x{} images={} storage={}",
@@ -1407,21 +1344,15 @@ impl Objects {
         (0..2).find(|slot| Some(*slot) != self.current_slot && self.slot_readers[*slot] == 0)
     }
 
-    #[cfg(any(feature = "host-renderer", feature = "diagnostic-ui-data"))]
-    fn create_download_buffer(&mut self, ui: bool) -> Result<(), Error> {
+    #[cfg(feature = "host-renderer")]
+    fn create_download_buffer(&mut self) -> Result<(), Error> {
         let device = self.device().clone();
         let properties = unsafe {
             self.instance()
                 .get_physical_device_memory_properties(self.physical)
         };
-        let (buffer, bytes) = if ui {
-            (&mut self.ui_readback, UI_COPY_BYTES)
-        } else {
-            (
-                &mut self.readback,
-                self.extent.width as usize * self.extent.height as usize * 4,
-            )
-        };
+        let bytes = self.extent.width as usize * self.extent.height as usize * 4;
+        let buffer = &mut self.readback;
         buffer.destroy(&device);
         unsafe {
             buffer.buffer = create!(
@@ -1478,7 +1409,7 @@ impl Objects {
             .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
             .image(image)
             .subresource_range(subresource);
-        #[cfg(any(feature = "host-renderer", feature = "diagnostic-ui-data"))]
+        #[cfg(feature = "host-renderer")]
         let region = vk::BufferImageCopy::default()
             .image_subresource(
                 vk::ImageSubresourceLayers::default()
@@ -1498,7 +1429,7 @@ impl Objects {
             .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
             .image(image)
             .subresource_range(subresource);
-        #[cfg(any(feature = "host-renderer", feature = "diagnostic-ui-data"))]
+        #[cfg(feature = "host-renderer")]
         let host = vk::MemoryBarrier::default()
             .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
             .dst_access_mask(vk::AccessFlags::HOST_READ);
@@ -1512,7 +1443,7 @@ impl Objects {
                 &[],
                 &[ready],
             );
-            #[cfg(any(feature = "host-renderer", feature = "diagnostic-ui-data"))]
+            #[cfg(feature = "host-renderer")]
             self.device().cmd_copy_image_to_buffer(
                 command,
                 image,
@@ -1524,21 +1455,18 @@ impl Objects {
                 command,
                 vk::PipelineStageFlags::TRANSFER,
                 vk::PipelineStageFlags::BOTTOM_OF_PIPE
-                    | if cfg!(any(
-                        feature = "host-renderer",
-                        feature = "diagnostic-ui-data"
-                    )) {
+                    | if cfg!(feature = "host-renderer") {
                         vk::PipelineStageFlags::HOST
                     } else {
                         vk::PipelineStageFlags::empty()
                     },
                 vk::DependencyFlags::empty(),
                 {
-                    #[cfg(any(feature = "host-renderer", feature = "diagnostic-ui-data"))]
+                    #[cfg(feature = "host-renderer")]
                     {
                         core::slice::from_ref(&host)
                     }
-                    #[cfg(not(any(feature = "host-renderer", feature = "diagnostic-ui-data")))]
+                    #[cfg(not(feature = "host-renderer"))]
                     {
                         &[]
                     }
@@ -1547,49 +1475,6 @@ impl Objects {
                 &[present],
             );
         }
-    }
-
-    #[cfg(any(feature = "host-renderer", feature = "diagnostic-ui-data"))]
-    fn record_ui_copy(&self, command: vk::CommandBuffer) {
-        if !self.config.capture_ui {
-            return;
-        }
-        self.barrier(
-            command,
-            vk::PipelineStageFlags::COMPUTE_SHADER
-                | vk::PipelineStageFlags::VERTEX_SHADER
-                | vk::PipelineStageFlags::FRAGMENT_SHADER,
-            vk::AccessFlags::SHADER_WRITE | vk::AccessFlags::SHADER_READ,
-            vk::PipelineStageFlags::TRANSFER,
-            vk::AccessFlags::TRANSFER_READ,
-        );
-        let regions = [
-            vk::BufferCopy {
-                src_offset: UI_CONTROL_OFFSET as u64,
-                dst_offset: 0,
-                size: UI_CONTROL_BYTES as u64,
-            },
-            vk::BufferCopy {
-                src_offset: frame::UI_OFFSET as u64,
-                dst_offset: UI_CONTROL_BYTES as u64,
-                size: (frame::UI_PAGE_BYTES * frame::UI_PAGES) as u64,
-            },
-        ];
-        unsafe {
-            self.device().cmd_copy_buffer(
-                command,
-                self.storage.buffer,
-                self.ui_readback.buffer,
-                &regions,
-            );
-        }
-        self.barrier(
-            command,
-            vk::PipelineStageFlags::TRANSFER,
-            vk::AccessFlags::TRANSFER_WRITE,
-            vk::PipelineStageFlags::HOST,
-            vk::AccessFlags::HOST_READ,
-        );
     }
 
     fn wait_flight(&mut self, index: usize, timeout_ns: u64) -> Result<(), Error> {
@@ -1688,7 +1573,7 @@ impl Objects {
                 &vk::CommandBufferBeginInfo::default()
                     .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),
             )?;
-            #[cfg(any(feature = "host-renderer", feature = "diagnostic-ui-data"))]
+            #[cfg(feature = "host-renderer")]
             self.barrier(
                 command,
                 vk::PipelineStageFlags::TRANSFER,
@@ -1702,19 +1587,8 @@ impl Objects {
                 vk::AccessFlags::HOST_WRITE,
                 vk::PipelineStageFlags::COMPUTE_SHADER
                     | vk::PipelineStageFlags::VERTEX_SHADER
-                    | vk::PipelineStageFlags::FRAGMENT_SHADER
-                    | if self.config.capture_ui {
-                        vk::PipelineStageFlags::TRANSFER
-                    } else {
-                        vk::PipelineStageFlags::empty()
-                    },
-                vk::AccessFlags::SHADER_READ
-                    | vk::AccessFlags::SHADER_WRITE
-                    | if self.config.capture_ui {
-                        vk::AccessFlags::TRANSFER_READ
-                    } else {
-                        vk::AccessFlags::empty()
-                    },
+                    | vk::PipelineStageFlags::FRAGMENT_SHADER,
+                vk::AccessFlags::SHADER_READ | vk::AccessFlags::SHADER_WRITE,
             );
             if interactive {
                 let graphics =
@@ -1802,24 +1676,13 @@ impl Objects {
                 self.pipelines[2],
             );
             if interactive {
-                match self.config.ui_draws {
-                    UiDraws::Instanced => {
-                        self.device()
-                            .cmd_draw(command, 6, frame::UI_INSTANCES + 1, 0, 0)
-                    }
-                    UiDraws::Separate => {
-                        for instance in 0..=frame::UI_INSTANCES {
-                            self.device().cmd_draw(command, 6, 1, 0, instance);
-                        }
-                    }
-                }
+                self.device()
+                    .cmd_draw(command, 6, frame::UI_INSTANCES + 1, 0, 0);
             } else {
                 self.device()
                     .cmd_draw(command, 6, 1, 0, frame::BADGE_INSTANCE);
             }
             self.device().cmd_end_render_pass(command);
-            #[cfg(any(feature = "host-renderer", feature = "diagnostic-ui-data"))]
-            self.record_ui_copy(command);
             self.record_present_transition(command, self.targets[image].image);
             if interactive {
                 self.barrier(
@@ -1955,11 +1818,8 @@ impl Objects {
                 for buffer in [&mut self.storage, &mut self.input] {
                     buffer.destroy(&device);
                 }
-                #[cfg(any(feature = "host-renderer", feature = "diagnostic-ui-data"))]
-                {
-                    self.readback.destroy(&device);
-                    self.ui_readback.destroy(&device);
-                }
+                #[cfg(feature = "host-renderer")]
+                self.readback.destroy(&device);
                 device.destroy_device(allocator());
             }
             self.device = None;

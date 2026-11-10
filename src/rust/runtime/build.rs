@@ -63,19 +63,17 @@ fn main() {
         generated.push_str("\n];\n");
         previous_end = offset + length;
     }
-    for (name, identifier) in [("ui-alpha", "UI_ALPHA"), ("ui-text", "UI_TEXT")] {
-        let probe = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap())
-            .join(format!("prebuilt/{name}.spv"));
-        println!("cargo:rerun-if-changed={}", probe.display());
-        let bytes = fs::read(probe).expect("generated Rust shader");
-        assert!(bytes.len() >= 20 && bytes.len() <= 256 * 1024 && bytes.len().is_multiple_of(4));
-        assert_eq!(word(&bytes, 0), 0x0723_0203);
-        generated.push_str(&format!("pub static {identifier}: &[u32] = &[\n"));
-        for chunk in bytes.as_chunks::<4>().0 {
-            generated.push_str(&format!("0x{:08x},", u32::from_le_bytes(*chunk)));
-        }
-        generated.push_str("\n];\n");
+    let text =
+        PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap()).join("prebuilt/ui-text.spv");
+    println!("cargo:rerun-if-changed={}", text.display());
+    let bytes = fs::read(text).expect("generated Rust shader");
+    assert!(bytes.len() >= 20 && bytes.len() <= 256 * 1024 && bytes.len().is_multiple_of(4));
+    assert_eq!(word(&bytes, 0), 0x0723_0203);
+    generated.push_str("pub static UI_TEXT: &[u32] = &[\n");
+    for chunk in bytes.as_chunks::<4>().0 {
+        generated.push_str(&format!("0x{:08x},", u32::from_le_bytes(*chunk)));
     }
+    generated.push_str("\n];\n");
     fs::write(
         PathBuf::from(env::var_os("OUT_DIR").unwrap()).join("shaders.rs"),
         generated,

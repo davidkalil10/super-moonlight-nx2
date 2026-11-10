@@ -1,4 +1,4 @@
-// ABI translation for runtime/src/{net,audio_device,io_diagnostic}.rs: BSD sockets, audout and
+// ABI translation for runtime/src/{net,audio_device,native_frontend}.rs: BSD sockets, audout and
 // the one-time session file. No state beyond the audout buffer descriptors.
 #include <errno.h>
 #include <stdbool.h>

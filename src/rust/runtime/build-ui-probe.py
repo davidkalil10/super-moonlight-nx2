@@ -18,10 +18,9 @@ def digest(path):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Build a diagnostic fragment shader without changing Civ7 assets")
+    parser = argparse.ArgumentParser(description="Build the UI text fragment shader without changing Civ7 assets")
     parser.add_argument("--directory", type=Path, required=True)
     parser.add_argument("--install", action="store_true")
-    parser.add_argument("--variant", choices=("alpha", "text"), default="alpha")
     args = parser.parse_args()
     directory = args.directory
     builds = Path("/media/storage2/builds/moonlight")
@@ -38,7 +37,7 @@ def main():
     if not source.startswith("#version 450\n"):
         raise ValueError("Unexpected fragment shader version")
     (directory/"ui-base.frag").write_text(source.removeprefix("#version 450\n"))
-    name = "ui-" + args.variant
+    name = "ui-text"
     wrapper = ROOT / f"shaders/{name}.frag"
     shutil.copy2(wrapper, directory/(name+".frag"))
     layout = subprocess.check_output(["node", "--input-type=module", "-e",
@@ -59,8 +58,7 @@ def main():
             "commands":commands, "compiler":subprocess.check_output(["glslc","--version"],text=True),
             "sources":{str(path):digest(path) for path in [wrapper, base, shaders/"storage.glsl", directory/"layout.glsl"]},
             "shader":{"path":target.name,"bytes":target.stat().st_size,"sha256":digest(target)},
-            "scope":("Text strips output bitmapSample alpha as grayscale with forced alpha1; other draws unchanged"
-                if args.variant=="alpha" else "Text branch separated; original colors, sampled alpha and blending retained")}
+            "scope":"Text branch separated; original colors, sampled alpha and blending retained"}
     (directory/(name+".json")).write_text(json.dumps(info,indent=2)+"\n")
     if args.install:
         install = ROOT/"prebuilt"

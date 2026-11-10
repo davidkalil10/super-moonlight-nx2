@@ -42,9 +42,6 @@ PRODUCTION = {
 SDK_DIAGNOSTICS = ("sdk-decode", "sdk-modes")
 # The session sets of sdk-modes (runtime/src/ref_replay.rs).
 TRIALS = ("sizes", "4k", "rate", "paced")
-STAGE_DIAGNOSTICS = ("core", "renderer", "display", "display120", "io", "audio-cue", "udp", "ui",
-                     "ui-order", "ui-data", "ui-alpha", "ui-text", "ui-text-apps",
-                     "ui-text-overlay", "ui-text-interactive")
 
 
 def digest(path):
@@ -86,21 +83,17 @@ def sources():
     for name in ("renderer.json", "shaders.bin"):
         result[f"../renderer/civ7/prebuilt/{name}"] = digest(assets / name)
     result["../streamer/ui/fonts/glyphs.bin"] = digest(APP / "src/streamer/ui/fonts/glyphs.bin")
-    probe = ROOT / "runtime/prebuilt"
-    for name in ("ui-alpha", "ui-text"):
-        record = json.loads((probe / (name + ".json")).read_text())
-        shader = probe / (name + ".spv")
-        if (record["format"] != "moonlight.rust." + name or record["version"] != 1
-                or record["shader"]["path"] != shader.name
-                or record["shader"]["bytes"] != shader.stat().st_size
-                or record["shader"]["sha256"] != digest(shader)):
-            raise ValueError("Rust UI shader differs from its manifest")
+    record = json.loads((ROOT / "runtime/prebuilt/ui-text.json").read_text())
+    shader = ROOT / "runtime/prebuilt/ui-text.spv"
+    if (record["format"] != "moonlight.rust.ui-text" or record["version"] != 1
+            or record["shader"]["path"] != shader.name
+            or record["shader"]["bytes"] != shader.stat().st_size
+            or record["shader"]["sha256"] != digest(shader)):
+        raise ValueError("Rust UI shader differs from its manifest")
     return result
 
 
 def features(diagnostic):
-    if diagnostic == "core":
-        return None
     return PRODUCTION.get(diagnostic, f"diagnostic-{diagnostic}")
 
 
@@ -182,9 +175,8 @@ def build(args):
             info["rust_distribution_sha256"] = digest(manifest)
             commands = [["cargo", "build", "--manifest-path", str(ROOT / "Cargo.toml"),
                          "--package", "moonlight-nx2-runtime", "--target", TARGET, "--release", "--locked",
-                         "-Zbuild-std=core,alloc", "-Zbuild-std-features="]]
-            if features(args.diagnostic):
-                commands[0].extend(["--features", features(args.diagnostic)])
+                         "-Zbuild-std=core,alloc", "-Zbuild-std-features=",
+                         "--features", features(args.diagnostic)]]
             artifact = directory / "cargo" / TARGET / "release/libmoonlight_nx2_runtime.a"
         else:
             dev = args.dev or APP.parent / "moonlight-nx2-dev"
@@ -263,8 +255,8 @@ def main():
     parser.add_argument("--revision")
     parser.add_argument("--branch")
     parser.add_argument("--nacp-version", default="0.1.0")
-    parser.add_argument("--diagnostic", default="core",
-                        choices=(*PRODUCTION, *SDK_DIAGNOSTICS, *STAGE_DIAGNOSTICS))
+    parser.add_argument("--diagnostic", default="production",
+                        choices=(*PRODUCTION, *SDK_DIAGNOSTICS))
     parser.add_argument("--trials", choices=TRIALS, default=TRIALS[0],
                         help="the sessions an sdk-modes build runs")
     parser.add_argument("--rust-directory", type=Path)
