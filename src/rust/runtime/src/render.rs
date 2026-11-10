@@ -449,8 +449,11 @@ impl Renderer {
 
     pub fn flush_page(&mut self, range: core::ops::Range<usize>) -> Result<(), Error> {
         self.active()?;
-        #[cfg(feature = "ui-pattern")]
-        let range = frame::UI_OFFSET..frame::STORAGE_BYTES;
+        let range = if cfg!(feature = "ui-pattern") {
+            frame::UI_OFFSET..frame::STORAGE_BYTES
+        } else {
+            range
+        };
         self.objects.storage.flush(range);
         self.objects.flush_mapped(false);
         Ok(())
