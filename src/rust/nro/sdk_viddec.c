@@ -60,6 +60,7 @@ static struct {
     uint32_t acquisitions;
     Result poll_result;
     bool root;
+    bool creator_open;
     bool pool_open;
     bool decoder_open;
     bool sync_open;
@@ -89,8 +90,39 @@ static Result fail(uint32_t *stage, uint32_t at, Result result)
     return result;
 }
 
-Result moonlightSdkVideoOpen(uint32_t width, uint32_t height, uint32_t count, uint32_t *images,
-                             uint32_t *stage, Result *sync_result)
+/*
+ * viddecInitialize with the creator's resolution flag, which it always clears. The creator
+ * lands in the session viddecOpenDecoder reads.
+ */
+static Result root_open(bool resolution_unlimited)
+{
+    Result result = gsvInitialize();
+
+    if (R_FAILED(result))
+        return result;
+    video.root = true;
+    result = gsvCheckVideoDecoderAccess();
+    if (R_SUCCEEDED(result))
+        result = gsvOpenVideoDecoderCreator(resolution_unlimited, VIDDEC_LIBRARY_VERSION,
+                                            viddecGetServiceSession());
+    video.creator_open = R_SUCCEEDED(result);
+    return result;
+}
+
+static void root_close(void)
+{
+    if (video.creator_open) {
+        tipcClose(viddecGetServiceSession());
+        gsvReleaseVideoDecoderAccess();
+        video.creator_open = false;
+    }
+    gsvExit();
+    video.root = false;
+}
+
+Result moonlightSdkVideoOpen(uint32_t width, uint32_t height, uint32_t count,
+                             bool resolution_unlimited, uint32_t *images, uint32_t *stage,
+                             Result *sync_result)
 {
     GsvDecodeImagePreference preference;
     uint64_t bytes = 0;
@@ -100,11 +132,10 @@ Result moonlightSdkVideoOpen(uint32_t width, uint32_t height, uint32_t count, ui
     if (video.root || count == 0 || count > VIDDEC_MAX_IMAGES)
         return fail(stage, STAGE_ROOT, MAKERESULT(Module_Libnx, LibnxError_BadInput));
     memset(&video, 0, sizeof(video));
-    note("sdk-video: before root");
-    result = viddecInitialize();
+    note("sdk-video: before root resolution_unlimited=%d", resolution_unlimited);
+    result = root_open(resolution_unlimited);
     if (R_FAILED(result))
         return fail(stage, STAGE_ROOT, result);
-    video.root = true;
     video.count = count;
     video.width = width;
     video.height = height;
@@ -369,7 +400,6 @@ Result moonlightSdkVideoClose(uint32_t *stage)
         gsvSyncClose(&video.sync);
     video.sync_open = false;
     note("sdk-video: before root exit");
-    viddecExit();
-    video.root = false;
+    root_close();
     return first;
 }

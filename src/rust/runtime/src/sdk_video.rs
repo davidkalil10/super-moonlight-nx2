@@ -15,7 +15,7 @@ use moonlight_nx2_core::{
     annexb,
     codec::{Capabilities, Codec, Depth, Evidence, Mode, Size},
     decoder::{Backend, BackendError, Backing, Config, SURFACES, UNITS},
-    viddec,
+    viddec::{self, Session},
     video_wire::Output,
 };
 
@@ -61,6 +61,7 @@ unsafe extern "C" {
         width: u32,
         height: u32,
         count: u32,
+        resolution_unlimited: bool,
         images: *mut u32,
         stage: *mut u32,
         sync_result: *mut u32,
@@ -113,7 +114,9 @@ pub fn note_output_formats(size: Size) {
 
 pub struct SdkVideo {
     fps: u32,
+    resolution_unlimited: Option<bool>,
     config: Option<Config>,
+    session: Option<Session>,
     started: bool,
     ready: Option<usize>,
     layout_reported: bool,
@@ -126,7 +129,9 @@ impl SdkVideo {
     pub fn new(fps: u32) -> Self {
         Self {
             fps,
+            resolution_unlimited: None,
             config: None,
+            session: None,
             started: false,
             ready: None,
             layout_reported: false,
@@ -151,9 +156,7 @@ impl SdkVideo {
     }
 
     fn start(&mut self, access_unit: &[u8]) -> Result<(), BackendError> {
-        let config = self.config.ok_or(BackendError::Invalid)?;
-        let session =
-            viddec::session(config.codec, config.display).ok_or(BackendError::Unsupported)?;
+        let (config, session) = self.config.zip(self.session).ok_or(BackendError::Invalid)?;
         let mut codec_config = [0; viddec::CODEC_CONFIG_MAX];
         let Some(bytes) = viddec::codec_config(config.codec, access_unit, &mut codec_config) else {
             log(&format!(
@@ -227,6 +230,11 @@ impl Backend for SdkVideo {
         if !accepted(config.codec) || config.backing != Backing::CpuReference {
             return Err(BackendError::Unsupported);
         }
+        let mut session =
+            viddec::session(config.codec, config.display).ok_or(BackendError::Unsupported)?;
+        if let Some(resolution_unlimited) = self.resolution_unlimited {
+            session.resolution_unlimited = resolution_unlimited;
+        }
         let mut images = [0; SURFACES];
         let mut stage = 0;
         let mut sync_result = 0;
@@ -235,6 +243,7 @@ impl Backend for SdkVideo {
                 config.display.width(),
                 config.display.height(),
                 SURFACES as u32,
+                session.resolution_unlimited,
                 images.as_mut_ptr(),
                 &mut stage,
                 &mut sync_result,
@@ -250,6 +259,7 @@ impl Backend for SdkVideo {
             log("sdk-video: no sync session; frames are taken when their properties arrive");
         }
         self.config = Some(config);
+        self.session = Some(session);
         Ok(images)
     }
 
@@ -370,6 +380,7 @@ impl Backend for SdkVideo {
             self.busy_submits
         ));
         self.config = None;
+        self.session = None;
         self.started = false;
         self.ready = None;
         if result != 0 {

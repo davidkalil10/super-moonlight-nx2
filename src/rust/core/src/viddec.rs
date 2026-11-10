@@ -21,6 +21,8 @@ const AV1_MIME: &[u8] = b"video/av1\0";
 pub struct Session {
     pub codec: u32,
     pub work_bytes: usize,
+    /// Opens the decoder creator without its default resolution cap.
+    pub resolution_unlimited: bool,
 }
 
 /// 64 MiB carried H.264 at 1080p on the console; larger pictures get it once per 1080p of area.
@@ -29,15 +31,26 @@ fn work_bytes_by_area(display: Size) -> usize {
     WORK_BYTES_1080P * pixels.div_ceil(PIXELS_1080P)
 }
 
+/// The service refused H.264 at 2160p from a default creator (0x17bc6f at initialize), while
+/// AV1 ran at 1440p and 2160p from the retail client's default one. So only H.264 above 1080p
+/// asks for the uncapped creator, and that is a guess until the console has run it.
+fn resolution_unlimited(codec: Codec, display: Size) -> bool {
+    codec == Codec::H264 && (display.width() > 1920 || display.height() > 1080)
+}
+
 /// `None` for a codec the service has no value for. HEVC is one: the enum skips 2 and the
 /// service refused it at initialize (0x17986f) on 2026-11-10.
 pub fn session(codec: Codec, display: Size) -> Option<Session> {
-    let (codec, work_bytes) = match codec {
+    let (value, work_bytes) = match codec {
         Codec::H264 => (CODEC_H264, work_bytes_by_area(display)),
         Codec::Av1 => (CODEC_AV1, video_wire::av1_workspace_bytes(display) as usize),
         Codec::Hevc | Codec::Vp9 => return None,
     };
-    Some(Session { codec, work_bytes })
+    Some(Session {
+        codec: value,
+        work_bytes,
+        resolution_unlimited: resolution_unlimited(codec, display),
+    })
 }
 
 /// Writes the configure buffer for a stream that starts with `first_unit` and returns its
