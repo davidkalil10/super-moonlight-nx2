@@ -185,7 +185,7 @@ impl Stream {
                 codec: core_codec(descriptor.codec),
                 coded,
                 display,
-                timeout_ms: if cfg!(feature = "native-video") {
+                timeout_ms: if cfg!(any(feature = "native-video", feature = "sdk-video")) {
                     2000
                 } else {
                     0

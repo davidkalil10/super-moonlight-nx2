@@ -53,7 +53,7 @@ def sources():
 
 
 def nacp_title(diagnostic):
-    if diagnostic == "production":
+    if diagnostic in ("production", "production-sdk"):
         return "Moonlight NX2"
     if diagnostic == "frontend":
         return "Moonlight NX2 Rust"
@@ -122,6 +122,8 @@ def build(args):
                          "-Zbuild-std=core,alloc", "-Zbuild-std-features="]]
             if args.diagnostic == "production":
                 commands[0].extend(["--features", "frontend,native-video"])
+            elif args.diagnostic == "production-sdk":
+                commands[0].extend(["--features", "frontend,sdk-video"])
             elif args.diagnostic != "core":
                 commands[0].extend(["--features", f"diagnostic-{args.diagnostic}"])
             artifact = directory / "cargo" / TARGET / "release/libmoonlight_nx2_runtime.a"
@@ -189,10 +191,12 @@ def build(args):
                 commands[0].append("NATIVE_DECODE=1")
             if args.diagnostic == "native-decode":
                 commands[0].append("BREADCRUMBS=1")
-        if args.diagnostic == "sdk-decode":
+        if args.diagnostic in ("sdk-decode", "production-sdk"):
             if info["sdk"]["version"] != native.SDK_VIDDEC:
                 raise ValueError("The SDK video decoder needs the 2026-11-10 SDK")
-            commands[0].extend(["SDK_VIDDEC=1", "BREADCRUMBS=1"])
+            commands[0].append("SDK_VIDDEC=1")
+            if args.diagnostic == "sdk-decode":
+                commands[0].append("BREADCRUMBS=1")
         artifact = directory / "moonlight-nx2-rust.nro"
 
     directory.mkdir(parents=True, exist_ok=False)
@@ -229,7 +233,7 @@ def main():
     parser.add_argument("--revision")
     parser.add_argument("--branch")
     parser.add_argument("--nacp-version", default="0.1.0")
-    parser.add_argument("--diagnostic", choices=("core", "renderer", "display", "display120", "coexist", "io", "audio-cue", "udp", "nvdec", "sdk-backing", "native-decode", "sdk-decode", "ui", "ui-order", "ui-data", "ui-alpha", "ui-text", "ui-text-apps", "ui-text-overlay", "ui-text-interactive", "control", "control-default", "frontend", "frontend-check", "ref-replay", "production"), default="core")
+    parser.add_argument("--diagnostic", choices=("core", "renderer", "display", "display120", "coexist", "io", "audio-cue", "udp", "nvdec", "sdk-backing", "native-decode", "sdk-decode", "ui", "ui-order", "ui-data", "ui-alpha", "ui-text", "ui-text-apps", "ui-text-overlay", "ui-text-interactive", "control", "control-default", "frontend", "frontend-check", "ref-replay", "production", "production-sdk"), default="core")
     parser.add_argument("--sdk-backing-library-dir", type=Path)
     parser.add_argument("--rust-directory", type=Path)
     parser.add_argument("--cargo-home", type=Path)

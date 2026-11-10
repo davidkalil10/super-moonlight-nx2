@@ -482,7 +482,11 @@ fn present_mode(low_latency: bool) -> crate::render::PresentMode {
 
 /// Hands the operation mode and the display modes verified for it to the client; a live stream
 /// restarts in the new context.
-#[cfg(any(feature = "diagnostic-frontend", feature = "native-video"))]
+#[cfg(any(
+    feature = "diagnostic-frontend",
+    feature = "native-video",
+    feature = "sdk-video"
+))]
 fn display_context(
     app: &mut Frontend<Directory, NetSocket>,
     docked: bool,
@@ -495,28 +499,40 @@ fn display_context(
             decoder: stream_capabilities(),
             display,
         });
-    #[cfg(not(feature = "native-video"))]
+    #[cfg(not(any(feature = "native-video", feature = "sdk-video")))]
     log(&format!(
         "display: context docked={docked} accepted={accepted}; video sink receives and discards up to 1440p120 and 4K60"
     ));
-    #[cfg(feature = "native-video")]
+    #[cfg(any(feature = "native-video", feature = "sdk-video"))]
     log(&format!(
         "display: context docked={docked} accepted={accepted}; native decoder capability is runtime gated"
     ));
 }
 
 /// Without a decoder nothing can be offered; only the operation mode reaches the model.
-#[cfg(not(any(feature = "diagnostic-frontend", feature = "native-video")))]
+#[cfg(not(any(
+    feature = "diagnostic-frontend",
+    feature = "native-video",
+    feature = "sdk-video"
+)))]
 fn display_context(app: &mut Frontend<Directory, NetSocket>, docked: bool, _: DisplayCapabilities) {
     app.client.event(&Event::OperationMode { docked });
 }
 
-#[cfg(any(feature = "diagnostic-frontend", feature = "native-video"))]
+#[cfg(any(
+    feature = "diagnostic-frontend",
+    feature = "native-video",
+    feature = "sdk-video"
+))]
 fn stream_capabilities() -> Capabilities {
     crate::frontend_stream::decoder_capabilities()
 }
 
-#[cfg(not(any(feature = "diagnostic-frontend", feature = "native-video")))]
+#[cfg(not(any(
+    feature = "diagnostic-frontend",
+    feature = "native-video",
+    feature = "sdk-video"
+)))]
 fn stream_capabilities() -> Capabilities {
     Capabilities::default()
 }
