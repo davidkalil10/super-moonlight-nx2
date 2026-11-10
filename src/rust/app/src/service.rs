@@ -36,6 +36,8 @@ pub const MEDIA_CLOSE_TIMEOUT_MS: u64 = 10_000;
 pub const RESUME_ATTEMPTS: u8 = 3;
 /// A stream that then ran this long gets its restarts back.
 pub const RESUME_RESET_MS: u64 = 60_000;
+/// How long a launch waits for the earlier stream to close: its stop, then its media.
+pub const LAUNCH_AFTER_STOP_TIMEOUT_MS: u64 = STOP_TIMEOUT_MS + MEDIA_CLOSE_TIMEOUT_MS;
 
 #[cfg(test)]
 mod wake_tests {
@@ -213,6 +215,18 @@ enum StopNotice {
     Reported,
     /// A session change: start the same app again once the stop finishes.
     Relaunch,
+    /// The user launched while the stream was closing: start that once the stop finishes.
+    Launch,
+}
+
+/// A launch held until the closing stream has stopped.
+#[derive(Clone, Copy, Debug)]
+struct QueuedLaunch {
+    host: Host,
+    app: moonlight_nx2_ui::model::App,
+    settings: StreamOptions,
+    /// Set by the first poll after the request.
+    deadline_ms: Option<u64>,
 }
 
 /// The stream to start again after a confirmed stop.
@@ -304,6 +318,7 @@ pub struct Service {
     docked: bool,
     stream_app: Option<moonlight_nx2_ui::model::App>,
     relaunch: Option<Relaunch>,
+    queued_launch: Option<QueuedLaunch>,
     stop_done: bool,
     stop_notice: StopNotice,
     wait: Wait,
@@ -364,6 +379,7 @@ impl Service {
             docked: false,
             stream_app: None,
             relaunch: None,
+            queued_launch: None,
             stop_done: false,
             stop_notice: StopNotice::Reported,
             wait: Wait::None,
@@ -690,6 +706,7 @@ impl Service {
         }
         self.now_ms = now_ms;
         self.check_wait(now_ms);
+        self.check_queued_launch(now_ms);
         if !self.link_up {
             return;
         }
@@ -908,7 +925,7 @@ impl Service {
         };
 
         if self.phase != Phase::Idle {
-            self.refuse_launch_phase();
+            self.queue_launch(host, app, settings);
             return;
         }
 
@@ -992,6 +1009,51 @@ impl Service {
         self.streamed = false;
     }
 
+    /// Holds a launch while the earlier stream closes; the newest request replaces an older one
+    /// and keeps its deadline. A stream kept for a session change is not replaced.
+    fn queue_launch(
+        &mut self,
+        host: Host,
+        app: moonlight_nx2_ui::model::App,
+        settings: &StreamOptions,
+    ) {
+        let closing = self.phase == Phase::Stopping && self.stop_notice != StopNotice::Relaunch;
+        if !closing {
+            self.refuse_launch_phase();
+            return;
+        }
+
+        let waiting = self.stop_notice == StopNotice::Launch;
+        let earlier = self.queued_launch.filter(|_| waiting);
+        self.queued_launch = Some(QueuedLaunch {
+            host,
+            app,
+            settings: *settings,
+            deadline_ms: earlier.and_then(|earlier| earlier.deadline_ms),
+        });
+        self.stop_notice = StopNotice::Launch;
+        self.notify(Notice::Stage(Message::of("Closing the earlier stream")));
+    }
+
+    /// Gives up a queued launch when the close outlasts its bound.
+    fn check_queued_launch(&mut self, now_ms: u64) {
+        let waiting = self.phase == Phase::Stopping && self.stop_notice == StopNotice::Launch;
+        let Some(queued) = self.queued_launch.as_mut().filter(|_| waiting) else {
+            return;
+        };
+        let deadline_ms = *queued
+            .deadline_ms
+            .get_or_insert(now_ms.saturating_add(LAUNCH_AFTER_STOP_TIMEOUT_MS));
+        if now_ms < deadline_ms {
+            return;
+        }
+
+        self.stats.deadlines += 1;
+        self.queued_launch = None;
+        self.stop_notice = StopNotice::Reported;
+        self.refuse_launch_phase();
+    }
+
     fn refuse_launch_phase(&mut self) {
         match self.phase {
             Phase::Retained => self.fail(
@@ -1006,10 +1068,12 @@ impl Service {
         }
     }
 
-    /// A user stop; it also cancels a pending dock relaunch.
+    /// A user stop; it also cancels a pending dock relaunch or a queued launch.
     fn stop_stream(&mut self) {
         self.relaunch = None;
-        if self.phase == Phase::Stopping && self.stop_notice == StopNotice::Relaunch {
+        self.queued_launch = None;
+        let restarting = matches!(self.stop_notice, StopNotice::Relaunch | StopNotice::Launch);
+        if self.phase == Phase::Stopping && restarting {
             self.stop_notice = StopNotice::Ended;
             return;
         }
@@ -1032,9 +1096,11 @@ impl Service {
         }
     }
 
-    /// After a stop: start the dock relaunch, or tell the UI the stream ended.
+    /// After a stop: start the dock relaunch or the queued launch, or tell the UI the stream
+    /// ended.
     fn finish_relaunch_or(&mut self, ended: Notice, notice: StopNotice) {
         let relaunch = self.relaunch.take();
+        let queued = self.queued_launch.take();
         match (notice, relaunch) {
             (StopNotice::Relaunch, Some(next)) if self.phase == Phase::Idle => {
                 self.automatic_start = true;
@@ -1044,6 +1110,12 @@ impl Service {
                 Some(true),
                 format_args!("The stream stopped for the session change and could not start again"),
             ),
+            (StopNotice::Launch, _) => match queued {
+                Some(next) if self.phase == Phase::Idle => {
+                    self.launch(next.host, Some(next.app), &next.settings);
+                }
+                _ => self.refuse_launch_phase(),
+            },
             (StopNotice::Ended, _) => self.notify(ended),
             (StopNotice::Reported, _) => {}
         }
