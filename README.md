@@ -110,7 +110,6 @@ Civilization VII payload, Node service and C helper this app replaced.
 - [Moonlight](https://moonlight-stream.org/) — [moonlight-common-c](https://github.com/moonlight-stream/moonlight-common-c) and [moonlight-embedded](https://github.com/moonlight-stream/moonlight-embedded).
 - [Sunshine](https://github.com/LizardByte/Sunshine) — game streaming host.
 - [ENet](https://github.com/cgutman/enet) — networking.
-- [libnx2](https://gitlab.com/Azkali/libnx2) — Switch 2 tooling.
 - [M PLUS Rounded 1c](https://github.com/coz-m/MPLUS_FONTS) — font.
 
 See [LICENSE](LICENSE) and the [font licence](src/rust/ui/fonts/OFL.txt).
