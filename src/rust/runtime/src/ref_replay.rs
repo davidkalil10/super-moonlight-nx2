@@ -1,8 +1,8 @@
-//! Reference clip replay for decoder bring-up. Embedded 1080p60 H.264 and AV1 clips
-//! (`tools/refclip.py generate`) go through the stream's own `Video` path with any decoder
-//! `Backend`; each decoded NV12 frame is logged as CRC-32s of its displayed luma and chroma, and
-//! held on screen long enough for an HDMI capture. `tools/refclip.py compare` checks both
-//! against the reference that ffmpeg decoded. A codec is enabled only once they agree.
+//! Reference clip replay for the decoder diagnostics. The embedded clips (`refclip/*.mlrc`, made
+//! by `tools/refclip/refclip.py generate` in moonlight-nx2-dev) go through the stream's own
+//! `Video` path; each decoded NV12 frame is logged as CRC-32s of its displayed luma and chroma,
+//! and held on screen long enough for an HDMI capture. `refclip.py compare` checks both against
+//! the reference that ffmpeg decoded. A codec is enabled only once they agree.
 
 extern crate alloc;
 
@@ -503,7 +503,7 @@ fn step<B: Backend<N>, const N: usize>(
     video.present(renderer, false).map(|_| ())
 }
 
-/// One embedded clip: the `.mlrc` header and its access units (see tools/refclip.py).
+/// One embedded clip: the `.mlrc` header and its access units (see refclip.py).
 pub struct Clip<'a> {
     pub codec: Codec,
     pub width: u32,
