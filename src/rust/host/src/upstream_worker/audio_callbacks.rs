@@ -240,7 +240,7 @@ unsafe fn decode_packet(data: *mut libc::c_char, length: i32) {
     if !state.open.load(Ordering::Acquire) {
         return;
     }
-    if let Ok(mut blocks) = state.blocks.try_lock() {
+    if let Ok(mut blocks) = state.blocks.lock() {
         blocks.push(&bytes);
     }
 }
