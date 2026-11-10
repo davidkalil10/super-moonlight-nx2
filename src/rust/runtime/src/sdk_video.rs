@@ -14,26 +14,23 @@ use alloc::format;
 use moonlight_nx2_core::{
     codec::{Capabilities, Codec, Depth, Evidence, Mode, Size},
     decoder::{Backend, BackendError, Backing, Config, SURFACES, UNITS},
-    viddec::{self, Av1Config},
+    viddec,
     video_wire::Output,
 };
 
 /// Enable only in a commit citing matching pixel sums and a clean close on the console.
 pub const SDK_H264_VERIFIED: bool = true;
+/// AV1 stays out of the stream offer until the diagnostic shows matching sums on the console.
+pub const SDK_AV1_VERIFIED: bool = false;
 /// 1440p and 4K are not measured on the console yet. Only the docked-modes build offers
 /// them, and only on a docked layer that presented at that size.
-pub const SDK_H264_DOCKED_VERIFIED: bool = cfg!(feature = "sdk-video-docked-modes");
+pub const SDK_DOCKED_MODES: bool = cfg!(feature = "sdk-video-docked-modes");
 /// Largest size and rate per tier, and whether it is offered.
 const MODES: [(u32, u32, u32, bool); 3] = [
-    (1920, 1080, 60, SDK_H264_VERIFIED),
-    (2560, 1440, 60, SDK_H264_DOCKED_VERIFIED),
-    (3840, 2160, 60, SDK_H264_DOCKED_VERIFIED),
+    (1920, 1080, 60, true),
+    (2560, 1440, 60, SDK_DOCKED_MODES),
+    (3840, 2160, 60, SDK_DOCKED_MODES),
 ];
-/// AV1 and HEVC stay out of the stream offer until each has its own console run.
-pub const SDK_AV1_VERIFIED: bool = false;
-pub const SDK_HEVC_VERIFIED: bool = false;
-/// The configure buffer production would open AV1 with.
-const AV1_CONFIG: Av1Config = Av1Config::Mime;
 const SUBMIT_BUSY: u32 = (3603 << 9) | 111;
 
 #[repr(C)]
@@ -97,14 +94,13 @@ fn verified(codec: Codec) -> bool {
     match codec {
         Codec::H264 => SDK_H264_VERIFIED,
         Codec::Av1 => SDK_AV1_VERIFIED,
-        Codec::Hevc => SDK_HEVC_VERIFIED,
-        Codec::Vp9 => false,
+        Codec::Hevc | Codec::Vp9 => false,
     }
 }
 
-/// H.264 as before; the others only once verified, or in the diagnostic that verifies them.
+/// A verified codec, or AV1 in the diagnostic that verifies it.
 fn accepted(codec: Codec) -> bool {
-    codec == Codec::H264 || verified(codec) || cfg!(feature = "diagnostic-sdk-decode")
+    verified(codec) || (codec == Codec::Av1 && cfg!(feature = "diagnostic-sdk-decode"))
 }
 
 /// Logs the size the service reports for one image of every output format, HDR included.
@@ -116,7 +112,6 @@ pub fn note_output_formats(size: Size) {
 
 pub struct SdkVideo {
     fps: u32,
-    av1_config: Av1Config,
     config: Option<Config>,
     started: bool,
     ready: Option<usize>,
@@ -128,13 +123,8 @@ pub struct SdkVideo {
 
 impl SdkVideo {
     pub fn new(fps: u32) -> Self {
-        Self::with_av1_config(fps, AV1_CONFIG)
-    }
-
-    pub fn with_av1_config(fps: u32, av1_config: Av1Config) -> Self {
         Self {
             fps,
-            av1_config,
             config: None,
             started: false,
             ready: None,
@@ -164,29 +154,13 @@ impl SdkVideo {
         let session =
             viddec::session(config.codec, config.display).ok_or(BackendError::Unsupported)?;
         let mut codec_config = [0; viddec::CODEC_CONFIG_MAX];
-        let Some(bytes) = viddec::codec_config(
-            config.codec,
-            self.av1_config,
-            access_unit,
-            &mut codec_config,
-        ) else {
+        let Some(bytes) = viddec::codec_config(config.codec, access_unit, &mut codec_config) else {
             log(&format!(
                 "sdk-video: first {:?} access unit has no codec configuration",
                 config.codec
             ));
             return Err(BackendError::Invalid);
         };
-        match config.codec {
-            Codec::Av1 => log(&format!(
-                "sdk-video: AV1 configure buffer is {:?}",
-                self.av1_config
-            )),
-            Codec::Hevc => log(&format!(
-                "sdk-video: HEVC codec value {} is a guess, unverified",
-                session.codec
-            )),
-            _ => {}
-        }
         let mut stage = 0;
         let result = unsafe {
             moonlightSdkVideoStart(
@@ -221,30 +195,19 @@ fn check(operation: &str, result: u32) -> Result<(), BackendError> {
 impl Backend for SdkVideo {
     fn capabilities() -> Capabilities {
         let mut capabilities = Capabilities::default();
-        for (width, height, fps, offered) in MODES {
-            if offered {
-                capabilities.record(
-                    Mode {
-                        codec: Codec::H264,
-                        depth: Depth::Eight,
-                        maximum: Size::new(width, height).unwrap(),
-                        fps,
-                    },
-                    Evidence::PixelsAndCloseVerified,
-                );
-            }
-        }
-        for codec in [Codec::Av1, Codec::Hevc] {
-            if verified(codec) {
-                capabilities.record(
-                    Mode {
-                        codec,
-                        depth: Depth::Eight,
-                        maximum: Size::new(1920, 1080).unwrap(),
-                        fps: 60,
-                    },
-                    Evidence::PixelsAndCloseVerified,
-                );
+        for codec in [Codec::H264, Codec::Av1] {
+            for (width, height, fps, offered) in MODES {
+                if verified(codec) && offered {
+                    capabilities.record(
+                        Mode {
+                            codec,
+                            depth: Depth::Eight,
+                            maximum: Size::new(width, height).unwrap(),
+                            fps,
+                        },
+                        Evidence::PixelsAndCloseVerified,
+                    );
+                }
             }
         }
         capabilities
