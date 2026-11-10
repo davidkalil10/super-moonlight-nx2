@@ -352,6 +352,36 @@ impl Composer {
         resident: Option<&Placement>,
         out: &mut [u8],
     ) -> Result<Option<Placement>, Error> {
+        self.render_with(model, epoch, sequence, resident, out, |b| {
+            b.compose(model, settings_error)
+        })
+    }
+
+    /// The test pattern page `view` (1 or 2) in place of the model's page; see `Builder::pattern`.
+    pub fn render_pattern(
+        &mut self,
+        model: &Model,
+        view: u32,
+        epoch: u32,
+        sequence: u32,
+        resident: Option<&Placement>,
+        out: &mut [u8],
+    ) -> Result<Option<Placement>, Error> {
+        self.render_with(model, epoch, sequence, resident, out, |b| {
+            b.pattern(view);
+            true
+        })
+    }
+
+    fn render_with(
+        &mut self,
+        model: &Model,
+        epoch: u32,
+        sequence: u32,
+        resident: Option<&Placement>,
+        out: &mut [u8],
+        compose: impl FnOnce(&mut Builder) -> bool,
+    ) -> Result<Option<Placement>, Error> {
         self.graveyard.clear();
         let pal = model.look().palette();
         let mut b = Builder {
@@ -366,7 +396,7 @@ impl Composer {
             images: Vec::new(),
             error: None,
         };
-        let has_page = b.compose(model, settings_error);
+        let has_page = compose(&mut b);
         let Builder {
             flags,
             background,
@@ -701,5 +731,67 @@ impl Builder<'_> {
         let tile = self.composer.glyphs.letters(name, COVER_WIDTH, COVER_HEIGHT)?;
         let bytes = tile.width as usize * tile.height as usize * 4;
         Some(self.composer.store_sized(key, tile, 0, 0, bytes))
+    }
+}
+
+const PATTERN_FACES: [Face; 4] = [
+    Face::new(24, 500),
+    Face::new(28, 500),
+    Face::new(32, 600),
+    Face::new(44, 500),
+];
+
+fn pattern_tile(view: u32) -> Bitmap {
+    let (width, height) = (COVER_WIDTH as usize, COVER_HEIGHT as usize);
+    let mut bytes = Vec::with_capacity(width * height * 4);
+    for y in 0..height {
+        for x in 0..width {
+            let ramp = (x * 120 / width + y * 120 / height) / 2;
+            let level = if view == 1 { 40 + ramp } else { 220 - ramp };
+            let line = view == 2 && y % 32 == 0;
+            let value = if line { 255 - level } else { level } as u8;
+            bytes.extend([value, value, value, 255]);
+        }
+    }
+    Bitmap {
+        width: COVER_WIDTH,
+        height: COVER_HEIGHT,
+        channels: 4,
+        bytes,
+    }
+}
+
+impl Builder<'_> {
+    /// A page of known art for telling a bad draw from bad content: smooth tiles at 1:1 and
+    /// scaled, thin rules and text in four sizes. Views 1 and 2 differ in every byte but share
+    /// their layout, so an old page showing through in the other one is easy to see.
+    pub(crate) fn pattern(&mut self, view: u32) {
+        let tile = |b: &mut Builder<'_>, n: u32, x: u32, shown: (u32, u32)| {
+            let key = format!("pat\x1f{view}\x1f{n}");
+            let serial = b.composer.lookup(&key).unwrap_or_else(|| {
+                let bitmap = pattern_tile(view);
+                let bytes = bitmap.bytes.len();
+                b.composer.store_sized(key, bitmap, 0, 0, bytes)
+            });
+            b.image(x, 64, serial, shown, 12);
+        };
+        tile(self, 0, 96, (COVER_WIDTH, COVER_HEIGHT));
+        tile(self, 1, 340, (326, 489));
+        tile(self, 2, 700, (150, 225));
+        tile(self, 3, 900, (COVER_WIDTH, COVER_HEIGHT));
+
+        let ink = self.pal.ink;
+        self.fill(96, 600, 1728, 2, self.pal.line, 0);
+        self.fill(96, 953, 1728, 2, self.pal.line, 0);
+        let sentence = if view == 1 {
+            "Fair link (136 Mbps, 5 ms): 2160p60 at 41 Mbps"
+        } else {
+            "Good link (80 Mbps, 7 ms): 1080p60 at 14 Mbps"
+        };
+        for (row, face) in PATTERN_FACES.into_iter().enumerate() {
+            self.put(96, 630 + row as u32 * 70, 1700, sentence, face, ink, Align::Left);
+        }
+        let name = format!("Pattern {view} of 2");
+        self.put(96, 990, 600, &name, PATTERN_FACES[1], ink, Align::Left);
     }
 }

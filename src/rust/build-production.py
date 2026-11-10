@@ -38,11 +38,15 @@ def main():
                         help="offer 120 fps on a 60 Hz display too, to measure the decoder")
     parser.add_argument("--tcp-video", action="store_true",
                         help="keep video on TCP instead of UDP")
+    parser.add_argument("--ui-pattern", action="store_true",
+                        help="L+R+X+Y steps through two test pages that show how the console draws known art")
     parser.add_argument("--diagnostic", choices=SDK_DIAGNOSTICS,
                         help="build this decoder diagnostic instead of the app")
     parser.add_argument("--trials", choices=TRIALS, default=TRIALS[0],
                         help="the sessions an sdk-modes diagnostic runs")
     args = parser.parse_args()
+    if args.ui_pattern and (args.decode120 or args.tcp_video or args.diagnostic):
+        parser.error("--ui-pattern goes alone")
     if args.diagnostic and (args.decode120 or args.tcp_video):
         parser.error("--diagnostic goes alone")
     if args.tcp_video and args.decode120:
@@ -52,6 +56,8 @@ def main():
         diagnostic += "-120-decode"
     if args.tcp_video:
         diagnostic += "-tcp"
+    if args.ui_pattern:
+        diagnostic += "-pattern"
     name = diagnostic
     if diagnostic == "sdk-modes" and args.trials != TRIALS[0]:
         name += f"-{args.trials}"

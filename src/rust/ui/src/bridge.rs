@@ -125,6 +125,8 @@ pub struct Bridge<F> {
     composed_revision: Option<u64>,
     pin_deadline_ns: Option<u64>,
     placed: [Option<Placement>; 2],
+    pattern: u32,
+    pattern_shown: u32,
 }
 
 impl<F: Files> Bridge<F> {
@@ -166,6 +168,8 @@ impl<F: Files> Bridge<F> {
             seen: word(storage, CMD_SEQUENCE),
             header: None,
             shown_screen: None,
+            pattern: 0,
+            pattern_shown: 0,
             published_at: 0,
             stale: false,
             header_rewrites: 0,
@@ -501,6 +505,15 @@ impl<F: Files> Bridge<F> {
         }
     }
 
+    /// Shows test pattern page `view` (1 or 2) in place of the model's page; 0 goes back to it.
+    pub fn set_pattern(&mut self, view: u32) {
+        self.pattern = view;
+    }
+
+    pub fn pattern(&self) -> u32 {
+        self.pattern
+    }
+
     /// Composes the model into the buffer not shown and shows it, when the model changed since
     /// the last compose. True when a page went up.
     pub fn publish(
@@ -509,7 +522,14 @@ impl<F: Files> Bridge<F> {
         composer: &mut Composer,
         now_ns: u64,
     ) -> Result<bool, Error> {
-        if self.composed_revision == Some(self.revision) {
+        let pattern = self.pattern;
+        let due = pattern != self.pattern_shown;
+        let current = if pattern == 0 {
+            self.composed_revision == Some(self.revision)
+        } else {
+            true
+        };
+        if current && !due {
             return Ok(false);
         }
 
@@ -517,14 +537,18 @@ impl<F: Files> Bridge<F> {
         let slot = (next & 1) as usize;
         let resident = self.placed[slot].as_ref();
         let out = &mut storage[page_buffer(slot as u32)];
-        let rendered = composer.render(
-            &self.model,
-            self.storage_error,
-            self.epoch,
-            next,
-            resident,
-            out,
-        );
+        let rendered = if pattern == 0 {
+            composer.render(
+                &self.model,
+                self.storage_error,
+                self.epoch,
+                next,
+                resident,
+                out,
+            )
+        } else {
+            composer.render_pattern(&self.model, pattern, self.epoch, next, resident, out)
+        };
         let placed = match rendered {
             Ok(placed) => placed,
             Err(error) => {
@@ -533,7 +557,10 @@ impl<F: Files> Bridge<F> {
             }
         };
 
-        self.composed_revision = Some(self.revision);
+        self.pattern_shown = pattern;
+        if pattern == 0 {
+            self.composed_revision = Some(self.revision);
+        }
         let Some(placed) = placed else {
             return Ok(false);
         };

@@ -129,6 +129,8 @@ pub struct Client<F> {
     hosts: Store<F>,
     ui_schedule: crate::hid::UiSchedule,
     menu_chord: crate::hid::MenuChord,
+    #[cfg(feature = "ui-pattern")]
+    pattern_keys: bool,
     stats_epoch: Option<moonlight_nx2_app::policy::Epoch>,
     network_stats: Option<moonlight_nx2_app::metrics::Second>,
     native_stats: Option<moonlight_nx2_core::stats::StreamStats>,
@@ -285,6 +287,8 @@ impl<F: Files + Clone> Client<F> {
             hosts,
             ui_schedule: crate::hid::UiSchedule::default(),
             menu_chord: crate::hid::MenuChord::default(),
+            #[cfg(feature = "ui-pattern")]
+            pattern_keys: false,
             stats_epoch: None,
             network_stats: None,
             native_stats: None,
@@ -409,6 +413,8 @@ impl<F: Files + Clone> Client<F> {
             self.session_us = 0;
             self.refresh_stream_stats();
         }
+        #[cfg(feature = "ui-pattern")]
+        self.cycle_pattern(input);
         let storage = storage(bytes)?;
         let active = self.bridge.model().screen() == Screen::Streaming
             && self
@@ -426,6 +432,17 @@ impl<F: Files + Clone> Client<F> {
             });
         }
         Ok(())
+    }
+
+    /// L, R, X and Y together step through the model's page and the two test patterns.
+    #[cfg(feature = "ui-pattern")]
+    fn cycle_pattern(&mut self, input: &crate::hid::FrameInput) {
+        const KEYS: u64 = (1 << 2) | (1 << 3) | (1 << 6) | (1 << 7);
+        let held = input.raw_buttons & KEYS == KEYS;
+        if held && !self.pattern_keys {
+            self.bridge.set_pattern((self.bridge.pattern() + 1) % 3);
+        }
+        self.pattern_keys = held;
     }
 
     pub fn needs_ui_compute(&mut self, input: &crate::hid::FrameInput, frame: &Frame) -> bool {
