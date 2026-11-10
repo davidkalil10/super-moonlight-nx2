@@ -13,3 +13,5 @@ and compacted to fit its version field. `src/rust/nro/icon.png` is embedded in t
 
 `--sdk-video` builds `--diagnostic production-sdk` instead, against the 2026-11-10 SDK pinned on m4:
 video is decoded through the SDK's video decoder.
+Adding `--docked-modes` builds `production-sdk-modes`, which also asks for a 4K layer when docked
+and offers H.264 1440p and 4K there. Those modes are not measured on the console yet.

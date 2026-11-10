@@ -46,8 +46,14 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--sdk-video", action="store_true",
                         help="decode through the 2026-11-10 SDK's video decoder")
+    parser.add_argument("--docked-modes", action="store_true",
+                        help="with --sdk-video, offer 1440p and 4K when docked (unmeasured)")
     args = parser.parse_args()
+    if args.docked_modes and not args.sdk_video:
+        parser.error("--docked-modes needs --sdk-video")
     diagnostic = "production-sdk" if args.sdk_video else "production"
+    if args.docked_modes:
+        diagnostic = "production-sdk-modes"
     sdk_directory = SDK_VIDDEC if args.sdk_video else SDK
     sdk_sha256 = SDK_VIDDEC_SHA256 if args.sdk_video else SDK_SHA256
     revision = subprocess.check_output(

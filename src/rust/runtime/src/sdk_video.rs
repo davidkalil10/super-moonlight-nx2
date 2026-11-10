@@ -20,6 +20,15 @@ use moonlight_nx2_core::{
 
 /// Enable only in a commit citing matching pixel sums and a clean close on the console.
 pub const SDK_H264_VERIFIED: bool = true;
+/// 1440p and 4K are not measured on the console yet. Only the docked-modes build offers
+/// them, and only on a docked layer that presented at that size.
+pub const SDK_H264_DOCKED_VERIFIED: bool = cfg!(feature = "sdk-video-docked-modes");
+/// Largest size and rate per tier, and whether it is offered.
+const MODES: [(u32, u32, u32, bool); 3] = [
+    (1920, 1080, 60, SDK_H264_VERIFIED),
+    (2560, 1440, 60, SDK_H264_DOCKED_VERIFIED),
+    (3840, 2160, 60, SDK_H264_DOCKED_VERIFIED),
+];
 const CODEC_CONFIG_BYTES: usize = 1024;
 const SUBMIT_BUSY: u32 = (3603 << 9) | 111;
 
@@ -147,16 +156,18 @@ fn check(operation: &str, result: u32) -> Result<(), BackendError> {
 impl Backend for SdkVideo {
     fn capabilities() -> Capabilities {
         let mut capabilities = Capabilities::default();
-        if SDK_H264_VERIFIED {
-            capabilities.record(
-                Mode {
-                    codec: Codec::H264,
-                    depth: Depth::Eight,
-                    maximum: Size::new(1920, 1080).unwrap(),
-                    fps: 60,
-                },
-                Evidence::PixelsAndCloseVerified,
-            );
+        for (width, height, fps, verified) in MODES {
+            if verified {
+                capabilities.record(
+                    Mode {
+                        codec: Codec::H264,
+                        depth: Depth::Eight,
+                        maximum: Size::new(width, height).unwrap(),
+                        fps,
+                    },
+                    Evidence::PixelsAndCloseVerified,
+                );
+            }
         }
         capabilities
     }

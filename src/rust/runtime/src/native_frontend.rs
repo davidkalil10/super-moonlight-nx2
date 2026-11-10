@@ -462,7 +462,23 @@ fn render_config(low_latency: bool) -> Config {
     }
 }
 
-#[cfg(not(feature = "diagnostic-frontend"))]
+/// The docked-modes build asks for a 4K layer when docked, so 1440p and 4K can be verified.
+#[cfg(all(
+    feature = "sdk-video-docked-modes",
+    not(feature = "diagnostic-frontend")
+))]
+fn render_config(low_latency: bool) -> Config {
+    Config {
+        window_mode: crate::display::WindowMode::PerMode {
+            docked_width: 3840,
+            docked_height: 2160,
+        },
+        present: present_mode(low_latency),
+        ..Config::default()
+    }
+}
+
+#[cfg(not(any(feature = "diagnostic-frontend", feature = "sdk-video-docked-modes")))]
 fn render_config(low_latency: bool) -> Config {
     Config {
         present: present_mode(low_latency),
