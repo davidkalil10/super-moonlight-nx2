@@ -196,6 +196,10 @@ pub enum Event<'a> {
     ConnectionLost {
         host: Option<&'a Host>,
     },
+    /// Open the selected PC again without the user; `resume` launches the app it still runs.
+    Reopen {
+        resume: bool,
+    },
     Hosts {
         hosts: &'a [Host],
     },
@@ -1584,6 +1588,17 @@ impl Model {
                 step.changed = true;
             }
             Event::ConnectionLost { host } => self.on_connection_lost(host, step),
+            Event::Reopen { resume }
+                if matches!(
+                    screen,
+                    Screen::ConnectionLost | Screen::Error | Screen::Apps
+                ) =>
+            {
+                if let Some(host) = self.host {
+                    self.resume_pending = resume;
+                    self.open_host(host, self.host_index, step);
+                }
+            }
             Event::Hosts { hosts } => {
                 self.set_hosts(hosts);
                 self.presence.retain(hosts);

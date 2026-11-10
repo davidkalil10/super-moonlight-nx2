@@ -28,6 +28,8 @@ pub struct Snapshot {
     /// The app the PC still runs, 0 for none.
     pub running: u32,
     pub link_up: bool,
+    /// The PC has a stored key, so a lost connection can be opened again.
+    pub paired: bool,
     pub now_ms: u64,
 }
 
@@ -38,6 +40,8 @@ pub enum Command {
     Pause,
     /// Launch this app again.
     Resume(u32),
+    /// The connection is gone but the PC is paired: reconnect, then resume.
+    Reconnect,
     /// The stream cannot come back; tell the user why.
     Ended(&'static str),
 }
@@ -113,7 +117,11 @@ impl Suspend {
             return Command::None;
         }
         if !now.link_up {
-            return Command::Ended(ENDED_LINK);
+            return if now.paired {
+                Command::Reconnect
+            } else {
+                Command::Ended(ENDED_LINK)
+            };
         }
         if now.screen == Screen::Apps && now.apps_ready {
             return if now.running == app {

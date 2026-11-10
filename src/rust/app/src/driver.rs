@@ -371,6 +371,9 @@ impl Driver {
             Ok(false) => {}
             Err(error) => effect(Effect::HostsError(error.message())),
         }
+        if let Action::ForgetHost(_) = action {
+            effect(Effect::Action(*action));
+        }
     }
 
     /// Hosts mDNS found: new ones are saved and the hosts page follows. Returns the error to
