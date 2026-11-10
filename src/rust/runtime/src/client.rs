@@ -88,9 +88,12 @@ impl<F: Files> Ui for View<'_, F> {
 
     fn stream_options(&self) -> StreamOptions {
         let model = self.0.model();
-        model
+        let options = model
             .settings()
-            .stream_options(model.docked(), model.capabilities())
+            .stream_options(model.docked(), model.capabilities());
+        model
+            .link_choice()
+            .map_or(options, |choice| choice.apply(options))
     }
 
     fn preferences(&self) -> StreamOptions {

@@ -192,42 +192,61 @@ impl DiscoverySocket {
         }
     }
 
-    /// Send one Wake-on-LAN packet. The SDK uses BSD SOL_SOCKET/SO_BROADCAST values.
-    pub fn wake(mac: [u8; 6]) -> Result<(), IoError> {
+    /// Sends the Wake-on-LAN packet to each target on the discard and echo ports, as the r5-wol
+    /// service did. Without SO_BROADCAST only a unicast target can go out; the report says so.
+    pub fn wake(mac: [u8; 6], targets: &[[u8; 4]]) -> Result<WakeReport, IoError> {
+        const SOL_SOCKET: i32 = 0xffff;
+        const SO_BROADCAST: i32 = 0x20;
+        const PORTS: [u16; 2] = [9, 7];
         let mut socket = Self::open()?;
         let enable: i32 = 1;
         let packet = moonlight_nx2_ui::model::Mac(mac).magic_packet();
-        let configured = unsafe {
-            setsockopt(
-                socket.socket.fd,
-                0xffff,
-                0x20,
-                (&enable as *const i32).cast(),
-                4,
-            )
-        } == 0;
-        let result = if configured {
-            let mut status = Status::default();
-            unsafe {
-                moonlightIoDiscoverySend(
+        let mut report = WakeReport {
+            broadcast: unsafe {
+                setsockopt(
                     socket.socket.fd,
-                    &[255; 4],
-                    9,
-                    packet.as_ptr(),
-                    packet.len(),
-                    &mut status,
-                );
-            }
-            match socket.socket.transfer(&status, packet.len()) {
-                Ok(count) if count == packet.len() => Ok(()),
-                _ => Err(IoError::Failed),
-            }
-        } else {
-            Err(IoError::Failed)
+                    SOL_SOCKET,
+                    SO_BROADCAST,
+                    (&enable as *const i32).cast(),
+                    4,
+                )
+            } == 0,
+            ..WakeReport::default()
         };
+        for target in targets {
+            for port in PORTS {
+                let mut status = Status::default();
+                unsafe {
+                    moonlightIoDiscoverySend(
+                        socket.socket.fd,
+                        target,
+                        port,
+                        packet.as_ptr(),
+                        packet.len(),
+                        &mut status,
+                    );
+                }
+                if status.kind == IO_OK && status.value == packet.len() as i64 {
+                    report.sent += 1;
+                } else {
+                    report.failed += 1;
+                    report.error = status.error;
+                }
+            }
+        }
         socket.close()?;
-        result
+        Ok(report)
     }
+}
+
+/// What one Wake-on-LAN send did, for the log.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct WakeReport {
+    pub broadcast: bool,
+    pub sent: u32,
+    pub failed: u32,
+    /// errno of the last packet that did not go out.
+    pub error: i32,
 }
 
 impl Datagram for DiscoverySocket {

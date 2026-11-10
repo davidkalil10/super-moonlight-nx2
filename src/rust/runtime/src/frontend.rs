@@ -17,9 +17,14 @@ use alloc::{boxed::Box, vec::Vec};
 use moonlight_nx2_app::{
     driver::Effect,
     link::{Link, LinkError},
+    link_probe::Prober,
+    netprobe,
     policy::{Context, DisplayCapabilities},
+    presence_watch::{Seen, Watch},
     reply::Descriptor,
     service::{Action, RuntimeEvent},
+    wake,
+    wake_connect::{Network, Progress, WakeConnect},
 };
 use moonlight_nx2_core::control::Frame as ControlFrame;
 use moonlight_nx2_io::{
@@ -30,7 +35,9 @@ use moonlight_nx2_io::{
 use moonlight_nx2_ui::{
     discover::{self, Answers},
     json::{Json, Kind},
-    model::Screen,
+    link_choice::LinkChoice,
+    model::{Address, Message, Screen},
+    presence::Presence,
     store::{Files, Store},
 };
 
@@ -45,8 +52,11 @@ pub trait Connections {
     type Socket: Socket + 'static;
     fn authorization(&mut self) -> Result<Session, AuthError>;
     fn connect(&mut self, address: [u8; 4], port: u16) -> Result<Self::Socket, IoError>;
-    fn wake(&mut self, _mac: [u8; 6]) -> Result<(), IoError> {
-        Err(IoError::Failed)
+    /// Sends Wake-on-LAN towards `address` and the broadcast addresses, and logs the outcome.
+    fn wake(&mut self, _mac: [u8; 6], _address: Option<[u8; 4]>) {}
+    /// A microsecond clock for the link measurement; 0 where there is none.
+    fn now_us(&mut self) -> u64 {
+        0
     }
     /// An unconnected UDP socket for one mDNS query; none where the platform has no network.
     fn discovery(&mut self) -> Result<Box<dyn Datagram>, IoError> {
@@ -63,13 +73,33 @@ struct Discovery {
     asked: bool,
 }
 
-struct WakeConnect<S> {
-    authorization: Session,
-    socket: Option<S>,
-    deadline_ms: u64,
-    attempt_deadline_ms: u64,
-    next_attempt_ms: u64,
+struct Net<'a, C>(&'a mut C);
+
+impl<C: Connections> Network for Net<'_, C> {
+    type Socket = C::Socket;
+    fn connect(&mut self, address: [u8; 4], port: u16) -> Result<Self::Socket, IoError> {
+        self.0.connect(address, port)
+    }
+    fn wake(&mut self, mac: [u8; 6], address: Option<[u8; 4]>) {
+        self.0.wake(mac, address);
+    }
 }
+
+/// The link measurement of the open PC connection and what Auto made of it.
+#[derive(Default)]
+struct LinkTest {
+    prober: Prober,
+    wanted: bool,
+    measured: Option<netprobe::LinkQuality>,
+    chosen_for: Option<netprobe::Wanted>,
+}
+
+/// Part of each frame the link measurement may use.
+const PROBE_SLICE_US: u64 = 8_000;
+const PROBE_NEEDS_PC: &str = "Open a PC to test the network";
+const PROBE_RUNNING: &str = "Testing the network\u{2026}";
+const PROBE_UNSUPPORTED: &str = "This PC helper cannot test the network; Auto uses its defaults";
+const PROBE_FAILED: &str = "The network test did not finish; Auto uses its defaults";
 
 /// Datagrams read per frame, so a flood cannot stall the UI.
 const DISCOVERY_READS: usize = 16;
@@ -93,7 +123,11 @@ pub enum MediaRequest {
 pub struct Frontend<F, S: Socket + 'static> {
     pub client: Client<F>,
     control: Option<Control<S>>,
-    wake_connect: Option<WakeConnect<S>>,
+    wake_connect: Option<(WakeConnect<S>, Session)>,
+    forced_wake: Option<Address>,
+    presence: Watch<S>,
+    link_test: LinkTest,
+    text: Option<Message>,
     peer: Option<[u8; 4]>,
     media: Vec<MediaRequest>,
     authorization: Option<Session>,
@@ -179,6 +213,10 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
             client,
             control: None,
             wake_connect: None,
+            forced_wake: None,
+            presence: Watch::default(),
+            link_test: LinkTest::default(),
+            text: None,
             peer: None,
             media: Vec::new(),
             authorization,
@@ -311,12 +349,18 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
         self.idr.reset();
         self.cover_host = None;
         self.client.clear_covers();
-        if let Some(mut pending) = self.wake_connect.take()
-            && let Some(mut socket) = pending.socket.take()
-            && socket.close().is_err()
-        {
-            crate::render_platform::retire_process();
-            return false;
+        self.link_test = LinkTest::default();
+        self.client.set_link(None, "");
+        if let Some((mut pending, authorization)) = self.wake_connect.take() {
+            // The token has not left the console yet, so the connection file is still good.
+            self.authorization = Some(authorization);
+            let host = pending.host().address;
+            self.client.set_presence(&host, Presence::Unknown);
+            self.client.set_status(None);
+            if !pending.close() {
+                crate::render_platform::retire_process();
+                return false;
+            }
         }
         let Some(mut control) = self.control.take() else {
             return true;
@@ -352,8 +396,12 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
             });
             return;
         };
-        if let Some(mac) = self.client.bridge.model().host().and_then(|host| host.mac) {
-            let _ = connections.wake(mac.0);
+        let host = self.client.bridge.model().host().copied();
+        if let Some((host, mac)) = host.and_then(|host| host.mac.map(|mac| (host, mac))) {
+            let force = self.forced_wake.take() == Some(host.address);
+            let helper = (authorization.address, authorization.port);
+            let pending =
+                WakeConnect::start(&mut Net(connections), helper, host, mac.0, force, now_ms);
             if crate::render_platform::process_retired() {
                 self.exit = true;
                 self.client.runtime(RuntimeEvent::LinkFailed);
@@ -362,16 +410,11 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
             self.client
                 .driver
                 .service_mut()
-                .set_link_timeout(now_ms, 25_000);
-            self.wake_connect = Some(WakeConnect {
-                authorization,
-                socket: None,
-                deadline_ms: now_ms.saturating_add(20_000),
-                attempt_deadline_ms: now_ms,
-                next_attempt_ms: now_ms,
-            });
+                .set_link_timeout(now_ms, wake::LIMIT_MS + 30_000);
+            self.wake_connect = Some((pending, authorization));
             return;
         }
+        self.forced_wake = None;
         let socket = match connections.connect(authorization.address, authorization.port) {
             Ok(socket) => socket,
             Err(_) => {
@@ -400,69 +443,226 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
     }
 
     fn poll_wake_connect<C: Connections<Socket = S>>(&mut self, connections: &mut C, now_ms: u64) {
-        let Some(mut pending) = self.wake_connect.take() else {
+        let Some((mut pending, mut authorization)) = self.wake_connect.take() else {
             return;
         };
-        if now_ms >= pending.deadline_ms {
-            if let Some(mut socket) = pending.socket.take()
-                && socket.close().is_err()
-            {
-                crate::render_platform::retire_process();
-                self.exit = true;
+        let host = *pending.host();
+        match pending.poll(&mut Net(connections), now_ms) {
+            Progress::Pending => {}
+            Progress::Waking(seconds) => {
+                self.client.set_presence(&host.address, Presence::Waking);
+                self.client
+                    .set_status(Some(wake::waiting_text(seconds).as_str()));
             }
-            self.client.runtime(RuntimeEvent::LinkFailed);
-            self.message = Some("PC connection timed out after wake");
-            return;
-        }
-        if pending.socket.is_none() && now_ms >= pending.next_attempt_ms {
-            pending.socket = connections
-                .connect(pending.authorization.address, pending.authorization.port)
-                .ok();
-            if crate::render_platform::process_retired() {
+            Progress::Awake => {
+                crate::render_platform::log(&alloc::format!(
+                    "wake: {} answered",
+                    host.address.as_str()
+                ));
+                self.client.set_presence(&host.address, Presence::Online);
+                self.client.set_status(None);
+            }
+            Progress::Ready(socket) => {
+                self.client.set_presence(&host.address, Presence::Online);
+                let token = core::mem::replace(&mut authorization.token, [0; 64]);
+                match Control::open(socket, token, self.access, now_ms) {
+                    Ok(control) => {
+                        self.control = Some(control);
+                        self.peer = Some(authorization.address);
+                        self.stats.opened += 1;
+                    }
+                    Err(error) => {
+                        self.client.runtime(RuntimeEvent::LinkFailed);
+                        self.message =
+                            Some("Check Wi-Fi and Sunshine; import a new PC connection to retry");
+                        if error.retained {
+                            self.exit = true;
+                        }
+                    }
+                }
+                return;
+            }
+            Progress::Failed(message) => {
+                crate::render_platform::log(&alloc::format!(
+                    "wake: {} gave up: {}",
+                    host.address.as_str(),
+                    message.as_str()
+                ));
+                self.client.set_presence(&host.address, Presence::Offline);
+                self.client.runtime(RuntimeEvent::LinkFailed);
+                self.text = Some(message);
+                self.authorization = Some(authorization);
+                return;
+            }
+            Progress::Retired => {
+                crate::render_platform::retire_process();
                 self.exit = true;
                 self.client.runtime(RuntimeEvent::LinkFailed);
                 return;
             }
-            pending.attempt_deadline_ms = now_ms.saturating_add(2_000);
-            pending.next_attempt_ms = now_ms.saturating_add(500);
         }
-        if let Some(socket) = pending.socket.as_mut() {
-            match socket.poll_connect() {
-                Ok(true) => {
-                    let socket = pending.socket.take().unwrap();
-                    let token = core::mem::replace(&mut pending.authorization.token, [0; 64]);
-                    match Control::open(socket, token, self.access, now_ms) {
-                        Ok(control) => {
-                            self.control = Some(control);
-                            self.peer = Some(pending.authorization.address);
-                            self.stats.opened += 1;
-                        }
-                        Err(error) => {
-                            self.client.runtime(RuntimeEvent::LinkFailed);
-                            self.message = Some(
-                                "Check Wi-Fi and Sunshine; import a new PC connection to retry",
-                            );
-                            if error.retained {
-                                self.exit = true;
-                            }
-                        }
-                    }
-                    return;
+        if crate::render_platform::process_retired() {
+            self.exit = true;
+            self.client.runtime(RuntimeEvent::LinkFailed);
+            return;
+        }
+        self.wake_connect = Some((pending, authorization));
+    }
+
+    /// Asks the saved PCs whether they answer while the hosts page is up and nothing is open.
+    fn watch_presence<C: Connections<Socket = S>>(&mut self, connections: &mut C, now_ms: u64) {
+        let watching = self.access != Access::SingleList
+            && self.control.is_none()
+            && self.wake_connect.is_none()
+            && self.client.bridge.model().screen() == Screen::Hosts;
+        if !watching {
+            if !self.presence.stop() {
+                crate::render_platform::retire_process();
+                self.exit = true;
+            }
+            return;
+        }
+        let seen = self.presence.poll(
+            &mut Net(connections),
+            self.client.bridge.model().hosts(),
+            now_ms,
+        );
+        match seen {
+            Seen::Nothing => {}
+            Seen::Answer { address, online } => {
+                let presence = if online {
+                    Presence::Online
+                } else {
+                    Presence::Offline
+                };
+                if self.client.bridge.model().presence(&address) != presence {
+                    crate::render_platform::log(&alloc::format!(
+                        "presence: {} {}",
+                        address.as_str(),
+                        if online { "online" } else { "offline" }
+                    ));
                 }
-                Ok(false) | Err(IoError::WouldBlock | IoError::Interrupted)
-                    if now_ms < pending.attempt_deadline_ms => {}
-                _ => {
-                    let mut socket = pending.socket.take().unwrap();
-                    if socket.close().is_err() {
-                        crate::render_platform::retire_process();
-                        self.exit = true;
-                        self.client.runtime(RuntimeEvent::LinkFailed);
-                        return;
-                    }
-                }
+                self.client.set_presence(&address, presence);
+            }
+            Seen::Retired => {
+                crate::render_platform::retire_process();
+                self.exit = true;
             }
         }
-        self.wake_connect = Some(pending);
+    }
+
+    fn wanted_shape(&self) -> netprobe::Wanted {
+        let model = self.client.bridge.model();
+        let options = model
+            .settings()
+            .stream_options(model.docked(), model.capabilities());
+        netprobe::Wanted {
+            width: options.width,
+            height: options.height,
+            fps: options.fps,
+            codec: moonlight_nx2_app::service::options_of(&options).codec,
+        }
+    }
+
+    /// Picks Auto's shape from the measured link for the settings in use.
+    fn choose_link(&mut self, quality: netprobe::LinkQuality, announce: bool) {
+        use moonlight_nx2_ui::settings::Size;
+        let wanted = self.wanted_shape();
+        let model = self.client.bridge.model();
+        let capabilities = *model.capabilities();
+        let codec = model
+            .settings()
+            .in_use(model.docked(), &capabilities)
+            .codec();
+        let choice = netprobe::choose(quality, wanted, |_, height, fps| {
+            let size = match height {
+                720 => Size::P720,
+                1080 => Size::P1080,
+                1440 => Size::P1440,
+                _ => Size::P2160,
+            };
+            capabilities.mode(codec, size, fps)
+        });
+        let note = netprobe::note(&choice);
+        crate::render_platform::log(&alloc::format!(
+            "netprobe: {quality:?} wanted={}x{}@{} -> {}x{}@{} {} kbps {:?}",
+            wanted.width,
+            wanted.height,
+            wanted.fps,
+            choice.width,
+            choice.height,
+            choice.fps,
+            choice.bitrate_kbps,
+            choice.grade
+        ));
+        self.client.set_link(
+            Some(LinkChoice {
+                width: choice.width,
+                height: choice.height,
+                fps: choice.fps,
+                bitrate_kbps: choice.bitrate_kbps,
+            }),
+            note.as_str(),
+        );
+        self.link_test.chosen_for = Some(wanted);
+        if announce && self.client.bridge.model().screen() == Screen::Apps {
+            self.text = Some(Message::of(note.as_str()));
+        }
+    }
+
+    /// Measures the link once per PC connection, before the covers, and again when asked.
+    fn test_link<C: Connections<Socket = S>>(&mut self, connections: &mut C, now_ms: u64) {
+        let screen = self.client.bridge.model().screen();
+        let quiet = self.authenticated
+            && self.access != Access::SingleList
+            && self.client.driver.service().idle()
+            && self.covers.waiting_id().is_none()
+            && self.idr.waiting_id().is_none();
+        let Some(control) = self.control.as_mut() else {
+            return;
+        };
+        if self.link_test.wanted
+            && quiet
+            && matches!(screen, Screen::Apps | Screen::Settings)
+            && !self.link_test.prober.busy()
+        {
+            self.link_test.wanted = false;
+            self.link_test.prober.start(connections.now_us());
+        }
+        if self.link_test.prober.busy() && !quiet {
+            self.link_test.prober.cancel(connections.now_us());
+            self.link_test.wanted = true;
+        }
+        if !self.link_test.prober.busy() {
+            if let Some(quality) = self.link_test.measured
+                && self.link_test.chosen_for != Some(self.wanted_shape())
+            {
+                self.choose_link(quality, false);
+            }
+            return;
+        }
+        let outcome = self.link_test.prober.run(
+            control,
+            |control| matches!(control.pump(now_ms), Ok(()) | Err(control::Error::Again)),
+            || connections.now_us(),
+            PROBE_SLICE_US,
+        );
+        match outcome {
+            Some(netprobe::Outcome::Measured(quality)) => {
+                self.link_test.measured = Some(quality);
+                self.choose_link(quality, true);
+            }
+            Some(outcome) => {
+                crate::render_platform::log(&alloc::format!("netprobe: {outcome:?}"));
+                let note = if outcome == netprobe::Outcome::Unsupported {
+                    PROBE_UNSUPPORTED
+                } else {
+                    PROBE_FAILED
+                };
+                self.client.set_link(None, note);
+            }
+            None => {}
+        }
     }
 
     pub fn frame<C: Connections<Socket = S>>(
@@ -472,7 +672,10 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
         now_ms: u64,
     ) -> Result<client::Frame, client::Error> {
         let message = self.message.take();
+        let text = self.text.take();
         self.poll_wake_connect(connections, now_ms);
+        self.watch_presence(connections, now_ms);
+        self.test_link(connections, now_ms);
         let mut disconnected = false;
         if let Some(control) = self.control.as_mut() {
             match control.pump(now_ms) {
@@ -482,6 +685,7 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
             if control.ready() && !self.authenticated {
                 self.authenticated = true;
                 self.stats.authenticated += 1;
+                self.link_test.wanted = true;
                 self.client.runtime(RuntimeEvent::LinkOpened);
             }
             if let Some((app, png)) = self.covers.poll(control, now_ms)
@@ -535,7 +739,11 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
             Some(control) => {
                 let mut guard = cover_fetch::Guard {
                     link: control,
-                    waiting: self.covers.waiting_id().or(self.idr.waiting_id()),
+                    waiting: self
+                        .covers
+                        .waiting_id()
+                        .or(self.idr.waiting_id())
+                        .or(self.link_test.prober.waiting_id()),
                 };
                 self.client
                     .frame(bytes, &mut guard, now_ms, &mut |effect| {
@@ -574,7 +782,19 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
                     crate::render_platform::retire_process();
                     self.exit = true;
                 }
-                Effect::Action(Action::RefreshHosts) => self.discover(connections, now_ms, true),
+                Effect::Action(Action::RefreshHosts) => {
+                    self.presence.restart();
+                    self.discover(connections, now_ms, true)
+                }
+                Effect::Action(Action::WakeHost(host)) => self.forced_wake = Some(host.address),
+                Effect::Action(Action::TestNetwork) => {
+                    let ready = self.control.is_some() && self.authenticated;
+                    self.link_test.wanted = ready;
+                    let note = if ready { PROBE_RUNNING } else { PROBE_NEEDS_PC };
+                    self.client.set_link(None, note);
+                    self.link_test.chosen_for = None;
+                    self.link_test.measured = None;
+                }
                 Effect::Action(Action::PauseInput) => crate::hid::stop_rumble(),
                 Effect::Action(Action::ResumeInput) => {}
                 Effect::HostsError(message) => self.message = Some(message),
@@ -646,6 +866,8 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
                 }
                 if let Some(control) = self.control.as_mut()
                     && self.idr.waiting_id().is_none()
+                    && !self.link_test.prober.busy()
+                    && !self.link_test.wanted
                 {
                     self.covers.request(control, host.address.as_str(), now_ms);
                 }
@@ -653,6 +875,9 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
         }
         if let Some(message) = message {
             self.client.set_status(Some(message));
+        }
+        if let Some(text) = text {
+            self.client.set_status(Some(text.as_str()));
         }
         while let Some(feedback) = self.client.next_policy_output() {
             self.client.paint_policy(bytes, feedback)?;

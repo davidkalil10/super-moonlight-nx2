@@ -23,6 +23,7 @@ unsafe extern "C" {
     fn moonlightSystemBattery(percent: *mut u32, charger: *mut u32) -> u32;
     fn moonlightSystemTemperature(celsius: *mut i32) -> u32;
     fn moonlightSystemNetwork(kind: *mut u32, bars: *mut u32, status: *mut u32) -> u32;
+    fn moonlightSystemSubnet(address: *mut [u8; 4], mask: *mut [u8; 4]) -> u32;
     fn moonlightSystemStop();
 }
 
@@ -41,6 +42,13 @@ const STALL_MS: u64 = 5_000;
 const KEEP_RUNNING: bool = true;
 /// Reads that fail this many times in a row are given up.
 const READ_ATTEMPTS: u8 = 3;
+
+/// The console's address and netmask, for the Wake-on-LAN broadcast.
+pub fn subnet() -> Option<([u8; 4], [u8; 4])> {
+    let (mut address, mut mask) = ([0; 4], [0; 4]);
+    let result = unsafe { moonlightSystemSubnet(&mut address, &mut mask) };
+    (result == 0).then_some((address, mask))
+}
 
 /// One reading that is dropped after repeated failures and logs its first result.
 #[derive(Default)]

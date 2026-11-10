@@ -93,14 +93,34 @@ impl Connections for NativeConnections {
         }
         NetSocket::connect(address, port)
     }
-    fn wake(&mut self, mac: [u8; 6]) -> Result<(), moonlight_nx2_io::socket::IoError> {
+    fn wake(&mut self, mac: [u8; 6], address: Option<[u8; 4]>) {
         if !self.network {
             self.network = unsafe { moonlightPlatformNetStart() };
-            if !self.network {
-                return Err(moonlight_nx2_io::socket::IoError::Failed);
+        }
+        let subnet = crate::system::subnet();
+        let directed = subnet.map(|(console, mask)| {
+            moonlight_nx2_ui::presence::directed_broadcast(console, Some(mask))
+        });
+        let mut targets = alloc::vec![[255; 4]];
+        for target in [directed, address].into_iter().flatten() {
+            if !targets.contains(&target) {
+                targets.push(target);
             }
         }
-        crate::net::DiscoverySocket::wake(mac)
+        let report = if self.network {
+            crate::net::DiscoverySocket::wake(mac, &targets)
+        } else {
+            Err(moonlight_nx2_io::socket::IoError::Failed)
+        };
+        log(&format!(
+            "wake: mac={} targets={targets:?} netmask={:?} result={report:?}",
+            moonlight_nx2_ui::model::Mac(mac).text().as_str(),
+            subnet.map(|subnet| subnet.1)
+        ));
+    }
+    fn now_us(&mut self) -> u64 {
+        let now_ns = unsafe { sdk::moonlightNowNs() };
+        now_ns / 1000
     }
     fn discovery(
         &mut self,
