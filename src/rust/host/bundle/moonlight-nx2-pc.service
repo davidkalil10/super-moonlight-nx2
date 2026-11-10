@@ -1,0 +1,13 @@
+[Unit]
+Description=Moonlight for Switch 2, PC helper
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+ExecStart=@BUNDLE@/moonlight-nx2-pc serve
+ExecStopPost=@BUNDLE@/bin/moonlight-nx2-host display restore
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=graphical-session.target

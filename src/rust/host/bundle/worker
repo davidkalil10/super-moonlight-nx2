@@ -1,0 +1,18 @@
+#!/bin/sh
+# Runs the upstream worker on this system's libraries, or inside the image it was built in.
+set -eu
+root=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+worker=moonlight-nx2-upstream-worker
+if [ "${MOONLIGHT_NX2_WORKER:-native}" != container ]; then
+  exec "$root/bin/$worker" "$@"
+fi
+config="${XDG_CONFIG_HOME:-$HOME/.config}/moonlight-nx2"
+mkdir -p "$config"
+if [ "${1:-}" = stream ]; then
+  set -- --preserve-fds=2 @IMAGE@ "$worker" "$@"
+else
+  set -- @IMAGE@ "$worker" "$@"
+fi
+exec podman run -i --rm --network host --userns=keep-id --security-opt label=disable \
+  -e XDG_CONFIG_HOME=/config -v "$config:/config/moonlight-nx2" \
+  -v "$root/bin/$worker:/usr/local/bin/$worker:ro" "$@"
