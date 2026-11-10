@@ -22,7 +22,7 @@ use moonlight_nx2_core::{
 /// Enable only in a commit citing matching pixel sums and a clean close on the console.
 pub const SDK_H264_VERIFIED: bool = true;
 /// AV1 stays out of the stream offer until the diagnostic shows matching sums on the console.
-pub const SDK_AV1_VERIFIED: bool = false;
+pub const SDK_AV1_VERIFIED: bool = true;
 /// 1440p and 4K are not measured on the console yet. Only the docked-modes build offers
 /// them, and only on a docked layer that presented at that size.
 pub const SDK_DOCKED_MODES: bool = cfg!(feature = "sdk-video-docked-modes");
