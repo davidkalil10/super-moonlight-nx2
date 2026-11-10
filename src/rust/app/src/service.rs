@@ -7,13 +7,13 @@ use crate::link::{Link, LinkError};
 use crate::reply::{
     self, Catalog, Code, Descriptor, EventClass, Pin, Quit, Reply, TelemetryEcho, UpstreamStatus,
 };
-use crate::request::{self, Codec, Op, Options, Request, TelemetryProfile, Transport};
+use crate::request::{self, Op, Options, Request, TelemetryProfile, Transport};
 use crate::stream::{self, Phase};
 use core::fmt::Write;
 use moonlight_nx2_core::codec::Capabilities;
 use moonlight_nx2_core::control::Kind as FrameKind;
 use moonlight_nx2_ui::model::{Event, Host, Intent, IntentKind, Message};
-use moonlight_nx2_ui::settings::{self, StreamOptions};
+use moonlight_nx2_ui::settings::StreamOptions;
 
 pub const OUTBOX: usize = 32;
 /// Outbox room kept free before reading another frame.
@@ -1991,18 +1991,12 @@ fn timeout_ms(op: Op) -> u64 {
 
 /// Wire options from the UI's settings in use. Quit-on-return stays a console rule.
 pub fn options_of(settings: &StreamOptions) -> Options {
-    let codec = match settings.codec {
-        settings::Codec::H264 => Codec::H264,
-        settings::Codec::Av1 => Codec::Av1,
-        settings::Codec::Hevc => Codec::Hevc,
-    };
-
     Options {
         width: settings.width,
         height: settings.height,
         fps: settings.fps,
         bitrate_kbps: settings.bitrate_kbps,
-        codec,
+        codec: settings.codec.into(),
         sops: settings.optimise,
         local_audio: settings.host_audio,
         quit_on_stop: false,

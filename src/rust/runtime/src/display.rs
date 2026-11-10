@@ -1,3 +1,5 @@
+use moonlight_nx2_ui::settings::Size;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WindowMode {
     Fixed,
@@ -114,9 +116,6 @@ pub(crate) fn observe() -> Option<Snapshot> {
     Some(result)
 }
 
-/// Stream sizes a layer can show, largest first; a layer shows any of them up to its own size.
-const SIZES: [(u32, u32); 4] = [(3840, 2160), (2560, 1440), (1920, 1080), (1280, 720)];
-
 /// The decode-capacity build streams 120 fps on a display that stays at 60 Hz: the stream loop
 /// takes two units a refresh and shows the newer frame, which measures the decoder without a
 /// 120 Hz display.
@@ -148,7 +147,7 @@ impl Probe {
         let best = [(1920, 1080, 60), (3840, 2160, 60)];
         let mut verified: [moonlight_nx2_app::policy::DisplayCapabilities; 2] = Default::default();
         for (set, (best_width, best_height, fps)) in verified.iter_mut().zip(best) {
-            for (width, height) in SIZES {
+            for (width, height) in Size::largest_first() {
                 if width <= best_width && height <= best_height {
                     let mode = DisplayMode { width, height, fps };
                     set.record(mode, DisplayEvidence::PresentedAndCloseVerified);
@@ -203,7 +202,7 @@ impl Probe {
             return false;
         }
         self.slow_seconds = 0;
-        for (width, height) in SIZES {
+        for (width, height) in Size::largest_first() {
             if width <= best_width && height <= best_height {
                 let mode = DisplayMode {
                     width,
@@ -234,7 +233,7 @@ impl Probe {
             return false;
         }
         let mut grew = false;
-        for (size_width, size_height) in SIZES {
+        for (size_width, size_height) in Size::largest_first() {
             if size_width <= width && size_height <= height {
                 let mode = DisplayMode {
                     width: size_width,

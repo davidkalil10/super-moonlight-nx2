@@ -111,7 +111,25 @@ pub enum Size {
 }
 
 impl Size {
-    const ALL: [Size; 4] = [Size::P720, Size::P1080, Size::P1440, Size::P2160];
+    pub const ALL: [Size; 4] = [Size::P720, Size::P1080, Size::P1440, Size::P2160];
+
+    /// Every size as width and height, largest first.
+    pub fn largest_first() -> impl Iterator<Item = (u32, u32)> {
+        Self::ALL
+            .iter()
+            .rev()
+            .map(|size| (size.width(), size.height()))
+    }
+
+    /// The size of a stream this many lines high.
+    pub fn from_height(height: u32) -> Self {
+        match height {
+            720 => Size::P720,
+            1080 => Size::P1080,
+            1440 => Size::P1440,
+            _ => Size::P2160,
+        }
+    }
 
     pub fn width(self) -> u32 {
         [1280, 1920, 2560, 3840][self as usize]

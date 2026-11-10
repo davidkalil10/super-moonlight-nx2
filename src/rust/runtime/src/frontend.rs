@@ -913,13 +913,7 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
             .in_use(model.docked(), &capabilities)
             .codec();
         let choice = netprobe::choose(quality, wanted, |_, height, fps| {
-            let size = match height {
-                720 => Size::P720,
-                1080 => Size::P1080,
-                1440 => Size::P1440,
-                _ => Size::P2160,
-            };
-            capabilities.mode(codec, size, fps)
+            capabilities.mode(codec, Size::from_height(height), fps)
         });
         let note = netprobe::note(&choice);
         crate::render_platform::log(&alloc::format!(

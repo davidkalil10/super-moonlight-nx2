@@ -841,11 +841,7 @@ fn rate_pending(session: &Session, launch: Option<&Launch>, fps: u32, reason: Re
 pub fn stream_info_text(options: &Options) -> metrics::Line {
     use core::fmt::Write;
     let mut text = metrics::Line::new();
-    let codec = match options.codec {
-        crate::request::Codec::H264 => "H.264",
-        crate::request::Codec::Hevc => "HEVC",
-        crate::request::Codec::Av1 => "AV1",
-    };
+    let codec = moonlight_nx2_ui::settings::Codec::from(options.codec).text();
     let tenths = (options.bitrate_kbps + 50) / 100;
     let _ = write!(
         text,

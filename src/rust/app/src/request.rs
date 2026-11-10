@@ -1,6 +1,8 @@
 //! Control-v1 request payloads (NATIVE-CONTROL-V1.md, "Requests"), written into caller storage.
 //! Field order matches the shared fixtures so the bytes compare exactly.
 
+use moonlight_nx2_ui::settings;
+
 pub const MAX_HOST_BYTES: usize = 255;
 pub const MAX_APP_BYTES: usize = 1024;
 pub const MAX_REQUEST_BYTES: usize = 3072;
@@ -57,13 +59,29 @@ impl Transport {
     }
 }
 
+impl From<settings::Codec> for Codec {
+    fn from(codec: settings::Codec) -> Self {
+        match codec {
+            settings::Codec::H264 => Codec::H264,
+            settings::Codec::Av1 => Codec::Av1,
+            settings::Codec::Hevc => Codec::Hevc,
+        }
+    }
+}
+
+impl From<Codec> for settings::Codec {
+    fn from(codec: Codec) -> Self {
+        match codec {
+            Codec::H264 => settings::Codec::H264,
+            Codec::Av1 => settings::Codec::Av1,
+            Codec::Hevc => settings::Codec::Hevc,
+        }
+    }
+}
+
 impl Codec {
     pub fn name(self) -> &'static str {
-        match self {
-            Codec::H264 => "h264",
-            Codec::Hevc => "hevc",
-            Codec::Av1 => "av1",
-        }
+        settings::Codec::from(self).name()
     }
 
     pub fn from_name(name: &str) -> Option<Self> {

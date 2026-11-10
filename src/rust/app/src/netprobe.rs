@@ -8,6 +8,7 @@
 
 use core::fmt::Write;
 
+use moonlight_nx2_ui::settings::Size;
 use moonlight_nx2_ui::text::Text;
 
 use crate::bitrate::auto_bitrate;
@@ -313,8 +314,6 @@ pub struct AutoChoice {
     pub quality: LinkQuality,
 }
 
-const SIZES: [(u32, u32); 4] = [(3840, 2160), (2560, 1440), (1920, 1080), (1280, 720)];
-
 /// Picks the bitrate the link carries for the wanted shape. When the size was left to the
 /// link, it first picks the largest size the link carries among the wanted one and the smaller
 /// modes the decoder and display offer (`offered`). A chosen size on a link too weak for it
@@ -327,8 +326,7 @@ pub fn choose(
     let usable = quality.usable_kbps();
     let full = |shape: (u32, u32, u32)| auto_bitrate(shape.0, shape.1, shape.2, wanted.codec);
     let wanted_shape = (wanted.width, wanted.height, wanted.fps);
-    let shapes = SIZES
-        .iter()
+    let shapes = Size::largest_first()
         .filter(|size| size.1 <= wanted.height)
         .map(|size| (size.0, size.1, wanted.fps))
         .filter(|shape| *shape == wanted_shape || wanted.size_auto)
