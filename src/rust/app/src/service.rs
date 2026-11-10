@@ -662,6 +662,7 @@ impl Service {
             IntentKind::WakeHost => self.act(Action::WakeHost(host)),
             IntentKind::TestNetwork => self.act(Action::TestNetwork),
             IntentKind::SaveSettings => self.act(Action::SaveSettings),
+            IntentKind::SaveExtras => {}
             IntentKind::PauseInput => {
                 self.input_paused = true;
                 self.act(Action::PauseInput)

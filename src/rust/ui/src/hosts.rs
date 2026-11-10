@@ -5,10 +5,14 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use core::fmt::Write;
 
+use crate::extras::{AppOverride, Extras, INHERIT, MAX_OVERRIDES};
 use crate::json::{Json, Kind, Value};
 use crate::model::{Address, Host, MAX_HOSTS, Mac, Name};
 
 pub const FILE: &str = "hosts.json";
+
+/// The keys of `AppOverride::values`, in order.
+const OVERRIDE_KEYS: [&str; 4] = ["size", "fps", "bitrate", "codec"];
 
 /// The written file stays within what the JSON reader takes back.
 pub const MAX_BYTES: usize = crate::json::MAX_TEXT;
@@ -70,6 +74,8 @@ impl Error {
 pub struct HostBook {
     hosts: Vec<Host>,
     removed: Vec<Removed>,
+    overrides: Vec<AppOverride>,
+    played: Vec<(Address, Name)>,
     dirty: bool,
 }
 
@@ -174,6 +180,7 @@ impl HostBook {
                 uniqueid: host.uniqueid,
                 mac: string(value.member("mac")).and_then(Mac::parse),
             });
+            book.read_extras(&value, host.address);
         }
         book.removed = entries(removed).into_iter().map(|(_, host)| host).collect();
         Ok(book)
@@ -181,6 +188,60 @@ impl HostBook {
 
     pub fn hosts(&self) -> &[Host] {
         &self.hosts
+    }
+
+    fn read_extras(&mut self, entry: &Value<'_>, address: Address) {
+        if let Some(name) = string(entry.member("lastPlayed")).filter(|name| !name.is_empty()) {
+            self.played.push((address, Name::of(name)));
+        }
+        let mut app = entry.member("apps").filter(|a| a.kind() == Kind::Array).and_then(|a| a.child());
+        while let Some(value) = app {
+            app = value.next();
+            let Some(id) = value.member("id").and_then(|id| id.number()) else {
+                continue;
+            };
+            let mut stored = AppOverride::new(address, id as u32);
+            for (slot, key) in OVERRIDE_KEYS.iter().enumerate() {
+                if let Some(index) = value.member(key).and_then(|index| index.number()) {
+                    stored.values[slot] = (index as u32).min(u32::from(INHERIT - 1)) as u8;
+                }
+            }
+            if !stored.is_empty() && self.overrides.len() < MAX_OVERRIDES {
+                self.overrides.push(stored);
+            }
+        }
+    }
+
+    /// What is remembered per PC, for the model.
+    pub fn extras(&self) -> Extras<'_> {
+        Extras {
+            overrides: &self.overrides,
+            played: &self.played,
+        }
+    }
+
+    /// Replaces the remembered extras with the model's; true when they differ.
+    pub fn set_extras(&mut self, extras: Extras<'_>) -> bool {
+        let known = |address: &Address| self.hosts.iter().any(|host| host.address == *address);
+        let overrides: Vec<AppOverride> = extras
+            .overrides
+            .iter()
+            .filter(|stored| known(&stored.host) && !stored.is_empty())
+            .copied()
+            .collect();
+        let played: Vec<(Address, Name)> = extras
+            .played
+            .iter()
+            .filter(|(address, _)| known(address))
+            .copied()
+            .collect();
+        if overrides == self.overrides && played == self.played {
+            return false;
+        }
+        self.overrides = overrides;
+        self.played = played;
+        self.dirty = true;
+        true
     }
 
     pub fn removed(&self) -> &[Removed] {
@@ -315,6 +376,8 @@ impl HostBook {
             uniqueid: entry.map_or(host.uniqueid, |entry| entry.uniqueid),
         };
         self.hosts.retain(|other| other.address != host.address);
+        self.overrides.retain(|stored| stored.host != host.address);
+        self.played.retain(|(address, _)| *address != host.address);
         self.removed.retain(|other| {
             !same(
                 (&other.address, &other.uniqueid),
@@ -323,6 +386,28 @@ impl HostBook {
         });
         self.removed.push(gone);
         self.dirty = true;
+    }
+
+    fn write_extras(&self, out: &mut String, address: &Address) {
+        if let Some((_, name)) = self.played.iter().find(|(known, _)| known == address) {
+            out.push_str(",\"lastPlayed\":");
+            quote(out, name.as_str());
+        }
+        let mut first = true;
+        for stored in self.overrides.iter().filter(|stored| stored.host == *address) {
+            out.push_str(if first { ",\"apps\":[{" } else { ",{" });
+            first = false;
+            let _ = write!(out, "\"id\":{}", stored.app);
+            for (key, value) in OVERRIDE_KEYS.iter().zip(stored.values) {
+                if value != INHERIT {
+                    let _ = write!(out, ",\"{key}\":{value}");
+                }
+            }
+            out.push('}');
+        }
+        if !first {
+            out.push(']');
+        }
     }
 
     fn write(&self, removed: &[Removed]) -> String {
@@ -341,6 +426,7 @@ impl HostBook {
                 out.push_str(",\"mac\":");
                 quote(&mut out, mac.text().as_str());
             }
+            self.write_extras(&mut out, &host.address);
             out.push('}');
         }
         out.push_str("],\"removed\":[");
@@ -389,5 +475,66 @@ mod rename_tests {
         discovered.name = Name::of("Other name");
         assert!(!restored.discovered(&[discovered]).unwrap());
         assert_eq!(restored.hosts()[0].name.as_str(), "Game PC");
+    }
+}
+
+#[cfg(test)]
+mod extras_tests {
+    use super::*;
+
+    const SAVED: &[u8] = br#"{"hosts":[{"name":"Rig","address":"192.168.0.5","uniqueid":"one","lastPlayed":"Desktop","apps":[{"id":12,"size":3,"codec":1},{"id":30,"fps":1}]}],"removed":[]}"#;
+
+    #[test]
+    fn extras_round_trip_through_the_file() {
+        let mut json = Json::new();
+        let book = HostBook::parse(SAVED, &mut json).unwrap();
+        let extras = book.extras();
+        assert_eq!(extras.played[0].1.as_str(), "Desktop");
+        assert_eq!(extras.overrides.len(), 2);
+        assert_eq!(extras.overrides[0].app, 12);
+        assert_eq!(extras.overrides[0].values, [3, INHERIT, INHERIT, 1]);
+
+        let again = HostBook::parse(book.to_json().unwrap().as_bytes(), &mut json).unwrap();
+        assert_eq!(again.extras().overrides, extras.overrides);
+        assert_eq!(again.extras().played, extras.played);
+    }
+
+    #[test]
+    fn files_without_extras_still_read_and_write_as_before() {
+        let mut json = Json::new();
+        let old = br#"[{"name":"Old","address":"192.168.0.5","uniqueid":"one"}]"#;
+        let book = HostBook::parse(old, &mut json).unwrap();
+        assert!(book.extras().overrides.is_empty());
+        let text = book.to_json().unwrap();
+        assert!(!text.contains("lastPlayed") && !text.contains("apps"));
+    }
+
+    #[test]
+    fn forgetting_a_host_drops_its_extras() {
+        let mut json = Json::new();
+        let mut book = HostBook::parse(SAVED, &mut json).unwrap();
+        let host = book.hosts()[0];
+        book.forget(&host);
+        assert!(book.extras().overrides.is_empty());
+        assert!(book.extras().played.is_empty());
+    }
+
+    #[test]
+    fn extras_of_unknown_hosts_are_not_kept() {
+        let mut json = Json::new();
+        let mut book = HostBook::parse(SAVED, &mut json).unwrap();
+        let stray = AppOverride::new(Address::of("10.0.0.9"), 1);
+        let kept = book.extras().overrides.to_vec();
+        let mut all = kept.clone();
+        all.push(AppOverride {
+            values: [1, INHERIT, INHERIT, INHERIT],
+            ..stray
+        });
+        let played = book.extras().played.to_vec();
+        assert!(!book.set_extras(Extras {
+            overrides: &all,
+            played: &played,
+        }));
+        assert_eq!(book.extras().overrides, kept);
     }
 }

@@ -2,6 +2,7 @@
 
 use core::fmt::Write;
 
+use crate::extras::{INHERIT, OVERRIDABLE};
 use crate::json::{Json, Kind, Value};
 use crate::text::Text;
 use crate::theme::Preference;
@@ -431,6 +432,29 @@ impl Settings {
 
     pub fn fps_before_4k(&self) -> u32 {
         self.fps_before_4k
+    }
+
+    /// These settings with the values an app overrides.
+    pub fn with_override(&self, values: &[u8; 4]) -> Settings {
+        let mut out = *self;
+        for (setting, &value) in OVERRIDABLE.iter().zip(values) {
+            if value != INHERIT && value < setting.row().count {
+                out.value[*setting as usize] = value;
+            }
+        }
+        out
+    }
+
+    /// The values these settings change from `base`, as an app's override.
+    pub fn override_from(&self, base: &Settings) -> [u8; 4] {
+        OVERRIDABLE.map(|setting| {
+            let index = setting as usize;
+            if self.value[index] == base.value[index] {
+                INHERIT
+            } else {
+                self.value[index]
+            }
+        })
     }
 
     /// Raw catalog index of `setting`.

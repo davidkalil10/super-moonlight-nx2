@@ -1,8 +1,10 @@
 //! Console UI state machine of src/native/ui/model.c: events in, model and intents out.
 //! Host work (list, pair, launch, quit) stays with the caller as intents.
 
+use alloc::vec::Vec;
 use core::fmt::Write;
 
+use crate::extras::{AppOverride, Extras, INHERIT, MAX_OVERRIDES, OVERRIDABLE};
 use crate::link_choice::LinkChoice;
 use crate::presence::{Presence, Table};
 use crate::readout::{Readout, StreamReadout};
@@ -120,6 +122,7 @@ pub enum Screen {
     Unpairing,
     Quitting,
     Stopped,
+    AppOptions,
 }
 
 impl Screen {
@@ -142,6 +145,7 @@ impl Screen {
             "unpairing",
             "quitting",
             "stopped",
+            "appOptions",
         ][self as usize]
     }
 }
@@ -156,6 +160,7 @@ pub enum Op {
     Chord,
     Edit,
     Focus,
+    Plus,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -238,6 +243,7 @@ pub enum IntentKind {
     Exit,
     WakeHost,
     TestNetwork,
+    SaveExtras,
 }
 
 impl IntentKind {
@@ -262,6 +268,7 @@ impl IntentKind {
             "exit",
             "wakeHost",
             "testNetwork",
+            "saveExtras",
         ][self as usize]
     }
 }
@@ -302,7 +309,7 @@ impl Step {
 }
 
 /// How many PCs remember the app last started on them.
-const PLAYED: usize = 8;
+const PLAYED: usize = MAX_HOSTS;
 /// Settings categories, in the order the page lists them.
 pub const CATEGORIES: u8 = 5;
 
@@ -355,6 +362,7 @@ pub struct Model {
     resume_pending: bool,
     played: [(Address, Name); PLAYED],
     played_count: usize,
+    overrides: Vec<AppOverride>,
     category: u8,
 }
 
@@ -450,6 +458,7 @@ impl Model {
             resume_pending: false,
             played: [(Address::new(), Name::default()); PLAYED],
             played_count: 0,
+            overrides: Vec::new(),
             category: 0,
         };
         model.set_hosts(hosts);
@@ -603,8 +612,11 @@ impl Model {
         changed && self.overlay
     }
 
+    /// The app a PC still runs, unless that PC has since stopped answering.
     pub fn resume(&self) -> Option<&Resume> {
-        self.resume.as_ref()
+        self.resume
+            .as_ref()
+            .filter(|resume| self.presence(&resume.address) != Presence::Offline)
     }
 
     pub fn last_played(&self, address: &Address) -> Option<&str> {
@@ -618,11 +630,100 @@ impl Model {
         self.category
     }
 
-    fn remember_played(&mut self, address: Address, name: Name) {
+    /// Takes back what hosts.json remembered per PC.
+    pub fn load_extras(&mut self, extras: Extras<'_>) {
+        self.overrides = extras.overrides.to_vec();
+        let count = extras.played.len().min(PLAYED);
+        self.played[..count].copy_from_slice(&extras.played[..count]);
+        self.played_count = count;
+    }
+
+    /// What is to be remembered per PC, for the caller to save.
+    pub fn extras(&self) -> Extras<'_> {
+        Extras {
+            overrides: &self.overrides,
+            played: &self.played[..self.played_count],
+        }
+    }
+
+    fn overridden_app(&self) -> Option<u32> {
+        match self.screen {
+            Screen::Apps | Screen::AppOptions => {
+                self.apps().get(self.app_index as usize).map(|app| app.id)
+            }
+            _ => self.app.map(|app| app.id),
+        }
+    }
+
+    fn override_of(&self, app: u32) -> Option<&AppOverride> {
+        let host = self.host?;
+        self.overrides
+            .iter()
+            .find(|stored| stored.host == host.address && stored.app == app)
+    }
+
+    /// The settings a stream of the chosen or focused app uses: the saved ones with that
+    /// app's own choices on top.
+    pub fn stream_settings(&self) -> Settings {
+        let stored = self
+            .overridden_app()
+            .and_then(|app| self.override_of(app));
+        match stored {
+            Some(stored) => self.settings.with_override(&stored.values),
+            None => self.settings,
+        }
+    }
+
+    /// True when the focused app has choices of its own.
+    pub fn has_override(&self) -> bool {
+        self.overridden_app()
+            .is_some_and(|app| self.override_of(app).is_some())
+    }
+
+    fn store_override(&mut self, adjusted: &Settings) -> bool {
+        let (Some(host), Some(app)) = (self.host, self.overridden_app()) else {
+            return false;
+        };
+        let values = adjusted.override_from(&self.settings);
+        let position = self
+            .overrides
+            .iter()
+            .position(|stored| stored.host == host.address && stored.app == app);
+        match (position, values.iter().all(|value| *value == INHERIT)) {
+            (Some(index), true) => {
+                self.overrides.remove(index);
+            }
+            (Some(index), false) => self.overrides[index].values = values,
+            (None, true) => return false,
+            (None, false) => {
+                if self.overrides.len() >= MAX_OVERRIDES {
+                    return false;
+                }
+                let mut stored = AppOverride::new(host.address, app);
+                stored.values = values;
+                self.overrides.push(stored);
+            }
+        }
+        true
+    }
+
+    fn clear_override(&mut self) -> bool {
+        let (Some(host), Some(app)) = (self.host, self.overridden_app()) else {
+            return false;
+        };
+        let before = self.overrides.len();
+        self.overrides
+            .retain(|stored| !(stored.host == host.address && stored.app == app));
+        self.overrides.len() != before
+    }
+
+    /// True when the PC's last played app changed.
+    fn remember_played(&mut self, address: Address, name: Name) -> bool {
         let known = self.played[..self.played_count]
             .iter()
             .position(|(known, _)| *known == address);
         match known {
+            Some(index) if self.played[index].1 == name => return false,
             Some(index) => self.played[index].1 = name,
             None if self.played_count < PLAYED => {
                 self.played[self.played_count] = (address, name);
@@ -633,6 +734,7 @@ impl Model {
                 self.played[PLAYED - 1] = (address, name);
             }
         }
+        true
     }
 
     pub fn set_stream_stats(&mut self, text: &str) -> bool {
@@ -672,7 +774,9 @@ impl Model {
 
     /// What a launch would stream now: the settings, limited by the network test's choice.
     pub fn planned_stream(&self) -> StreamOptions {
-        let options = self.settings.stream_options(self.docked, &self.capabilities);
+        let options = self
+            .stream_settings()
+            .stream_options(self.docked, &self.capabilities);
         self.link_choice
             .map_or(options, |choice| choice.apply(options))
     }
@@ -840,7 +944,7 @@ impl Model {
     }
 
     fn on_resume_host(&mut self, step: &mut Step) {
-        let Some(resume) = self.resume else {
+        let Some(resume) = self.resume().copied() else {
             return;
         };
         let Some(index) = self.find_host(&resume.address) else {
@@ -851,7 +955,7 @@ impl Model {
     }
 
     fn on_hosts(&mut self, op: Op, item: u32, step: &mut Step) {
-        if (op, item) == (Op::A, item::RESUME_HOST) {
+        if (op, item) == (Op::A, item::RESUME_HOST) || op == Op::Plus {
             self.on_resume_host(step);
             return;
         }
@@ -1098,9 +1202,9 @@ impl Model {
             return;
         }
 
-        if let Some(host) = self.host {
-            self.remember_played(host.address, app.name);
-        }
+        let played = self
+            .host
+            .is_some_and(|host| self.remember_played(host.address, app.name));
         self.screen = Screen::Launching;
         self.app = Some(app);
         self.app_index = index as u32;
@@ -1112,6 +1216,9 @@ impl Model {
             host: self.host,
             app: Some(app),
         });
+        if played {
+            step.add(IntentKind::SaveExtras, None);
+        }
     }
 
     fn on_quit_confirm(&mut self, op: Op, item: u32, step: &mut Step) {
@@ -1160,6 +1267,51 @@ impl Model {
         self.settings = adjusted;
         step.changed = true;
         step.add(IntentKind::SaveSettings, None);
+    }
+
+    fn app_option_item(&self, item: u32) -> Option<Setting> {
+        Self::setting_item(item).filter(|setting| OVERRIDABLE.contains(setting))
+    }
+
+    fn on_app_options(&mut self, op: Op, item: u32, value: i32, step: &mut Step) {
+        let adjusting = self.editing.is_some();
+        match op {
+            Op::Edit => {
+                let editing = self
+                    .app_option_item(item)
+                    .filter(|&setting| self.stream_settings().adjustable(setting));
+                if editing != self.editing {
+                    self.editing = editing;
+                    step.changed = true;
+                }
+            }
+            Op::Adjust if adjusting => {
+                let Some(setting) = self.app_option_item(item).filter(|s| Some(*s) == self.editing)
+                else {
+                    return;
+                };
+                let Some(adjusted) =
+                    self.stream_settings()
+                        .adjust(setting, value, self.docked, &self.capabilities)
+                else {
+                    return;
+                };
+                if self.store_override(&adjusted) {
+                    step.changed = true;
+                    step.add(IntentKind::SaveExtras, None);
+                }
+            }
+            Op::B => {
+                self.screen = Screen::Apps;
+                self.editing = None;
+                step.changed = true;
+            }
+            Op::Y if !adjusting && self.clear_override() => {
+                step.changed = true;
+                step.add(IntentKind::SaveExtras, None);
+            }
+            _ => {}
+        }
     }
 
     fn on_settings(&mut self, op: Op, item: u32, value: i32, step: &mut Step) {
@@ -1262,10 +1414,15 @@ impl Model {
             self.on_focus(item, step);
             return;
         }
-        let browsing = matches!(self.screen, Screen::Hosts | Screen::Apps);
-        if op == Op::X && browsing {
+        if op == Op::X && self.screen == Screen::Hosts {
             self.from = self.screen;
             self.screen = Screen::Settings;
+            self.editing = None;
+            step.changed = true;
+            return;
+        }
+        if op == Op::X && self.screen == Screen::Apps && self.app_count > 0 {
+            self.screen = Screen::AppOptions;
             self.editing = None;
             step.changed = true;
             return;
@@ -1290,6 +1447,7 @@ impl Model {
             Screen::Apps => self.on_apps(op, item, step),
             Screen::QuitConfirm => self.on_quit_confirm(op, item, step),
             Screen::Settings => self.on_settings(op, item, value, step),
+            Screen::AppOptions => self.on_app_options(op, item, value, step),
             Screen::Launching if cancelled => {
                 self.screen = Screen::Connecting;
                 self.app = None;
@@ -1580,5 +1738,144 @@ mod add_host_tests {
         assert_eq!(intents[0].kind, IntentKind::List);
         assert_eq!(intents[0].host.unwrap().address.as_str(), "192.168.1.7");
         assert!(model.hosts().is_empty());
+    }
+}
+
+#[cfg(test)]
+mod app_options_tests {
+    use super::*;
+
+    fn run(model: &mut Model, op: Op, item: u32, value: i32) -> Step {
+        model.reduce(&Event::Command { op, item, value })
+    }
+
+    fn browsing() -> Model {
+        let host = Host {
+            name: Name::of("PC"),
+            address: Address::of("192.168.1.4"),
+            ..Host::default()
+        };
+        let apps = [
+            App {
+                id: 7,
+                name: Name::of("Desktop"),
+            },
+            App {
+                id: 8,
+                name: Name::of("Game"),
+            },
+        ];
+        let mut model = Model::new(&[host], Settings::default(), Capabilities::ALL);
+        model.reduce(&Event::Attached);
+        run(&mut model, Op::A, item::HOST, 0);
+        model.reduce(&Event::Listed {
+            apps: &apps,
+            current_game: 0,
+            message: None,
+        });
+        model
+    }
+
+    fn raise_fps(model: &mut Model) -> Step {
+        let fps = item::SETTING + Setting::Fps as u32;
+        run(model, Op::X, 0, 0);
+        run(model, Op::Edit, fps, 0);
+        let step = run(model, Op::Adjust, fps, 1);
+        run(model, Op::Edit, 0, 0);
+        step
+    }
+
+    #[test]
+    fn an_apps_own_choice_changes_its_plan_and_no_other() {
+        let mut model = browsing();
+        let global = model.planned_stream().fps;
+        let step = raise_fps(&mut model);
+        assert_eq!(model.screen(), Screen::AppOptions);
+        assert!(step.intents().any(|i| i.kind == IntentKind::SaveExtras));
+        assert_ne!(model.planned_stream().fps, global);
+        assert_eq!(model.settings().fps(), global);
+        assert_eq!(model.extras().overrides.len(), 1);
+
+        run(&mut model, Op::B, 0, 0);
+        run(&mut model, Op::Focus, item::APP + 1, 0);
+        assert_eq!(model.planned_stream().fps, global);
+        run(&mut model, Op::Focus, item::APP, 0);
+        assert_ne!(model.planned_stream().fps, global);
+    }
+
+    #[test]
+    fn launching_streams_with_the_apps_choice() {
+        let mut model = browsing();
+        let global = model.stream_settings().fps();
+        raise_fps(&mut model);
+        run(&mut model, Op::B, 0, 0);
+        run(&mut model, Op::A, item::APP, 0);
+        assert_eq!(model.screen(), Screen::Launching);
+        assert_ne!(model.stream_settings().fps(), global);
+    }
+
+    #[test]
+    fn reset_and_stepping_back_drop_the_override() {
+        let mut model = browsing();
+        raise_fps(&mut model);
+        let step = run(&mut model, Op::Y, 0, 0);
+        assert!(step.intents().any(|i| i.kind == IntentKind::SaveExtras));
+        assert!(model.extras().overrides.is_empty());
+
+        raise_fps(&mut model);
+        let fps = item::SETTING + Setting::Fps as u32;
+        run(&mut model, Op::Edit, fps, 0);
+        run(&mut model, Op::Adjust, fps, -1);
+        assert!(model.extras().overrides.is_empty());
+    }
+
+    #[test]
+    fn saved_extras_come_back_with_the_model() {
+        let mut model = browsing();
+        raise_fps(&mut model);
+        let overrides = model.extras().overrides.to_vec();
+        let played = [(Address::of("192.168.1.4"), Name::of("Desktop"))];
+
+        let mut fresh = browsing();
+        fresh.load_extras(Extras {
+            overrides: &overrides,
+            played: &played,
+        });
+        assert_ne!(fresh.planned_stream().fps, fresh.settings().fps());
+        assert_eq!(
+            fresh.last_played(&Address::of("192.168.1.4")),
+            Some("Desktop")
+        );
+    }
+
+    #[test]
+    fn launching_remembers_the_app_and_asks_for_a_save() {
+        let mut model = browsing();
+        let step = run(&mut model, Op::A, item::APP, 0);
+        let kinds: alloc::vec::Vec<_> = step.intents().map(|i| i.kind).collect();
+        assert_eq!(kinds, [IntentKind::Launch, IntentKind::SaveExtras]);
+        assert_eq!(model.extras().played.len(), 1);
+    }
+
+    #[test]
+    fn plus_resumes_the_running_app_unless_the_pc_went_quiet() {
+        let mut model = browsing();
+        model.current_game = 7;
+        model.resume = Some(Resume {
+            address: Address::of("192.168.1.4"),
+            app: Name::of("Desktop"),
+        });
+        run(&mut model, Op::B, 0, 0);
+        assert_eq!(model.screen(), Screen::Hosts);
+        let address = Address::of("192.168.1.4");
+        model.set_presence(&address, Presence::Offline);
+        assert!(model.resume().is_none());
+        run(&mut model, Op::Plus, 0, 0);
+        assert_eq!(model.screen(), Screen::Hosts);
+
+        model.set_presence(&address, Presence::Online);
+        let step = run(&mut model, Op::Plus, 0, 0);
+        assert_eq!(model.screen(), Screen::Connecting);
+        assert!(step.intents().any(|i| i.kind == IntentKind::List));
     }
 }

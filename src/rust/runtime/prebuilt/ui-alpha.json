@@ -9,18 +9,18 @@
       "-O",
       "--target-env=vulkan1.0",
       "-I",
-      "/media/storage2/builds/moonlight/worktrees/uipol/ui-alpha-5",
+      "/media/storage2/builds/moonlight/worktrees/uipol/ui-alpha-6",
       "-I",
       "/media/storage2/builds/moonlight/wt-uipol/src/renderer/civ7/shaders",
-      "/media/storage2/builds/moonlight/worktrees/uipol/ui-alpha-5/ui-alpha.frag",
+      "/media/storage2/builds/moonlight/worktrees/uipol/ui-alpha-6/ui-alpha.frag",
       "-o",
-      "/media/storage2/builds/moonlight/worktrees/uipol/ui-alpha-5/ui-alpha.spv"
+      "/media/storage2/builds/moonlight/worktrees/uipol/ui-alpha-6/ui-alpha.spv"
     ],
     [
       "spirv-val",
       "--target-env",
       "vulkan1.0",
-      "/media/storage2/builds/moonlight/worktrees/uipol/ui-alpha-5/ui-alpha.spv"
+      "/media/storage2/builds/moonlight/worktrees/uipol/ui-alpha-6/ui-alpha.spv"
     ]
   ],
   "compiler": "shaderc v2026.2 2026-04-24spirv-tools v2026.2 2026-04-24glslang d5f08ae5c5a9a45165578445cbd0f9adf0223448\nTarget: SPIR-V 1.0\n",
@@ -28,7 +28,7 @@
     "/media/storage2/builds/moonlight/wt-uipol/src/rust/runtime/shaders/ui-alpha.frag": "8f79915164d926a4d60597f5dfc10602f6d7691c9f90806b08cea2fd3e08d07e",
     "/media/storage2/builds/moonlight/wt-uipol/src/renderer/civ7/shaders/ui.frag": "b2097ac18a83855ddc96e5a0d4c0b004aaa78e37e24e71d82c0e0c683dbf5a1d",
     "/media/storage2/builds/moonlight/wt-uipol/src/renderer/civ7/shaders/storage.glsl": "81c18548664c68dfcf7bb9b2ce683234dbcd08b161a6c1756555ace8a912d3e6",
-    "/media/storage2/builds/moonlight/worktrees/uipol/ui-alpha-5/layout.glsl": "1557ce904a8d292197fc4a8b0f90ce68183c40d704806c7c5454ab1eb36c1e2a"
+    "/media/storage2/builds/moonlight/worktrees/uipol/ui-alpha-6/layout.glsl": "1557ce904a8d292197fc4a8b0f90ce68183c40d704806c7c5454ab1eb36c1e2a"
   },
   "shader": {
     "path": "ui-alpha.spv",

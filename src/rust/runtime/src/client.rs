@@ -99,7 +99,7 @@ impl<F: Files> Ui for View<'_, F> {
     fn stream_options(&self) -> StreamOptions {
         let model = self.0.model();
         let options = model
-            .settings()
+            .stream_settings()
             .stream_options(model.docked(), model.capabilities());
         model
             .link_choice()
@@ -285,6 +285,7 @@ impl<F: Files + Clone> Client<F> {
             Capabilities::default(),
             epoch,
         ));
+        bridge.load_extras(driver.hosts().extras());
         driver.event(&mut View(&mut bridge), &Event::Attached);
         if let Some(error) = driver.hosts().load_error() {
             bridge.set_status(Some(error.message()));
@@ -302,6 +303,13 @@ impl<F: Files + Clone> Client<F> {
             session_us: 0,
             badge: crate::policy_badge::Badge::default(),
         })
+    }
+
+    fn save_extras(&mut self) {
+        let extras = self.bridge.model().extras();
+        if let Err(error) = self.driver.hosts_mut().save_extras(extras, &mut self.hosts) {
+            self.bridge.set_status(Some(error.message()));
+        }
     }
 
     pub fn event(&mut self, event: &Event<'_>) {
@@ -573,6 +581,10 @@ impl<F: Files + Clone> Client<F> {
         self.bridge.poll(bytes, now_ms.saturating_mul(1_000_000));
         let intents: Vec<_> = self.bridge.take_intents(bridge::MAX_QUEUED).collect();
         for intent in intents {
+            if intent.kind == moonlight_nx2_ui::model::IntentKind::SaveExtras {
+                self.save_extras();
+                continue;
+            }
             self.driver
                 .dispatch_intent(&View(&mut self.bridge), &intent);
         }

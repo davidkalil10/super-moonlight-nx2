@@ -36,12 +36,12 @@ impl Ui for Model {
     }
 
     fn stream_options(&self) -> StreamOptions {
-        self.settings()
+        self.stream_settings()
             .stream_options(self.docked(), self.capabilities())
     }
 
     fn preferences(&self) -> StreamOptions {
-        let settings = self.settings();
+        let settings = self.stream_settings();
         let mut options =
             settings.stream_options(true, &moonlight_nx2_ui::settings::Capabilities::ALL);
         options.width = settings.size().width();
@@ -105,6 +105,10 @@ impl Driver {
 
     pub fn service_mut(&mut self) -> &mut Service {
         &mut self.service
+    }
+
+    pub fn hosts_mut(&mut self) -> &mut Hosts {
+        &mut self.hosts
     }
 
     pub fn hosts(&self) -> &Hosts {

@@ -14,7 +14,7 @@ layout(set = 0, binding = 0, std430) buffer InputState {
 }
 inputState;
 const uint BUTTON_A = 1u, BUTTON_B = 2u, BUTTON_X = 4u, BUTTON_Y = 8u,
-           BUTTON_L = 64u, BUTTON_R = 128u;
+           BUTTON_L = 64u, BUTTON_R = 128u, BUTTON_PLUS = 1024u;
 const uint BUTTON_LEFT = 4096u, BUTTON_UP = 8192u, BUTTON_RIGHT = 16384u,
            BUTTON_DOWN = 32768u;
 uint inputButtons() { return inputState.pad[2]; }

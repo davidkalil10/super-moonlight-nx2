@@ -9,6 +9,7 @@ pub mod badge;
 pub mod bridge;
 pub mod composer;
 pub mod discover;
+pub mod extras;
 pub mod glyphs;
 pub mod hosts;
 pub mod inflate;

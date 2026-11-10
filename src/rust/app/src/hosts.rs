@@ -49,6 +49,25 @@ impl Hosts {
         self.book.hosts()
     }
 
+    pub fn extras(&self) -> moonlight_nx2_ui::extras::Extras<'_> {
+        self.book.extras()
+    }
+
+    /// Saves the per-PC extras when they differ from what is stored.
+    pub fn save_extras<F: Files>(
+        &mut self,
+        extras: moonlight_nx2_ui::extras::Extras<'_>,
+        store: &mut Store<F>,
+    ) -> Result<(), Error> {
+        if let Some(error) = self.load_error {
+            return Err(Error::Load(error));
+        }
+        if self.book.set_extras(extras) && !store.save_hosts(&mut self.book) {
+            return Err(Error::Save);
+        }
+        Ok(())
+    }
+
     pub fn load_error(&self) -> Option<Error> {
         self.load_error.map(Error::Load)
     }

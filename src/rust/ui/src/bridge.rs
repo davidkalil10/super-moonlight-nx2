@@ -38,7 +38,7 @@ pub const APPLY_TIMEOUT_NS: u64 = 5_000_000_000;
 pub const MAX_QUEUED: usize = 16;
 
 const SAVE_FAILED: &str = "Settings write failed";
-const OPS: [Op; 8] = [
+const OPS: [Op; 9] = [
     Op::A,
     Op::B,
     Op::X,
@@ -47,6 +47,7 @@ const OPS: [Op; 8] = [
     Op::Chord,
     Op::Edit,
     Op::Focus,
+    Op::Plus,
 ];
 
 pub type Storage = [u8; STORAGE_BYTES];
@@ -348,6 +349,11 @@ impl<F: Files> Bridge<F> {
         step
     }
 
+    /// Hands the model what hosts.json remembered per PC.
+    pub fn load_extras(&mut self, extras: crate::extras::Extras<'_>) {
+        self.model.load_extras(extras);
+    }
+
     pub fn persist_settings(&mut self) {
         let before = self.storage_error;
         self.save_settings();
@@ -418,7 +424,7 @@ impl<F: Files> Bridge<F> {
     }
 
     fn follow_edit(&mut self, storage: &Storage) {
-        if self.shown_is(Screen::Settings) {
+        if self.shown_is(Screen::Settings) || self.shown_is(Screen::AppOptions) {
             self.command(storage, Op::Edit, word(storage, EDIT), 0);
         }
     }

@@ -9,6 +9,7 @@ use crate::composer::{
     Builder, CONTENT_WIDTH, Error, Face, Keys, SCREEN_WIDTH, SIDE,
     home_slot, page_count, shown_count,
 };
+use crate::extras::OVERRIDABLE;
 use crate::glyphs::Align;
 use crate::model::{APPS_PER_PAGE, Address, CATEGORIES, HOSTS_PER_PAGE, Host, Model, Screen, is_address, item};
 use crate::presence::Presence;
@@ -557,7 +558,7 @@ impl Builder<'_> {
     }
 
     fn apps_page(&mut self, model: &Model) {
-        let keys: Keys = &[("X", "Settings"), ("B", "PCs"), ("A", "Launch")];
+        let keys: Keys = &[("X", "Stream options"), ("B", "PCs"), ("A", "Launch")];
         let quit: Keys = &[("Y", "Quit host app")];
         let apps = model.apps();
         let count = apps.len() as u32;
@@ -686,7 +687,8 @@ impl Builder<'_> {
             self.wrapped(x, y + 140, inner, "Waiting for the PC to show a PIN.", BODY, pal.ink);
             return;
         };
-        self.wrapped(x, y + 124, inner, "Enter this PIN in Sunshine on the PC.", BODY, pal.ink);
+        let steps = format!("On {host}, open Sunshine's PIN page and enter this code.");
+        self.wrapped(x, y + 124, inner, &steps, BODY, pal.ink);
         self.put(x, y + 190, inner, pin, PIN, pal.accent, Align::Center);
         if let Some(left) = model.pin_left_s() {
             let total = model.pin_timeout_s().max(1);
@@ -700,7 +702,8 @@ impl Builder<'_> {
             self.put(x, bar_y + 28, inner, &countdown, HINT, pal.dim, Align::Center);
         }
         if let Some(url) = model.url().filter(|u| !u.is_empty()) {
-            self.put(x, y + PAIRING_HEIGHT - 64, inner, url, HINT, pal.dim, Align::Center);
+            let page = format!("{}/pin", url.trim_end_matches('/'));
+            self.put(x, y + PAIRING_HEIGHT - 64, inner, &page, HINT, pal.dim, Align::Center);
         }
     }
 
@@ -735,10 +738,10 @@ impl Builder<'_> {
         }
     }
 
-    fn setting_row(&mut self, model: &Model, row: &SettingRow, slot: u32) {
+    fn setting_row(&mut self, model: &Model, row: &SettingRow, slot: u32, own: Option<bool>) {
         let pal = self.pal;
         let editing = model.editing() == Some(row.setting);
-        let x = PANE_X;
+        let (x, pane) = if own.is_some() { (SIDE, CONTENT_WIDTH) } else { (PANE_X, PANE_WIDTH) };
         let y = BODY_Y + 16 + slot * (ROW_HEIGHT + ROW_GAP);
         let mut flags = 0;
         if row.adjustable {
@@ -750,20 +753,30 @@ impl Builder<'_> {
         if row.greyed {
             flags |= page::ITEM_GREYED;
         }
-        self.item(item::SETTING + row.setting as u32, x, y, PANE_WIDTH, ROW_HEIGHT, flags, PANEL_RADIUS);
-        self.fill(x + ROW_PAD, y + ROW_HEIGHT, PANE_WIDTH - 2 * ROW_PAD, 2, pal.line, 0);
+        self.item(item::SETTING + row.setting as u32, x, y, pane, ROW_HEIGHT, flags, PANEL_RADIUS);
+        self.fill(x + ROW_PAD, y + ROW_HEIGHT, pane - 2 * ROW_PAD, 2, pal.line, 0);
         let ink = if row.greyed { pal.line } else { pal.ink };
-        let value_ink = if row.greyed { pal.line } else { pal.accent };
-        self.put(x + ROW_PAD, y + 14, 520, row.setting.label(), OPTION, ink, Align::Left);
-        let hint_width = PANE_WIDTH - 2 * ROW_PAD - VALUE_WIDTH;
-        let hint = if row.setting == Setting::Size && model.settings().size_auto() {
-            "Picked from the network test and the dock"
+        let inherited = own == Some(false);
+        let value_ink = if row.greyed {
+            pal.line
+        } else if inherited {
+            pal.dim
         } else {
-            row.setting.hint()
+            pal.accent
+        };
+        self.put(x + ROW_PAD, y + 14, 520, row.setting.label(), OPTION, ink, Align::Left);
+        let hint_width = pane - 2 * ROW_PAD - VALUE_WIDTH;
+        let hint = match own {
+            Some(true) => "Set for this app",
+            Some(false) => "Same as Settings",
+            None if row.setting == Setting::Size && model.settings().size_auto() => {
+                "Picked from the network test and the dock"
+            }
+            None => row.setting.hint(),
         };
         self.put(x + ROW_PAD, y + 54, hint_width, hint, HINT, pal.dim, Align::Left);
 
-        let value_x = x + PANE_WIDTH - ROW_PAD - VALUE_WIDTH;
+        let value_x = x + pane - ROW_PAD - VALUE_WIDTH;
         let value_y = y + 22;
         if let Some(reason) = locked_reason(row) {
             self.put(value_x, y + 12, VALUE_WIDTH, row.value.as_str(), VALUE, pal.dim, Align::Right);
@@ -840,7 +853,7 @@ impl Builder<'_> {
         self.category_list(model);
         let mut count = 0;
         for (slot, row) in (0u32..).zip(shown) {
-            self.setting_row(model, row, slot);
+            self.setting_row(model, row, slot, None);
             count = slot + 1;
         }
         if model.category() == 0 && !(model.docked() && model.capabilities().docked_sizes) {
@@ -849,6 +862,32 @@ impl Builder<'_> {
                 self.unavailable_row(size, "Docked only", y);
                 y += LOCKED_ROW_HEIGHT + ROW_GAP;
             }
+        }
+    }
+
+    fn app_options_page(&mut self, model: &Model) {
+        let editing_keys: Keys = &[("\u{25c2}\u{25b8}", "Change"), ("B", "Done"), ("A", "Done")];
+        let browsing_keys: Keys = &[("Y", "Reset"), ("B", "Back"), ("A", "Change")];
+        let stream = model.stream_settings();
+        let rows = stream.rows(model.docked(), model.capabilities());
+        let editing = model.editing().is_some_and(|s| rows[s as usize].adjustable);
+        let app = model
+            .apps()
+            .get(model.app_index() as usize)
+            .map_or("this app", |app| app.name.as_str());
+        let left = format!("These choices apply to {app} only");
+        self.frame(
+            model,
+            &Chrome {
+                title: "Stream options",
+                left: &left,
+                keys: if editing { editing_keys } else { browsing_keys },
+                ..Chrome::default()
+            },
+        );
+        for (slot, setting) in (0u32..).zip(OVERRIDABLE) {
+            let own = stream.index(setting) != model.settings().index(setting);
+            self.setting_row(model, &rows[setting as usize], slot, Some(own));
         }
     }
 
@@ -1016,6 +1055,7 @@ impl Builder<'_> {
             Screen::Apps => self.apps_page(model),
             Screen::QuitConfirm => self.quit_confirm_page(model),
             Screen::Settings => self.settings_page(model, settings_error),
+            Screen::AppOptions => self.app_options_page(model),
             Screen::Launching => {
                 let title = model.app().map_or("", |a| a.name.as_str());
                 let line = model.message().unwrap_or("Starting the stream\u{2026}");
