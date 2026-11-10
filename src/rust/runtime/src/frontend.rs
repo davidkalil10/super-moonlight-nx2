@@ -129,6 +129,8 @@ enum Auth {
     Token(Session),
     /// The key stored for a paired PC.
     Key,
+    /// The same, after the helper refused it once.
+    KeyAgain,
     /// No key yet: pair first, with a code the user types on the PC.
     Setup,
 }
@@ -146,10 +148,14 @@ struct Handshake<S: Socket> {
     address: [u8; 4],
     pc: Address,
     code: Option<[u8; secure::CODE_DIGITS]>,
+    /// This key session already follows a refusal; the next one pairs again.
+    second: bool,
     deadline_ms: u64,
 }
 
 const SESSION_LIMIT_MS: u64 = 10_000;
+/// Pause before a refused key is tried once more: the helper may still be storing it.
+const KEY_RETRY_MS: u64 = 500;
 const PAIRING_LIMIT_MS: u64 = 125_000;
 const HELPER_SILENT: &str =
     "The PC helper did not answer; check that moonlight-nx2-pc serve is running";
@@ -178,6 +184,7 @@ pub struct Frontend<F, S: Socket + 'static> {
     control: Option<Control<SecureSocket<S>>>,
     wake_connect: Option<(WakeConnect<S>, Target)>,
     handshake: Option<Handshake<S>>,
+    key_retry: Option<(Target, u64)>,
     pairings: Pairings,
     files: F,
     forced_wake: Option<Address>,
@@ -272,6 +279,7 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
             control: None,
             wake_connect: None,
             handshake: None,
+            key_retry: None,
             pairings,
             files: pairing_files,
             forced_wake: None,
@@ -412,6 +420,7 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
         self.client.clear_covers();
         self.link_test = LinkTest::default();
         self.client.set_link(None, "");
+        self.key_retry = None;
         if let Some(mut handshake) = self.handshake.take()
             && handshake.socket.close().is_err()
         {
@@ -499,7 +508,11 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
     }
 
     fn open<C: Connections<Socket = S>>(&mut self, connections: &mut C, now_ms: u64) {
-        if self.control.is_some() || self.wake_connect.is_some() || self.handshake.is_some() {
+        if self.control.is_some()
+            || self.wake_connect.is_some()
+            || self.handshake.is_some()
+            || self.key_retry.is_some()
+        {
             self.client.runtime(RuntimeEvent::LinkFailed);
             return;
         }
@@ -570,7 +583,7 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
                     now_ms,
                 );
             }
-            Auth::Key => (Mode::Session, None, SESSION_LIMIT_MS),
+            Auth::Key | Auth::KeyAgain => (Mode::Session, None, SESSION_LIMIT_MS),
             Auth::Setup => (
                 Mode::Pair,
                 Some(secure::new_code(&mut random)),
@@ -603,6 +616,7 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
             address: target.address,
             pc: target.pc,
             code,
+            second: matches!(target.auth, Auth::KeyAgain),
             deadline_ms: now_ms.saturating_add(limit_ms),
         });
     }
@@ -674,11 +688,18 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
     }
 
     fn poll_handshake<C: Connections<Socket = S>>(&mut self, connections: &mut C, now_ms: u64) {
+        let cancelled = self.client.bridge.model().screen() != Screen::Connecting;
         let Some(mut handshake) = self.handshake.take() else {
+            match self.key_retry.take() {
+                Some((target, at_ms)) if !cancelled && now_ms >= at_ms => {
+                    self.connect(connections, target, now_ms)
+                }
+                Some(retry) if !cancelled => self.key_retry = Some(retry),
+                _ => {}
+            }
             return;
         };
         let pairing = handshake.code.is_some();
-        let cancelled = self.client.bridge.model().screen() != Screen::Connecting;
         let progress = if cancelled {
             Err(IoError::Failed)
         } else {
@@ -717,16 +738,20 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
             failure,
             Some(secure::Error::Confirm | secure::Error::Refused(Status::UnknownConsole))
         );
+        let again = |auth| Target {
+            address: handshake.address,
+            port: secure::PORT,
+            pc: handshake.pc,
+            auth,
+        };
         match failure {
-            _ if rejected && !pairing => {
-                let target = Target {
-                    address: handshake.address,
-                    port: secure::PORT,
-                    pc: handshake.pc,
-                    auth: Auth::Setup,
-                };
-                self.connect(connections, target, now_ms)
+            _ if rejected && !pairing && !handshake.second => {
+                self.key_retry = Some((
+                    again(Auth::KeyAgain),
+                    now_ms.saturating_add(KEY_RETRY_MS),
+                ));
             }
+            _ if rejected && !pairing => self.connect(connections, again(Auth::Setup), now_ms),
             Some(secure::Error::Confirm) => self.link_failed(CODE_REFUSED),
             Some(secure::Error::Refused(Status::PairingUnavailable)) => {
                 self.link_failed(PAIRING_OFF)

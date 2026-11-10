@@ -26,6 +26,9 @@ pub const MAX_PLAINTEXT: usize = 4096;
 pub const TAG_BYTES: usize = 16;
 pub const LENGTH_BYTES: usize = 2;
 pub const MAX_RECORD: usize = LENGTH_BYTES + MAX_PLAINTEXT + TAG_BYTES;
+/// The one record a helper sends after a pairing, once it has stored the console's key.
+/// The console keeps its own copy only after reading it.
+pub const PAIRED: &[u8] = b"paired";
 /// The MNC1 token used inside a session: both ends are already authenticated.
 pub const SESSION_TOKEN: [u8; 64] = [b'0'; 64];
 

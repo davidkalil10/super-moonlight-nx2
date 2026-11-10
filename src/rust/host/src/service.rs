@@ -11,8 +11,8 @@ use crate::{
 };
 use moonlight_nx2_core::control;
 use moonlight_nx2_secure::{
-    ANSWER_BYTES, Error as SecureError, FINISH_BYTES, HELLO_BYTES, Hello, Id, Mode, Pending,
-    Random, Status, code_ok, refuse,
+    ANSWER_BYTES, Error as SecureError, FINISH_BYTES, HELLO_BYTES, Hello, Id, MAX_RECORD, Mode,
+    PAIRED, Pending, Random, Status, code_ok, refuse,
 };
 use std::{
     collections::VecDeque,
@@ -333,7 +333,12 @@ impl Service {
             paired_at,
             address: handshake.address.to_string(),
         });
-        if saved.is_err() {
+        let mut stored = [0; MAX_RECORD];
+        let told = established
+            .sealer
+            .seal(PAIRED, &mut stored)
+            .is_ok_and(|size| handshake.socket.write_all(&stored[..size]).is_ok());
+        if saved.is_err() || !told {
             return Progress::Dropped;
         }
         eprintln!(

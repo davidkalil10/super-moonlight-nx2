@@ -4,7 +4,7 @@
 use crate::socket::{IoError, Socket};
 use moonlight_nx2_secure::{
     ANSWER_BYTES, Error, Established, FINISH_BYTES, HELLO_BYTES, Id, Initiator, Key, LENGTH_BYTES,
-    MAX_PLAINTEXT, MAX_RECORD, Mode, Opener,
+    MAX_PLAINTEXT, MAX_RECORD, Mode, Opener, PAIRED,
 };
 use rand_core::{CryptoRng, RngCore};
 
@@ -36,6 +36,8 @@ enum State {
         bytes: [u8; FINISH_BYTES],
         sent: usize,
     },
+    /// A pairing waits for the helper to say it stored the key.
+    Stored(Records),
     Open(Records),
     Failed,
 }
@@ -184,7 +186,7 @@ impl<S: Socket> SecureSocket<S> {
                     }
                 }
                 State::Finish {
-                    mut keys,
+                    keys,
                     bytes,
                     mut sent,
                 } => {
@@ -204,8 +206,8 @@ impl<S: Socket> SecureSocket<S> {
                             }
                         }
                     }
-                    self.pairing = keys.pairing_key.take().map(|key| (keys.peer, key));
-                    self.state = State::Open(Records {
+                    let pairing = keys.pairing_key.is_some();
+                    let records = Records {
                         keys,
                         inbound: [0; MAX_RECORD],
                         received: 0,
@@ -214,7 +216,25 @@ impl<S: Socket> SecureSocket<S> {
                         outbound: [0; MAX_RECORD],
                         sealed: 0,
                         sent: 0,
-                    });
+                    };
+                    self.state = if pairing {
+                        State::Stored(records)
+                    } else {
+                        State::Open(records)
+                    };
+                }
+                State::Stored(mut records) => {
+                    if !records.receive(&mut self.socket)? {
+                        self.state = State::Stored(records);
+                        return Ok(false);
+                    }
+                    if records.inbound[records.plain_start..records.plain_end] != *PAIRED {
+                        return Err(self.fail(Error::Confirm));
+                    }
+                    records.plain_start = records.plain_end;
+                    let keys = &mut records.keys;
+                    self.pairing = keys.pairing_key.take().map(|key| (keys.peer, key));
+                    self.state = State::Open(records);
                 }
             }
         }

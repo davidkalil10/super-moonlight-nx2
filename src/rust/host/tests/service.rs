@@ -2,8 +2,8 @@
 
 use moonlight_nx2_core::control::{Header, Kind};
 use moonlight_nx2_secure::{
-    ANSWER_BYTES, Error, Established, HELLO_BYTES, Initiator, MAX_RECORD, Mode, Opener, Random,
-    SESSION_TOKEN, Status,
+    ANSWER_BYTES, Error, Established, HELLO_BYTES, Initiator, MAX_RECORD, Mode, Opener, PAIRED,
+    Random, SESSION_TOKEN, Status,
 };
 use serde_json::{Value, json};
 use std::{
@@ -122,10 +122,13 @@ impl Helper {
         });
         let mut answer = [0; ANSWER_BYTES];
         let key = match socket.read_exact(&mut answer) {
-            Ok(()) => initiator.finish(&answer).map(|(mut established, proof)| {
-                socket.write_all(&proof).unwrap();
-                established.pairing_key.take().unwrap()
-            }),
+            Ok(()) => initiator
+                .finish(&answer)
+                .and_then(|(mut established, proof)| {
+                    socket.write_all(&proof).unwrap();
+                    stored(&mut socket, &mut established)?;
+                    Ok(established.pairing_key.take().unwrap())
+                }),
             Err(_) => Err(Error::Malformed),
         };
         drop(socket);
@@ -221,6 +224,22 @@ impl Console {
     fn closed(&mut self) -> bool {
         let mut byte = [0; 1];
         matches!(self.socket.read(&mut byte), Ok(0) | Err(_))
+    }
+}
+
+/// Reads the record a helper sends once it has stored a pairing.
+fn stored(socket: &mut TcpStream, keys: &mut Established) -> Result<(), Error> {
+    let mut length = [0; 2];
+    socket
+        .read_exact(&mut length)
+        .map_err(|_| Error::Malformed)?;
+    let mut body = vec![0; Opener::body_bytes(length)?];
+    socket.read_exact(&mut body).map_err(|_| Error::Malformed)?;
+    let size = keys.opener.open(&mut body)?;
+    if body[..size] == *PAIRED {
+        Ok(())
+    } else {
+        Err(Error::Confirm)
     }
 }
 
@@ -412,4 +431,46 @@ fn consoles_and_unpair_work_on_the_files_when_no_service_runs() {
         String::from_utf8_lossy(&helper.command(&["consoles"]).stdout).trim(),
         "ok"
     );
+}
+
+/// The helper has a pairing only once it read the console's proof and stored the key; it
+/// says so with one record. A key session sent before that is refused, the first one after
+/// it must succeed, with no pause in between.
+#[test]
+fn the_first_session_after_the_stored_record_succeeds_at_once() {
+    let helper = Helper::start("first-session");
+    let mut socket = helper.connect();
+    let (initiator, hello) = Initiator::start(Mode::Pair, CONSOLE, b"27182818", random());
+    socket.write_all(&hello).unwrap();
+    let state = helper.state();
+    let typed = std::thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let output = Command::new(HOST)
+                .args(["pair", "--state"])
+                .arg(&state)
+                .arg("27182818")
+                .output()
+                .unwrap();
+            if output.status.success() || Instant::now() >= deadline {
+                return output;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    });
+    let mut answer = [0; ANSWER_BYTES];
+    socket.read_exact(&mut answer).unwrap();
+    let (mut established, proof) = initiator.finish(&answer).unwrap();
+    let key = established.pairing_key.unwrap();
+
+    assert_eq!(
+        helper.open(CONSOLE, &key).err(),
+        Some(Error::Refused(Status::UnknownConsole)),
+        "the proof has not been sent yet"
+    );
+    socket.write_all(&proof).unwrap();
+    stored(&mut socket, &mut established).unwrap();
+    let mut console = helper.open(CONSOLE, &key).unwrap();
+    assert!(console.accepted() && console.lists(1));
+    assert!(typed.join().unwrap().status.success());
 }
