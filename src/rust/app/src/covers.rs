@@ -24,6 +24,17 @@ pub struct Cover {
     data: Vec<u8>,
 }
 
+/// The error a reply's `code` stands for.
+fn refusal(root: &json::Value<'_>) -> Error {
+    match root.member("code").and_then(|x| x.as_plain_str()) {
+        Some("unsupported" | "invalid_request") => Error::Unsupported,
+        Some("backend_failed") => Error::Backend,
+        Some("timeout" | "busy") => Error::RetryLater,
+        Some("too_large") => Error::TooLarge,
+        _ => Error::Malformed,
+    }
+}
+
 impl Cover {
     pub fn new(app: u32) -> Option<Self> {
         (app != 0).then(|| Self {
@@ -48,14 +59,7 @@ impl Cover {
     pub fn accept(&mut self, payload: &[u8]) -> Result<bool, Error> {
         let root = json::parse(payload).map_err(|_| Error::Malformed)?;
         if root.member("code").is_some() {
-            let code = root.member("code").and_then(|x| x.as_plain_str());
-            return Err(match code {
-                Some("unsupported" | "invalid_request") => Error::Unsupported,
-                Some("backend_failed") => Error::Backend,
-                Some("timeout" | "busy") => Error::RetryLater,
-                Some("too_large") => Error::TooLarge,
-                _ => Error::Malformed,
-            });
+            return Err(refusal(&root));
         }
         if root.kind() != Kind::Object
             || !root.member("event").is_some_and(|x| x.string_is("result"))
@@ -68,14 +72,7 @@ impl Cover {
             .and_then(|x| x.as_bool())
             .ok_or(Error::Malformed)?;
         if !ok {
-            let code = root.member("code").and_then(|x| x.as_plain_str());
-            return Err(match code {
-                Some("unsupported" | "invalid_request") => Error::Unsupported,
-                Some("backend_failed") => Error::Backend,
-                Some("timeout" | "busy") => Error::RetryLater,
-                Some("too_large") => Error::TooLarge,
-                _ => Error::Malformed,
-            });
+            return Err(refusal(&root));
         }
         let value = root
             .member("value")
