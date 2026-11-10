@@ -86,8 +86,8 @@ once on the badge.
 
 ## Development
 
-Tests, tools and design notes live in the separate `moonlight-nx2-dev` repository. Its
-parity tests compare the Rust UI and wire code with the C sources under `src/native`.
+Tests, tools and design notes live in the separate `moonlight-nx2-dev` repository, with
+the C sources its parity tests compare the Rust UI and wire code with.
 
 The shaders are in `src/rust/runtime/shaders`, compiled into `src/rust/runtime/prebuilt`.
 After changing one, with glslc and spirv-val installed:

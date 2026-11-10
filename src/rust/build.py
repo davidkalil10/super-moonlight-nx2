@@ -183,14 +183,14 @@ def build(args):
                         ["cargo", "fmt", "--manifest-path", str(tests), "--check"],
                         ["cargo", "clippy", "--manifest-path", str(tests), "--all-targets", "--locked", "--offline", "--", "-D", "warnings"],
                         ["cargo", "test", "--manifest-path", str(tests), "--locked", "--offline"]]
-            reference_files = [APP / f"src/native/{name}" for name in
+            reference_files = [dev / f"reference/native/{name}" for name in
                                ("input.c", "native.h", "control/wire.c", "control/wire.h", "media/parser.c", "media.h", "audio/queue.c", "audio/queue.h", "codec/untile.c", "codec/untile.h", "codec/wire.c", "codec/wire.h", "renderer/frame.c", "renderer/frame.h", "renderer/layout.h", "renderer/cache.h", "renderer.h")]
-            reference_files.append(APP / "src/streamer/input/controller.js")
-            reference_files.append(APP / "package.json")
+            reference_files.append(dev / "legacy/src/streamer/input/controller.js")
+            reference_files.append(dev / "legacy/package.json")
             info["node"] = output("node", "--version")
             info["cc"] = output("cc", "--version").splitlines()[0]
             test_files = [path for path in tests.parent.rglob("*") if path.is_file()]
-            info["reference_sources"] = {str(path.relative_to(APP)): digest(path) for path in reference_files}
+            info["reference_sources"] = {str(path.relative_to(dev)): digest(path) for path in reference_files}
             info["test_sources"] = {str(path.relative_to(dev)): digest(path) for path in test_files}
     else:
         if args.rust_directory is None or not args.rust_directory.is_absolute():
