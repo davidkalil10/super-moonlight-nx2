@@ -1,5 +1,5 @@
 [workspace]
-members = ["core", "runtime", "host", "io", "ui", "app"]
+members = ["core", "runtime", "host", "io", "ui", "app", "secure"]
 default-members = ["core", "runtime"]
 resolver = "3"
 
