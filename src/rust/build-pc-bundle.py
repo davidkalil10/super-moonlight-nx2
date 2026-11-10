@@ -2,8 +2,8 @@
 """Builds the PC bundle: host, upstream worker, launcher, licences and a manifest.
 
 Everything is compiled from the committed HEAD inside the image from
-host/bundle/Containerfile, against the upstream revisions fetch.sh pins and the crates
-Cargo.lock pins. Compilation runs without network access.
+host/bundle/Containerfile, against the upstream revisions host/upstream/fetch.sh pins and
+the crates Cargo.lock pins. Compilation runs without network access.
 """
 
 import argparse
@@ -19,7 +19,8 @@ from build import BUILDS, digest, git, output, utc_stamp, write_json
 
 APP = Path(__file__).resolve().parents[2]
 BUNDLE_SOURCE = "src/rust/host/bundle"
-SOURCE_PATHS = ["LICENSE", "src/rust", "src/streamer/protocol"]
+SOURCE_PATHS = ["LICENSE", "src/rust"]
+UPSTREAM_SOURCE = "src/rust/host/upstream"
 BINARIES = ["moonlight-nx2-host", "moonlight-nx2-upstream-worker"]
 LAUNCHER_FILES = ["moonlight-nx2-pc", "moonlight-nx2-pc.service", "README.md", "DISPLAY.md"]
 # The workspace pins a public crate by its SSH URL; the image has no key to fetch it with.
@@ -174,7 +175,7 @@ def main():
     build.run("Testing the launcher", [sys.executable, "-B", "-m", "unittest", "test_launcher"],
               cwd=source / BUNDLE_SOURCE)
     build.run("Fetching the pinned upstream sources",
-              ["bash", str(source / "src/streamer/protocol/fetch.sh"), str(directory / "upstream")])
+              ["bash", str(source / UPSTREAM_SOURCE / "fetch.sh"), str(directory / "upstream")])
     upstreams = [{"name": name,
                   "url": output("git", "-C", directory / "upstream" / name, "remote", "get-url", "origin"),
                   "commit": output("git", "-C", directory / "upstream" / name, "rev-parse", "HEAD")}
@@ -194,9 +195,9 @@ def main():
     build.container("Fetching the pinned crates", image, source, ["cargo", "fetch", "--locked"],
                     network=True, environment={**environment, **PUBLIC_GIT})
     build.container("Configuring the upstream libraries", image, source,
-                    ["cmake", "-S", "/src/src/streamer/protocol", "-B", "/work/upstream-build",
+                    ["cmake", "-S", f"/src/{UPSTREAM_SOURCE}", "-B", "/work/upstream-build",
                      "-DUPSTREAM_DIR=/work/upstream", "-DCMAKE_BUILD_TYPE=Release",
-                     "-DBUILD_TESTING=OFF", "-DCMAKE_POSITION_INDEPENDENT_CODE=ON"])
+                     "-DCMAKE_POSITION_INDEPENDENT_CODE=ON"])
     build.container("Compiling the upstream libraries", image, source,
                     ["cmake", "--build", "/work/upstream-build", "--target", "gamestream", "--parallel"])
     build.container("Compiling the host and the worker", image, source,

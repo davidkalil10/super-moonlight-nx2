@@ -101,9 +101,11 @@ python3 src/rust/build-shaders.py --directory /media/storage2/builds/moonlight/<
 The fonts and the glyph atlas made from them are in `src/rust/ui/fonts`. With Pillow
 installed, `python3 src/rust/ui/fonts/glyphs.py atlas` rewrites `glyphs.bin`.
 
+`src/rust/host/upstream` pins the Moonlight sources the Sunshine worker is built from:
+`fetch.sh` checks them out and `CMakeLists.txt` builds their library.
+
 The Civilization VII payload this app replaces is still under `src/streamer` and
-`src/renderer`: the PC bundle takes its pinned Moonlight sources from there
-(`src/streamer/protocol`).
+`src/renderer`. Nothing in the builds reads it.
 
 ## Credits
 
