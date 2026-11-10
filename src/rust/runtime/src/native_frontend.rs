@@ -198,8 +198,6 @@ pub fn run() -> bool {
         "frontend: one-time authorization imported={} checked={checked}",
         authorization.is_ok()
     ));
-    #[cfg(feature = "diagnostic-native-decode")]
-    log("b2ar: before renderer/GPU open; no explicit second gsvOpenGpu or nvOpen");
     let (_, saved_settings) = Store::new(files.clone()).load(&mut Box::new(Json::new()));
     let low_latency = saved_settings.on(moonlight_nx2_ui::settings::Setting::LowLatency);
     let mut renderer = match Renderer::open(render_config(low_latency)) {
@@ -209,8 +207,6 @@ pub fn run() -> bool {
             return false;
         }
     };
-    #[cfg(feature = "diagnostic-native-decode")]
-    log("b2ar: renderer/GPU open returned success");
     #[cfg(feature = "diagnostic-ref-replay")]
     crate::ref_replay::run(&mut renderer);
     let verified = stream_capabilities().supports(
@@ -354,14 +350,7 @@ fn execute(renderer: &mut Renderer, connections: &mut NativeConnections, launch:
             match request {
                 MediaRequest::Open(descriptor) => {
                     let peer = app.peer();
-                    stream.open(
-                        &mut app.client,
-                        *descriptor,
-                        peer,
-                        now_ms,
-                        #[cfg(feature = "native-video")]
-                        renderer,
-                    );
+                    stream.open(&mut app.client, *descriptor, peer, now_ms);
                 }
                 MediaRequest::Close => stream.begin_close(&mut app.client, now_ms),
             }
@@ -522,11 +511,7 @@ fn present_mode(low_latency: bool) -> crate::render::PresentMode {
 
 /// Hands the operation mode and the display modes verified for it to the client; a live stream
 /// restarts in the new context.
-#[cfg(any(
-    feature = "diagnostic-frontend",
-    feature = "native-video",
-    feature = "sdk-video"
-))]
+#[cfg(any(feature = "diagnostic-frontend", feature = "sdk-video"))]
 fn display_context(
     app: &mut Frontend<Directory, NetSocket>,
     docked: bool,
@@ -539,40 +524,28 @@ fn display_context(
             decoder: stream_capabilities(),
             display,
         });
-    #[cfg(not(any(feature = "native-video", feature = "sdk-video")))]
+    #[cfg(not(feature = "sdk-video"))]
     log(&format!(
         "display: context docked={docked} accepted={accepted}; video sink receives and discards up to 1440p120 and 4K60"
     ));
-    #[cfg(any(feature = "native-video", feature = "sdk-video"))]
+    #[cfg(feature = "sdk-video")]
     log(&format!(
         "display: context docked={docked} accepted={accepted}; native decoder capability is runtime gated"
     ));
 }
 
 /// Without a decoder nothing can be offered; only the operation mode reaches the model.
-#[cfg(not(any(
-    feature = "diagnostic-frontend",
-    feature = "native-video",
-    feature = "sdk-video"
-)))]
+#[cfg(not(any(feature = "diagnostic-frontend", feature = "sdk-video")))]
 fn display_context(app: &mut Frontend<Directory, NetSocket>, docked: bool, _: DisplayCapabilities) {
     app.client.event(&Event::OperationMode { docked });
 }
 
-#[cfg(any(
-    feature = "diagnostic-frontend",
-    feature = "native-video",
-    feature = "sdk-video"
-))]
+#[cfg(any(feature = "diagnostic-frontend", feature = "sdk-video"))]
 fn stream_capabilities() -> Capabilities {
     crate::frontend_stream::decoder_capabilities()
 }
 
-#[cfg(not(any(
-    feature = "diagnostic-frontend",
-    feature = "native-video",
-    feature = "sdk-video"
-)))]
+#[cfg(not(any(feature = "diagnostic-frontend", feature = "sdk-video")))]
 fn stream_capabilities() -> Capabilities {
     Capabilities::default()
 }

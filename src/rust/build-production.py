@@ -13,10 +13,8 @@ import subprocess
 APP = Path(__file__).resolve().parents[2]
 BUILDS = Path("/media/storage2/builds/moonlight")
 FOUNDATION = Path("/Users/azkali/claude-builds/moonlight/20261109T060400Z-ae67243-rust-foundation")
-SDK = Path("/Users/azkali/claude-builds/moonlight/20261109T020739Z-ae67243-testship-native/sdk")
-SDK_SHA256 = "0dd4be44ad73471969aac593ca1b03179f90e2014e1583c6c6249da4eeeeead7"
-SDK_VIDDEC = Path("/Users/azkali/claude-builds/moonlight/20261110-sdk-viddec/sdk")
-SDK_VIDDEC_SHA256 = "7437e4f4b88f77e80ba0732b3f7bab3dcb05ef81c6b837129381fb4c1af024fb"
+SDK = Path("/Users/azkali/claude-builds/moonlight/20261110-sdk-viddec/sdk")
+SDK_SHA256 = "7437e4f4b88f77e80ba0732b3f7bab3dcb05ef81c6b837129381fb4c1af024fb"
 BUILDER_IMAGE = "sha256:1fc388c3a0d34bd2045a6dadcb1020e069d5f876a187fd705de14b4440c00282"
 
 
@@ -44,30 +42,24 @@ def nacp_version(description, revision):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--sdk-video", action="store_true",
-                        help="decode through the 2026-11-10 SDK's video decoder")
     parser.add_argument("--hz120", action="store_true",
-                        help="with --sdk-video, present at 120 Hz and offer 120 fps up to 1440p (unmeasured)")
+                        help="present at 120 Hz and offer 120 fps up to 1440p")
     parser.add_argument("--decode120", action="store_true",
-                        help="with --sdk-video --hz120, offer 120 fps on a 60 Hz display too, to measure the decoder")
+                        help="with --hz120, offer 120 fps on a 60 Hz display too, to measure the decoder")
     parser.add_argument("--tcp-video", action="store_true",
-                        help="with --sdk-video alone, keep video on TCP instead of UDP")
+                        help="keep video on TCP instead of UDP")
     args = parser.parse_args()
-    if (args.hz120 or args.tcp_video) and not args.sdk_video:
-        parser.error("--hz120 and --tcp-video need --sdk-video")
     if args.tcp_video and args.hz120:
-        parser.error("--tcp-video goes with --sdk-video alone")
+        parser.error("--tcp-video does not go with --hz120")
     if args.decode120 and not args.hz120:
-        parser.error("--decode120 goes with --sdk-video --hz120")
-    diagnostic = "production-sdk" if args.sdk_video else "production"
+        parser.error("--decode120 goes with --hz120")
+    diagnostic = "production-sdk"
     if args.hz120:
         diagnostic += "-120"
     if args.decode120:
         diagnostic += "-decode"
     if args.tcp_video:
         diagnostic += "-tcp"
-    sdk_directory = SDK_VIDDEC if args.sdk_video else SDK
-    sdk_sha256 = SDK_VIDDEC_SHA256 if args.sdk_video else SDK_SHA256
     revision = subprocess.check_output(
         ["git", "-C", str(APP), "rev-parse", "HEAD"], text=True).strip()
     description = subprocess.check_output(
@@ -78,10 +70,10 @@ def main():
     version = nacp_version(description, revision)
     stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     build_id = f"{stamp}-{revision[:7]}-{diagnostic}"
-    remote_sdk = shlex.quote(str(sdk_directory / "ounce-sdk.tar.xz"))
+    remote_sdk = shlex.quote(str(SDK / "ounce-sdk.tar.xz"))
     remote_sdk_sha = subprocess.check_output(
         ["ssh", "m4", f"shasum -a 256 {remote_sdk}"], text=True).split()[0]
-    if remote_sdk_sha != sdk_sha256:
+    if remote_sdk_sha != SDK_SHA256:
         raise ValueError("The pinned m4 SDK archive changed")
     local_root = BUILDS / build_id
     remote_root = f"/Users/azkali/claude-builds/moonlight/{build_id}"
@@ -99,7 +91,7 @@ def main():
         "archive_sha256": digest(archive),
         "builder": "m4",
         "diagnostic": diagnostic,
-        "sdk_sha256": sdk_sha256,
+        "sdk_sha256": SDK_SHA256,
         "builder_image": BUILDER_IMAGE,
     }, indent=2) + "\n")
 
@@ -131,7 +123,7 @@ def main():
     ])
     run(["ssh", "m4", rust_command])
 
-    sdk = shlex.quote(str(sdk_directory))
+    sdk = shlex.quote(str(SDK))
     docker_root = shlex.quote(remote_root)
     revision_arg = shlex.quote(revision)
     branch_arg = shlex.quote(branch or "detached")

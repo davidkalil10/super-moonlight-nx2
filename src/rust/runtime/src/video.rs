@@ -64,43 +64,24 @@ struct Arrival {
 #[derive(Default)]
 struct Timing {
     window_ns: u64,
-    logged: u64,
     frames: u64,
     decode_us: u64,
     decode_max_us: u64,
     latency_us: u64,
     latency_max_us: u64,
-    last_present_ns: u64,
-    interval_max_us: u64,
     dropped_start: u64,
     presented_start: u64,
 }
 
-const LOG_TIMING: bool = cfg!(feature = "diagnostic-native-decode");
-
 impl Timing {
-    fn record(&mut self, pts_us: u64, submitted: u64, decoded: u64, started: u64, returned: u64) {
+    fn record(&mut self, submitted: u64, decoded: u64, returned: u64) {
         let decode_us = decoded.saturating_sub(submitted) / 1000;
         let latency_us = returned.saturating_sub(submitted) / 1000;
-        let interval_us = if self.last_present_ns == 0 {
-            0
-        } else {
-            returned.saturating_sub(self.last_present_ns) / 1000
-        };
-        if LOG_TIMING && self.logged < 120 {
-            self.logged += 1;
-            platform::log(&format!(
-                "video-timing: pts_us={pts_us} present_return_ns={returned} submit_to_readback_us={decode_us} present_call_us={} submit_to_present_return_us={latency_us}",
-                returned.saturating_sub(started) / 1000
-            ));
-        }
-        self.last_present_ns = returned;
         self.frames += 1;
         self.decode_us += decode_us;
         self.decode_max_us = self.decode_max_us.max(decode_us);
         self.latency_us += latency_us;
         self.latency_max_us = self.latency_max_us.max(latency_us);
-        self.interval_max_us = self.interval_max_us.max(interval_us);
     }
 
     fn summarize(&mut self, now: u64, stats: &Stats, recovery: recovery::Counters) {
@@ -133,33 +114,12 @@ impl Timing {
             idr_requests: clamp(recovery.idr_requests),
             frames_skipped: clamp(recovery.frames_skipped),
         });
-        if !LOG_TIMING {
-            self.restart(now, stats);
-            return;
-        }
-        platform::log(&format!(
-            "video-pace: window_ms={} presented={} fps_x10={} decode_mean_us={} decode_max_us={} latency_mean_us={} latency_max_us={} interval_max_us={} zero_copy_total={} dropped_total={} idr_requests={} frames_skipped={}",
-            elapsed / 1_000_000,
-            self.frames,
-            self.frames * 10_000_000_000 / elapsed,
-            self.decode_us / frames,
-            self.decode_max_us,
-            self.latency_us / frames,
-            self.latency_max_us,
-            self.interval_max_us,
-            stats.zero_copy,
-            stats.dropped,
-            recovery.idr_requests,
-            recovery.frames_skipped
-        ));
         self.restart(now, stats);
     }
 
     fn restart(&mut self, now: u64, stats: &Stats) {
         *self = Self {
             window_ns: now,
-            logged: self.logged,
-            last_present_ns: self.last_present_ns,
             dropped_start: stats.dropped,
             presented_start: stats.presented,
             ..Self::default()
@@ -185,7 +145,7 @@ pub struct Video<'a, B: Backend<N>, const N: usize = SURFACES> {
     arrivals: [Option<Arrival>; decoder::UNITS],
     bound: [Option<FrameToken>; N],
     pending_arrival: Option<u64>,
-    pending_timing: Option<(u64, u64, u64)>,
+    pending_timing: Option<(u64, u64)>,
     timing: Timing,
     presentation: Option<Presentation>,
 }
@@ -210,7 +170,7 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
             retired.set(true);
             return Err(Error::Decoder(decoder::Error::Retired));
         }
-        let mut decoder = match Decoder::open(backend, config.decoder, retired, frames) {
+        let decoder = match Decoder::open(backend, config.decoder, retired, frames) {
             Ok(decoder) => decoder,
             Err(error) => {
                 if retired.get() {
@@ -219,10 +179,6 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
                 return Err(Error::Decoder(error));
             }
         };
-        decoder.set_zero_copy(
-            cfg!(all(target_os = "none", feature = "native-video"))
-                && config.decoder.backing == decoder::Backing::NativeGpu,
-        );
         Ok(Self {
             decoder,
             copied: config.decoder.backing == decoder::Backing::CpuReference,
@@ -532,7 +488,7 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
         }
         self.pending = true;
         self.pending_arrival = arrival;
-        self.pending_timing = Some((info.pts_us, submitted_ns, decoded_ns));
+        self.pending_timing = Some((submitted_ns, decoded_ns));
         Ok(true)
     }
 
@@ -551,10 +507,8 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
                 self.pending = false;
                 self.stats.presented += u64::from(presented);
                 if presented {
-                    if let Some((pts, submitted, decoded)) = self.pending_timing.take() {
-                        let returned = platform::now_ns();
-                        self.timing
-                            .record(pts, submitted, decoded, present_start_ns, returned);
+                    if let Some((submitted, decoded)) = self.pending_timing.take() {
+                        self.timing.record(submitted, decoded, platform::now_ns());
                     }
                     self.presentation = Some(Presentation {
                         received_us: self.pending_arrival.take(),
@@ -707,28 +661,10 @@ impl<B: Backend<N>, const N: usize> moonlight_nx2_app::media::Decoder for Tick<'
     }
 }
 
-#[cfg(all(target_os = "none", feature = "native-video"))]
-fn native_busy(renderer: &mut Renderer, surface: usize) -> Result<bool, render::Error> {
-    renderer.native_busy(surface)
-}
-
-#[cfg(not(all(target_os = "none", feature = "native-video")))]
 fn native_busy(_renderer: &mut Renderer, _surface: usize) -> Result<bool, render::Error> {
     Ok(false)
 }
 
-#[cfg(all(target_os = "none", feature = "native-video"))]
-fn native_upload(
-    renderer: &mut Renderer,
-    surface: usize,
-    image: moonlight_nx2_core::untile::Image,
-    info: &FrameInfo,
-    matrix: Matrix,
-) -> Result<(), render::Error> {
-    renderer.upload_native(surface, image, info.display, matrix)
-}
-
-#[cfg(not(all(target_os = "none", feature = "native-video")))]
 fn native_upload(
     _renderer: &mut Renderer,
     _surface: usize,

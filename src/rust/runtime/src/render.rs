@@ -37,10 +37,6 @@ macro_rules! create {
     }};
 }
 
-#[cfg(any(feature = "host-renderer", feature = "diagnostic-sdk-backing"))]
-#[path = "render_backing.rs"]
-mod backing_probe;
-
 fn allocator() -> Option<&'static vk::AllocationCallbacks> {
     #[cfg(feature = "host-renderer")]
     {
@@ -260,17 +256,9 @@ struct Objects {
     retained: bool,
     config: Config,
     info: Info,
-    #[cfg(all(target_os = "none", feature = "native-video"))]
-    native: Option<native::Presenter>,
 }
 
-#[cfg(all(target_os = "none", feature = "native-video"))]
-#[path = "render_native.rs"]
-pub(crate) mod native;
-
 pub struct Renderer {
-    #[cfg(all(target_os = "none", feature = "native-video"))]
-    native_children: alloc::rc::Rc<core::cell::Cell<u32>>,
     objects: ManuallyDrop<Box<Objects>>,
     closed: bool,
     not_send: PhantomData<*mut ()>,
@@ -353,14 +341,10 @@ impl Renderer {
                 sequence: 0,
                 rebuild: false,
                 retained: false,
-                #[cfg(all(target_os = "none", feature = "native-video"))]
-                native: None,
                 config,
                 info: Info::default(),
             })),
             closed: false,
-            #[cfg(all(target_os = "none", feature = "native-video"))]
-            native_children: alloc::rc::Rc::new(core::cell::Cell::new(0)),
             not_send: PhantomData,
         };
         let result = renderer.objects.initialize();
@@ -458,10 +442,6 @@ impl Renderer {
         self.active()?;
         if self.objects.free_slot() != Some(slot) {
             return Err(Error::Busy);
-        }
-        #[cfg(all(target_os = "none", feature = "native-video"))]
-        if let Some(native) = self.objects.native.as_mut() {
-            native.forget_slot(slot);
         }
         self.objects.sequence = self.objects.sequence.wrapping_add(1).max(1);
         let sequence = self.objects.sequence;
@@ -580,10 +560,6 @@ impl Renderer {
             self.objects.retain();
             return Err(Error::Retained);
         }
-        #[cfg(all(target_os = "none", feature = "native-video"))]
-        if self.native_children.get() != 0 {
-            return Err(self.objects.retain());
-        }
         self.objects.destroy()?;
         unsafe { ManuallyDrop::drop(&mut self.objects) };
         self.closed = true;
@@ -630,11 +606,7 @@ impl Objects {
             let info = vk::InstanceCreateInfo::default()
                 .application_info(&app)
                 .enabled_extension_names(&extensions);
-            #[cfg(feature = "diagnostic-native-decode")]
-            log("b2ar: renderer create instance begin");
             self.instance = Some(create!(self.entry.create_instance(&info, allocator()))?);
-            #[cfg(feature = "diagnostic-native-decode")]
-            log("b2ar: renderer create instance ok");
             self.surface_api = Some(ash::khr::surface::Instance::load(
                 &self.entry,
                 self.instance(),
@@ -677,8 +649,6 @@ impl Objects {
                 .queue_family_index(self.family)
                 .queue_priorities(&priorities)];
             let extensions = [ash::khr::swapchain::NAME.as_ptr()];
-            #[cfg(feature = "diagnostic-native-decode")]
-            log("b2ar: renderer create GPU device begin");
             self.device = Some(create!(
                 self.instance().create_device(
                     self.physical,
@@ -688,8 +658,6 @@ impl Objects {
                     allocator(),
                 )
             )?);
-            #[cfg(feature = "diagnostic-native-decode")]
-            log("b2ar: renderer create GPU device ok");
             self.queue = self.device().get_device_queue(self.family, 0);
             self.swapchain_api = Some(ash::khr::swapchain::Device::load(
                 self.instance(),
@@ -1820,13 +1788,7 @@ impl Objects {
                 }],
             );
             self.device().cmd_set_scissor(command, 0, &[area]);
-            #[cfg(all(target_os = "none", feature = "native-video"))]
-            let native = self
-                .current_slot
-                .is_some_and(|slot| self.record_native(command, slot));
-            #[cfg(not(all(target_os = "none", feature = "native-video")))]
-            let native = false;
-            if let Some(slot) = self.current_slot.filter(|_| !native) {
+            if let Some(slot) = self.current_slot {
                 self.device().cmd_bind_pipeline(
                     command,
                     vk::PipelineBindPoint::GRAPHICS,
@@ -1980,10 +1942,6 @@ impl Objects {
                     device.destroy_semaphore(flight.acquired, allocator());
                 }
                 device.destroy_command_pool(self.command_pool, allocator());
-                #[cfg(all(target_os = "none", feature = "native-video"))]
-                if let Some(native) = self.native.take() {
-                    native.destroy(&device);
-                }
                 for pipeline in self.pipelines {
                     device.destroy_pipeline(pipeline, allocator());
                 }

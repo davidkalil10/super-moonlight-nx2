@@ -25,18 +25,11 @@ use moonlight_nx2_core::{
 const H264: &[u8] = include_bytes!("../refclip/h264.mlrc");
 #[cfg(not(feature = "diagnostic-sdk-modes-rate"))]
 const AV1: &[u8] = include_bytes!("../refclip/av1.mlrc");
-#[cfg(feature = "diagnostic-native-decode")]
-const HEVC: &[u8] = include_bytes!("../refclip/hevc.mlrc");
 
-#[cfg(not(any(
-    feature = "diagnostic-native-decode",
-    feature = "diagnostic-sdk-modes-rate"
-)))]
+#[cfg(not(feature = "diagnostic-sdk-modes-rate"))]
 const CLIPS: [(&str, &[u8]); 2] = [("h264", H264), ("av1", AV1)];
 #[cfg(feature = "diagnostic-sdk-modes-rate")]
 const CLIPS: [(&str, &[u8]); 1] = [("h264", H264)];
-#[cfg(feature = "diagnostic-native-decode")]
-const CLIPS: [(&str, &[u8]); 3] = [("h264", H264), ("hevc", HEVC), ("av1", AV1)];
 /// One diagnostic session on the SDK decoder: a clip, the rate it is fed at, how it is fed and
 /// what the session changes from a stream's own choices.
 #[cfg(feature = "diagnostic-sdk-modes")]
@@ -262,7 +255,7 @@ const CLIP_FPS: u32 = 60;
 /// The backend under test. The sink answers grey frames, so its sums never match; it proves
 /// the plumbing. A real decoder gates these two behind its feature (`diagnostic-native-decode`)
 /// and adds its own constructor and `BACKING` next to them.
-#[cfg(not(any(feature = "diagnostic-native-decode", feature = "sdk-video")))]
+#[cfg(not(feature = "sdk-video"))]
 fn backend(_: &mut Renderer) -> Option<crate::video_sink::VideoSink> {
     Some(crate::video_sink::VideoSink::new())
 }
@@ -270,14 +263,7 @@ fn backend(_: &mut Renderer) -> Option<crate::video_sink::VideoSink> {
 fn backend(_: &mut Renderer) -> Option<crate::sdk_video::SdkVideo> {
     Some(crate::sdk_video::SdkVideo::new(CLIP_FPS))
 }
-#[cfg(not(feature = "diagnostic-native-decode"))]
 const BACKING: Backing = Backing::CpuReference;
-#[cfg(feature = "diagnostic-native-decode")]
-fn backend(renderer: &mut Renderer) -> Option<crate::native_video::NativeVideo> {
-    renderer.native_decoder().ok()
-}
-#[cfg(feature = "diagnostic-native-decode")]
-const BACKING: Backing = Backing::NativeGpu;
 
 /// One session: true when the clip decoded, uploaded and closed cleanly.
 fn session<B: Backend<N>, const N: usize>(

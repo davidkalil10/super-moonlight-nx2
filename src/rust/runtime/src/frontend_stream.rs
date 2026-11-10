@@ -36,31 +36,15 @@ use moonlight_nx2_io::{
 };
 use moonlight_nx2_ui::store::Files;
 
-#[cfg(not(any(
-    feature = "diagnostic-frontend",
-    feature = "native-video",
-    feature = "sdk-video"
-)))]
+#[cfg(not(any(feature = "diagnostic-frontend", feature = "sdk-video")))]
 type Decoder = crate::gsv::GsvBackend;
-#[cfg(all(
-    feature = "diagnostic-frontend",
-    not(any(feature = "native-video", feature = "sdk-video"))
-))]
+#[cfg(all(feature = "diagnostic-frontend", not(feature = "sdk-video")))]
 type Decoder = crate::video_sink::VideoSink;
 #[cfg(feature = "sdk-video")]
 type Decoder = crate::sdk_video::SdkVideo;
-#[cfg(feature = "native-video")]
-type Decoder = crate::native_video::NativeVideo;
-#[cfg(feature = "native-video")]
-const SURFACES: usize = decoder::RING;
-#[cfg(not(feature = "native-video"))]
 const SURFACES: usize = decoder::SURFACES;
 
-#[cfg(any(
-    feature = "diagnostic-frontend",
-    feature = "native-video",
-    feature = "sdk-video"
-))]
+#[cfg(any(feature = "diagnostic-frontend", feature = "sdk-video"))]
 pub(crate) fn decoder_capabilities() -> Capabilities {
     <Decoder as decoder::Backend<SURFACES>>::capabilities()
 }
@@ -159,7 +143,6 @@ impl Stream {
         mut descriptor: Descriptor,
         peer: Option<[u8; 4]>,
         now_ms: u64,
-        #[cfg(feature = "native-video")] renderer: &mut Renderer,
     ) -> bool {
         let Some(epoch) = client.session_epoch() else {
             descriptor.wipe();
@@ -187,14 +170,7 @@ impl Stream {
             descriptor.codec.name()
         ));
         let opened = match peer {
-            Some(peer) if self.running.is_none() => self.start(
-                &descriptor,
-                peer,
-                epoch,
-                now_ms,
-                #[cfg(feature = "native-video")]
-                renderer,
-            ),
+            Some(peer) if self.running.is_none() => self.start(&descriptor, peer, epoch, now_ms),
             _ => Err("no peer or a stream is already open"),
         };
         descriptor.wipe();
@@ -218,7 +194,6 @@ impl Stream {
         peer: [u8; 4],
         epoch: Epoch,
         now_ms: u64,
-        #[cfg(feature = "native-video")] renderer: &mut Renderer,
     ) -> Result<Running, &'static str> {
         let display = Size::new(descriptor.width, descriptor.height).ok_or("invalid size")?;
         let coded = Size::new(
@@ -231,28 +206,16 @@ impl Stream {
                 codec: core_codec(descriptor.codec),
                 coded,
                 display,
-                timeout_ms: if cfg!(any(feature = "native-video", feature = "sdk-video")) {
-                    2000
-                } else {
-                    0
-                },
+                timeout_ms: if cfg!(feature = "sdk-video") { 2000 } else { 0 },
                 frame_registration: FrameRegistration::Register,
-                backing: if cfg!(feature = "native-video") {
-                    Backing::NativeGpu
-                } else {
-                    Backing::CpuReference
-                },
+                backing: Backing::CpuReference,
             },
             fps: descriptor.fps,
             matrix: Matrix::Bt709,
         };
-        #[cfg(feature = "native-video")]
-        let backend = renderer
-            .native_decoder()
-            .map_err(|_| "native renderer owner")?;
         #[cfg(feature = "sdk-video")]
         let backend = Decoder::new(descriptor.fps);
-        #[cfg(not(any(feature = "native-video", feature = "sdk-video")))]
+        #[cfg(not(feature = "sdk-video"))]
         let backend = Decoder::new();
         let buffers = Box::into_raw(Buffers::new(coded));
         let memory = unsafe { &mut *buffers };
@@ -300,8 +263,7 @@ impl Stream {
             }),
             Err((failure, closed)) => {
                 log(&format!("stream: media open failed {failure:?}"));
-                if self.reclaim(closed) && (!cfg!(feature = "native-video") || !self.retired.get())
-                {
+                if self.reclaim(closed) {
                     drop(unsafe { Box::from_raw(buffers) });
                 }
                 Err("media")

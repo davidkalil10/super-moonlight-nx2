@@ -45,15 +45,11 @@ def sources():
                 or record["shader"]["bytes"] != shader.stat().st_size
                 or record["shader"]["sha256"] != digest(shader)):
             raise ValueError("Rust UI shader differs from its manifest")
-    interop = APP / "tools/testship/sdk-interop"
-    for path in sorted(interop.rglob("*")):
-        if path.is_file() and "__pycache__" not in path.parts:
-            result[str(Path("../../tools/testship/sdk-interop") / path.relative_to(interop))] = digest(path)
     return result
 
 
 def nacp_title(diagnostic):
-    if diagnostic in ("production", "production-sdk"):
+    if diagnostic == "production-sdk":
         return "Moonlight NX2"
     if diagnostic == "frontend":
         return "Moonlight NX2 Rust"
@@ -120,9 +116,7 @@ def build(args):
             commands = [["cargo", "build", "--manifest-path", str(ROOT / "Cargo.toml"),
                          "--package", "moonlight-nx2-runtime", "--target", TARGET, "--release", "--locked",
                          "-Zbuild-std=core,alloc", "-Zbuild-std-features="]]
-            if args.diagnostic == "production":
-                commands[0].extend(["--features", "frontend,native-video"])
-            elif args.diagnostic == "production-sdk":
+            if args.diagnostic == "production-sdk":
                 commands[0].extend(["--features", "frontend,sdk-video"])
             elif args.diagnostic == "production-sdk-tcp":
                 commands[0].extend(["--features", "frontend,sdk-video,video-tcp"])
@@ -177,26 +171,6 @@ def build(args):
                      f"BUILD_DIR={directory}", f"RUST_LIBRARY={library}",
                      "NACP_TITLE=" + nacp_title(args.diagnostic),
                      "NACP_VERSION=" + args.nacp_version]]
-        if args.diagnostic in ("sdk-backing", "native-decode", "production"):
-            alias_directory = args.sdk_backing_library_dir or directory / "sdk-interop/alias"
-            if not alias_directory.is_absolute():
-                raise ValueError("SDK backing alias library directory must be absolute")
-            backing_inputs = {
-                args.devkitpro / "portlibs/switch2/lib/libouncevk.a": "9b8d1de4d5d6c64de7ab737e940a05650544823ea46cd04f60c76d7a2d93621f",
-                args.devkitpro / "libounce/lib/libounce.a": "1a914c2d1e3c7bb12878ace59d77d570017beee8a1bd366fa596b194bc41efd9",
-                ROOT / "nro/sdk_backing.c": "a97422200d45b8e4973f4b19ce0b618b4c0cfe1020add2e5153dba849f5df63c",
-                ROOT / "nro/sdk_backing.h": "982992ee26ed8ed01f3e8ae0979626d1a712622cbf2f9540faa89125df9cb5b1",
-            }
-            for path, expected in backing_inputs.items():
-                if digest(path) != expected:
-                    raise ValueError(f"SDK backing input differs: {path.name}")
-            info["sdk_backing_inputs"] = {str(path): digest(path) for path in backing_inputs}
-            info["sdk_backing_library_dir"] = str(alias_directory)
-            commands[0].extend(["SDK_BACKING=1", f"SDK_BACKING_LIBRARY_DIR={alias_directory}"])
-            if args.diagnostic in ("native-decode", "production"):
-                commands[0].append("NATIVE_DECODE=1")
-            if args.diagnostic == "native-decode":
-                commands[0].append("BREADCRUMBS=1")
         diagnostic_sdk = args.diagnostic in ("sdk-decode", "sdk-modes", "sdk-modes-4k", "sdk-modes-rate", "sdk-modes-paced")
         if diagnostic_sdk or args.diagnostic.startswith("production-sdk"):
             if info["sdk"]["version"] != native.SDK_VIDDEC:
@@ -211,11 +185,6 @@ def build(args):
         with (directory / "build.log").open("w") as log:
             for command in commands:
                 run(command, env, log, info["commands"])
-        if args.stage == "nro" and args.diagnostic in ("sdk-backing", "native-decode", "production"):
-            alias = Path(info["sdk_backing_library_dir"]) / "libouncevk.a"
-            if digest(alias) != "b33546d8f616e135257a27b5606992a2b8a9708dc8d11e8343b55faa34176531":
-                raise ValueError("Unexpected SDK backing alias archive")
-            info["sdk_backing_alias_sha256"] = digest(alias)
         if sources() != info["sources"]:
             raise ValueError("Rust source changed during the build")
         if artifact:
@@ -240,8 +209,7 @@ def main():
     parser.add_argument("--revision")
     parser.add_argument("--branch")
     parser.add_argument("--nacp-version", default="0.1.0")
-    parser.add_argument("--diagnostic", choices=("core", "renderer", "display", "display120", "coexist", "io", "audio-cue", "udp", "nvdec", "sdk-backing", "native-decode", "sdk-decode", "sdk-modes", "sdk-modes-4k", "sdk-modes-rate", "sdk-modes-paced", "ui", "ui-order", "ui-data", "ui-alpha", "ui-text", "ui-text-apps", "ui-text-overlay", "ui-text-interactive", "control", "control-default", "frontend", "frontend-check", "ref-replay", "production", "production-sdk", "production-sdk-tcp", "production-sdk-120", "production-sdk-120-decode"), default="core")
-    parser.add_argument("--sdk-backing-library-dir", type=Path)
+    parser.add_argument("--diagnostic", choices=("core", "renderer", "display", "display120", "coexist", "io", "audio-cue", "udp", "nvdec", "sdk-decode", "sdk-modes", "sdk-modes-4k", "sdk-modes-rate", "sdk-modes-paced", "ui", "ui-order", "ui-data", "ui-alpha", "ui-text", "ui-text-apps", "ui-text-overlay", "ui-text-interactive", "control", "control-default", "frontend", "frontend-check", "ref-replay", "production-sdk", "production-sdk-tcp", "production-sdk-120", "production-sdk-120-decode"), default="core")
     parser.add_argument("--rust-directory", type=Path)
     parser.add_argument("--cargo-home", type=Path)
     parser.add_argument("--dev", type=Path)

@@ -43,8 +43,6 @@ static ALLOCATOR: Allocator = Allocator;
 
 #[panic_handler]
 fn panic(_info: &PanicInfo<'_>) -> ! {
-    #[cfg(feature = "native-video")]
-    log("runtime: Rust panic; process exits, cleanup unconfirmed");
     unsafe { moonlightPlatformAbort() }
 }
 
@@ -311,15 +309,13 @@ pub extern "C" fn main() -> i32 {
     if !unsafe { moonlightPlatformStart() } {
         return 1;
     }
-    log(
-        if cfg!(any(feature = "native-video", feature = "sdk-video")) {
-            "Moonlight NX2 Rust frontend; native video behind verified capabilities"
-        } else if cfg!(feature = "frontend") {
-            "Moonlight NX2 Rust frontend; native codecs disabled"
-        } else {
-            "Moonlight NX2 Rust runtime diagnostic; streaming not implemented"
-        },
-    );
+    log(if cfg!(feature = "sdk-video") {
+        "Moonlight NX2 Rust frontend; native video behind verified capabilities"
+    } else if cfg!(feature = "frontend") {
+        "Moonlight NX2 Rust frontend; native codecs disabled"
+    } else {
+        "Moonlight NX2 Rust runtime diagnostic; streaming not implemented"
+    });
     #[cfg(any(
         not(feature = "frontend"),
         feature = "diagnostic-frontend",
@@ -344,8 +340,6 @@ pub extern "C" fn main() -> i32 {
     let passed = passed && crate::udp_diagnostic::check();
     #[cfg(feature = "diagnostic-nvdec")]
     let passed = passed && crate::nvdec_access::nvdec_check();
-    #[cfg(feature = "diagnostic-sdk-backing")]
-    let passed = passed && crate::sdk_backing_diagnostic::check();
     #[cfg(feature = "diagnostic-ui")]
     let passed = passed && crate::ui_diagnostic::check();
     #[cfg(feature = "diagnostic-control")]

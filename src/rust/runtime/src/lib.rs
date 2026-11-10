@@ -30,27 +30,12 @@ compile_error!("host-renderer is only for host parity tests");
 compile_error!("select one device diagnostic mode");
 
 #[cfg(all(
-    feature = "diagnostic-sdk-backing",
-    any(
-        feature = "diagnostic-renderer",
-        feature = "diagnostic-io",
-        feature = "diagnostic-udp",
-        feature = "diagnostic-nvdec",
-        feature = "diagnostic-ui",
-        feature = "diagnostic-control",
-        feature = "frontend"
-    )
-))]
-compile_error!("SDK backing metadata is a separate diagnostic mode");
-
-#[cfg(all(
     feature = "diagnostic-audio-cue",
     any(
         feature = "diagnostic-renderer",
         feature = "diagnostic-io",
         feature = "diagnostic-udp",
         feature = "diagnostic-nvdec",
-        feature = "diagnostic-sdk-backing",
         feature = "diagnostic-ui",
         feature = "diagnostic-control",
         feature = "frontend"
@@ -59,8 +44,6 @@ compile_error!("SDK backing metadata is a separate diagnostic mode");
 compile_error!("Audio cue is a separate diagnostic mode");
 
 use moonlight_nx2_core::input::{self, Pad};
-
-pub mod native_gate;
 
 #[cfg(not(any(target_os = "none", feature = "host-renderer")))]
 use ash as _;
@@ -96,7 +79,7 @@ mod udp_diagnostic;
 #[cfg(all(
     target_os = "none",
     feature = "diagnostic-frontend",
-    not(any(feature = "native-video", feature = "sdk-video"))
+    not(feature = "sdk-video")
 ))]
 mod video_sink;
 
@@ -118,7 +101,7 @@ pub mod files;
 pub mod frontend;
 #[cfg(any(target_os = "none", feature = "host-renderer"))]
 pub mod frontend_media;
-#[cfg(all(target_os = "none", not(feature = "native-video")))]
+#[cfg(target_os = "none")]
 pub mod gsv;
 #[cfg(any(target_os = "none", feature = "host-renderer"))]
 pub mod hid;
@@ -132,20 +115,12 @@ pub mod render;
 mod render_platform;
 #[cfg(target_os = "none")]
 pub mod sdk;
-#[cfg(any(
-    feature = "host-renderer",
-    feature = "diagnostic-sdk-backing",
-    feature = "native-video"
-))]
-pub mod sdk_backing;
-#[cfg(all(target_os = "none", feature = "diagnostic-sdk-backing"))]
-mod sdk_backing_diagnostic;
 #[cfg(all(target_os = "none", feature = "sdk-video"))]
 mod sdk_video;
-#[cfg(all(target_os = "none", feature = "frontend"))]
-mod system;
 #[cfg(any(target_os = "none", feature = "host-renderer"))]
 pub mod stream_stats;
+#[cfg(all(target_os = "none", feature = "frontend"))]
+mod system;
 #[cfg(any(feature = "diagnostic-ui", feature = "host-renderer"))]
 pub mod ui_diagnostic;
 #[cfg(any(target_os = "none", feature = "host-renderer"))]
@@ -169,8 +144,3 @@ pub extern "C" fn map_pad(
 pub extern "C" fn stop_held(buttons: u64) -> bool {
     input::stop_held(buttons)
 }
-
-#[cfg(all(target_os = "none", feature = "native-video"))]
-pub mod native_video;
-#[cfg(all(target_os = "none", feature = "native-video"))]
-mod owner_call;
