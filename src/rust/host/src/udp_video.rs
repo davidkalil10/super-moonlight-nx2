@@ -30,6 +30,15 @@ pub const FLAG_KEYFRAME: u32 = 1;
 pub const FLAG_END: u32 = 2;
 pub const FLAG_RESEND: u32 = 4;
 
+/// Units the console holds while the oldest one waits for its missing fragments.
+const UNIT_SLOTS: f64 = 8.0;
+/// Pacing time of a typical keyframe, kept inside the slots a keyframe may wait for.
+const KEYFRAME_SPREAD_MS: f64 = 20.0;
+/// A fragment is resent again once this long after its last resend.
+const RESEND_GAP_MS: f64 = 10.0;
+
+/// The deadline leaves room for two repair rounds at the console's display rate; a unit that
+/// still misses it is dropped and answered with a keyframe.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Timing {
     pub deadline_ms: f64,
@@ -43,8 +52,9 @@ impl Timing {
             return None;
         }
         let period_ms = 1000.0 / f64::from(fps);
+        let keyframe_fit = (UNIT_SLOTS * period_ms - KEYFRAME_SPREAD_MS) / 2.0;
         Some(Self {
-            deadline_ms: (2.0 * period_ms).max(12.0),
+            deadline_ms: (3.0 * period_ms).min(keyframe_fit).max(12.0),
             spread_ms: period_ms / 3.0,
             pace_bytes_per_ms: 12_500.0,
         })
@@ -198,7 +208,7 @@ struct Scheduled {
 struct Retained {
     datagram: Arc<[u8]>,
     deadline_at: f64,
-    resent: bool,
+    resent_at: Option<f64>,
 }
 
 pub struct Sender {
@@ -324,7 +334,7 @@ impl Sender {
                 Retained {
                     datagram: Arc::clone(&datagram),
                     deadline_at: deadline,
-                    resent: false,
+                    resent_at: None,
                 },
             );
             self.retained_order.push_back(sequence);
@@ -385,11 +395,14 @@ impl Sender {
                     self.counters.expired += 1;
                     continue;
                 }
-                if entry.resent {
+                if entry
+                    .resent_at
+                    .is_some_and(|at| now_ms - at < RESEND_GAP_MS)
+                {
                     self.counters.repeated += 1;
                     continue;
                 }
-                entry.resent = true;
+                entry.resent_at = Some(now_ms);
                 let datagram = Arc::clone(&entry.datagram);
                 output.push(self.stamp(&datagram, now_ms, true));
                 self.counters.resent += 1;
@@ -443,5 +456,46 @@ mod tests {
             u32::from_le_bytes(sender.end()[12..16].try_into().unwrap()),
             u32::MAX
         );
+    }
+
+    #[test]
+    fn a_fragment_is_resent_again_once_the_gap_has_passed() {
+        let mut sender = Sender::new(60, 4096).unwrap();
+        let unit = Unit {
+            sequence: 0,
+            pts_us: 0,
+            keyframe: false,
+            data: &[1; 3000],
+        };
+        sender.enqueue(unit, 0.0).unwrap();
+        assert_eq!(sender.nack(&[(1, 1)], 1.0).unwrap().len(), 1);
+        assert!(
+            sender
+                .nack(&[(1, 1)], 1.0 + RESEND_GAP_MS / 2.0)
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            sender.nack(&[(1, 1)], 1.0 + RESEND_GAP_MS).unwrap().len(),
+            1
+        );
+        let late = sender.timing().frame_deadline(3000, false) + 1.0;
+        assert!(sender.nack(&[(1, 1)], late).unwrap().is_empty());
+        let counters = sender.counters();
+        assert_eq!(
+            (counters.resent, counters.repeated, counters.expired),
+            (2, 1, 1)
+        );
+    }
+
+    #[test]
+    fn the_deadline_allows_repair_and_a_waiting_keyframe_fits_the_console_slots() {
+        assert_eq!(Timing::new(60).unwrap().deadline_ms, 50.0);
+        for fps in [30, 60, 90, 120] {
+            let timing = Timing::new(fps).unwrap();
+            let period_ms = 1000.0 / f64::from(fps);
+            assert!(timing.deadline_ms > 2.0 * period_ms);
+            assert!(timing.frame_deadline(250_000, true) <= UNIT_SLOTS * period_ms + 1e-9);
+        }
     }
 }

@@ -7,6 +7,8 @@ const FRAGMENTS: usize = MAX_PAYLOAD.div_ceil(wire::FRAGMENT_BYTES);
 const BITMAP_WORDS: usize = FRAGMENTS.div_ceil(64);
 const HELLO_PERIOD_US: u64 = 100_000;
 const STATS_PERIOD_US: u64 = 1_000_000;
+/// How often the head unit's missing fragments are requested again.
+const REPAIR_PERIOD_US: u64 = 15_000;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Error {
@@ -127,6 +129,7 @@ pub struct Receiver<'a, S: Socket, D: Datagram> {
     ranges: [wire::Range; wire::NACK_RANGES],
     range_count: usize,
     awaiting_keyframe: bool,
+    repair_at: u64,
     feedback_connected: bool,
     datagram_connected: bool,
     token_bytes: usize,
@@ -199,6 +202,7 @@ impl<'a, S: Socket, D: Datagram> Receiver<'a, S, D> {
             ranges: [wire::Range::default(); wire::NACK_RANGES],
             range_count: 0,
             awaiting_keyframe: false,
+            repair_at: 0,
             feedback_connected: false,
             datagram_connected: false,
             token_bytes: 64,
@@ -515,6 +519,63 @@ impl<'a, S: Socket, D: Datagram> Receiver<'a, S, D> {
         }
     }
 
+    /// Requests the head unit's missing fragments again. The gap NACK is sent once, so without
+    /// this one lost NACK or resend costs the whole unit and a keyframe request.
+    fn repair(&mut self, now_us: u64) {
+        let slot = &self.slots[self.next_frame as usize % UNIT_SLOTS];
+        if slot.frame != Some(self.next_frame) || slot.received == slot.count {
+            return;
+        }
+        if self.range_count > 0 {
+            self.repair_at = now_us;
+            return;
+        }
+        if now_us.saturating_sub(self.repair_at.max(slot.known_at)) < REPAIR_PERIOD_US {
+            return;
+        }
+        let following = self.next_frame.checked_add(1);
+        let sent_whole = following.is_some_and(|frame| {
+            self.slots[frame as usize % UNIT_SLOTS].known == Some(frame)
+                || self.end_frame == Some(frame)
+        });
+        let received = |index: usize| slot.bitmap[index / 64] & (1 << (index % 64)) != 0;
+        let limit = if sent_whole {
+            slot.count
+        } else {
+            (0..slot.count)
+                .rev()
+                .find(|index| received(*index))
+                .unwrap_or(0)
+        };
+        let first_sequence = slot.first_sequence;
+        let mut missing = [wire::Range::default(); wire::NACK_RANGES];
+        let mut count = 0;
+        let mut index = 0;
+        while index < limit && self.range_count + count < wire::NACK_RANGES {
+            if received(index) {
+                index += 1;
+                continue;
+            }
+            let start = index;
+            while index < limit
+                && !received(index)
+                && index - start < wire::NACK_RANGE_LIMIT as usize
+            {
+                index += 1;
+            }
+            missing[count] = wire::Range {
+                first: first_sequence.wrapping_add(start as u32),
+                length: (index - start) as u32,
+            };
+            count += 1;
+        }
+        if count == 0 {
+            return;
+        }
+        self.ranges[self.range_count..self.range_count + count].copy_from_slice(&missing[..count]);
+        self.range_count += count;
+        self.repair_at = now_us;
+    }
     fn report(&mut self, now_us: u64) -> Result<(), Error> {
         let mut packet = [0; 8 + wire::NACK_RANGES * 8];
         if self.receive_ended() {
@@ -583,6 +644,7 @@ impl<'a, S: Socket, D: Datagram> Receiver<'a, S, D> {
             self.stats.drain_us += elapsed;
         }
         self.settle(now_us);
+        self.repair(now_us);
         self.report(now_us)?;
         if self.receive_ended() {
             Err(Error::Ended)
