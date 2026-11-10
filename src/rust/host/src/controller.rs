@@ -833,6 +833,7 @@ impl Controller {
                 Ok(None) => {}
                 Err(error @ relay::Error::Cleanup(_)) => return Err(Error::Relay(error)),
                 Err(error) => {
+                    eprintln!("stream: relay failed: {error:?}");
                     let start_id = backend.start_id.expect("owned stream request");
                     let (code, message) = match error {
                         relay::Error::Udp(crate::udp_endpoint::Error::Timeout) => (

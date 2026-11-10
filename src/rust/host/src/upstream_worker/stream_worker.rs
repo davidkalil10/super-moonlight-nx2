@@ -248,14 +248,16 @@ pub fn run(args: &[String]) -> WorkerResult {
     let mut native_stopped = false;
     let mut next_rtt = Instant::now() + Duration::from_secs(1);
     loop {
-        if monitor.overflowed() {
+        if monitor.overflowed() && !failed {
+            eprintln!("{{\"event\":\"listener-overflow\"}}");
             failed = true;
             request_stop(&mut lifecycle, &mut stopping);
         }
         while let Ok(event) = events.try_recv() {
             match event {
                 ListenerEvent::Connected => native_connected = true,
-                ListenerEvent::StageFailed { .. } => {
+                ListenerEvent::StageFailed { stage, code } => {
+                    eprintln!("{{\"event\":\"stage-failed\",\"stage\":{stage},\"code\":{code}}}");
                     failed = true;
                     request_stop(&mut lifecycle, &mut stopping);
                 }

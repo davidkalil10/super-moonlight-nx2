@@ -727,6 +727,13 @@ impl Relay {
                 }
                 status::Event::AccessUnit(_) => {}
                 status::Event::Status(value) => {
+                    let event = value.get("event").and_then(|v| v.as_str());
+                    if matches!(
+                        event,
+                        Some("terminated" | "failed" | "stage-failed" | "listener-overflow")
+                    ) {
+                        eprintln!("worker: {value}");
+                    }
                     if value.get("event").and_then(|v| v.as_str()) == Some("video") {
                         let expected = match self.options.codec {
                             Codec::H264 => "h264",
