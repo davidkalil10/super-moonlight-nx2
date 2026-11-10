@@ -367,7 +367,15 @@ fn execute(renderer: &mut Renderer, connections: &mut NativeConnections, launch:
                 display_context(&mut app, dock.current(), probe.capabilities());
                 pending = false;
             }
-            let mode = (info.width, info.height, hz, dock.current());
+            let shown = snapshot.map(|display| {
+                (
+                    display.width,
+                    display.height,
+                    display.resolution_level,
+                    display.interval_denominator,
+                )
+            });
+            let mode = (info.width, info.height, hz, dock.current(), shown);
             if last_mode != Some(mode)
                 && let Some(display) = snapshot
             {
@@ -424,13 +432,15 @@ fn execute(renderer: &mut Renderer, connections: &mut NativeConnections, launch:
     !failed && closed && stats.frames > 0 && !stats.rejected
 }
 
-/// Docked, the layer is 4K. The window presents every refresh, which also asks the display for
-/// 120 Hz: the handheld panel has it, a TV has it or stays at 60.
+/// Docked, the window takes the size the console outputs (0x0), and follows it: a TV that goes
+/// to 120 Hz may do so at a smaller size than its 60 Hz mode, and a layer left at 4K is then
+/// shown unscaled. The window presents every refresh, which also asks the display for 120 Hz:
+/// the handheld panel has it, a TV has it or stays at 60.
 fn render_config(low_latency: bool) -> Config {
     Config {
         window_mode: WindowMode::PerMode {
-            docked_width: 3840,
-            docked_height: 2160,
+            docked_width: 0,
+            docked_height: 0,
         },
         frame_rates: Some(FrameRates::EVERY_REFRESH),
         present: present_mode(low_latency),
