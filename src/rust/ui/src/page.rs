@@ -455,8 +455,8 @@ impl<'a> Page<'a> {
     }
 
     /// Writes the page into `out`. With `resident`, blocks that page already holds keep their
-    /// offsets and the body bytes up to its size are not cleared, so `out` must be the buffer
-    /// that placement was made in.
+    /// offsets, so `out` must be the buffer that placement was made in. The body is cleared
+    /// before the blocks are copied in, so no byte of an earlier page survives in a gap.
     pub fn encode(&self, resident: Option<&Placement>, out: &mut [u8]) -> Result<Placement, Error> {
         self.validate()?;
         if out.len() < BODY_OFFSET {
@@ -466,19 +466,12 @@ impl<'a> Page<'a> {
         let (blocks, count) = self.blocks();
         let blocks = &blocks[..count];
         let max_body = out.len() - BODY_OFFSET;
-        let kept = resident.and_then(|r| place(blocks, Some(r), max_body).map(|p| (p, r.bytes)));
-        let (placed, kept) = match kept {
-            Some(found) => found,
-            None => (
-                place(blocks, None, max_body).ok_or(Error::TooBig)?,
-                BODY_OFFSET,
-            ),
-        };
+        let placed = resident
+            .and_then(|r| place(blocks, Some(r), max_body))
+            .or_else(|| place(blocks, None, max_body))
+            .ok_or(Error::TooBig)?;
 
-        out[..BODY_OFFSET].fill(0);
-        if placed.bytes > kept {
-            out[kept..placed.bytes].fill(0);
-        }
+        out[..placed.bytes].fill(0);
         for i in 0..placed.count {
             let block = &blocks[placed.source[i] as usize];
             let at = BODY_OFFSET + placed.offset[i] as usize;
@@ -617,4 +610,46 @@ fn place(blocks: &[Block], resident: Option<&Placement>, max_body: usize) -> Opt
     let body = used.end() as usize;
     placed.bytes = BODY_OFFSET + body;
     (body <= max_body).then_some(placed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloc::vec;
+
+    fn strip(alpha: &[u8], identity: u64) -> Strip<'_> {
+        Strip {
+            x: 0,
+            y: 0,
+            w: alpha.len() as u32,
+            h: 1,
+            alpha,
+            color: 0,
+            cursor_item: 0,
+            identity,
+        }
+    }
+
+    #[test]
+    fn a_dropped_block_leaves_no_bytes_behind_in_a_resident_page() {
+        let (first, second) = ([9u8; 16], [7u8; 8]);
+        let mut out = vec![0u8; BODY_OFFSET + 64];
+
+        let mut page = Page::new();
+        (page.epoch, page.sequence) = (1, 1);
+        page.push_text(strip(&first, 1));
+        page.push_text(strip(&second, 2));
+        let placed = page.encode(None, &mut out).unwrap();
+        let second_at = BODY_OFFSET + placed.offset_of(2).unwrap() as usize;
+        assert_eq!(&out[second_at..second_at + 8], &second);
+
+        let mut next = Page::new();
+        (next.epoch, next.sequence) = (1, 2);
+        next.push_text(strip(&second, 2));
+        let kept = next.encode(Some(&placed), &mut out).unwrap();
+        assert_eq!(kept.offset_of(2), placed.offset_of(2));
+        assert_eq!(&out[second_at..second_at + 8], &second);
+        assert!(out[BODY_OFFSET..second_at].iter().all(|&byte| byte == 0));
+        assert!(out[second_at + 8..kept.bytes()].iter().all(|&byte| byte == 0));
+    }
 }
