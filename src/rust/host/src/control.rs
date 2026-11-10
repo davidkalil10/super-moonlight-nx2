@@ -72,6 +72,10 @@ impl<'a> Connection<'a> {
             closed: false,
         })
     }
+    /// Lets streams that ask for it switch the PC display; without this it is never touched.
+    pub fn match_display(&mut self, display: crate::display::Session) {
+        self.controller.match_display(display);
+    }
     pub fn pump(&mut self, now: Instant) -> Result<(), Error> {
         self.pump_with_video_readiness(now).map(|_| ())
     }
@@ -320,6 +324,10 @@ impl<'a> Connection<'a> {
             }),
             controller::Event::TouchUnsupported => self.enqueue(now, |out| {
                 let value = json!({"event": "touch", "supported": false});
+                response::encode(Kind::Event, 0, &value, out)
+            }),
+            controller::Event::DisplayUnmatched(reason) => self.enqueue(now, |out| {
+                let value = json!({"event": "host_display", "reason": reason.code()});
                 response::encode(Kind::Event, 0, &value, out)
             }),
         }

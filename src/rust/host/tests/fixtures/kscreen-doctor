@@ -1,0 +1,43 @@
+#!/usr/bin/env python3
+"""Stands in for kscreen-doctor in tests: the display is state.json beside this script."""
+import json
+import os
+import sys
+from pathlib import Path
+
+state_path = Path(__file__).absolute().parent / "state.json"
+state = json.loads(state_path.read_text())
+arguments = sys.argv[1:]
+state.setdefault("calls", []).append(arguments)
+
+if state.get("abort"):
+    state_path.write_text(json.dumps(state))
+    os.abort()
+if arguments == ["-j"]:
+    state_path.write_text(json.dumps(state))
+    print(json.dumps({"outputs": state["outputs"]}))
+    sys.exit(0)
+
+for argument in arguments:
+    words = argument.split(".")
+    if len(words) < 4 or words[0] != "output":
+        sys.exit(2)
+    output = next((item for item in state["outputs"] if item["name"] == words[1]), None)
+    if output is None:
+        sys.exit(2)
+    if state.get("ignore_changes"):
+        continue
+    if words[2] == "mode":
+        if not any(mode["id"] == words[3] for mode in output["modes"]):
+            sys.exit(2)
+        output["currentModeId"] = words[3]
+    elif words[2] == "scale":
+        output["scale"] = float(".".join(words[3:]))
+    elif words[2] == "addCustomMode":
+        width, height, millihertz = (int(word) for word in words[3:6])
+        output["modes"].append({"id": str(900 + len(output["modes"])),
+                                "size": {"width": width, "height": height},
+                                "refreshRate": millihertz / 1000})
+    else:
+        sys.exit(2)
+state_path.write_text(json.dumps(state))

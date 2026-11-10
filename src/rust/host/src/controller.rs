@@ -194,6 +194,8 @@ struct HostBackend {
     cover_cache: crate::cover::Cache,
     cover_pending: Option<CoverRequest>,
     cover_result: Option<crate::bridge::Event>,
+    display: Option<crate::display::Session>,
+    display_unmatched: Option<crate::display::Reason>,
 }
 
 struct CoverRequest {
@@ -214,6 +216,7 @@ impl HostBackend {
         let StartPreflight {
             host, app, options, ..
         } = start;
+        let streamed_host = host.clone();
         let mut random = File::open("/dev/urandom").map_err(|e| Box::new(Error::Random(e)))?;
         let video_token = random_token(&mut random).map_err(|e| Box::new(Error::Random(e)))?;
         let mut audio_token = random_token(&mut random).map_err(|e| Box::new(Error::Random(e)))?;
@@ -270,6 +273,10 @@ impl HostBackend {
             })),
             None => None,
         };
+        self.display_unmatched = self
+            .display
+            .as_mut()
+            .and_then(|display| display.match_stream(&streamed_host, &options));
         self.relay = Some(relay);
         Ok(Descriptor {
             video_token,
@@ -394,6 +401,9 @@ impl Backend for HostBackend {
         self.management
             .cancel()
             .map_err(|e| Box::new(Error::Management(e)))?;
+        if let Some(display) = &mut self.display {
+            display.restore();
+        }
         if let Some(relay) = &mut self.relay {
             relay.stop();
             let deadline = Instant::now() + Duration::from_secs(10);
@@ -441,6 +451,8 @@ pub enum Event {
     Rumble(relay::Rumble),
     /// The PC takes no touch; an ID-0 event the client turns into a note.
     TouchUnsupported,
+    /// The PC display does not follow the stream; an ID-0 event the client turns into a note.
+    DisplayUnmatched(crate::display::Reason),
 }
 
 pub struct Controller {
@@ -465,11 +477,17 @@ impl Controller {
             cover_cache: crate::cover::Cache::new(),
             cover_pending: None,
             cover_result: None,
+            display: None,
+            display_unmatched: None,
         };
         Ok(Self {
             session: Session::new(token, backend).map_err(Error::Session)?,
             management_output: None,
         })
+    }
+    /// Lets streams that ask for it switch the PC display; without this it is never touched.
+    pub fn match_display(&mut self, display: crate::display::Session) {
+        self.session.backend_mut().display = Some(display);
     }
     pub fn authenticate(&mut self, frame: Frame<'_>) -> Result<(), Error> {
         self.session.authenticate(frame).map_err(Error::Session)
@@ -782,6 +800,15 @@ impl Controller {
             }
         }
         let backend = self.session.backend_mut();
+        if let Some(display) = &mut backend.display {
+            display.poll(now);
+        }
+        if !backend.starting
+            && backend.relay.is_some()
+            && let Some(reason) = backend.display_unmatched.take()
+        {
+            return Ok(Some(Event::DisplayUnmatched(reason)));
+        }
         if let Some(relay) = &mut backend.relay {
             match relay.poll(now) {
                 Ok(Some(relay::Event::Connected)) => {
@@ -796,6 +823,10 @@ impl Controller {
                     let id = backend.stopping.take().filter(|id| *id != 0);
                     backend.relay = None;
                     backend.start_id = None;
+                    backend.display_unmatched = None;
+                    if let Some(display) = &mut backend.display {
+                        display.release(now);
+                    }
                     self.session.stream_stopped().map_err(Error::Session)?;
                     return Ok(Some(Event::Stopped { request_id: id }));
                 }
@@ -821,6 +852,9 @@ impl Controller {
                     backend.starting = false;
                     if backend.stopping.is_some() {
                         relay.stop();
+                    }
+                    if let Some(display) = &mut backend.display {
+                        display.release(now);
                     }
                     return Ok(Some(Event::StreamFailed {
                         start_id,

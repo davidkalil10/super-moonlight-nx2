@@ -1,0 +1,3 @@
+#!/bin/sh
+# Stands in for the upstream worker: every host is paired and idle.
+printf '%s\n' '{"currentGame":0,"apps":[]}'

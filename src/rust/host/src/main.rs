@@ -3,6 +3,7 @@ mod linux {
     use moonlight_nx2_core::control;
     use moonlight_nx2_host::{
         control_server::{Connection, Error},
+        display,
         helper::Helper,
     };
     use std::{
@@ -29,16 +30,26 @@ mod linux {
         Ok(())
     }
 
+    const USAGE: &str = "expected listen address, helper path and optionally --match-display";
+
+    pub fn display_command(arguments: &[String]) -> Result<(), String> {
+        display::cli::run(arguments)
+    }
+
     pub fn run() -> Result<(), &'static str> {
         let mut args = std::env::args_os().skip(1);
-        let listen = args
-            .next()
-            .ok_or("expected listen address and helper path")?;
-        let executable = args
-            .next()
-            .ok_or("expected listen address and helper path")?;
+        let listen = args.next().ok_or(USAGE)?;
+        let executable = args.next().ok_or(USAGE)?;
+        let mut display = match args.next() {
+            None => None,
+            Some(flag) if flag == "--match-display" => Some(display::Session::from_environment()),
+            Some(_) => return Err(USAGE),
+        };
         if args.next().is_some() {
-            return Err("expected listen address and helper path");
+            return Err(USAGE);
+        }
+        if let Some(display) = &mut display {
+            display.restore();
         }
         let address: SocketAddr = listen
             .to_str()
@@ -89,6 +100,9 @@ mod linux {
         let result = Connection::new(socket, token.0, helper, &mut storage);
         drop(token);
         let mut connection = result.map_err(|_| "cannot initialize control connection")?;
+        if let Some(display) = display {
+            connection.match_display(display);
+        }
         let mut immediate_turns = 0;
         while !STOP.load(Ordering::Relaxed) {
             match connection.pump_with_video_readiness(Instant::now()) {
@@ -162,6 +176,17 @@ mod linux {
 
 #[cfg(target_os = "linux")]
 fn main() {
+    let mut arguments = std::env::args_os().skip(1);
+    if arguments.next().is_some_and(|word| word == "display") {
+        let arguments: Vec<String> = arguments
+            .map(|word| word.to_string_lossy().into_owned())
+            .collect();
+        if let Err(message) = linux::display_command(&arguments) {
+            eprintln!("{message}");
+            std::process::exit(1);
+        }
+        return;
+    }
     if let Err(message) = linux::run() {
         eprintln!("{message}");
         std::process::exit(1);
