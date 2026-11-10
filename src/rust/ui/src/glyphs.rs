@@ -78,6 +78,10 @@ const WHITE: Ink = Ink {
     levels: [255, 0, 0],
     count: 1,
 };
+const CUT_OUT: Ink = Ink {
+    levels: [0, 0, 0],
+    count: 1,
+};
 const LETTER_INK: Ink = Ink {
     levels: [240, 246, 250],
     count: 3,
@@ -839,7 +843,7 @@ impl Glyphs {
         Some(layout.length)
     }
 
-    /// Button legend: a ring with each key name, then its label, left to right.
+    /// Button legend: a disc with each key name cut out of it, then its label, left to right.
     pub fn legend(&mut self, keys: &[(&str, &str)], size: u32, width: u32) -> Option<Bitmap> {
         let face = self.face_at(size, DEFAULT_WEIGHT)?;
         let key_face = self.face_at(size, KEY_WEIGHT)?;
@@ -874,7 +878,7 @@ impl Glyphs {
                 x + (ring - key.length) / 2.0,
                 baseline,
                 &key,
-                &WHITE,
+                &CUT_OUT,
             );
             x += ring + KEY_GAP;
             self.draw_runs(face, &mut out, x, baseline, &label, &WHITE);

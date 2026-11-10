@@ -19,9 +19,9 @@ pub const SCREEN_WIDTH: u32 = 1920;
 pub const SCREEN_HEIGHT: u32 = 1080;
 pub const MAX_TEXT_HEIGHT: u32 = 96;
 pub const MAX_IMAGE_WIDTH: u32 = 320;
-pub const MAX_IMAGE_HEIGHT: u32 = 180;
+pub const MAX_IMAGE_HEIGHT: u32 = 360;
 pub const MAX_SHOWN_WIDTH: u32 = 480;
-pub const MAX_SHOWN_HEIGHT: u32 = 270;
+pub const MAX_SHOWN_HEIGHT: u32 = 540;
 pub const FORMAT_RGBA8: u32 = 1;
 
 pub const FLAG_OVERLAY: u32 = 1;

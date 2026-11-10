@@ -375,7 +375,7 @@ impl<F: Files + Clone> Client<F> {
     }
 
     pub fn install_cover(&mut self, app: u32, png: &[u8]) -> bool {
-        let Some(tile) = moonlight_nx2_ui::png::tile(png, 240, 135) else {
+        let Some(tile) = moonlight_nx2_ui::png::tile(png, Composer::COVER_SIZE.0, Composer::COVER_SIZE.1) else {
             return false;
         };
         self.composer.set_cover(app, tile);

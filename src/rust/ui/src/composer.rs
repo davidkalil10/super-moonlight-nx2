@@ -14,8 +14,8 @@ use crate::theme::Palette;
 pub(crate) const SCREEN_WIDTH: u32 = 1920;
 pub(crate) const SIDE: u32 = 96;
 pub(crate) const CONTENT_WIDTH: u32 = SCREEN_WIDTH - 2 * SIDE;
-pub(crate) const COVER_WIDTH: u32 = 240;
-pub(crate) const COVER_HEIGHT: u32 = 135;
+pub(crate) const COVER_WIDTH: u32 = 200;
+pub(crate) const COVER_HEIGHT: u32 = 300;
 pub(crate) const LEGEND_SIZE: u32 = 26;
 pub(crate) const LEGEND_WIDTH: u32 = 1200;
 const DEFAULT_CACHE: usize = 8 << 20;
@@ -550,7 +550,7 @@ impl Builder<'_> {
             if let Some(mut bitmap) =
                 self.composer
                     .glyphs
-                    .text(&label, face.size, width, Align::Center, Some(&style))
+                    .text(&label, face.size, width, Align::Right, Some(&style))
             {
                 if !can_left {
                     clear_run(&mut bitmap, 0, 1);

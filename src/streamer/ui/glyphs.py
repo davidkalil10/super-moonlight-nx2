@@ -32,7 +32,7 @@ VERSION = 1
 # the atlas fallback, and the reference is made the same way on every PC.
 text.CJK_PATH = None
 
-UI_SYMBOLS = "…‹›◂▸‘’“”–—•€™œŒŸ−"
+UI_SYMBOLS = "…‹›◂▸‘’“”–—•●€™œŒŸ−"
 # Modern Greek and the Cyrillic of Russian, Ukrainian, Belarusian, Serbian, Macedonian and
 # Bulgarian; M PLUS Rounded has them, DejaVu is the fallback otherwise, so DejaVu draws them, as text.py does.
 GREEK = "ΆΈΉΊΌΎΏΐ" + "".join(chr(c) for c in range(0x391, 0x3CF) if c != 0x3A2)
@@ -42,13 +42,14 @@ CHARSET += [c for c in UI_SYMBOLS + GREEK + CYRILLIC if c not in CHARSET]
 # Letter tiles draw initials, which are upper-cased first.
 INITIALS = [c for c in CHARSET if c.upper() == c]
 
-# Every size and weight pages.js asks for, then the letter tile face (half a 135 px cover).
+# Every size and weight pages.js asks for, then the letter tile face (half a 135 px and a 300 px cover).
 COMBOS = [
     (18, 700, CHARSET), (22, 600, CHARSET), (24, 500, CHARSET), (24, 600, CHARSET),
     (26, 500, CHARSET), (26, 600, CHARSET), (26, 700, CHARSET), (28, 500, CHARSET),
     (28, 600, CHARSET), (32, 700, CHARSET), (36, 700, CHARSET), (40, 700, CHARSET),
-    (48, 700, CHARSET), (56, 700, CHARSET), (72, 700, CHARSET), (67, 700, INITIALS),
+    (48, 700, CHARSET), (56, 700, CHARSET), (72, 700, CHARSET), (67, 700, INITIALS), (150, 700, INITIALS),
     (28, 700, CHARSET), (32, 500, CHARSET), (32, 600, CHARSET), (40, 500, CHARSET),
+    (44, 500, CHARSET), (50, 700, CHARSET),
 ]
 LEGEND_SIZES = [26]
 
@@ -371,7 +372,7 @@ def build_reference():
         request = {"kind": "legend", "keys": keys, "size": size, "width": width}
         add(request, text.legend(request))
     for name in REFERENCE_LETTERS:
-        request = {"kind": "letters", "text": name, "width": 240, "height": 135}
+        request = {"kind": "letters", "text": name, "width": 200, "height": 300}
         add(request, text.letters(request))
     with tempfile.TemporaryDirectory() as directory:
         for name, png in reference_covers():

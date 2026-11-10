@@ -139,11 +139,11 @@ def fit(text, size, weight, tracking, width):
     return text
 
 
-def draw_runs(draw, x, baseline, placed):
+def draw_runs(draw, x, baseline, placed, fill=255):
     """Draws the runs from x with their baselines on `baseline`."""
     for offset, piece, face in placed:
         ascent = face.getmetrics()[0]
-        draw.text((x + offset, baseline - ascent), piece, font=face, fill=255)
+        draw.text((x + offset, baseline - ascent), piece, font=face, fill=fill)
 
 
 def text_strip(request):
@@ -168,7 +168,7 @@ def text_strip(request):
 
 
 def legend(request):
-    """Button hints in one strip: each key in a ring, its label after it."""
+    """Button hints in one strip: each key as a disc with its name cut out, its label after it."""
     size, width = request["size"], int(request["width"])
     ascent, descent = font(size).getmetrics()
     ring = round(size * 1.55)
@@ -178,13 +178,12 @@ def legend(request):
     draw = ImageDraw.Draw(strip)
     baseline = (height + ascent - descent) / 2
     top = (height - ring) / 2
-    outline = max(2, size // 9)
 
     x = 0
     for key, label in request["keys"]:
-        draw.ellipse((x, top, x + ring - 1, top + ring - 1), outline=255, width=outline)
+        draw.ellipse((x, top, x + ring - 1, top + ring - 1), fill=255)
         placed, length = runs(key, size, 700, 0)
-        draw_runs(draw, x + (ring - length) / 2, baseline, placed)
+        draw_runs(draw, x + (ring - length) / 2, baseline, placed, fill=0)
         x += ring + KEY_GAP
 
         placed, length = runs(label, size, 600, 0)

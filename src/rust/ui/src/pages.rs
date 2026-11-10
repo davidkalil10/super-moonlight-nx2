@@ -16,19 +16,21 @@ use crate::page::{self, Shape};
 use crate::readout::{Network, Readout};
 use crate::settings::{Setting, SettingRow};
 
-const TITLE: Face = Face::new(40, 500);
+const TITLE: Face = Face::new(44, 500);
 const STATUS: Face = Face::new(28, 500);
 const NAME: Face = Face::new(40, 700);
 const BODY: Face = Face::new(28, 500);
 const OPTION: Face = Face::new(32, 600);
-const VALUE: Face = Face::new(32, 700);
+const VALUE: Face = Face::new(32, 500);
 const BODY_BOLD: Face = Face::new(28, 700);
 const BUTTON: Face = Face::new(32, 700);
 const HINT: Face = Face::new(24, 500);
 const HEADLINE: Face = Face::new(56, 700);
+const APP_NAME: Face = Face::new(50, 700);
 const PIN: Face = Face::new(72, 700);
 
 const HEAD_Y: u32 = 81;
+const STATUS_GAP: u32 = 34;
 const LOGO: u32 = 58;
 const RULE_TOP: u32 = 173;
 const RULE_BOTTOM: u32 = 952;
@@ -45,46 +47,66 @@ const DIALOG_BUTTON: u32 = 88;
 const PAIRING_HEIGHT: u32 = 520;
 const CATEGORY_WIDTH: u32 = 460;
 const CATEGORY_HEIGHT: u32 = 80;
-const PANE_X: u32 = SIDE + CATEGORY_WIDTH + 48;
-const PANE_WIDTH: u32 = CONTENT_WIDTH - CATEGORY_WIDTH - 48;
+const PANE_GAP: u32 = 58;
+const PANE_X: u32 = SIDE + CATEGORY_WIDTH + PANE_GAP;
+const PANE_WIDTH: u32 = CONTENT_WIDTH - CATEGORY_WIDTH - PANE_GAP;
+const CATEGORY_BAR: u32 = 8;
 const ROW_HEIGHT: u32 = 96;
-const ROW_GAP: u32 = 10;
+const ROW_GAP: u32 = 4;
 const LOCKED_ROW_HEIGHT: u32 = 56;
 const VALUE_WIDTH: u32 = 420;
 const BUTTON_RADIUS: u32 = 14;
+const ROW_PAD: u32 = 27;
+const CATEGORY_RADIUS: u32 = 12;
 
-const CARD_WIDTH: u32 = 840;
 const CARD_HEIGHT: u32 = 96;
-const PC_CARD_HEIGHT: u32 = 144;
-const RESUME_HEIGHT: u32 = 88;
+const PC_CARD_WIDTH: u32 = 400;
+const PC_CARD_HEIGHT: u32 = 250;
+const PC_CARD_PAD: u32 = 34;
+const PC_GAP: u32 = 42;
+const PC_ROW_GAP: u32 = 30;
+const PCS_PER_ROW: u32 = 4;
+const PAGER_Y: u32 = BODY_Y + 16 + 2 * (PC_CARD_HEIGHT + PC_ROW_GAP);
+const RESUME_HEIGHT: u32 = 84;
+const RESUME_Y: u32 = RULE_BOTTOM - 24 - RESUME_HEIGHT;
+const RESUME_PAD: u32 = 34;
+const RESUME_APP_MAX: u32 = 700;
+const PLUS_PILL: (u32, u32) = (62, 40);
 const DOT: u32 = 20;
-const CARD_GAP_X: u32 = 48;
-const CARD_GAP_Y: u32 = 16;
-const CARD_PAD: u32 = 32;
 const KEYPAD_Y: u32 = 430;
 const KEYPAD_WIDTH: u32 = 160;
 const KEYPAD_GAP: u32 = 24;
 const BUTTON_WIDTH: u32 = 400;
 const BUTTON_GAP: u32 = 48;
 const PAGER_WIDTH: u32 = 300;
-const SHELF_Y: u32 = 230;
-const SHELF_GAP: u32 = 16;
-const FOCUS_COVER: (u32, u32) = (400, 225);
-const SHELF_COVER_MAX: u32 = 200;
-const FOCUS_MARGIN: u32 = 12;
+const PAGER_HEIGHT: u32 = 64;
+const FOCUS_COVER: (u32, u32) = (326, 489);
+const SHELF_BOTTOM: u32 = BODY_Y + 16 + FOCUS_COVER.1;
+const SHELF_GAP: u32 = 31;
+const SHELF_COVER_MAX: u32 = 250;
+const NAME_GAP: u32 = 34;
+const CHIPS_GAP: u32 = 86;
+const BACK_WIDTH: u32 = 220;
 const COVER_RADIUS: u32 = 12;
-const CHIP_HEIGHT: u32 = 48;
-const CHIP_PAD: u32 = 22;
-const SHEET_WIDTH: u32 = 760;
-const SHEET_PAD: u32 = 40;
-const SHEET_MARGIN: u32 = 24;
+const CHIP_HEIGHT: u32 = 44;
+const CHIP_PAD: u32 = 21;
+const SHEET_WIDTH: u32 = 653;
+const SHEET_PAD: u32 = 50;
+const SHEET_TOP: u32 = 56;
+const SHEET_ALPHA: u32 = 0xf0 << 24;
 const SCREEN_HEIGHT: u32 = 1080;
-const SHEET_RADIUS: u32 = 28;
-const SHEET_GRID_Y: u32 = 236;
-const SHEET_CELL: u32 = 104;
-const SHEET_ITEMS_Y: u32 = 584;
-const SHEET_ITEM: u32 = 76;
-const SHEET_ITEM_GAP: u32 = 12;
+const SHEET_GRID_Y: u32 = 186;
+const SHEET_CELL: u32 = 46;
+const SHEET_ITEMS_Y: u32 = 350;
+const SHEET_ITEM: u32 = 84;
+const SHEET_ITEM_GAP: u32 = 21;
+const SHEET_ITEM_RADIUS: u32 = 13;
+const SHEET_FOOT_Y: u32 = 984;
+const BADGE_X: u32 = 58;
+const BADGE_HEIGHT: u32 = 56;
+const BADGE_Y: u32 = SCREEN_HEIGHT - 58 - BADGE_HEIGHT;
+const BADGE_PAD: u32 = 30;
+const BADGE_ALPHA: u32 = 0xeb << 24;
 
 const KEY_LABELS: [&str; 12] = [
     "1", "2", "3", "4", "5", "6", "7", "8", "9", ".", "0", "Erase",
@@ -124,27 +146,27 @@ fn host_name(model: &Model) -> Option<&str> {
     model.host().map(|h| h.name.as_str())
 }
 
-fn card_at(i: u32, top: u32, height: u32, gap_y: u32) -> (u32, u32) {
+fn pc_slot(i: u32) -> (u32, u32) {
     (
-        SIDE + (i % 2) * (CARD_WIDTH + CARD_GAP_X),
-        top + (i / 2) * (height + gap_y),
+        SIDE + (i % PCS_PER_ROW) * (PC_CARD_WIDTH + PC_GAP),
+        BODY_Y + 16 + (i / PCS_PER_ROW) * (PC_CARD_HEIGHT + PC_ROW_GAP),
     )
 }
 
-fn status_line(readout: &Readout) -> String {
-    let mut line = String::new();
+fn status_items(readout: &Readout) -> Vec<String> {
+    let mut items = Vec::new();
     match readout.network {
-        Some(Network::Wifi(bars)) => join(&mut line, Some(&format!("Wi-Fi {}/3", bars.min(3)))),
-        Some(Network::Wired) => join(&mut line, Some("Wired")),
+        Some(Network::Wifi(bars)) => items.push(format!("Wi-Fi {}/3", bars.min(3))),
+        Some(Network::Wired) => items.push(String::from("Wired")),
         None => {}
     }
     if let Some(percent) = readout.battery_percent {
-        join(&mut line, Some(&format!("{percent} %")));
+        items.push(format!("{percent} %"));
     }
     if let Some((hours, minutes)) = readout.clock {
-        join(&mut line, Some(&format!("{hours}:{minutes:02}")));
+        items.push(format!("{hours}:{minutes:02}"));
     }
-    line
+    items
 }
 
 /// What a screen puts in the shared frame.
@@ -168,16 +190,19 @@ impl Builder<'_> {
         self.dot(SIDE + 10, HEAD_Y + 10, LOGO - 20, pal.ink);
         self.put(
             SIDE + LOGO + 27,
-            HEAD_Y + 6,
+            HEAD_Y + 3,
             1000,
             chrome.title,
             TITLE,
             pal.ink,
             Align::Left,
         );
-        let status = status_line(model.readout());
-        if !status.is_empty() {
-            self.put(RIGHT - 700, HEAD_Y + 14, 700, &status, STATUS, pal.dim, Align::Right);
+        let mut right = RIGHT;
+        for item in status_items(model.readout()).iter().rev() {
+            let width = self.text_width(item, STATUS) + 2;
+            right = right.saturating_sub(width);
+            self.put(right, HEAD_Y + 14, width, item, STATUS, pal.dim, Align::Left);
+            right = right.saturating_sub(STATUS_GAP);
         }
         self.fill(SIDE, RULE_TOP, CONTENT_WIDTH, 2, pal.line, 0);
         self.fill(SIDE, RULE_BOTTOM, CONTENT_WIDTH, 2, pal.line, 0);
@@ -194,23 +219,29 @@ impl Builder<'_> {
     }
 
     fn button(&mut self, id: u32, x: u32, y: u32, width: u32, label: &str, greyed: bool) {
+        self.sized_button(id, (x, y, width, CARD_HEIGHT), label, greyed);
+    }
+
+    fn sized_button(&mut self, id: u32, (x, y, width, height): (u32, u32, u32, u32), label: &str, greyed: bool) {
         let pal = self.pal;
         let flags = if greyed { page::ITEM_GREYED } else { 0 };
-        self.item(id, x, y, width, CARD_HEIGHT, flags, BUTTON_RADIUS);
+        self.item(id, x, y, width, height, flags, BUTTON_RADIUS);
         let (fill, ink) = if greyed {
             (pal.ground, pal.line)
         } else {
             (pal.panel, pal.ink)
         };
-        self.fill(x, y, width, CARD_HEIGHT, fill, BUTTON_RADIUS);
-        self.put(x, y + 28, width, label, BUTTON, ink, Align::Center);
+        self.fill(x, y, width, height, fill, BUTTON_RADIUS);
+        self.put(x, y + (height - 40) / 2, width, label, BUTTON, ink, Align::Center);
     }
 
     fn pager(&mut self, y: u32, at: u32, pages: u32) {
         let x = RIGHT - 2 * PAGER_WIDTH - BUTTON_GAP;
         let next_x = x + PAGER_WIDTH + BUTTON_GAP;
-        self.button(item::PREVIOUS, x, y, PAGER_WIDTH, "\u{2039}  Previous", at == 0);
-        self.button(item::NEXT, next_x, y, PAGER_WIDTH, "Next  \u{203a}", at + 1 >= pages);
+        let previous = (x, y, PAGER_WIDTH, PAGER_HEIGHT);
+        let next = (next_x, y, PAGER_WIDTH, PAGER_HEIGHT);
+        self.sized_button(item::PREVIOUS, previous, "\u{2039}  Previous", at == 0);
+        self.sized_button(item::NEXT, next, "Next  \u{203a}", at + 1 >= pages);
     }
 
     fn wrapped(&mut self, x: u32, y: u32, width: u32, text: &str, face: Face, color: u32) -> u32 {
@@ -316,22 +347,16 @@ impl Builder<'_> {
 
         for i in 0..shown {
             let host = &hosts[(start + i) as usize];
-            let (x, y) = card_at(i, BODY_Y + 24, PC_CARD_HEIGHT, CARD_GAP_Y);
+            let (x, y) = pc_slot(i);
             self.pc_card(model, host, item::HOST + start + i, x, y);
         }
 
-        let buttons_y = BODY_Y + 24 + 3 * (PC_CARD_HEIGHT + CARD_GAP_Y);
-        self.add_card(SIDE, buttons_y, PAGER_WIDTH);
-        self.button(
-            item::FIND_HOSTS,
-            SIDE + PAGER_WIDTH + BUTTON_GAP,
-            buttons_y,
-            PAGER_WIDTH,
-            "Find PCs",
-            false,
-        );
+        let (x, y) = pc_slot(shown);
+        self.dashed_card(item::ADD_HOST, x, y, "+  Add a PC");
+        let (x, y) = pc_slot(shown + 1);
+        self.dashed_card(item::FIND_HOSTS, x, y, "Find PCs");
         if pages > 1 {
-            self.pager(buttons_y, model.host_page(), pages);
+            self.pager(PAGER_Y, model.host_page(), pages);
         }
         if let Some(resume) = model.resume() {
             self.resume_bar(model, resume.app.as_str(), resume.address);
@@ -340,27 +365,28 @@ impl Builder<'_> {
 
     fn pc_card(&mut self, model: &Model, host: &Host, id: u32, x: u32, y: u32) {
         let pal = self.pal;
-        let inner = CARD_WIDTH - 2 * CARD_PAD;
-        self.item(id, x, y, CARD_WIDTH, PC_CARD_HEIGHT, 0, PANEL_RADIUS);
-        self.fill(x, y, CARD_WIDTH, PC_CARD_HEIGHT, pal.panel, PANEL_RADIUS);
-        self.put(x + CARD_PAD, y + 10, inner, host.name.as_str(), NAME, pal.ink, Align::Left);
+        let inner = PC_CARD_WIDTH - 2 * PC_CARD_PAD;
+        let left = x + PC_CARD_PAD;
+        self.item(id, x, y, PC_CARD_WIDTH, PC_CARD_HEIGHT, 0, PANEL_RADIUS);
+        self.fill(x, y, PC_CARD_WIDTH, PC_CARD_HEIGHT, pal.panel, PANEL_RADIUS);
+        self.put(left, y + 24, inner, host.name.as_str(), NAME, pal.ink, Align::Left);
 
         let presence = model.presence(&host.address);
         let asleep = model.is_asleep(host);
         let (dot, mut state) = match presence {
             Presence::Online => (pal.ok, String::from("Online")),
             Presence::Waking => (pal.warn, String::from("Waking\u{2026}")),
-            Presence::Offline if asleep => (pal.warn, String::from("Asleep")),
-            Presence::Offline => (pal.line, String::from("Offline")),
-            Presence::Unknown => (pal.line, String::from("Checking\u{2026}")),
+            Presence::Offline if asleep => (pal.dim, String::from("Asleep")),
+            Presence::Offline => (pal.dim, String::from("Offline")),
+            Presence::Unknown => (pal.dim, String::from("Checking\u{2026}")),
         };
         if presence == Presence::Online {
             if let Some(ms) = model.link_ms(&host.address) {
                 join(&mut state, Some(&format!("{ms} ms")));
             }
         }
-        self.dot(x + CARD_PAD, y + 74, DOT, dot);
-        self.put(x + CARD_PAD + DOT + 12, y + 62, inner - DOT - 12, &state, BODY, pal.ink, Align::Left);
+        self.put(left, y + 92, DOT + 8, "\u{25cf}", BODY, dot, Align::Left);
+        self.put(left + DOT + 15, y + 92, inner - DOT - 15, &state, BODY, pal.ink, Align::Left);
 
         let detail = if asleep {
             String::from("Press A to wake")
@@ -370,24 +396,25 @@ impl Builder<'_> {
                 None => String::from(host.address.as_str()),
             }
         };
-        self.put(x + CARD_PAD, y + 104, inner, &detail, HINT, pal.dim, Align::Left);
+        self.fill(left, y + 150, inner, 2, pal.line, 0);
+        self.put(left, y + 168, inner, &detail, HINT, pal.dim, Align::Left);
     }
 
-    fn add_card(&mut self, x: u32, y: u32, width: u32) {
+    fn dashed_card(&mut self, id: u32, x: u32, y: u32, label: &str) {
         let pal = self.pal;
-        self.item(item::ADD_HOST, x, y, width, CARD_HEIGHT, 0, PANEL_RADIUS);
+        self.item(id, x, y, PC_CARD_WIDTH, PC_CARD_HEIGHT, 0, PANEL_RADIUS);
         self.shape(Shape {
             x,
             y,
-            w: width,
-            h: CARD_HEIGHT,
+            w: PC_CARD_WIDTH,
+            h: PC_CARD_HEIGHT,
             radius: PANEL_RADIUS,
             stroke: pal.line,
-            stroke_width: 2,
+            stroke_width: 3,
             dashed: true,
             ..Shape::default()
         });
-        self.put(x, y + 28, width, "+  Add a PC", BUTTON, pal.ink, Align::Center);
+        self.put(x, y + PC_CARD_HEIGHT / 2 - 20, PC_CARD_WIDTH, label, BODY, pal.dim, Align::Center);
     }
 
     fn resume_bar(&mut self, model: &Model, app: &str, address: Address) {
@@ -397,13 +424,25 @@ impl Builder<'_> {
             .iter()
             .find(|host| host.address == address)
             .map_or("the PC", |host| host.name.as_str());
-        let y = RULE_BOTTOM - 24 - RESUME_HEIGHT;
+        let y = RESUME_Y;
         self.item(item::RESUME_HOST, SIDE, y, CONTENT_WIDTH, RESUME_HEIGHT, 0, PANEL_RADIUS);
         self.fill(SIDE, y, CONTENT_WIDTH, RESUME_HEIGHT, pal.panel, PANEL_RADIUS);
-        self.dot(SIDE + CARD_PAD, y + 34, DOT, pal.ok);
-        let text = format!("{app} is still running on {name}");
-        self.put(SIDE + CARD_PAD + DOT + 16, y + 24, 1200, &text, BODY_BOLD, pal.ink, Align::Left);
-        self.put(RIGHT - CARD_PAD - 300, y + 24, 300, "Resume", BUTTON, pal.accent, Align::Right);
+        let left = SIDE + RESUME_PAD;
+        self.put(left, y + 20, DOT + 8, "\u{25cf}", BODY, pal.warn, Align::Left);
+        let text_x = left + DOT + 30;
+        let app_width = self.text_width(app, BODY_BOLD).min(RESUME_APP_MAX);
+        self.put(text_x, y + 20, app_width, app, BODY_BOLD, pal.ink, Align::Left);
+        let at = text_x + app_width + 10;
+        let room = (RIGHT - RESUME_PAD - 300).saturating_sub(at);
+        self.put(at, y + 20, room, &format!("is still running on {name}"), BODY, pal.ink, Align::Left);
+
+        let label = "Resume";
+        let width = self.text_width(label, BODY) + 2;
+        let label_x = RIGHT - RESUME_PAD - width;
+        self.put(label_x, y + 20, width, label, BODY, pal.ink, Align::Left);
+        let pill_x = label_x - 12 - PLUS_PILL.0;
+        self.fill(pill_x, y + (RESUME_HEIGHT - PLUS_PILL.1) / 2, PLUS_PILL.0, PLUS_PILL.1, pal.ink, PLUS_PILL.1 / 2);
+        self.put(pill_x, y + 20, PLUS_PILL.0, "+", BODY_BOLD, pal.ground, Align::Center);
     }
 
     fn add_host_page(&mut self, model: &Model) {
@@ -552,18 +591,15 @@ impl Builder<'_> {
 
         let focused = model.app_index().checked_sub(start).filter(|&i| i < shown);
         let others = shown.saturating_sub(1).max(1);
-        let room = CONTENT_WIDTH - FOCUS_COVER.0 - 2 * FOCUS_MARGIN - others * SHELF_GAP;
+        let room = CONTENT_WIDTH - FOCUS_COVER.0 - others * SHELF_GAP;
         let small_w = (room / others).min(SHELF_COVER_MAX);
-        let shelf_cover = (small_w, small_w * 9 / 16);
+        let shelf_cover = (small_w, small_w * 3 / 2);
         let mut x = SIDE;
         for i in 0..shown {
             let app = &apps[(start + i) as usize];
             let is_focus = Some(i) == focused;
             let (w, h) = if is_focus { FOCUS_COVER } else { shelf_cover };
-            let y = SHELF_Y + (FOCUS_COVER.1 - h) / 2;
-            if is_focus && i > 0 {
-                x += FOCUS_MARGIN;
-            }
+            let y = SHELF_BOTTOM - h;
             let is_current = app.id == current;
             self.item(item::APP + start + i, x, y, w, h, page::ITEM_REPORTS_FOCUS, COVER_RADIUS);
             match self.cover_tile(app.id, app.name.as_str()) {
@@ -574,26 +610,24 @@ impl Builder<'_> {
                 self.fill(x, y + h + 8, w, 4, pal.ok, 2);
             }
             x += w + SHELF_GAP;
-            if is_focus {
-                x += FOCUS_MARGIN;
-            }
         }
 
         if let Some(app) = focused.map(|i| &apps[(start + i) as usize]) {
             let color = if app.id == current { pal.ok } else { pal.ink };
-            let name_y = SHELF_Y + FOCUS_COVER.1 + 40;
-            self.put(SIDE, name_y, CONTENT_WIDTH, app.name.as_str(), NAME, color, Align::Left);
+            let name_y = SHELF_BOTTOM + NAME_GAP;
+            self.put(SIDE, name_y, CONTENT_WIDTH, app.name.as_str(), APP_NAME, color, Align::Left);
             if app.id == current {
-                let name_width = self.text_width(app.name.as_str(), NAME).min(CONTENT_WIDTH - 160);
+                let name_width = self.text_width(app.name.as_str(), APP_NAME).min(CONTENT_WIDTH - 160);
                 let pill_x = SIDE + name_width + 24;
-                self.fill(pill_x, name_y + 8, 112, 32, pal.ok, 16);
-                self.put(pill_x, name_y + 12, 112, "Running", Face::new(22, 600), pal.ground, Align::Center);
+                self.fill(pill_x, name_y + 16, 112, 32, pal.ok, 16);
+                self.put(pill_x, name_y + 20, 112, "Running", Face::new(22, 600), pal.ground, Align::Center);
             }
-            self.stream_chips(model, SIDE, SHELF_Y + FOCUS_COVER.1 + 112);
+            self.stream_chips(model, SIDE, name_y + CHIPS_GAP);
         }
 
-        let buttons_y = RULE_BOTTOM - 24 - CARD_HEIGHT;
-        self.button(item::BACK, SIDE, buttons_y, PAGER_WIDTH, "\u{2039}  PCs", false);
+        let buttons_y = RULE_BOTTOM - 24 - PAGER_HEIGHT;
+        let back_x = if pages > 1 { RIGHT - 2 * PAGER_WIDTH - BUTTON_GAP - BACK_WIDTH - BUTTON_GAP } else { RIGHT - BACK_WIDTH };
+        self.sized_button(item::BACK, (back_x, buttons_y, BACK_WIDTH, PAGER_HEIGHT), "\u{2039}  PCs", false);
         if pages > 1 {
             self.pager(buttons_y, model.app_page(), pages);
         }
@@ -609,17 +643,27 @@ impl Builder<'_> {
             format!("{mbps:.0} Mbps")
         };
         let chips = [
-            format!("{}p", plan.height),
-            format!("{} fps", plan.fps),
-            String::from(plan.codec.text()),
-            bitrate,
+            (format!("{}p", plan.height), true),
+            (format!("{} fps", plan.fps), true),
+            (String::from(plan.codec.text()), true),
+            (bitrate, !plan.bitrate_auto),
         ];
         let mut at = x;
-        for chip in &chips {
-            let width = self.text_width(chip, BODY) + 2 * CHIP_PAD;
-            self.fill(at, y, width, CHIP_HEIGHT, pal.panel, CHIP_HEIGHT / 2);
-            self.put(at + CHIP_PAD, y + 9, width, chip, BODY, pal.ink, Align::Left);
-            at += width + 12;
+        for (chip, set) in &chips {
+            let width = self.text_width(chip, HINT) + 2 * CHIP_PAD;
+            let (stroke, ink) = if *set { (pal.accent, pal.accent) } else { (pal.line, pal.dim) };
+            self.shape(Shape {
+                x: at,
+                y,
+                w: width,
+                h: CHIP_HEIGHT,
+                radius: CHIP_HEIGHT / 2,
+                stroke,
+                stroke_width: 2,
+                ..Shape::default()
+            });
+            self.put(at + CHIP_PAD, y + 5, width, chip, HINT, ink, Align::Left);
+            at += width + 17;
         }
     }
 
@@ -676,10 +720,18 @@ impl Builder<'_> {
             );
             let current = i == u32::from(model.category());
             if current {
-                self.fill(SIDE, y, CATEGORY_WIDTH, CATEGORY_HEIGHT, pal.panel, PANEL_RADIUS);
+                self.fill(SIDE, y, CATEGORY_WIDTH, CATEGORY_HEIGHT, pal.accent, CATEGORY_RADIUS);
+                self.fill(
+                    SIDE + CATEGORY_BAR,
+                    y,
+                    CATEGORY_WIDTH - CATEGORY_BAR,
+                    CATEGORY_HEIGHT,
+                    pal.panel,
+                    CATEGORY_RADIUS,
+                );
             }
-            let ink = if current { pal.ink } else { pal.dim };
-            self.put(SIDE + 28, y + 20, CATEGORY_WIDTH - 56, name, OPTION, ink, Align::Left);
+            let (face, ink) = if current { (BUTTON, pal.accent) } else { (OPTION, pal.dim) };
+            self.put(SIDE + 28, y + 20, CATEGORY_WIDTH - 56, name, face, ink, Align::Left);
         }
     }
 
@@ -699,25 +751,25 @@ impl Builder<'_> {
             flags |= page::ITEM_GREYED;
         }
         self.item(item::SETTING + row.setting as u32, x, y, PANE_WIDTH, ROW_HEIGHT, flags, PANEL_RADIUS);
-        let fill = if row.greyed { pal.ground } else { pal.panel };
-        self.fill(x, y, PANE_WIDTH, ROW_HEIGHT, fill, PANEL_RADIUS);
+        self.fill(x + ROW_PAD, y + ROW_HEIGHT, PANE_WIDTH - 2 * ROW_PAD, 2, pal.line, 0);
         let ink = if row.greyed { pal.line } else { pal.ink };
-        self.put(x + CARD_PAD, y + 14, 520, row.setting.label(), OPTION, ink, Align::Left);
+        let value_ink = if row.greyed { pal.line } else { pal.accent };
+        self.put(x + ROW_PAD, y + 14, 520, row.setting.label(), OPTION, ink, Align::Left);
+        let hint_width = PANE_WIDTH - 2 * ROW_PAD - VALUE_WIDTH;
         let hint = if row.setting == Setting::Size && model.settings().size_auto() {
             "Picked from the network test and the dock"
         } else {
             row.setting.hint()
         };
-        let hint_width = PANE_WIDTH - 2 * CARD_PAD - VALUE_WIDTH;
-        self.put(x + CARD_PAD, y + 54, hint_width, hint, HINT, pal.dim, Align::Left);
+        self.put(x + ROW_PAD, y + 54, hint_width, hint, HINT, pal.dim, Align::Left);
 
-        let value_x = x + PANE_WIDTH - CARD_PAD - VALUE_WIDTH;
+        let value_x = x + PANE_WIDTH - ROW_PAD - VALUE_WIDTH;
         let value_y = y + 22;
         if let Some(reason) = locked_reason(row) {
             self.put(value_x, y + 12, VALUE_WIDTH, row.value.as_str(), VALUE, pal.dim, Align::Right);
             self.put(value_x, y + 58, VALUE_WIDTH, reason, HINT, pal.dim, Align::Right);
         } else if !row.adjustable {
-            self.put(value_x, value_y, VALUE_WIDTH, row.value.as_str(), VALUE, ink, Align::Right);
+            self.put(value_x, value_y, VALUE_WIDTH, row.value.as_str(), VALUE, value_ink, Align::Right);
         } else {
             self.stepper(
                 value_x,
@@ -725,7 +777,7 @@ impl Builder<'_> {
                 row.value.as_str(),
                 VALUE,
                 VALUE_WIDTH,
-                ink,
+                value_ink,
                 editing && row.can_left,
                 editing && row.can_right,
             );
@@ -737,9 +789,9 @@ impl Builder<'_> {
         let pal = self.pal;
         self.fill(PANE_X, y, PANE_WIDTH, LOCKED_ROW_HEIGHT, pal.ground, PANEL_RADIUS);
         self.outline_row(y);
-        self.put(PANE_X + CARD_PAD, y + 12, 520, label, BODY, pal.dim, Align::Left);
+        self.put(PANE_X + ROW_PAD, y + 12, 520, label, BODY, pal.dim, Align::Left);
         let width = VALUE_WIDTH;
-        self.put(PANE_X + PANE_WIDTH - CARD_PAD - width, y + 12, width, reason, BODY, pal.dim, Align::Right);
+        self.put(PANE_X + PANE_WIDTH - ROW_PAD - width, y + 12, width, reason, BODY, pal.dim, Align::Right);
     }
 
     fn outline_row(&mut self, y: u32) {
@@ -792,7 +844,7 @@ impl Builder<'_> {
             count = slot + 1;
         }
         if model.category() == 0 && !(model.docked() && model.capabilities().docked_sizes) {
-            let mut y = BODY_Y + 16 + count * (ROW_HEIGHT + ROW_GAP);
+            let mut y = BODY_Y + 16 + count * (ROW_HEIGHT + ROW_GAP) + 14;
             for size in ["1440p", "4K"] {
                 self.unavailable_row(size, "Docked only", y);
                 y += LOCKED_ROW_HEIGHT + ROW_GAP;
@@ -839,51 +891,21 @@ impl Builder<'_> {
         let pal = self.pal;
         self.background = pal.scrim;
         self.flags = page::FLAG_OVERLAY | page::FLAG_NO_CHORD;
-        let x = SCREEN_WIDTH - SHEET_WIDTH - SHEET_MARGIN;
-        self.fill(x, SHEET_MARGIN, SHEET_WIDTH, SCREEN_HEIGHT - 2 * SHEET_MARGIN, pal.ground, SHEET_RADIUS);
+        let x = SCREEN_WIDTH - SHEET_WIDTH;
+        let sheet = (pal.ground & 0x00ff_ffff) | SHEET_ALPHA;
+        self.fill(x, 0, SHEET_WIDTH, SCREEN_HEIGHT, sheet, 0);
         let inner = SHEET_WIDTH - 2 * SHEET_PAD;
         let left = x + SHEET_PAD;
 
-        let first = [
-            (item::RESUME_STREAM, "Resume", None, pal.ink),
-            (
-                item::TOGGLE_STATS,
-                "Show stats on screen",
-                Some(if model.settings().on(Setting::FrameCounter) { "On" } else { "Off" }),
-                pal.ink,
-            ),
-            (item::RETURN_TO_APPS, "Disconnect", None, pal.ink),
-            (item::QUIT_HOST, "Quit app on PC", None, pal.warn),
-        ];
-        for (i, (id, label, value, ink)) in first.into_iter().enumerate() {
-            let y = SHEET_ITEMS_Y + i as u32 * (SHEET_ITEM + SHEET_ITEM_GAP);
-            self.item(id, left, y, inner, SHEET_ITEM, 0, BUTTON_RADIUS);
-            self.fill(left, y, inner, SHEET_ITEM, pal.panel, BUTTON_RADIUS);
-            self.put(left + 28, y + 22, inner - 56, label, OPTION, ink, Align::Left);
-            if let Some(value) = value {
-                self.put(left + 28, y + 22, inner - 56, value, OPTION, pal.dim, Align::Right);
-            }
-        }
-
         let title = model.app().map_or("Moonlight", |a| a.name.as_str());
-        self.put(left, 64, inner, title, NAME, pal.ink, Align::Left);
+        self.put(left, SHEET_TOP, inner, title, NAME, pal.ink, Align::Left);
         let minutes = model.stream().session_s / 60;
         let session = match minutes {
             0 => String::from("less than a minute"),
             minutes => format!("{minutes} min"),
         };
         let subtitle = format!("{} \u{b7} {session}", host_name(model).unwrap_or(""));
-        self.put(left, 120, inner, &subtitle, BODY, pal.dim, Align::Left);
-        let plan = model.planned_stream();
-        let mode = format!(
-            "{}p{} \u{b7} {} \u{b7} {:.0} Mbps",
-            plan.height,
-            plan.fps,
-            plan.codec.text(),
-            plan.bitrate_kbps as f32 / 1000.0
-        );
-        self.put(left, 160, inner, &mode, BODY, pal.dim, Align::Left);
-        self.fill(left, SHEET_GRID_Y - 24, inner, 2, pal.line, 0);
+        self.put(left, SHEET_TOP + 62, inner, &subtitle, BODY, pal.dim, Align::Left);
 
         let stream = model.stream();
         let readout = model.readout();
@@ -906,14 +928,51 @@ impl Builder<'_> {
                 },
             ),
         ];
+        let cell_width = inner / 2;
         for (i, (label, value)) in cells.iter().enumerate() {
-            let cx = left + (i as u32 % 2) * (inner / 2);
+            let cx = left + (i as u32 % 2) * cell_width;
             let cy = SHEET_GRID_Y + (i as u32 / 2) * SHEET_CELL;
-            self.put(cx, cy, inner / 2, label, HINT, pal.dim, Align::Left);
+            self.put(cx, cy, cell_width, label, HINT, pal.dim, Align::Left);
+            let at = cx + self.text_width(label, HINT) + 12;
             let text = value.as_deref().unwrap_or("--");
-            self.put(cx, cy + 32, inner / 2, text, NAME, pal.ink, Align::Left);
+            self.put(at, cy, cell_width.saturating_sub(at - cx), text, HINT, pal.ink, Align::Left);
         }
-        self.legend_right(SCREEN_WIDTH - SHEET_MARGIN - SHEET_PAD, FOOT_Y, &[("B", "Close"), ("A", "Choose")], pal.ink, 0);
+
+        let items = [
+            (item::RESUME_STREAM, "Resume", None, pal.ink),
+            (
+                item::TOGGLE_STATS,
+                "Show stats on screen",
+                Some(if model.settings().on(Setting::FrameCounter) { "On" } else { "Off" }),
+                pal.ink,
+            ),
+            (item::RETURN_TO_APPS, "Disconnect", None, pal.ink),
+            (item::QUIT_HOST, "Quit app on PC", None, pal.warn),
+        ];
+        for (i, (id, label, value, ink)) in items.into_iter().enumerate() {
+            let y = SHEET_ITEMS_Y + i as u32 * (SHEET_ITEM + SHEET_ITEM_GAP);
+            self.item(id, left, y, inner, SHEET_ITEM, 0, SHEET_ITEM_RADIUS);
+            self.fill(left, y, inner, SHEET_ITEM, pal.panel, SHEET_ITEM_RADIUS);
+            self.put(left + 27, y + 20, inner - 54, label, OPTION, ink, Align::Left);
+            if let Some(value) = value {
+                self.put(left + 27, y + 20, inner - 54, value, OPTION, pal.dim, Align::Right);
+            }
+        }
+        self.legend_right(SCREEN_WIDTH - SHEET_PAD, SHEET_FOOT_Y, &[("B", "Close"), ("A", "Choose")], pal.dim, 0);
+
+        let plan = model.planned_stream();
+        let badge = format!(
+            "{}p{} \u{b7} {} \u{b7} {:.0} Mbps",
+            plan.height,
+            plan.fps,
+            plan.codec.text(),
+            plan.bitrate_kbps as f32 / 1000.0
+        );
+        let width = self.text_width(&badge, HINT) + BADGE_PAD * 2 + DOT + 19;
+        let badge_color = (pal.ground & 0x00ff_ffff) | BADGE_ALPHA;
+        self.fill(BADGE_X, BADGE_Y, width, BADGE_HEIGHT, badge_color, BADGE_HEIGHT / 2);
+        self.dot(BADGE_X + BADGE_PAD, BADGE_Y + (BADGE_HEIGHT - DOT) / 2, DOT, pal.ok);
+        self.put(BADGE_X + BADGE_PAD + DOT + 19, BADGE_Y + 10, width, &badge, HINT, pal.ink, Align::Left);
     }
 
     fn error_page(&mut self, model: &Model) {

@@ -160,6 +160,7 @@ struct MoonlightGlyphs {
 };
 
 static const Ink WHITE = {{255, 0, 0}, 1};
+static const Ink CUT_OUT = {{0, 0, 0}, 1};
 static const Ink LETTER_INK = {{240, 246, 250}, 3};
 
 static bool in_atlas(const MoonlightGlyphs *glyphs, uint64_t at, uint64_t length)
@@ -1027,7 +1028,7 @@ static bool paint_legend_entry(const MoonlightGlyphs *glyphs, MoonlightBitmap *s
         return false;
     }
 
-    draw_runs(glyphs, strip, *x + (ring - key.layout.length) / 2, baseline, &key.layout, &WHITE);
+    draw_runs(glyphs, strip, *x + (ring - key.layout.length) / 2, baseline, &key.layout, &CUT_OUT);
     *x += ring + KEY_GAP;
     draw_runs(glyphs, strip, *x, baseline, &label.layout, &WHITE);
     *x += label.layout.length + ENTRY_GAP;

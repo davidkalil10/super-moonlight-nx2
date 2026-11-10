@@ -80,7 +80,7 @@ impl Look {
                 accent: rgb(0x3f, 0xd2, 0xf0),
                 ok: rgb(0x6f, 0xdc, 0x8c),
                 warn: rgb(0xf2, 0xc1, 0x4e),
-                scrim: 0x6600_0000,
+                scrim: 0x3800_0000,
             },
             Self::Light => Palette {
                 ground: rgb(0xeb, 0xeb, 0xeb),
@@ -91,7 +91,7 @@ impl Look {
                 accent: rgb(0x00, 0x7f, 0xa8),
                 ok: rgb(0x1f, 0x9d, 0x55),
                 warn: rgb(0xb7, 0x79, 0x1f),
-                scrim: 0x4400_0000,
+                scrim: 0x2600_0000,
             },
         }
     }

@@ -99,10 +99,10 @@ void main() {
           pending ? 0.55 + 0.45 * sin(float(word(FRAME_COUNTER)) * 0.4) : 1.0;
       uint accent = word(base + 12u);
       vec3 ring = accent != 0u ? rgba(accent).rgb : vec3(0.25, 0.85, 0.90);
-      float gap = 6.0;
+      float gap = 10.3;
       float distance = roundedBox(p - center, vec2(rect.zw) * 0.5 + gap, float(info.w) + gap);
-      float line = 1.0 - smoothstep(2.0, 3.5, abs(distance));
-      float glow = distance > 0.0 ? 0.4 * exp(-distance / 14.0) : 0.0;
+      float line = 1.0 - smoothstep(3.0, 4.3, abs(distance));
+      float glow = distance > 0.0 ? 0.4 * exp(-distance / 14.0) * (1.0 - smoothstep(14.0, 30.0, distance)) : 0.0;
       float alpha = pulse * max(line, glow * (1.0 - line));
       color = over(vec4(ring, alpha), color);
     }
