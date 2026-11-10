@@ -2,6 +2,7 @@
 
 pub mod annexb;
 pub mod audio;
+pub mod av1;
 pub mod cache;
 pub mod codec;
 pub mod coexist;
