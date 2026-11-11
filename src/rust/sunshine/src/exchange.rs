@@ -58,6 +58,13 @@ impl<S: Socket> Exchange<S> {
         }
     }
 
+    /// One RTSP request on its own connection, as Sunshine serves them.
+    pub fn rtsp(socket: S, request: Vec<u8>, limit: usize, deadline_ms: u64) -> Self {
+        let mut exchange = Self::plain(socket, request, limit, deadline_ms);
+        exchange.reader = Reader::rtsp(limit);
+        exchange
+    }
+
     pub fn secure(
         socket: S,
         config: Arc<ClientConfig>,

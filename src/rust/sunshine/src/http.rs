@@ -1,7 +1,8 @@
 //! One HTTP/1.1 GET and its response, read incrementally. Sunshine answers with a length or
-//! chunks; a response without either ends at the close.
+//! chunks; a response without either ends at the close. RTSP replies use the same reader,
+//! where a reply without a length has no body.
 
-use alloc::{format, vec::Vec};
+use alloc::{format, string::String, vec::Vec};
 
 pub const MAX_HEAD_BYTES: usize = 8192;
 
@@ -15,7 +16,18 @@ pub enum Error {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Response {
     pub status: u16,
+    pub headers: Vec<(String, String)>,
     pub body: Vec<u8>,
+}
+
+impl Response {
+    /// The first header called `name`, ignoring case.
+    pub fn header(&self, name: &str) -> Option<&str> {
+        self.headers
+            .iter()
+            .find(|(key, _)| key.eq_ignore_ascii_case(name))
+            .map(|(_, value)| value.as_str())
+    }
 }
 
 /// A GET for `target` (path and query), closing the connection after the reply.
@@ -45,6 +57,7 @@ pub struct Reader {
     bytes: Vec<u8>,
     limit: usize,
     head: Option<Head>,
+    rtsp: bool,
 }
 
 impl Reader {
@@ -54,6 +67,14 @@ impl Reader {
             bytes: Vec::new(),
             limit,
             head: None,
+            rtsp: false,
+        }
+    }
+
+    pub fn rtsp(limit: usize) -> Self {
+        Self {
+            rtsp: true,
+            ..Self::new(limit)
         }
     }
 
@@ -64,7 +85,7 @@ impl Reader {
         self.bytes.extend_from_slice(data);
 
         if self.head.is_none() {
-            self.head = parse_head(&self.bytes)?;
+            self.head = parse_head(&self.bytes, self.rtsp)?;
             if self.head.is_none() && self.bytes.len() > MAX_HEAD_BYTES {
                 return Err(Error::TooLarge);
             }
@@ -104,14 +125,25 @@ impl Reader {
             Framing::Close if eof => Ok(body.to_vec()),
             Framing::Close => return None,
         };
+        let headers = headers(&self.bytes[..head.body_start]);
         Some(decoded.map(|body| Response {
             status: head.status,
+            headers,
             body,
         }))
     }
 }
 
-fn parse_head(bytes: &[u8]) -> Result<Option<Head>, Error> {
+fn headers(head: &[u8]) -> Vec<(String, String)> {
+    let text = core::str::from_utf8(head).unwrap_or_default();
+    text.split("\r\n")
+        .skip(1)
+        .filter_map(|line| line.split_once(':'))
+        .map(|(name, value)| (String::from(name.trim()), String::from(value.trim())))
+        .collect()
+}
+
+fn parse_head(bytes: &[u8], rtsp: bool) -> Result<Option<Head>, Error> {
     let Some(end) = bytes.windows(4).position(|window| window == b"\r\n\r\n") else {
         return Ok(None);
     };
@@ -122,11 +154,12 @@ fn parse_head(bytes: &[u8]) -> Result<Option<Head>, Error> {
     let mut parts = status_line.splitn(3, ' ');
     let version = parts.next().unwrap_or_default();
     let status = parts.next().and_then(|code| code.parse().ok());
-    let Some(status) = status.filter(|_| version.starts_with("HTTP/1.")) else {
+    let protocol = if rtsp { "RTSP/1." } else { "HTTP/1." };
+    let Some(status) = status.filter(|_| version.starts_with(protocol)) else {
         return Err(Error::Malformed);
     };
 
-    let mut framing = Framing::Close;
+    let mut framing = if rtsp { Framing::Length(0) } else { Framing::Close };
     for line in lines {
         let (name, value) = line.split_once(':').ok_or(Error::Malformed)?;
         let value = value.trim();

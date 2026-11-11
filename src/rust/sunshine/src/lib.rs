@@ -9,12 +9,16 @@ extern crate alloc;
 
 pub mod apps;
 pub mod control;
+pub mod control_stream;
+pub mod enet;
 pub mod exchange;
 pub mod hex;
 pub mod http;
 pub mod identity;
+pub mod launch;
 pub mod pairing;
 pub mod random;
+pub mod rtsp;
 pub mod serverinfo;
 pub mod stream;
 pub mod tls;
