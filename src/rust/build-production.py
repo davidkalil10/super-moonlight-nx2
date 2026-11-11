@@ -39,7 +39,7 @@ def main():
     parser.add_argument("--tcp-video", action="store_true",
                         help="keep video on TCP instead of UDP")
     parser.add_argument("--ui-pattern", action="store_true",
-                        help="ZL+ZR together step through two test pages that show how the console draws known art")
+                        help="Both stick clicks step two test pages; ZL+ZR steps the scaling filter: exact, bilinear, Lanczos")
     parser.add_argument("--ui-uncached", action="store_true",
                         help="the pattern build with the UI buffers in non-cached host memory")
     parser.add_argument("--diagnostic", choices=SDK_DIAGNOSTICS,

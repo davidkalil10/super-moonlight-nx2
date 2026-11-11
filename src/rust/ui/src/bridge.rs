@@ -31,6 +31,7 @@ pub const SHOWN: usize = BLOCK + 56;
 pub const EDIT: usize = BLOCK + 60;
 pub const HOST_ACK: usize = BLOCK + 64;
 pub const HOST_BUSY: usize = BLOCK + 68;
+pub const FILTER: usize = BLOCK + 72;
 pub const PROTOCOL_MAGIC: u32 = 0x4955_4248;
 pub const PAGES_OFFSET: usize = 40_030_208;
 pub const PAGE_BUFFER_BYTES: usize = 4 << 20;
@@ -568,6 +569,11 @@ impl<F: Files> Bridge<F> {
         let screen = self.model.screen();
         self.show(storage, next, screen, now_ns)?;
         Ok(true)
+    }
+
+    /// Picks the scaling filter the shaders use: 0 or 2 bilinear, 1 exact, 3 Lanczos.
+    pub fn set_filter(&mut self, storage: &mut Storage, mode: u32) {
+        put(storage, FILTER, mode);
     }
 
     /// The storage bytes of the page last shown, for the owner to write back from its cache.

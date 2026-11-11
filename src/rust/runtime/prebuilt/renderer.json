@@ -95,7 +95,8 @@
       "uiShown": 49208,
       "uiEdit": 49212,
       "hostAck": 49216,
-      "hostBusy": 49220
+      "hostBusy": 49220,
+      "uiFilter": 49224
     },
     "input": {
       "pad": 0,
@@ -109,19 +110,19 @@
   },
   "blob": {
     "path": "shaders.bin",
-    "bytes": 91696,
-    "sha256": "6684b9e2b21dcfe7a2e9c91b644bac8f4faebd89b55427ed36d04487f90ce6ce"
+    "bytes": 113536,
+    "sha256": "4cce630d829e53243e437a1418357550cc5ffb443851950a68aa647a70835e82"
   },
   "sources": {
     "publish.comp": "9a52f6d19abb08bf7d6f63dccbea17fff490ee03d3b7fb30ee053a4bea93567e",
     "storage.glsl": "81c18548664c68dfcf7bb9b2ce683234dbcd08b161a6c1756555ace8a912d3e6",
     "ui-control.glsl": "5133603d4f47f285dfd86b309fb4c7a11418e596f8a5184463582e8fe346de34",
-    "ui.frag": "b2097ac18a83855ddc96e5a0d4c0b004aaa78e37e24e71d82c0e0c683dbf5a1d",
+    "ui.frag": "87afbe80dcc79289904fc6ee14b8271068e56980e88f8529e8322c55ab31b936",
     "ui.vert": "11b8ef7ae3a3897d010a06bb30c9ed62c2fbb521dca039d8d73b29341bd79b97",
     "video-storage.frag": "bd7c0b6877d11fafa3d691d01498d5039651f434d6dcba9fdcf7ed66d0b5fdb9",
     "video.frag": "eb48b715e2c0bbfa9591cf40c0757dbd65b166ca1e8effed1b4cd53cb0f880d5",
-    "video.glsl": "bdc0b6a4ea437eecfd441581344dc8d671afbc99a1f5f444e3a993c643edec38",
+    "video.glsl": "179308ddb066651184b86a712fd6788ee117b12c0adb82b53736b46421ea744f",
     "video.vert": "e582aff5ecbd58498a99f19d32bfbdb74b43a6df94b90da128fe3d4b99dc5bac",
-    "layout.glsl": "1557ce904a8d292197fc4a8b0f90ce68183c40d704806c7c5454ab1eb36c1e2a"
+    "layout.glsl": "bcbdeed3845e97ed32584d93d8585e84a3d614896bee73a828741fc3402c42fd"
   }
 }

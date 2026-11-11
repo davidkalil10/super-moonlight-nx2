@@ -204,3 +204,13 @@ impl Layout {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_handheld_window_is_the_1080p_panel_the_ui_draws_for() {
+        assert_eq!((WIDTH, HEIGHT), (1920, 1080));
+    }
+}

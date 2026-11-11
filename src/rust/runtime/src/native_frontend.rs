@@ -287,8 +287,15 @@ fn execute(renderer: &mut Renderer, connections: &mut NativeConnections, launch:
             }
         };
         #[cfg(feature = "ui-pattern")]
-        if input_gate.take_pattern_edge() {
-            app.client.cycle_pattern();
+        {
+            if input_gate.take_pattern_edge() {
+                app.client.cycle_pattern();
+            }
+            if input_gate.take_filter_edge()
+                && let Ok(bytes) = renderer.storage_mut()
+            {
+                app.client.cycle_filter(bytes);
+            }
         }
         if renderer
             .storage_mut()

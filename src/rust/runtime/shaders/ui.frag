@@ -30,11 +30,56 @@ vec4 bitmapAt(ivec2 point) {
 vec4 premultiplied(vec4 value) {
   return vec4(value.rgb * value.a, value.a);
 }
+float lanczos2(float x) {
+  x = abs(x);
+  if (x < 1e-4)
+    return 1.0;
+  if (x >= 2.0)
+    return 0.0;
+  float px = 3.14159265 * x;
+  return 2.0 * sin(px) * sin(px * 0.5) / (px * px);
+}
+// Four by four taps, each clamped to the source by bitmapAt, kept inside the range of the
+// centre 2x2 so text and covers get no halos.
+vec4 lanczosSample(vec2 q) {
+  ivec2 low = ivec2(floor(q));
+  vec2 f = fract(q);
+  float wx[4], wy[4];
+  float sumX = 0.0, sumY = 0.0;
+  for (int i = 0; i < 4; i++) {
+    wx[i] = lanczos2(f.x - float(i - 1));
+    wy[i] = lanczos2(f.y - float(i - 1));
+    sumX += wx[i];
+    sumY += wy[i];
+  }
+  vec4 sum = vec4(0.0), lo = vec4(1e9), hi = vec4(-1e9);
+  for (int y = 0; y < 4; y++) {
+    for (int x = 0; x < 4; x++) {
+      vec4 tap = premultiplied(bitmapAt(low + ivec2(x - 1, y - 1)));
+      sum += tap * (wx[x] / sumX) * (wy[y] / sumY);
+      if (x == 1 || x == 2) {
+        if (y == 1 || y == 2) {
+          lo = min(lo, tap);
+          hi = max(hi, tap);
+        }
+      }
+    }
+  }
+  vec4 value = clamp(sum, lo, hi);
+  if (value.a > 0.0)
+    value.rgb /= value.a;
+  return value;
+}
 vec4 bitmapSample(vec2 p) {
   vec2 scale = vec2(sourceSize()) / vec2(rect.zw);
   if (all(equal(targetSize(), DISPLAY_SIZE)) && scale == vec2(1.0))
     return bitmapAt(ivec2(p) - ivec2(rect.xy));
+  uint filterMode = word(UI_FILTER);
+  if (filterMode == 1u)
+    return bitmapAt(ivec2(floor((p - vec2(rect.xy)) * scale)));
   vec2 q = (p - vec2(rect.xy)) * scale - 0.5;
+  if (filterMode == 3u)
+    return lanczosSample(q);
   ivec2 low = ivec2(floor(q));
   vec2 f = fract(q);
   vec4 top = mix(premultiplied(bitmapAt(low)),

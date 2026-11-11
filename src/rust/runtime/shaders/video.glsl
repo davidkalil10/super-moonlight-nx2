@@ -12,7 +12,53 @@ vec2 bilinear(vec2 s, uvec2 size, out ivec4 corners) {
   return q - floor(q);
 }
 
+float lanczos2(float x) {
+  x = abs(x);
+  if (x < 1e-4)
+    return 1.0;
+  if (x >= 2.0)
+    return 0.0;
+  float px = 3.14159265 * x;
+  return 2.0 * sin(px) * sin(px * 0.5) / (px * px);
+}
+
+// Lanczos-2 over four by four luma taps clamped to the picture, kept inside the range of the
+// centre 2x2.
+float lumaLanczos(uint base, uint stride, uvec2 size, vec2 s) {
+  vec2 q = s - 0.5;
+  ivec2 low = ivec2(floor(q)), last = ivec2(size) - 1;
+  vec2 f = q - floor(q);
+  float wx[4], wy[4];
+  float sumX = 0.0, sumY = 0.0;
+  for (int i = 0; i < 4; i++) {
+    wx[i] = lanczos2(f.x - float(i - 1));
+    wy[i] = lanczos2(f.y - float(i - 1));
+    sumX += wx[i];
+    sumY += wy[i];
+  }
+  float sum = 0.0, lo = 1e9, hi = -1e9;
+  for (int y = 0; y < 4; y++) {
+    uint row = base + uint(clamp(low.y + y - 1, 0, last.y)) * stride;
+    for (int x = 0; x < 4; x++) {
+      float tap = lumaAt(row + uint(clamp(low.x + x - 1, 0, last.x)));
+      sum += tap * (wx[x] / sumX) * (wy[y] / sumY);
+      if ((x == 1 || x == 2) && (y == 1 || y == 2)) {
+        lo = min(lo, tap);
+        hi = max(hi, tap);
+      }
+    }
+  }
+  return clamp(sum, lo, hi);
+}
+
 float lumaSample(uint base, uint stride, uvec2 size, vec2 s) {
+  uint filterMode = word(UI_FILTER);
+  if (filterMode == 3u)
+    return lumaLanczos(base, stride, size, s);
+  if (filterMode == 1u) {
+    ivec2 at = clamp(ivec2(floor(s)), ivec2(0), ivec2(size) - 1);
+    return lumaAt(base + uint(at.y) * stride + uint(at.x));
+  }
   ivec4 c;
   vec2 f = bilinear(s, size, c);
   uint r0 = base + uint(c.y) * stride, r1 = base + uint(c.w) * stride;

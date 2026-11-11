@@ -30,10 +30,16 @@ pub struct InputGate {
     pattern_held: bool,
     #[cfg(feature = "ui-pattern")]
     pattern_edge: bool,
+    #[cfg(feature = "ui-pattern")]
+    filter_held: bool,
+    #[cfg(feature = "ui-pattern")]
+    filter_edge: bool,
 }
 
 #[cfg(feature = "ui-pattern")]
-const PATTERN_CHORD: u64 = (1 << 8) | (1 << 9);
+const PATTERN_CHORD: u64 = (1 << 4) | (1 << 5);
+#[cfg(feature = "ui-pattern")]
+const FILTER_CHORD: u64 = (1 << 8) | (1 << 9);
 
 impl InputGate {
     pub fn filter(&mut self, bytes: &mut [u8]) -> Result<FrameInput, Error> {
@@ -57,6 +63,9 @@ impl InputGate {
             let held = input.raw_buttons & PATTERN_CHORD == PATTERN_CHORD;
             self.pattern_edge |= held && !self.pattern_held;
             self.pattern_held = held;
+            let filter = input.raw_buttons & FILTER_CHORD == FILTER_CHORD;
+            self.filter_edge |= filter && !self.filter_held;
+            self.filter_held = filter;
         }
         Ok(input)
     }
@@ -64,6 +73,11 @@ impl InputGate {
     #[cfg(feature = "ui-pattern")]
     pub fn take_pattern_edge(&mut self) -> bool {
         core::mem::take(&mut self.pattern_edge)
+    }
+
+    #[cfg(feature = "ui-pattern")]
+    pub fn take_filter_edge(&mut self) -> bool {
+        core::mem::take(&mut self.filter_edge)
     }
 }
 

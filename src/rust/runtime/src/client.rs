@@ -125,6 +125,8 @@ pub struct Frame {
 pub struct Client<F> {
     pub driver: Box<Driver>,
     pub bridge: Box<Bridge<F>>,
+    #[cfg(feature = "ui-pattern")]
+    filter_step: usize,
     composer: Composer,
     hosts: Store<F>,
     ui_schedule: crate::hid::UiSchedule,
@@ -281,6 +283,8 @@ impl<F: Files + Clone> Client<F> {
         Ok(Self {
             driver,
             bridge,
+            #[cfg(feature = "ui-pattern")]
+            filter_step: 2,
             composer: Composer::new(Glyphs::new(atlas).ok_or(Error::Atlas)?, 0),
             hosts,
             ui_schedule: crate::hid::UiSchedule::default(),
@@ -428,10 +432,20 @@ impl<F: Files + Clone> Client<F> {
         Ok(())
     }
 
-    /// Steps the model's page, pattern 1 and pattern 2.
+    /// Steps normal, pattern 1 and pattern 2.
     #[cfg(feature = "ui-pattern")]
     pub fn cycle_pattern(&mut self) {
         self.bridge.set_pattern((self.bridge.pattern() + 1) % 3);
+    }
+
+    /// Steps the scaling filter the shaders use: exact, bilinear, Lanczos.
+    #[cfg(feature = "ui-pattern")]
+    pub fn cycle_filter(&mut self, bytes: &mut [u8]) {
+        const MODES: [u32; 3] = [1, 2, 3];
+        self.filter_step = (self.filter_step + 1) % MODES.len();
+        if let Ok(storage) = storage(bytes) {
+            self.bridge.set_filter(storage, MODES[self.filter_step]);
+        }
     }
 
     pub fn needs_ui_compute(&mut self, input: &crate::hid::FrameInput, frame: &Frame) -> bool {
