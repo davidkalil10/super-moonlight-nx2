@@ -599,9 +599,9 @@ impl Builder<'_> {
             model,
             &Chrome {
                 title: host_name(model).unwrap_or("PC"),
-                left: "Forget removes this PC and its helper key; unpair is for Sunshine",
+                left: "Forget this PC unpairs it and removes it from this console",
                 keys,
-                cursor_home: 4,
+                cursor_home: 3,
                 ..Chrome::default()
             },
         );
@@ -609,7 +609,6 @@ impl Builder<'_> {
         let wakeable = model.host().is_some_and(|host| host.mac.is_some());
         let choices = [
             (item::WAKE_HOST, "Wake PC", !wakeable),
-            (item::UNPAIR, "Unpair", false),
             (item::REMOVE_HOST, "Forget this PC", false),
             (item::RENAME_HOST, "Rename PC", false),
             (item::CANCEL, "Cancel", false),
@@ -1077,6 +1076,43 @@ impl Builder<'_> {
         }
     }
 
+    fn forget_confirm_page(&mut self, model: &Model) {
+        let name = host_name(model).unwrap_or("this PC");
+        self.frame(
+            model,
+            &Chrome {
+                title: name,
+                keys: &[("B", "Back"), ("A", "Choose")],
+                cursor_home: 1,
+                ..Chrome::default()
+            },
+        );
+        let title = format!("Forget {name}?");
+        let pal = self.pal;
+        let (x, y) = self.dialog_panel(DIALOG_HEIGHT);
+        let inner = DIALOG_WIDTH - 2 * DIALOG_PAD;
+        self.put(x, y + 44, inner, &title, NAME, pal.ink, Align::Center);
+        self.wrapped(
+            x,
+            y + 124,
+            inner,
+            "This unpairs the PC and removes it with its key and saved covers. Pairing again needs a new PIN.",
+            BODY,
+            pal.ink,
+        );
+        let button_y = y + DIALOG_HEIGHT - DIALOG_BUTTON - 40;
+        let width = (inner - BUTTON_GAP) / 2;
+        for (i, (id, label)) in [(item::CONFIRM_FORGET, "Forget"), (item::CANCEL, "Cancel")]
+            .into_iter()
+            .enumerate()
+        {
+            let bx = x + i as u32 * (width + BUTTON_GAP);
+            self.item(id, bx, button_y, width, DIALOG_BUTTON, 0, BUTTON_RADIUS);
+            self.fill(bx, button_y, width, DIALOG_BUTTON, pal.ground, BUTTON_RADIUS);
+            self.put(bx, button_y + 20, width, label, BUTTON, pal.ink, Align::Center);
+        }
+    }
+
     fn overlay_page(&mut self, model: &Model) {
         let pal = self.pal;
         self.background = pal.scrim;
@@ -1215,6 +1251,9 @@ impl Builder<'_> {
             Screen::AddHost => self.add_host_page(model),
             Screen::HostMenu => self.host_menu_page(model),
             Screen::RenameHost => self.rename_host_page(model),
+            Screen::Unpairing if model.forgetting() => {
+                self.status(model, "Forgetting", Some("Asking the PC to unpair this console\u{2026}"), &[], false);
+            }
             Screen::Unpairing => {
                 self.status(model, "Unpairing", Some("Asking the PC to forget this console\u{2026}"), &[], false);
             }
@@ -1229,6 +1268,7 @@ impl Builder<'_> {
             Screen::Pairing => self.pairing_page(model),
             Screen::Apps => self.apps_page(model),
             Screen::QuitConfirm => self.quit_confirm_page(model),
+            Screen::ForgetConfirm => self.forget_confirm_page(model),
             Screen::Settings => self.settings_page(model, settings_error),
             Screen::AppOptions => self.app_options_page(model),
             Screen::Launching => {

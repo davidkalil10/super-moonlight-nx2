@@ -33,6 +33,7 @@ pub enum Started {
     StartPending,
     StopPending,
     IdrReady { queued: bool },
+    RevokeReady,
     ProbeReady { sequence: u32, bytes: u32 },
 }
 
@@ -370,6 +371,7 @@ impl Backend for HostBackend {
                     queued: relay.request_idr(Instant::now()),
                 })
             }
+            Operation::Revoke => Ok(Started::RevokeReady),
             Operation::Probe { sequence, bytes } => Ok(Started::ProbeReady { sequence, bytes }),
             op => {
                 self.management
