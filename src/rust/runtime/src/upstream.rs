@@ -5,7 +5,7 @@ extern crate alloc;
 use alloc::boxed::Box;
 
 use moonlight_nx2_app::{
-    direct::{Dial, DirectLink},
+    direct::{Dial, DirectLink, Live},
     link::{Link, LinkError},
 };
 use moonlight_nx2_core::control::Frame;
@@ -30,9 +30,22 @@ impl<S: Socket + 'static> Upstream<S> {
         match self {
             Self::Helper(control) => control.pump(now_ms),
             Self::Direct(link) => {
+                if let Some(live) = link.live() {
+                    let mouse = crate::hid::pointer::mouse();
+                    live.pointer(mouse.as_ref(), crate::hid::pointer::keyboard().as_ref());
+                }
                 link.pump(files, now_ms);
                 Ok(())
             }
+        }
+    }
+
+    /// The direct stream whose control channel is up: its negotiated media settings and the
+    /// input session the media path feeds each record to with `Live::record`.
+    pub fn live(&mut self) -> Option<&mut Live> {
+        match self {
+            Self::Helper(_) => None,
+            Self::Direct(link) => link.live(),
         }
     }
 

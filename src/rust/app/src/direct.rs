@@ -34,9 +34,12 @@ use moonlight_nx2_ui::{
 
 use crate::{
     covers,
+    direct_input::{self, DirectInput},
     direct_keys::Keys,
     json,
     link::{Link, LinkError},
+    pointer::{KeyboardSample, MouseSample},
+    reply::Rumble,
     request::DEFAULT_PAIR_TIMEOUT_S,
 };
 
@@ -139,6 +142,7 @@ pub struct Live {
     pub app: u32,
     pub negotiated: Negotiated,
     pub control: ControlStream,
+    pub input: DirectInput,
     socket: Box<dyn Datagram>,
 }
 
@@ -424,7 +428,7 @@ impl<D: Dial> DirectLink<D> {
         let Some(live) = self.live.as_mut() else {
             return;
         };
-        if !live.pump(now_ms, &mut self.events) {
+        if !live.pump(now_ms, &mut self.events, &mut self.replies) {
             self.live = None;
         }
     }
@@ -795,6 +799,7 @@ impl<D: Dial> DirectLink<D> {
         let Some(negotiated) = handshake.negotiated() else {
             return failure("backend_failed", "Sunshine refused the stream setup");
         };
+        let features = handshake.host_features();
         let socket = match self.dial.datagram(self.address, negotiated.control_port) {
             Ok(socket) => socket,
             Err(_) => return failure("backend_failed", NO_CONTROL),
@@ -808,10 +813,13 @@ impl<D: Dial> DirectLink<D> {
             .as_ref()
             .and_then(|start| self.apps.iter().find(|app| app.title == start.app))
             .map(|app| app.id);
+        let mut input = DirectInput::new(features);
+        input.connect();
         active.live = Some(Live {
             app: app.unwrap_or(0),
             negotiated,
             control,
+            input,
             socket,
         });
         active.deadline_ms = now_ms.saturating_add(CONTROL_MS);
@@ -822,7 +830,7 @@ impl<D: Dial> DirectLink<D> {
     fn wait_control(&mut self, now_ms: u64) -> Option<Next> {
         let active = self.active.as_mut()?;
         let live = active.live.as_mut()?;
-        if !live.pump(now_ms, &mut self.events) {
+        if !live.pump(now_ms, &mut self.events, &mut self.replies) {
             active.live = None;
             return Some(failure("backend_failed", NO_CONTROL));
         }
@@ -974,6 +982,9 @@ fn stream_request(start: &Start) -> StreamRequest {
 
 /// Says goodbye on the control channel without waiting for the host.
 fn end(mut live: Live, now_ms: u64) {
+    live.input.release();
+    live.input.disconnect();
+    let _ = live.flush_input(now_ms);
     live.control.disconnect(now_ms);
     while let Some(datagram) = live.control.output(now_ms) {
         if live.socket.send(&datagram).is_err() {
@@ -985,26 +996,66 @@ fn end(mut live: Live, now_ms: u64) {
 
 impl Live {
     /// Moves datagrams both ways; false once the channel ended.
-    fn pump(&mut self, now_ms: u64, events: &mut VecDeque<HostEvent>) -> bool {
+    fn pump(
+        &mut self,
+        now_ms: u64,
+        events: &mut VecDeque<HostEvent>,
+        replies: &mut VecDeque<(Kind, u32, Vec<u8>)>,
+    ) -> bool {
         let mut buffer = [0u8; MAX_DATAGRAM + 1];
         loop {
             match self.socket.recv(&mut buffer) {
                 Ok(length) if length <= MAX_DATAGRAM => {
-                    self.control
-                        .input(&buffer[..length], now_ms, &mut |event| events.push_back(event));
+                    let input = &mut self.input;
+                    self.control.input(&buffer[..length], now_ms, &mut |event| {
+                        if let Some(rumble) = input.host_event(event) {
+                            replies.push_back((Kind::Event, 0, rumble_event(rumble).into_bytes()));
+                        }
+                        events.push_back(event);
+                    });
                 }
                 Ok(_) => {}
                 Err(IoError::WouldBlock | IoError::Interrupted) => break,
                 Err(_) => return false,
             }
         }
-        while let Some(datagram) = self.control.output(now_ms) {
-            match self.socket.send(&datagram) {
-                Ok(()) | Err(IoError::WouldBlock) => {}
-                Err(_) => return false,
+        for _ in 0..2 {
+            while let Some(datagram) = self.control.output(now_ms) {
+                match self.socket.send(&datagram) {
+                    Ok(()) | Err(IoError::WouldBlock) => {}
+                    Err(_) => return false,
+                }
+            }
+            if self.flush_input(now_ms).is_err() {
+                break;
             }
         }
         !matches!(self.control.state(), control_stream::State::Ended(_))
+    }
+
+    /// Takes one input record from the console's recorder and sends what changed.
+    pub fn record(&mut self, record: &[u8], now_ms: u64) -> Result<bool, direct_input::Error> {
+        let changed = self.input.apply(record, now_ms.saturating_mul(1000))?;
+        self.flush_input(now_ms)?;
+        Ok(changed)
+    }
+
+    fn flush_input(&mut self, now_ms: u64) -> Result<(), direct_input::Error> {
+        if !self.control.started() {
+            return Ok(());
+        }
+        self.input.flush(&mut control_stream::Sender {
+            stream: &mut self.control,
+            now_ms,
+        })
+    }
+
+    /// Takes the USB mouse and keyboard; flushed with the next pump.
+    pub fn pointer(&mut self, mouse: Option<&MouseSample>, keyboard: Option<&KeyboardSample>) {
+        if let Some(mouse) = mouse {
+            self.input.mouse(mouse);
+        }
+        self.input.keyboard(keyboard);
     }
 
     /// Where input sends its messages.
@@ -1014,6 +1065,13 @@ impl Live {
             now_ms,
         }
     }
+}
+
+fn rumble_event(rumble: Rumble) -> String {
+    format!(
+        "{{\"event\":\"rumble\",\"controller\":{},\"low\":{},\"high\":{}}}",
+        rumble.player, rumble.low, rumble.high
+    )
 }
 
 /// A random version 4 UUID for the requests' `uuid` argument.

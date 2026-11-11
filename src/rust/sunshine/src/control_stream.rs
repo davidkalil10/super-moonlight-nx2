@@ -123,6 +123,11 @@ impl ControlStream {
         }
     }
 
+    /// Whether the start messages went out, so other messages may follow them.
+    pub fn started(&self) -> bool {
+        self.started && self.state() == State::Streaming
+    }
+
     pub fn rtt_ms(&self) -> u64 {
         self.peer.rtt_ms()
     }

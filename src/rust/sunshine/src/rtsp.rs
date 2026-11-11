@@ -45,6 +45,8 @@ pub struct Offer {
     pub av1: bool,
     pub encryption_supported: u32,
     pub encryption_requested: u32,
+    /// Sunshine's `featureFlags`, such as pen and controller touch.
+    pub features: u32,
     pub surround: Vec<(u8, u8, u8, [u8; 8])>,
 }
 
@@ -61,6 +63,9 @@ pub fn parse_offer(sdp: &str) -> Offer {
         }
         if let Some(flags) = number("a=x-ss-general.encryptionRequested:") {
             offer.encryption_requested = flags;
+        }
+        if let Some(flags) = number("a=x-ss-general.featureFlags:") {
+            offer.features = flags;
         }
         if let Some((_, params)) = line.split_once("surround-params=") {
             let digits: Vec<u8> = params
@@ -91,6 +96,7 @@ pub struct Handshake {
     key: StreamKey,
     codec: Codec,
     encryption: u32,
+    features: u32,
     audio: Audio,
     video_port: u16,
     audio_port: u16,
@@ -142,6 +148,7 @@ impl Handshake {
             key,
             codec: Codec::H264,
             encryption: 0,
+            features: 0,
             video_port: VIDEO_PORT,
             audio_port: AUDIO_PORT,
             control_port: CONTROL_PORT,
@@ -217,7 +224,9 @@ impl Handshake {
             Step::Options => self.step = Step::Describe,
             Step::Describe => {
                 let sdp = core::str::from_utf8(&response.body).map_err(|_| Error::Malformed)?;
-                self.choose(&parse_offer(sdp))?;
+                let offer = parse_offer(sdp);
+                self.choose(&offer)?;
+                self.features = offer.features;
                 self.step = Step::SetupAudio;
             }
             Step::SetupAudio | Step::SetupVideo | Step::SetupControl => {
@@ -342,6 +351,11 @@ impl Handshake {
     }
 
     /// The settled stream, once PLAY was answered.
+    /// The host's feature flags from DESCRIBE.
+    pub fn host_features(&self) -> u32 {
+        self.features
+    }
+
     pub fn negotiated(&self) -> Option<Negotiated> {
         (self.step == Step::Done).then(|| Negotiated {
             host: self.host,

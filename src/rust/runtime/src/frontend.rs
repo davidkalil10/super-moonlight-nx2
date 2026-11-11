@@ -859,13 +859,18 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
         }
         self.revoke(&host.address);
         let pc = &host.address;
+        let open_direct = self.control.as_ref().is_some_and(Upstream::direct)
+            && octets(pc).is_some_and(|address| self.peer == Some(address));
         let (mut direct, _) = DirectKeys::load(&mut self.files);
-        if direct.forget(pc) {
+        let pinned = direct.forget(pc);
+        if pinned {
             let saved = direct.save(&mut self.files);
             crate::render_platform::log(&alloc::format!(
                 "direct: forgot {} saved={saved}",
                 pc.as_str()
             ));
+        }
+        if pinned || open_direct {
             self.message = Some(FORGOTTEN_DIRECT);
         }
         if !self.pairings.forget(pc) {
