@@ -703,7 +703,10 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
     }
 
     fn poll_handshake<C: Connections<Socket = S>>(&mut self, connections: &mut C, now_ms: u64) {
-        let cancelled = self.client.bridge.model().screen() != Screen::Connecting;
+        let cancelled = !matches!(
+            self.client.bridge.model().screen(),
+            Screen::Connecting | Screen::Unpairing
+        );
         let Some(mut handshake) = self.handshake.take() else {
             match self.key_retry.take() {
                 Some((target, at_ms)) if !cancelled && now_ms >= at_ms => {
@@ -773,6 +776,9 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
             _ if rejected && !pairing && !handshake.second => {
                 self.key_retry = Some((again(Auth::KeyAgain), now_ms.saturating_add(KEY_RETRY_MS)));
             }
+            _ if rejected && !pairing && self.client.bridge.model().forgetting() => {
+                self.link_failed(HELPER_SILENT)
+            }
             _ if rejected && !pairing => self.connect(connections, again(Auth::Setup), now_ms),
             Some(secure::Error::Confirm) => self.link_failed(CODE_REFUSED),
             Some(secure::Error::Refused(Status::PairingUnavailable)) => {
@@ -817,8 +823,37 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
         true
     }
 
-    /// Removes the stored keys of a PC the user removed.
-    fn forget(&mut self, pc: &Address) {
+    /// Asks the helper of an open connection to drop this console; the helper then closes it.
+    fn revoke(&mut self, pc: &Address) {
+        let connected =
+            self.authenticated && octets(pc).is_some_and(|address| self.peer == Some(address));
+        let Some(control) = self.control.as_mut().filter(|_| connected) else {
+            return;
+        };
+        let sent = control.request(br#"{"op":"revoke"}"#).is_ok();
+        crate::render_platform::log(&alloc::format!(
+            "pairing: asked {} to forget this console sent={sent}",
+            pc.as_str()
+        ));
+    }
+
+    /// Removes the stored key of a PC the user removed.
+    fn forget(&mut self, host: &moonlight_nx2_ui::model::Host) {
+        if let Some(cache) = self.cover_cache.as_ref() {
+            let covers = cache.forget(host);
+            crate::render_platform::log(&alloc::format!(
+                "covers: dropped {covers} of {}",
+                host.address.as_str()
+            ));
+        }
+        if self
+            .cover_host
+            .is_some_and(|shown| shown.address == host.address)
+        {
+            self.cover_host = None;
+        }
+        self.revoke(&host.address);
+        let pc = &host.address;
         let (mut direct, _) = DirectKeys::load(&mut self.files);
         if direct.forget(pc) {
             let saved = direct.save(&mut self.files);
@@ -1255,7 +1290,7 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
                     self.discover(connections, now_ms, true)
                 }
                 Effect::Action(Action::WakeHost(host)) => self.forced_wake = Some(host.address),
-                Effect::Action(Action::ForgetHost(host)) => self.forget(&host.address),
+                Effect::Action(Action::ForgetHost(host)) => self.forget(&host),
                 Effect::Action(Action::TestNetwork) => {
                     let ready = self.control.is_some() && self.authenticated;
                     self.link_test.wanted = ready;

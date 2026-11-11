@@ -31,12 +31,13 @@ pub enum Setting {
     TouchMouse,
     LowLatency,
     Theme,
+    RumbleOn,
     Rumble,
     ButtonLayout,
 }
 
 impl Setting {
-    pub const COUNT: usize = 15;
+    pub const COUNT: usize = 16;
     pub const ALL: [Setting; Self::COUNT] = [
         Setting::Size,
         Setting::Fps,
@@ -51,6 +52,7 @@ impl Setting {
         Setting::TouchMouse,
         Setting::LowLatency,
         Setting::Theme,
+        Setting::RumbleOn,
         Setting::Rumble,
         Setting::ButtonLayout,
     ];
@@ -73,7 +75,11 @@ impl Setting {
         match self {
             Self::Size | Self::Fps | Self::Bitrate | Self::Codec | Self::Optimise => 0,
             Self::HostAudio => 1,
-            Self::MenuChord | Self::TouchMouse | Self::Rumble | Self::ButtonLayout => 2,
+            Self::MenuChord
+            | Self::TouchMouse
+            | Self::RumbleOn
+            | Self::Rumble
+            | Self::ButtonLayout => 2,
             Self::LowLatency => 3,
             Self::QuitOnReturn | Self::StreamInfo | Self::FrameCounter | Self::Theme => 4,
         }
@@ -95,6 +101,7 @@ impl Setting {
             Self::StreamInfo => "A small badge with the stream mode over the video",
             Self::FrameCounter => "Adds the frame rate and delays to the badge",
             Self::Theme => "System follows the console's theme",
+            Self::RumbleOn => "Vibrate the controllers when the PC rumbles them",
             Self::Rumble => "How strongly the controllers vibrate",
             Self::ButtonLayout => {
                 "Xbox sends each button as the one in the same place, Nintendo by its label"
@@ -296,6 +303,7 @@ const ROWS: [Row; Setting::COUNT] = [
     row("touchMouse", "Touch as mouse", RowKind::Toggle, 2, 0),
     row("lowLatency", "Low latency (restart)", RowKind::Toggle, 2, 0),
     row("theme", "Theme", RowKind::Theme, 3, 0),
+    row("rumbleOn", "Rumble", RowKind::Toggle, 2, 1),
     row("rumble", "Rumble strength", RowKind::Percent, 5, 4),
     row("buttons", "Button layout", RowKind::Layout, 2, 0),
 ];
@@ -508,8 +516,11 @@ impl Settings {
         self.value[setting as usize]
     }
 
-    /// How much of the PC's rumble reaches the controller, in percent.
+    /// How much of the PC's rumble reaches the controller, in percent; none while Rumble is off.
     pub fn rumble_percent(&self) -> u32 {
+        if !self.on(Setting::RumbleOn) {
+            return 0;
+        }
         STRENGTHS[self.value[Setting::Rumble as usize] as usize]
     }
 

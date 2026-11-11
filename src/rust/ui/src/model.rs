@@ -75,7 +75,6 @@ pub mod item {
     pub const CANCEL: u32 = 8;
     pub const ADD_HOST: u32 = 9;
     pub const FIND_HOSTS: u32 = 10;
-    pub const UNPAIR: u32 = 11;
     pub const REMOVE_HOST: u32 = 12;
     pub const ERASE: u32 = 13;
     pub const CONNECT: u32 = 14;
@@ -87,6 +86,7 @@ pub mod item {
     pub const RESUME_STREAM: u32 = 20;
     pub const RESUME_HOST: u32 = 21;
     pub const EXPORT_LOGS: u32 = 22;
+    pub const CONFIRM_FORGET: u32 = 23;
     pub const CATEGORY: u32 = 50000;
     pub const HOST: u32 = 10000;
     pub const APP: u32 = 20000;
@@ -124,6 +124,7 @@ pub enum Screen {
     Quitting,
     Stopped,
     AppOptions,
+    ForgetConfirm,
 }
 
 impl Screen {
@@ -147,6 +148,7 @@ impl Screen {
             "quitting",
             "stopped",
             "appOptions",
+            "forgetConfirm",
         ][self as usize]
     }
 }
@@ -396,6 +398,7 @@ pub struct Model {
     stream: StreamReadout,
     resume: Option<Resume>,
     resume_pending: bool,
+    forgetting: bool,
     played: [(Address, Name); PLAYED],
     played_count: usize,
     overrides: Vec<AppOverride>,
@@ -494,6 +497,7 @@ impl Model {
             stream: StreamReadout::default(),
             resume: None,
             resume_pending: false,
+            forgetting: false,
             played: [(Address::new(), Name::default()); PLAYED],
             played_count: 0,
             overrides: Vec::new(),
@@ -569,6 +573,11 @@ impl Model {
         }
         self.pin_left_s = left;
         self.screen == Screen::Pairing
+    }
+
+    /// Whether the unpair in progress is part of forgetting the PC.
+    pub fn forgetting(&self) -> bool {
+        self.forgetting
     }
 
     /// The code to type on the PC while this console pairs with its helper.
@@ -986,6 +995,7 @@ impl Model {
     fn back_to_hosts(&mut self, step: &mut Step) {
         self.screen = Screen::Hosts;
         self.host = None;
+        self.forgetting = false;
         self.resume_pending = false;
         step.changed = true;
     }
@@ -1167,16 +1177,30 @@ impl Model {
                 step.add(IntentKind::WakeHost, Some(host));
                 self.open_host(host, self.host_index, step);
             }
-            item::UNPAIR => {
-                self.screen = Screen::Unpairing;
+            item::REMOVE_HOST => {
+                self.screen = Screen::ForgetConfirm;
                 step.changed = true;
-                step.add(IntentKind::UnpairHost, self.host);
             }
-            item::REMOVE_HOST => self.remove_host(host, step),
             item::RENAME_HOST => {
                 self.rename = Text::of(host.name.as_str());
                 self.name_keys = 0;
                 self.screen = Screen::RenameHost;
+                step.changed = true;
+            }
+            _ => {}
+        }
+    }
+
+    fn on_forget_confirm(&mut self, op: Op, item: u32, step: &mut Step) {
+        match (op, item) {
+            (Op::A, item::CONFIRM_FORGET) => {
+                self.forgetting = true;
+                self.screen = Screen::Unpairing;
+                step.changed = true;
+                step.add(IntentKind::UnpairHost, self.host);
+            }
+            (Op::B, _) | (Op::A, item::CANCEL) => {
+                self.screen = Screen::HostMenu;
                 step.changed = true;
             }
             _ => {}
@@ -1522,6 +1546,7 @@ impl Model {
             Screen::AddHost => self.on_add_host(op, item, step),
             Screen::HostMenu => self.on_host_menu(op, item, step),
             Screen::RenameHost => self.on_rename_host(op, item, step),
+            Screen::ForgetConfirm => self.on_forget_confirm(op, item, step),
             Screen::Connecting if cancelled => {
                 self.back_to_hosts(step);
                 step.add(IntentKind::CancelList, None);
@@ -1686,6 +1711,26 @@ impl Model {
                 self.overlay = false;
                 self.list_again(step);
             }
+            Event::Unpaired if screen == Screen::Unpairing && self.forgetting => {
+                self.forgetting = false;
+                match self.host {
+                    Some(host) => self.remove_host(host, step),
+                    None => self.back_to_hosts(step),
+                }
+            }
+            Event::Failed { .. } if screen == Screen::Unpairing && self.forgetting => {
+                self.forgetting = false;
+                match self.host {
+                    Some(host) => {
+                        self.remove_host(host, step);
+                        self.message = formatted(format_args!(
+                            "Removed {}; the PC could not be asked to unpair",
+                            host.name
+                        ));
+                    }
+                    None => self.back_to_hosts(step),
+                }
+            }
             Event::Unpaired if screen == Screen::Unpairing => {
                 let name = self.host.map_or(Name::of("undefined"), |host| host.name);
                 self.screen = Screen::Hosts;
@@ -1701,6 +1746,7 @@ impl Model {
                         | Screen::AddHost
                         | Screen::HostMenu
                         | Screen::RenameHost
+                        | Screen::ForgetConfirm
                         | Screen::Settings
                 );
                 if !idle {
@@ -1901,6 +1947,26 @@ mod app_options_tests {
         assert_eq!(settings.rumble_percent(), 75);
         let saved = Settings::from_json(settings.to_json().as_str().as_bytes(), &mut json);
         assert_eq!(saved.rumble_percent(), 75);
+    }
+
+    #[test]
+    fn rumble_defaults_on_and_off_silences_every_strength() {
+        let mut json = crate::json::Json::new();
+        let old = Settings::from_json(br#"{"version":8,"rumble":50}"#, &mut json);
+        assert!(old.on(Setting::RumbleOn));
+        assert_eq!(old.rumble_percent(), 50);
+        let off = old
+            .adjust(Setting::RumbleOn, -1, false, &Capabilities::ALL)
+            .unwrap();
+        assert_eq!(off.rumble_percent(), 0);
+        let saved = Settings::from_json(off.to_json().as_str().as_bytes(), &mut json);
+        assert!(!saved.on(Setting::RumbleOn));
+        assert_eq!(saved.rumble_percent(), 0);
+        let on = saved
+            .adjust(Setting::RumbleOn, 1, false, &Capabilities::ALL)
+            .unwrap();
+        assert_eq!(on.rumble_percent(), 50);
+        assert_eq!(Setting::RumbleOn.category(), Setting::Rumble.category());
     }
 
     #[test]

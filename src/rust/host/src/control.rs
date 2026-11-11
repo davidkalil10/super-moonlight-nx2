@@ -45,6 +45,7 @@ pub struct Connection<'a> {
     authenticated: bool,
     auth_deadline: Instant,
     closed: bool,
+    revoked: bool,
 }
 
 impl<'a> Connection<'a> {
@@ -98,6 +99,7 @@ impl<'a> Connection<'a> {
             authenticated: false,
             auth_deadline: Instant::now() + Duration::from_secs(15),
             closed: false,
+            revoked: false,
         })
     }
     /// Lets streams that ask for it switch the PC display; without this it is never touched.
@@ -259,6 +261,17 @@ impl<'a> Connection<'a> {
                             out,
                         )
                     })?,
+                    Ok(Started::RevokeReady) => {
+                        self.revoked = true;
+                        self.enqueue(now, |out| {
+                            response::result(
+                                id,
+                                response::OperationName::Revoke,
+                                &json!({"event":"revoked"}),
+                                out,
+                            )
+                        })?
+                    }
                     Ok(Started::ProbeReady { sequence, bytes }) => self.enqueue(now, |out| {
                         response::result(
                             id,
@@ -365,6 +378,16 @@ impl<'a> Connection<'a> {
             }),
         }
     }
+    /// The console asked to be dropped from the trusted list.
+    pub fn revoked(&self) -> bool {
+        self.revoked
+    }
+
+    /// Whether replies are still waiting to be written.
+    pub fn flushing(&self) -> bool {
+        self.output.len() > 0
+    }
+
     pub fn close(&mut self) -> Result<(), Error> {
         if self.closed {
             return Ok(());

@@ -176,7 +176,7 @@ impl<S: Socket + 'static> Link for Control<S> {
         let op = parsed.and_then(|value| value.member("op"));
         let list = op.is_some_and(|op| op.string_is("list"));
         let allowed = op.is_some_and(|op| {
-            ["list", "pair", "unpair", "quit", "stop", "cover", "probe"]
+            ["list", "pair", "unpair", "quit", "stop", "cover", "probe", "revoke"]
                 .iter()
                 .any(|name| op.string_is(name))
                 || (self.access == Access::Streaming

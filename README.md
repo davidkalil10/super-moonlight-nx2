@@ -54,6 +54,13 @@ matching.
   is off. Plus and Minus still reach the PC while held.
 - **L+R+Minus+Plus**: stop the stream at once and return to the apps. It always works.
 
+## Controllers
+
+Up to four controllers play, in the Switch's player order with handheld as player 1, and
+each keeps its player until it disconnects. Pads reach Sunshine with their motion sensors,
+so by default it emulates a DualShock 4 (Windows) or DualSense (Linux) and games get gyro;
+setting a gamepad type in Sunshine overrides that. PC rumble drives the pad's motors.
+
 ## Options
 
 Open **Settings** before launching a game. An app can keep its own picture options.
@@ -72,7 +79,8 @@ Open **Settings** before launching a game. An app can keep its own picture optio
 | Quit host app on return | On / Off |
 | Show stats on screen | Off, Compact (the stream mode) or Full (with frame rate and delays) |
 | Theme | System, light or dark |
-| Rumble | Strength of the controller vibration |
+| Rumble | On / Off |
+| Rumble strength | Strength of the controller vibration |
 
 4K streams at 60 fps and needs AV1.
 
