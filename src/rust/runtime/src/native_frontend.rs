@@ -138,6 +138,42 @@ impl Connections for NativeConnections {
         }
         Ok(Box::new(crate::net::DiscoverySocket::open()?))
     }
+    fn dialer(&mut self) -> Option<crate::upstream::Dialer<NetSocket>> {
+        if !self.network {
+            self.network = unsafe { moonlightPlatformNetStart() };
+        }
+        self.network.then(|| Box::new(NativeDial) as crate::upstream::Dialer<NetSocket>)
+    }
+}
+
+/// Reaches Sunshine once the network is up; `NativeConnections::dialer` starts it.
+struct NativeDial;
+
+const DEVICE_NAME: &str = "Nintendo Switch 2";
+
+fn platform_random(bytes: &mut [u8]) -> bool {
+    unsafe { moonlightPlatformRandom(bytes.as_mut_ptr(), bytes.len()) };
+    true
+}
+
+impl moonlight_nx2_app::direct::Dial for NativeDial {
+    type Socket = NetSocket;
+
+    fn dial(
+        &mut self,
+        address: [u8; 4],
+        port: u16,
+    ) -> Result<NetSocket, moonlight_nx2_io::socket::IoError> {
+        NetSocket::connect(address, port)
+    }
+
+    fn random(&self) -> moonlight_nx2_app::sunshine::random::Random {
+        moonlight_nx2_app::sunshine::random::Random(platform_random)
+    }
+
+    fn device_name(&self) -> alloc::string::String {
+        crate::system::nickname().unwrap_or_else(|| alloc::string::String::from(DEVICE_NAME))
+    }
 }
 
 impl Drop for NativeConnections {

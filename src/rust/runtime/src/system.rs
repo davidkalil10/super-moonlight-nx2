@@ -28,6 +28,7 @@ unsafe extern "C" {
     fn moonlightSystemSubnet(address: *mut [u8; 4], mask: *mut [u8; 4]) -> u32;
     fn moonlightSystemClock(hour: *mut u32, minute: *mut u32) -> u32;
     fn moonlightSystemColorSet(dark: *mut u32) -> u32;
+    fn moonlightSystemNickname(out: *mut u8, bytes: usize) -> u32;
     fn moonlightSystemStop();
 }
 
@@ -52,6 +53,15 @@ pub fn subnet() -> Option<([u8; 4], [u8; 4])> {
     let (mut address, mut mask) = ([0; 4], [0; 4]);
     let result = unsafe { moonlightSystemSubnet(&mut address, &mut mask) };
     (result == 0).then_some((address, mask))
+}
+
+/// The console's name from System Settings; none when it cannot be read or is empty.
+pub fn nickname() -> Option<alloc::string::String> {
+    let mut name = [0u8; 0x81];
+    let result = unsafe { moonlightSystemNickname(name.as_mut_ptr(), name.len()) };
+    let length = name.iter().position(|&byte| byte == 0)?;
+    let name = core::str::from_utf8(&name[..length]).ok()?.trim();
+    (result == 0 && !name.is_empty()).then(|| alloc::string::String::from(name))
 }
 
 /// One reading that is dropped after repeated failures and logs its first result.

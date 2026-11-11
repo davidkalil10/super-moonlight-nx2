@@ -38,6 +38,8 @@ pub mod client_session;
 #[cfg(any(target_os = "none", feature = "host-renderer"))]
 pub mod control_link;
 #[cfg(any(target_os = "none", feature = "host-renderer"))]
+pub mod upstream;
+#[cfg(any(target_os = "none", feature = "host-renderer"))]
 pub mod display;
 #[cfg(any(target_os = "none", feature = "host-renderer"))]
 pub mod files;

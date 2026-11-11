@@ -165,7 +165,7 @@ def build(args):
         if args.stage == "rust":
             if f"commit-hash: {RUST_COMMIT}" not in rustc:
                 raise ValueError("Device builds require nightly-2026-02-09 and rust-src")
-            env["RUSTFLAGS"] = "-C relocation-model=pic -D warnings"
+            env["RUSTFLAGS"] = "-C relocation-model=pic -C target-feature=+aes,+sha2 -D warnings"
             info["rustflags"] = env["RUSTFLAGS"]
             info["target"] = TARGET
             sysroot = Path(output("rustc", "--print", "sysroot"))

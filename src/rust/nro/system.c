@@ -169,6 +169,23 @@ uint32_t moonlightSystemLanguage(uint64_t *code)
     return setGetSystemLanguage(code);
 }
 
+/* The console's name from System Settings, NUL-terminated in out. */
+uint32_t moonlightSystemNickname(char *out, size_t bytes)
+{
+    Result result = open_once(&set_service, open_set);
+    if (R_FAILED(result))
+        return result;
+    SetSysDeviceNickName nickname = {0};
+    result = setGetDeviceNickname(&nickname);
+    if (R_SUCCEEDED(result) && bytes > 0) {
+        size_t length = strnlen(nickname.nickname, sizeof(nickname.nickname));
+        length = length < bytes ? length : bytes - 1;
+        memcpy(out, nickname.nickname, length);
+        out[length] = 0;
+    }
+    return result;
+}
+
 void moonlightSystemStop(void)
 {
     if (hooked) {

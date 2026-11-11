@@ -12,9 +12,12 @@ use crate::{
     client_session::Session,
     control_link::{Access, Control},
     render::Renderer,
+    upstream::{Dialer, Upstream},
 };
 use alloc::{boxed::Box, vec::Vec};
 use moonlight_nx2_app::{
+    direct::DirectLink,
+    direct_keys::Keys as DirectKeys,
     driver::Effect,
     link::{Link, LinkError},
     link_probe::Prober,
@@ -69,6 +72,10 @@ pub trait Connections {
     /// An unconnected UDP socket for one mDNS query; none where the platform has no network.
     fn discovery(&mut self) -> Result<Box<dyn Datagram>, IoError> {
         Err(IoError::Failed)
+    }
+    /// Opens connections straight to Sunshine; none where the console cannot pair with it.
+    fn dialer(&mut self) -> Option<Dialer<Self::Socket>> {
+        None
     }
 }
 
@@ -183,7 +190,7 @@ pub enum MediaRequest {
 
 pub struct Frontend<F, S: Socket + 'static> {
     pub client: Client<F>,
-    control: Option<Control<SecureSocket<S>>>,
+    control: Option<Upstream<S>>,
     wake_connect: Option<(WakeConnect<S>, Target)>,
     handshake: Option<Handshake<S>>,
     key_retry: Option<(Target, u64)>,
@@ -523,6 +530,11 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
             self.client.runtime(RuntimeEvent::LinkFailed);
             return;
         }
+        let pc = self.client.bridge.model().host().map(|host| host.address);
+        let helper_key = pc.is_some_and(|pc| self.pairings.find(&pc).is_some());
+        if !helper_key && self.open_direct(connections, true) {
+            return;
+        }
         let Some(target) = self.target(connections) else {
             self.client.runtime(RuntimeEvent::LinkFailed);
             return;
@@ -557,6 +569,8 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
     ) {
         match connections.connect(target.address, target.port) {
             Ok(socket) => self.attach(connections, socket, target, now_ms),
+            Err(_) if !matches!(target.auth, Auth::Token(_))
+                && self.open_direct(connections, false) => {}
             Err(_) => {
                 self.client.runtime(RuntimeEvent::LinkFailed);
                 self.message = Some(match target.auth {
@@ -631,7 +645,7 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
     ) {
         match Control::open(socket, token, self.access, now_ms) {
             Ok(control) => {
-                self.control = Some(control);
+                self.control = Some(Upstream::Helper(control));
                 self.peer = Some(address);
                 self.stats.opened += 1;
             }
@@ -768,12 +782,51 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
                 self.link_failed(HELPER_VERSION)
             }
             _ if pairing && progress == Ok(false) => self.link_failed(PAIRING_TIMED_OUT),
+            _ if self.open_direct(connections, false) => {}
             _ => self.link_failed(HELPER_SILENT),
         }
     }
 
-    /// Removes the stored key of a PC the user removed.
+    /// Talks to Sunshine itself for the selected PC, when no helper answers or the PC was
+    /// paired that way. `pinned` asks for a PC this console already paired with directly.
+    fn open_direct<C: Connections<Socket = S>>(&mut self, connections: &mut C, pinned: bool) -> bool {
+        let Some(pc) = self.client.bridge.model().host().map(|host| host.address) else {
+            return false;
+        };
+        let Some(address) = octets(&pc) else {
+            return false;
+        };
+        let Some(dialer) = connections.dialer() else {
+            return false;
+        };
+        let Some(link) = DirectLink::new(dialer, &pc, &mut self.files) else {
+            return false;
+        };
+        if pinned && !link.paired() {
+            return false;
+        }
+        crate::render_platform::log(&alloc::format!(
+            "direct: talking to Sunshine at {} paired={}",
+            pc.as_str(),
+            link.paired()
+        ));
+        self.message = None;
+        self.control = Some(Upstream::Direct(Box::new(link)));
+        self.peer = Some(address);
+        self.stats.opened += 1;
+        true
+    }
+
+    /// Removes the stored keys of a PC the user removed.
     fn forget(&mut self, pc: &Address) {
+        let (mut direct, _) = DirectKeys::load(&mut self.files);
+        if direct.forget(pc) {
+            let saved = direct.save(&mut self.files);
+            crate::render_platform::log(&alloc::format!(
+                "direct: forgot {} saved={saved}",
+                pc.as_str()
+            ));
+        }
         if !self.pairings.forget(pc) {
             return;
         }
@@ -1020,9 +1073,10 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
             && self.client.driver.service().idle()
             && self.covers.waiting_id().is_none()
             && self.idr.waiting_id().is_none();
-        let Some(control) = self.control.as_mut() else {
+        let Some(control) = self.control.as_mut().filter(|control| !control.direct()) else {
             return;
         };
+        let files = &mut self.files;
         if self.link_test.wanted
             && quiet
             && matches!(screen, Screen::Apps | Screen::Settings)
@@ -1045,7 +1099,7 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
         }
         let outcome = self.link_test.prober.run(
             control,
-            |control| matches!(control.pump(now_ms), Ok(()) | Err(control::Error::Again)),
+            |control| matches!(control.pump(files, now_ms), Ok(()) | Err(control::Error::Again)),
             || connections.now_us(),
             PROBE_SLICE_US,
         );
@@ -1086,7 +1140,7 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
         self.test_link(connections, now_ms);
         let mut disconnected = false;
         if let Some(control) = self.control.as_mut() {
-            match control.pump(now_ms) {
+            match control.pump(&mut self.files, now_ms) {
                 Ok(()) | Err(control::Error::Again) => {}
                 Err(_) => disconnected = true,
             }
@@ -1126,6 +1180,7 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
             if self.covers.failed() || self.covers.expired(now_ms) {
                 disconnected = true;
             }
+            let direct = control.direct();
             match self.idr.poll(control) {
                 Some(Ok(reply)) => crate::render_platform::log(&alloc::format!(
                     "video-recovery: host idr {reply:?}"
@@ -1135,7 +1190,7 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
             }
             let wanted = crate::stream_stats::take_idr_request();
             let idle = self.covers.waiting_id().is_none();
-            if wanted && !(idle && self.idr.request(control, true, now_ms)) {
+            if wanted && !direct && !(idle && self.idr.request(control, true, now_ms)) {
                 crate::stream_stats::request_idr();
             }
             if self.idr.expired(now_ms) {
