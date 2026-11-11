@@ -121,6 +121,9 @@ const PROBE_FAILED: &str = "The network test did not finish; Auto uses its defau
 /// Datagrams read per frame, so a flood cannot stall the UI.
 const DISCOVERY_READS: usize = 16;
 
+const FORGOTTEN_DIRECT: &str =
+    "Forgotten here. Remove this console under Clients in Sunshine's web UI (port 47990) too";
+
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Stats {
     pub frames: u64,
@@ -817,7 +820,8 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
         true
     }
 
-    /// Removes the stored keys of a PC the user removed.
+    /// Removes the stored keys of a PC the user removed; Sunshine keeps its side until the
+    /// user removes the client in its web UI, which needs that UI's password.
     fn forget(&mut self, pc: &Address) {
         let (mut direct, _) = DirectKeys::load(&mut self.files);
         if direct.forget(pc) {
@@ -826,6 +830,7 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
                 "direct: forgot {} saved={saved}",
                 pc.as_str()
             ));
+            self.message = Some(FORGOTTEN_DIRECT);
         }
         if !self.pairings.forget(pc) {
             return;

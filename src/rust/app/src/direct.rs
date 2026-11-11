@@ -1,5 +1,6 @@
 //! The control-v1 link answered on the console itself: list, pair, unpair, quit and covers go
-//! straight to Sunshine. Streaming is refused here until the stream path lands.
+//! straight to Sunshine, and start launches the app and runs its RTSP and control handshakes.
+//! Video and audio are not wired to the console's media path yet.
 //! Design: moonlight-nx2-dev/src/rust/sunshine/README.md.
 
 extern crate alloc;
@@ -7,15 +8,23 @@ extern crate alloc;
 use alloc::{boxed::Box, collections::VecDeque, format, string::String, sync::Arc, vec::Vec};
 
 use moonlight_nx2_core::control::{Frame, Header, Kind};
-use moonlight_nx2_io::socket::{IoError, Socket};
+use moonlight_nx2_io::{
+    socket::{IoError, Socket},
+    udp::{Datagram, MAX_DATAGRAM},
+};
 use moonlight_nx2_sunshine::{
     HTTP_PORT, HTTPS_PORT, WEB_UI_PORT, apps,
+    control::{ControlSender, HostEvent},
+    control_stream::{self, ControlStream},
     exchange::{self, Exchange},
     hex, http,
     identity::Identity,
+    launch,
     pairing::{self, Pairing, Stage},
     random::Random,
+    rtsp::{self, Handshake},
     serverinfo::{self, ServerInfo},
+    stream::{Codec, Negotiated, Request as StreamRequest, StreamKey},
     tls,
 };
 use moonlight_nx2_ui::{
@@ -38,6 +47,10 @@ pub trait Dial {
     fn random(&self) -> Random;
     /// The name Sunshine lists the console under.
     fn device_name(&self) -> String;
+    /// A UDP socket connected to `address`, for the stream's control channel.
+    fn datagram(&mut self, _address: [u8; 4], _port: u16) -> Result<Box<dyn Datagram>, IoError> {
+        Err(IoError::Failed)
+    }
 }
 
 impl<D: Dial + ?Sized> Dial for Box<D> {
@@ -54,6 +67,10 @@ impl<D: Dial + ?Sized> Dial for Box<D> {
     fn device_name(&self) -> String {
         (**self).device_name()
     }
+
+    fn datagram(&mut self, address: [u8; 4], port: u16) -> Result<Box<dyn Datagram>, IoError> {
+        (**self).datagram(address, port)
+    }
 }
 
 const REQUEST_MS: u64 = 15_000;
@@ -69,8 +86,15 @@ const REFUSED: &str = "Sunshine refused the pairing; check the PIN and try again
 const WRONG_PIN: &str = "The PIN typed in Sunshine did not match";
 const NO_RANDOM: &str = "The console has no random source";
 const OLD_HOST: &str = "This host is too old for direct pairing; update Sunshine";
-const NO_STREAM: &str =
-    "Streaming straight from Sunshine is not in this build; start the PC helper";
+const NO_MEDIA: &str = "Sunshine is streaming, but its video is not wired up in this build; \
+                        quit the app to end it";
+const NO_APP: &str = "Sunshine has no app with that name";
+const OTHER_APP: &str = "Another app is running on this PC; quit it first";
+const NO_CONTROL: &str = "Sunshine's control channel did not answer";
+const NO_CODEC: &str = "Sunshine offers none of the console's codecs";
+const OLD_CONTROL: &str = "This Sunshine cannot encrypt its control stream; update it";
+const CONTROL_MS: u64 = 10_000;
+const PACKET_SIZE: u16 = 1392;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Job {
@@ -79,6 +103,21 @@ enum Job {
     Unpair,
     Quit,
     Cover { app: u32, offset: usize },
+    Start,
+    Stop,
+    Idr,
+}
+
+/// What a start asked for, kept beside the job.
+#[derive(Clone, Debug, Default)]
+struct Start {
+    app: String,
+    width: u16,
+    height: u16,
+    fps: u16,
+    bitrate_kbps: u32,
+    codec: Option<Codec>,
+    options: launch::Options,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -90,6 +129,17 @@ enum Step {
     Unpair,
     Cancel,
     Pair(Stage),
+    Launch { app: u32, resume: bool },
+    Rtsp,
+    Control,
+}
+
+/// A stream whose control channel is up.
+pub struct Live {
+    pub app: u32,
+    pub negotiated: Negotiated,
+    pub control: ControlStream,
+    socket: Box<dyn Datagram>,
 }
 
 struct Active<S: Socket> {
@@ -99,6 +149,11 @@ struct Active<S: Socket> {
     exchange: Option<Exchange<S>>,
     info: Option<ServerInfo>,
     pairing: Option<Pairing>,
+    start: Option<Start>,
+    key: Option<StreamKey>,
+    rtsp: Option<Handshake>,
+    live: Option<Live>,
+    deadline_ms: u64,
 }
 
 enum Next {
@@ -115,12 +170,15 @@ pub struct DirectLink<D: Dial> {
     config: Option<Arc<rustls::ClientConfig>>,
     uuid: String,
     next_id: u32,
-    queue: VecDeque<(u32, Result<Job, (&'static str, &'static str)>)>,
+    queue: VecDeque<(u32, Result<(Job, Option<Start>), (&'static str, &'static str)>)>,
     active: Option<Active<D::Socket>>,
     replies: VecDeque<(Kind, u32, Vec<u8>)>,
     cover: Option<(u32, Vec<u8>)>,
     https_port: u16,
     closed: bool,
+    apps: Vec<apps::App>,
+    live: Option<Live>,
+    events: VecDeque<HostEvent>,
 }
 
 fn quoted(text: &str) -> String {
@@ -191,7 +249,57 @@ fn octets(address: &str) -> Option<[u8; 4]> {
     parts.next().is_none().then_some(bytes)
 }
 
-fn parse_request(payload: &[u8]) -> Result<(Job, Address), (&'static str, &'static str)> {
+fn codec(name: &str) -> Option<Codec> {
+    match name {
+        "h264" => Some(Codec::H264),
+        "hevc" => Some(Codec::Hevc),
+        "av1" => Some(Codec::Av1),
+        _ => None,
+    }
+}
+
+fn parse_start(root: json::Value<'_>) -> Option<Start> {
+    let app = root.member("app")?.as_plain_str()?;
+    let options = root.member("options");
+    let number = |key: &str| options.and_then(|options| options.member(key)).and_then(|value| value.as_u64());
+    let flag = |key: &str| {
+        options
+            .and_then(|options| options.member(key))
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false)
+    };
+    let small = |key: &str, default: u16| {
+        number(key).and_then(|value| u16::try_from(value).ok()).filter(|value| *value > 0).unwrap_or(default)
+    };
+    Some(Start {
+        app: String::from(app),
+        width: small("width", 1280),
+        height: small("height", 720),
+        fps: small("fps", 60),
+        bitrate_kbps: number("bitrate_kbps")
+            .and_then(|value| u32::try_from(value).ok())
+            .filter(|value| *value > 0)
+            .unwrap_or(10_000),
+        codec: options
+            .and_then(|options| options.member("codec"))
+            .and_then(|value| value.as_plain_str())
+            .and_then(codec),
+        options: launch::Options {
+            sops: flag("sops"),
+            local_audio: flag("local_audio"),
+        },
+    })
+}
+
+fn codecs(preferred: Option<Codec>) -> &'static [Codec] {
+    match preferred {
+        Some(Codec::Av1) => &[Codec::Av1, Codec::H264],
+        Some(Codec::Hevc) => &[Codec::Hevc, Codec::H264],
+        _ => &[Codec::H264],
+    }
+}
+
+fn parse_request(payload: &[u8]) -> Result<(Job, Option<Start>, Option<Address>), (&'static str, &'static str)> {
     let invalid = ("invalid_request", "Malformed request");
     let root = json::parse(payload).map_err(|_| invalid)?;
     let op = root
@@ -219,12 +327,17 @@ fn parse_request(payload: &[u8]) -> Result<(Job, Address), (&'static str, &'stat
                 .and_then(|offset| usize::try_from(offset).ok())
                 .ok_or(invalid)?,
         },
-        "start" => return Err(("unsupported", NO_STREAM)),
-        "stop" => return Err(("invalid_state", "No stream is running")),
+        "start" => {
+            let start = parse_start(root).ok_or(invalid)?;
+            let host = host.filter(|host| octets(host).is_some()).ok_or(invalid)?;
+            return Ok((Job::Start, Some(start), Some(Address::of(host))));
+        }
+        "stop" => return Ok((Job::Stop, None, None)),
+        "idr" => return Ok((Job::Idr, None, None)),
         _ => return Err(("unsupported", "Unsupported operation")),
     };
     let host = host.filter(|host| octets(host).is_some()).ok_or(invalid)?;
-    Ok((job, Address::of(host)))
+    Ok((job, None, Some(Address::of(host))))
 }
 
 fn transport_failure(error: &exchange::Error) -> Next {
@@ -261,6 +374,9 @@ impl<D: Dial> DirectLink<D> {
             cover: None,
             https_port: HTTPS_PORT,
             closed: false,
+            apps: Vec::new(),
+            live: None,
+            events: VecDeque::new(),
         })
     }
 
@@ -277,8 +393,39 @@ impl<D: Dial> DirectLink<D> {
     pub fn close(&mut self) {
         self.closed = true;
         self.queue.clear();
-        if let Some(exchange) = self.active.take().and_then(|active| active.exchange) {
-            let _ = exchange.close();
+        if let Some(mut active) = self.active.take() {
+            if let Some(exchange) = active.exchange.take() {
+                let _ = exchange.close();
+            }
+            if let Some(live) = active.live.take() {
+                end(live, 0);
+            }
+        }
+        self.end_live(0);
+    }
+
+    /// The stream whose control channel is up, for the media and input paths.
+    pub fn live(&mut self) -> Option<&mut Live> {
+        self.live.as_mut()
+    }
+
+    /// Rumble, motion and other requests the host sent since the last call.
+    pub fn take_events(&mut self) -> VecDeque<HostEvent> {
+        core::mem::take(&mut self.events)
+    }
+
+    fn end_live(&mut self, now_ms: u64) {
+        if let Some(live) = self.live.take() {
+            end(live, now_ms);
+        }
+    }
+
+    fn pump_live(&mut self, now_ms: u64) {
+        let Some(live) = self.live.as_mut() else {
+            return;
+        };
+        if !live.pump(now_ms, &mut self.events) {
+            self.live = None;
         }
     }
 
@@ -287,12 +434,20 @@ impl<D: Dial> DirectLink<D> {
         if self.closed {
             return;
         }
+        self.pump_live(now_ms);
         if self.active.is_none() {
             self.begin(now_ms);
         }
         let Some(active) = self.active.as_mut() else {
             return;
         };
+        if active.step == Step::Control {
+            let next = self.wait_control(now_ms);
+            if let Some(next) = next {
+                self.go(next, now_ms);
+            }
+            return;
+        }
         let Some(exchange) = active.exchange.as_mut() else {
             return;
         };
@@ -302,7 +457,7 @@ impl<D: Dial> DirectLink<D> {
         let exchange = active.exchange.take().expect("exchange");
         let _ = exchange.close();
         let step = active.step;
-        let next = self.advance(step, outcome, files);
+        let next = self.advance(step, outcome, files, now_ms);
         self.go(next, now_ms);
     }
 
@@ -310,7 +465,7 @@ impl<D: Dial> DirectLink<D> {
         let Some((id, job)) = self.queue.pop_front() else {
             return;
         };
-        let job = match job {
+        let (job, start) = match job {
             Ok(job) => job,
             Err((code, message)) => {
                 if let Next::Reply(kind, payload) = failure(code, message) {
@@ -326,17 +481,40 @@ impl<D: Dial> DirectLink<D> {
             exchange: None,
             info: None,
             pairing: None,
+            start,
+            key: None,
+            rtsp: None,
+            live: None,
+            deadline_ms: 0,
         });
 
         let first = match job {
             Job::List | Job::Pair { .. } => Next::Call(Step::PlainInfo),
-            Job::Quit if self.paired() => Next::Call(Step::Cancel),
+            Job::Quit if self.paired() => {
+                self.end_live(now_ms);
+                Next::Call(Step::Cancel)
+            }
             Job::Quit => Next::Call(Step::PlainInfo),
             Job::Unpair => Next::Call(Step::Unpair),
             Job::Cover { app, offset } => match &self.cover {
                 Some((cached, png)) if *cached == app => self.cover_chunk(app, png, offset),
                 _ if !self.paired() => failure("not_paired", NOT_PAIRED),
                 _ => Next::Call(Step::Asset),
+            },
+            Job::Start if !self.paired() => failure("not_paired", NOT_PAIRED),
+            Job::Start if self.live.is_some() => failure("invalid_state", "A stream is already running"),
+            Job::Start => Next::Call(Step::SecureInfo),
+            Job::Stop if self.live.is_some() => {
+                self.end_live(now_ms);
+                result("stop", "{\"event\":\"stopped\"}")
+            }
+            Job::Stop => failure("invalid_state", "No stream is running"),
+            Job::Idr => match self.live.as_mut() {
+                Some(live) => {
+                    let queued = live.control.request_idr(now_ms).is_ok();
+                    result("idr", &format!("{{\"event\":\"idr\",\"queued\":{queued}}}"))
+                }
+                None => failure("invalid_state", "No stream is running"),
             },
         };
         self.go(first, now_ms);
@@ -354,6 +532,9 @@ impl<D: Dial> DirectLink<D> {
             }
             Next::Call(step) => {
                 active.step = step;
+                if step == Step::Control {
+                    return;
+                }
                 match self.call(step, now_ms) {
                     Ok(exchange) => {
                         if let Some(active) = self.active.as_mut() {
@@ -390,6 +571,17 @@ impl<D: Dial> DirectLink<D> {
             }
             Step::Unpair => (false, format!("/unpair?{query}")),
             Step::Cancel => (true, format!("/cancel?{query}")),
+            Step::Launch { app, resume } => {
+                let (Some(start), Some(key)) = (active.start.as_ref(), active.key.as_ref()) else {
+                    return Err(failure("invalid_state", "No start was asked for"));
+                };
+                let request = stream_request(start);
+                let target = launch::target(app, resume, &request, key, start.options);
+                let (path, rest) = target.split_once('?').unwrap_or((&target, ""));
+                (true, format!("{path}?{query}&{rest}"))
+            }
+            Step::Rtsp => return self.call_rtsp(deadline_ms),
+            Step::Control => return Err(failure("invalid_state", "Control has no request")),
             Step::Pair(stage) => {
                 let pairing = active.pairing.as_ref().expect("pairing");
                 let identity = self.identity.as_ref().expect("identity");
@@ -452,6 +644,7 @@ impl<D: Dial> DirectLink<D> {
         step: Step,
         outcome: Result<http::Response, exchange::Error>,
         files: &mut impl Files,
+        now_ms: u64,
     ) -> Next {
         let active = self.active.as_mut().expect("active");
         let job = active.job;
@@ -487,6 +680,7 @@ impl<D: Dial> DirectLink<D> {
                     match job {
                         Job::Pair { .. } => result("pair", "{\"event\":\"paired\",\"already\":true}"),
                         Job::Quit => self.quit_result(),
+                        Job::Start if !self.apps.is_empty() => self.launch(),
                         _ => Next::Call(Step::AppList),
                     }
                 }
@@ -498,7 +692,16 @@ impl<D: Dial> DirectLink<D> {
             },
             Step::AppList => match apps::parse(body) {
                 Ok(list) if list.len() > MAX_APPS => failure("too_large", "Too many apps"),
-                Ok(list) => self.list_result(&list),
+                Ok(list) => {
+                    self.apps = list;
+                    if job == Job::Start {
+                        return self.launch();
+                    }
+                    let list = core::mem::take(&mut self.apps);
+                    let next = self.list_result(&list);
+                    self.apps = list;
+                    next
+                }
                 Err(serverinfo::Error::Status(401)) => failure("not_paired", NOT_PAIRED),
                 Err(_) => failure("backend_failed", UNREACHABLE),
             },
@@ -521,7 +724,120 @@ impl<D: Dial> DirectLink<D> {
             },
             Step::Pair(_) => self.paired_step(body, files),
             Step::Unpair => self.unpaired(files),
+            Step::Launch { resume, .. } => match launch::parse(body, resume) {
+                Ok(port) => {
+                    let active = self.active.as_mut().expect("active");
+                    let (Some(start), Some(key)) = (active.start.as_ref(), active.key.clone()) else {
+                        return failure("invalid_state", "No start was asked for");
+                    };
+                    active.rtsp = Some(Handshake::new(self.address, port, stream_request(start), key));
+                    Next::Call(Step::Rtsp)
+                }
+                Err(serverinfo::Error::Status(401)) => failure("not_paired", NOT_PAIRED),
+                Err(_) => failure("backend_failed", "Sunshine did not start the app"),
+            },
+            Step::Rtsp => self.rtsp_step(&response, now_ms),
+            Step::Control => failure("invalid_state", "Control has no reply"),
         }
+    }
+
+    /// Picks launch or resume for the asked app, with a fresh stream key.
+    fn launch(&mut self) -> Next {
+        let active = self.active.as_mut().expect("active");
+        let Some(start) = active.start.as_ref() else {
+            return failure("invalid_state", "No start was asked for");
+        };
+        let Some(app) = self.apps.iter().find(|app| app.title == start.app).map(|app| app.id) else {
+            return failure("invalid_request", NO_APP);
+        };
+        let current = active.info.as_ref().map_or(0, |info| info.current_game);
+        if current != 0 && current != app {
+            return failure("busy", OTHER_APP);
+        }
+        let random = self.dial.random();
+        let (Ok(key), Ok(id)) = (random.array::<16>(), random.array::<4>()) else {
+            return failure("backend_failed", NO_RANDOM);
+        };
+        active.key = Some(StreamKey {
+            key,
+            key_id: u32::from_le_bytes(id) & 0x7fff_ffff,
+        });
+        Next::Call(Step::Launch {
+            app,
+            resume: current == app,
+        })
+    }
+
+    fn call_rtsp(&mut self, deadline_ms: u64) -> Result<Exchange<D::Socket>, Next> {
+        let active = self.active.as_mut().expect("active");
+        let handshake = active.rtsp.as_mut().expect("rtsp");
+        let port = handshake.port();
+        let Some(request) = handshake.request() else {
+            return Err(failure("invalid_state", "RTSP already finished"));
+        };
+        let socket = self
+            .dial
+            .dial(self.address, port)
+            .map_err(|_| failure("backend_failed", UNREACHABLE))?;
+        Ok(Exchange::rtsp(socket, request, MAX_REPLY_BYTES, deadline_ms))
+    }
+
+    fn rtsp_step(&mut self, response: &http::Response, now_ms: u64) -> Next {
+        let active = self.active.as_mut().expect("active");
+        let handshake = active.rtsp.as_mut().expect("rtsp");
+        match handshake.accept(response) {
+            Ok(rtsp::Step::Done) => {}
+            Ok(_) => return Next::Call(Step::Rtsp),
+            Err(rtsp::Error::NoCodec) => return failure("unsupported", NO_CODEC),
+            Err(rtsp::Error::OldHost) => return failure("unsupported", OLD_CONTROL),
+            Err(_) => return failure("backend_failed", "Sunshine refused the stream setup"),
+        }
+        let Some(negotiated) = handshake.negotiated() else {
+            return failure("backend_failed", "Sunshine refused the stream setup");
+        };
+        let socket = match self.dial.datagram(self.address, negotiated.control_port) {
+            Ok(socket) => socket,
+            Err(_) => return failure("backend_failed", NO_CONTROL),
+        };
+        let Ok(connect) = self.dial.random().array::<4>() else {
+            return failure("backend_failed", NO_RANDOM);
+        };
+        let control = ControlStream::new(&negotiated, u32::from_le_bytes(connect), now_ms);
+        let app = active
+            .start
+            .as_ref()
+            .and_then(|start| self.apps.iter().find(|app| app.title == start.app))
+            .map(|app| app.id);
+        active.live = Some(Live {
+            app: app.unwrap_or(0),
+            negotiated,
+            control,
+            socket,
+        });
+        active.deadline_ms = now_ms.saturating_add(CONTROL_MS);
+        Next::Call(Step::Control)
+    }
+
+    /// Waits for the control channel; `None` while it connects.
+    fn wait_control(&mut self, now_ms: u64) -> Option<Next> {
+        let active = self.active.as_mut()?;
+        let live = active.live.as_mut()?;
+        if !live.pump(now_ms, &mut self.events) {
+            active.live = None;
+            return Some(failure("backend_failed", NO_CONTROL));
+        }
+        match live.control.state() {
+            control_stream::State::Streaming => {}
+            control_stream::State::Connecting if now_ms < active.deadline_ms => return None,
+            _ => {
+                if let Some(live) = active.live.take() {
+                    end(live, now_ms);
+                }
+                return Some(failure("timeout", NO_CONTROL));
+            }
+        }
+        self.live = active.live.take();
+        Some(failure("unsupported", NO_MEDIA))
     }
 
     fn start_pairing(&mut self, files: &mut impl Files) -> Next {
@@ -642,6 +958,64 @@ impl<D: Dial> DirectLink<D> {
     }
 }
 
+fn stream_request(start: &Start) -> StreamRequest {
+    StreamRequest {
+        width: start.width,
+        height: start.height,
+        fps: start.fps,
+        bitrate_kbps: start.bitrate_kbps,
+        packet_size: PACKET_SIZE,
+        codecs: codecs(start.codec),
+        hdr: false,
+        audio_channels: 2,
+        controllers: 1,
+    }
+}
+
+/// Says goodbye on the control channel without waiting for the host.
+fn end(mut live: Live, now_ms: u64) {
+    live.control.disconnect(now_ms);
+    while let Some(datagram) = live.control.output(now_ms) {
+        if live.socket.send(&datagram).is_err() {
+            break;
+        }
+    }
+    let _ = live.socket.close();
+}
+
+impl Live {
+    /// Moves datagrams both ways; false once the channel ended.
+    fn pump(&mut self, now_ms: u64, events: &mut VecDeque<HostEvent>) -> bool {
+        let mut buffer = [0u8; MAX_DATAGRAM + 1];
+        loop {
+            match self.socket.recv(&mut buffer) {
+                Ok(length) if length <= MAX_DATAGRAM => {
+                    self.control
+                        .input(&buffer[..length], now_ms, &mut |event| events.push_back(event));
+                }
+                Ok(_) => {}
+                Err(IoError::WouldBlock | IoError::Interrupted) => break,
+                Err(_) => return false,
+            }
+        }
+        while let Some(datagram) = self.control.output(now_ms) {
+            match self.socket.send(&datagram) {
+                Ok(()) | Err(IoError::WouldBlock) => {}
+                Err(_) => return false,
+            }
+        }
+        !matches!(self.control.state(), control_stream::State::Ended(_))
+    }
+
+    /// Where input sends its messages.
+    pub fn sender(&mut self, now_ms: u64) -> impl ControlSender + '_ {
+        control_stream::Sender {
+            stream: &mut self.control,
+            now_ms,
+        }
+    }
+}
+
 /// A random version 4 UUID for the requests' `uuid` argument.
 fn uuid(random: Random) -> Option<String> {
     let mut bytes = random.array::<16>().ok()?;
@@ -676,12 +1050,9 @@ impl<D: Dial> Link for DirectLink<D> {
         }
         let id = self.next_id;
         self.next_id = self.next_id.wrapping_add(1).max(1);
-        let job = parse_request(payload).and_then(|(job, host)| {
-            if host == self.host {
-                Ok(job)
-            } else {
-                Err(("invalid_request", "This link serves another host"))
-            }
+        let job = parse_request(payload).and_then(|(job, start, host)| match host {
+            Some(host) if host != self.host => Err(("invalid_request", "This link serves another host")),
+            _ => Ok((job, start)),
         });
         self.queue.push_back((id, job));
         Ok(id)

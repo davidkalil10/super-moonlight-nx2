@@ -174,6 +174,14 @@ impl moonlight_nx2_app::direct::Dial for NativeDial {
     fn device_name(&self) -> alloc::string::String {
         crate::system::nickname().unwrap_or_else(|| alloc::string::String::from(DEVICE_NAME))
     }
+
+    fn datagram(
+        &mut self,
+        address: [u8; 4],
+        port: u16,
+    ) -> Result<Box<dyn moonlight_nx2_io::udp::Datagram>, moonlight_nx2_io::socket::IoError> {
+        Ok(Box::new(crate::net::UdpSocket::connect(address, port)?))
+    }
 }
 
 impl Drop for NativeConnections {
