@@ -70,6 +70,7 @@ pub struct DirectInput {
     motion: MotionGate,
     motion_rates: MotionRates,
     started: Instant,
+    live: bool,
     mouse_finger: Option<u32>,
 }
 
@@ -82,12 +83,36 @@ impl Default for DirectInput {
             motion: MotionGate::default(),
             motion_rates: [[0; 2]; PADS],
             started: Instant::now(),
+            live: false,
             mouse_finger: None,
         }
     }
 }
 
 impl DirectInput {
+    /// Frees every pad an earlier session may have left on the host, so the primary arrives
+    /// fresh with this session's type and sensors, then announces it.
+    pub fn connect(&mut self) {
+        for index in 0..PADS as u8 {
+            send_empty(index, 0);
+        }
+        eprintln!("{{\"event\":\"controller\",\"action\":\"reset\",\"mask\":0}}");
+        self.gamepads = Gamepads::default();
+        announce(0, self.gamepads.mask());
+        self.live = true;
+    }
+
+    /// Removes every pad while the connection still runs, so the host frees them.
+    pub fn disconnect(&mut self) {
+        if !std::mem::take(&mut self.live) {
+            return;
+        }
+        for update in self.gamepads.remove_all() {
+            send_empty(update.index, update.mask);
+            log_controller("removal", update.index, update.mask);
+        }
+    }
+
     pub fn handle(&mut self, line: &[u8]) -> Result<Vec<bool>, Error> {
         if line.is_empty() || line.len() > MAX_LINE {
             return Err(Error::Invalid);
@@ -108,9 +133,12 @@ impl DirectInput {
                 if usize::from(index) >= PADS {
                     return Err(Error::Invalid);
                 }
+                let was = self.gamepads.mask();
                 let update = self.gamepads.update(index, connected);
                 if update.arrived {
                     announce(index, update.mask);
+                } else if update.mask != was {
+                    log_controller("removal", index, update.mask);
                 }
                 let result = unsafe {
                     native::LiSendMultiControllerEvent(
@@ -289,7 +317,7 @@ impl DirectInput {
 
 /// Announces a pad by its buttons and sensors but no type, so Sunshine picks a DualShock 4 or
 /// DualSense for its motion unless the PC sets a gamepad type.
-pub fn announce(index: u8, active: u16) {
+fn announce(index: u8, active: u16) {
     let buttons = native::A_FLAG
         | native::B_FLAG
         | native::X_FLAG
@@ -310,7 +338,7 @@ pub fn announce(index: u8, active: u16) {
         | native::LI_CCAP_TRIGGER_RUMBLE
         | native::LI_CCAP_ACCEL
         | native::LI_CCAP_GYRO;
-    unsafe {
+    let result = unsafe {
         native::LiSendControllerArrivalEvent(
             index,
             active,
@@ -319,4 +347,19 @@ pub fn announce(index: u8, active: u16) {
             capabilities as u16,
         )
     };
+    eprintln!(
+        "{{\"event\":\"controller\",\"action\":\"arrival\",\"controller\":{index},\"type\":\"unknown\",\"caps\":\"{capabilities:#x}\",\"mask\":\"{active:#x}\",\"result\":{result}}}"
+    );
+}
+
+fn send_empty(index: u8, active: u16) {
+    unsafe {
+        native::LiSendMultiControllerEvent(i16::from(index), active as i16, 0, 0, 0, 0, 0, 0, 0)
+    };
+}
+
+fn log_controller(action: &str, index: u8, active: u16) {
+    eprintln!(
+        "{{\"event\":\"controller\",\"action\":\"{action}\",\"controller\":{index},\"mask\":\"{active:#x}\"}}"
+    );
 }

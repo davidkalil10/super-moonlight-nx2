@@ -2,7 +2,7 @@ use super::{
     Deadline, WorkerError, WorkerResult,
     audio_callbacks::AudioOwner,
     connect,
-    direct_input::{self, DirectInput},
+    direct_input::DirectInput,
     key_directory,
     lifecycle::{Event as LifecycleEvent, Lifecycle},
     listener_callbacks::{Event as ListenerEvent, ListenerOwner},
@@ -251,7 +251,7 @@ pub fn run(args: &[String]) -> WorkerResult {
         if monitor.overflowed() && !failed {
             eprintln!("{{\"event\":\"listener-overflow\"}}");
             failed = true;
-            request_stop(&mut lifecycle, &mut stopping);
+            request_stop(&mut input, &mut lifecycle, &mut stopping);
         }
         while let Ok(event) = events.try_recv() {
             match event {
@@ -259,12 +259,12 @@ pub fn run(args: &[String]) -> WorkerResult {
                 ListenerEvent::StageFailed { stage, code } => {
                     eprintln!("{{\"event\":\"stage-failed\",\"stage\":{stage},\"code\":{code}}}");
                     failed = true;
-                    request_stop(&mut lifecycle, &mut stopping);
+                    request_stop(&mut input, &mut lifecycle, &mut stopping);
                 }
                 ListenerEvent::Terminated(code) => {
                     eprintln!("{{\"event\":\"terminated\",\"code\":{code}}}");
                     failed |= code != 0;
-                    request_stop(&mut lifecycle, &mut stopping);
+                    request_stop(&mut input, &mut lifecycle, &mut stopping);
                 }
                 ListenerEvent::Status(value) => {
                     let status = if value == 1 { "poor" } else { "okay" };
@@ -291,13 +291,13 @@ pub fn run(args: &[String]) -> WorkerResult {
         if native_connected && started && !announced && stopping.is_none() {
             eprintln!("{{\"event\":\"video\",\"codec\":\"{}\"}}", options.codec);
             eprintln!("{{\"event\":\"connected\"}}");
-            direct_input::announce(0, 1);
+            input.connect();
             announced = true;
         }
         if stopping.is_none() {
             let mut chunk = [0u8; 4096];
             match io::stdin().read(&mut chunk) {
-                Ok(0) => request_stop(&mut lifecycle, &mut stopping),
+                Ok(0) => request_stop(&mut input, &mut lifecycle, &mut stopping),
                 Ok(count) => {
                     for byte in &chunk[..count] {
                         if *byte == b'\n' {
@@ -445,8 +445,13 @@ fn write_some(file: &mut File, bytes: &[u8], offset: &mut usize) -> io::Result<(
     }
 }
 
-fn request_stop(lifecycle: &mut Lifecycle<NativeEngine>, deadline: &mut Option<Instant>) {
+fn request_stop(
+    input: &mut DirectInput,
+    lifecycle: &mut Lifecycle<NativeEngine>,
+    deadline: &mut Option<Instant>,
+) {
     if deadline.is_none() {
+        input.disconnect();
         lifecycle.request_stop();
         *deadline = Some(Instant::now() + STOP_TIMEOUT);
     }

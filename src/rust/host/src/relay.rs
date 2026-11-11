@@ -753,7 +753,15 @@ impl Relay {
                     let event = value.get("event").and_then(|v| v.as_str());
                     if matches!(
                         event,
-                        Some("terminated" | "failed" | "stage-failed" | "listener-overflow")
+                        Some(
+                            "terminated"
+                                | "failed"
+                                | "stage-failed"
+                                | "listener-overflow"
+                                | "controller"
+                                | "motion"
+                                | "motion-request"
+                        )
                     ) {
                         eprintln!("worker: {value}");
                     }
