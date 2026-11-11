@@ -1995,11 +1995,11 @@ mod app_options_tests {
         assert_eq!(xbox.button_layout(), ButtonLayout::Xbox);
     }
 
-    fn raise_fps(model: &mut Model) -> Step {
+    fn lower_fps(model: &mut Model) -> Step {
         let fps = item::SETTING + Setting::Fps as u32;
         run(model, Op::Minus, 0, 0);
         run(model, Op::Edit, fps, 0);
-        let step = run(model, Op::Adjust, fps, 1);
+        let step = run(model, Op::Adjust, fps, -1);
         run(model, Op::Edit, 0, 0);
         step
     }
@@ -2008,7 +2008,7 @@ mod app_options_tests {
     fn an_apps_own_choice_changes_its_plan_and_no_other() {
         let mut model = browsing();
         let global = model.planned_stream().fps;
-        let step = raise_fps(&mut model);
+        let step = lower_fps(&mut model);
         assert_eq!(model.screen(), Screen::AppOptions);
         assert!(step.intents().any(|i| i.kind == IntentKind::SaveExtras));
         assert_ne!(model.planned_stream().fps, global);
@@ -2026,7 +2026,7 @@ mod app_options_tests {
     fn launching_streams_with_the_apps_choice() {
         let mut model = browsing();
         let global = model.stream_settings().fps();
-        raise_fps(&mut model);
+        lower_fps(&mut model);
         run(&mut model, Op::B, 0, 0);
         run(&mut model, Op::A, item::APP, 0);
         assert_eq!(model.screen(), Screen::Launching);
@@ -2036,22 +2036,22 @@ mod app_options_tests {
     #[test]
     fn reset_and_stepping_back_drop_the_override() {
         let mut model = browsing();
-        raise_fps(&mut model);
+        lower_fps(&mut model);
         let step = run(&mut model, Op::Y, 0, 0);
         assert!(step.intents().any(|i| i.kind == IntentKind::SaveExtras));
         assert!(model.extras().overrides.is_empty());
 
-        raise_fps(&mut model);
+        lower_fps(&mut model);
         let fps = item::SETTING + Setting::Fps as u32;
         run(&mut model, Op::Edit, fps, 0);
-        run(&mut model, Op::Adjust, fps, -1);
+        run(&mut model, Op::Adjust, fps, 1);
         assert!(model.extras().overrides.is_empty());
     }
 
     #[test]
     fn saved_extras_come_back_with_the_model() {
         let mut model = browsing();
-        raise_fps(&mut model);
+        lower_fps(&mut model);
         let overrides = model.extras().overrides.to_vec();
         let played = [(Address::of("192.168.1.4"), Name::of("Desktop"))];
 

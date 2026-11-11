@@ -8,7 +8,7 @@ use crate::json::{Json, Kind, Value};
 use crate::text::Text;
 use crate::theme::Preference;
 
-pub const VERSION: u32 = 8;
+pub const VERSION: u32 = 9;
 pub const JSON_BYTES: usize = 512;
 pub const ROW_TEXT_BYTES: usize = 96;
 
@@ -279,7 +279,10 @@ const fn row(id: &'static str, label: &'static str, kind: RowKind, count: u8, fa
 
 const ROWS: [Row; Setting::COUNT] = [
     row("size", "Resolution", RowKind::Size, 5, AUTO_SIZE),
-    row("fps", "Frame rate", RowKind::Fps, 2, 0),
+    Row {
+        reset_before: 9,
+        ..row("fps", "Frame rate", RowKind::Fps, 2, 1)
+    },
     Row {
         former_default: Some(7),
         ..row("bitrate", "Bitrate", RowKind::Bitrate, 16, AUTO_BITRATE)
@@ -710,15 +713,18 @@ impl Settings {
         out
     }
 
-    /// Automatic: the largest size this dock state plays at the saved rate and codec.
+    /// Automatic: the largest size this dock state plays at the saved rate and codec, where
+    /// 4K always plays at 60 fps.
     fn largest_size(&mut self, docked: bool, caps: &Capabilities) {
+        let rate = |size: Size| if size == Size::P2160 { 60 } else { self.fps() };
         let fits = |size: &&Size| {
-            (docked || !size.docked_only())
-                && !(**size == Size::P2160 && self.fps() == 120)
-                && caps.mode(self.codec(), **size, self.fps())
+            (docked || !size.docked_only()) && caps.mode(self.codec(), **size, rate(**size))
         };
-        let size = Size::ALL.iter().rev().find(fits).unwrap_or(&Size::P1080);
-        self.value[Setting::Size as usize] = *size as u8;
+        let size = *Size::ALL.iter().rev().find(fits).unwrap_or(&Size::P1080);
+        self.value[Setting::Size as usize] = size as u8;
+        if size == Size::P2160 {
+            self.value[Setting::Fps as usize] = 0;
+        }
     }
 
     fn dock_fallback(&mut self, docked: bool) {
@@ -1119,6 +1125,27 @@ mod verified_tests {
             (Codec::H264, Size::P720, 60)
         );
         assert_eq!(settings.size(), Size::P1080);
+    }
+}
+
+#[cfg(test)]
+mod rate_tests {
+    use super::*;
+
+    #[test]
+    fn streams_default_to_120_fps_except_at_4k() {
+        let caps = Capabilities::ALL;
+        let settings = Settings::default();
+        assert_eq!(settings.fps(), 120);
+        let handheld = settings.in_use(false, &caps);
+        assert_eq!((handheld.size(), handheld.fps()), (Size::P1080, 120));
+        let docked = settings.in_use(true, &caps);
+        assert_eq!((docked.size(), docked.fps()), (Size::P2160, 60));
+
+        let old = Settings::from_json(br#"{"version":8,"fps":60}"#, &mut Json::new());
+        assert_eq!(old.fps(), 120);
+        let kept = Settings::from_json(br#"{"version":9,"fps":60}"#, &mut Json::new());
+        assert_eq!(kept.fps(), 60);
     }
 }
 
