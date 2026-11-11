@@ -18,6 +18,8 @@ use moonlight_nx2_ui as _;
 
 #[cfg(target_os = "none")]
 pub mod audio_device;
+#[cfg(all(target_os = "none", feature = "frontend"))]
+mod clocks;
 #[cfg(target_os = "none")]
 mod device;
 #[cfg(all(target_os = "none", feature = "frontend"))]
