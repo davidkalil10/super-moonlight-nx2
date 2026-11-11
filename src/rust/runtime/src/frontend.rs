@@ -773,7 +773,21 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
     }
 
     /// Removes the stored key of a PC the user removed.
-    fn forget(&mut self, pc: &Address) {
+    fn forget(&mut self, host: &moonlight_nx2_ui::model::Host) {
+        if let Some(cache) = self.cover_cache.as_ref() {
+            let covers = cache.forget(host);
+            crate::render_platform::log(&alloc::format!(
+                "covers: dropped {covers} of {}",
+                host.address.as_str()
+            ));
+        }
+        if self
+            .cover_host
+            .is_some_and(|shown| shown.address == host.address)
+        {
+            self.cover_host = None;
+        }
+        let pc = &host.address;
         if !self.pairings.forget(pc) {
             return;
         }
@@ -1200,7 +1214,7 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
                     self.discover(connections, now_ms, true)
                 }
                 Effect::Action(Action::WakeHost(host)) => self.forced_wake = Some(host.address),
-                Effect::Action(Action::ForgetHost(host)) => self.forget(&host.address),
+                Effect::Action(Action::ForgetHost(host)) => self.forget(&host),
                 Effect::Action(Action::TestNetwork) => {
                     let ready = self.control.is_some() && self.authenticated;
                     self.link_test.wanted = ready;

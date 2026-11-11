@@ -87,6 +87,7 @@ pub mod item {
     pub const RESUME_STREAM: u32 = 20;
     pub const RESUME_HOST: u32 = 21;
     pub const EXPORT_LOGS: u32 = 22;
+    pub const CONFIRM_FORGET: u32 = 23;
     pub const CATEGORY: u32 = 50000;
     pub const HOST: u32 = 10000;
     pub const APP: u32 = 20000;
@@ -124,6 +125,7 @@ pub enum Screen {
     Quitting,
     Stopped,
     AppOptions,
+    ForgetConfirm,
 }
 
 impl Screen {
@@ -147,6 +149,7 @@ impl Screen {
             "quitting",
             "stopped",
             "appOptions",
+            "forgetConfirm",
         ][self as usize]
     }
 }
@@ -1172,11 +1175,28 @@ impl Model {
                 step.changed = true;
                 step.add(IntentKind::UnpairHost, self.host);
             }
-            item::REMOVE_HOST => self.remove_host(host, step),
+            item::REMOVE_HOST => {
+                self.screen = Screen::ForgetConfirm;
+                step.changed = true;
+            }
             item::RENAME_HOST => {
                 self.rename = Text::of(host.name.as_str());
                 self.name_keys = 0;
                 self.screen = Screen::RenameHost;
+                step.changed = true;
+            }
+            _ => {}
+        }
+    }
+
+    fn on_forget_confirm(&mut self, op: Op, item: u32, step: &mut Step) {
+        match (op, item) {
+            (Op::A, item::CONFIRM_FORGET) => match self.host {
+                Some(host) => self.remove_host(host, step),
+                None => self.back_to_hosts(step),
+            },
+            (Op::B, _) | (Op::A, item::CANCEL) => {
+                self.screen = Screen::HostMenu;
                 step.changed = true;
             }
             _ => {}
@@ -1522,6 +1542,7 @@ impl Model {
             Screen::AddHost => self.on_add_host(op, item, step),
             Screen::HostMenu => self.on_host_menu(op, item, step),
             Screen::RenameHost => self.on_rename_host(op, item, step),
+            Screen::ForgetConfirm => self.on_forget_confirm(op, item, step),
             Screen::Connecting if cancelled => {
                 self.back_to_hosts(step);
                 step.add(IntentKind::CancelList, None);
@@ -1701,6 +1722,7 @@ impl Model {
                         | Screen::AddHost
                         | Screen::HostMenu
                         | Screen::RenameHost
+                        | Screen::ForgetConfirm
                         | Screen::Settings
                 );
                 if !idle {
