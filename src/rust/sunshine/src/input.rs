@@ -40,6 +40,7 @@ const MOUSE_ABS_MAGIC: u32 = 0x05;
 const MOUSE_BUTTON_MAGIC_BASE: u32 = 0x01;
 const MULTI_CONTROLLER_MAGIC: u32 = 0x0C;
 const SCROLL_MAGIC: u32 = 0x0A;
+const HSCROLL_MAGIC: u32 = 0x5500_0001;
 const TOUCH_MAGIC: u32 = 0x5500_0002;
 const ARRIVAL_MAGIC: u32 = 0x5500_0004;
 const MOTION_MAGIC: u32 = 0x5500_0006;
@@ -200,6 +201,10 @@ pub fn scroll(amount: i16) -> Packet {
     body[..2].copy_from_slice(&amount.to_be_bytes());
     body[2..4].copy_from_slice(&amount.to_be_bytes());
     packet(channel::MOUSE, true, SCROLL_MAGIC, &body)
+}
+
+pub fn hscroll(amount: i16) -> Packet {
+    packet(channel::MOUSE, true, HSCROLL_MAGIC, &amount.to_be_bytes())
 }
 
 /// `down` picks the key action; `key` is a Windows virtual key code.

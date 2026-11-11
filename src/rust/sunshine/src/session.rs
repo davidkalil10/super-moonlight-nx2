@@ -331,6 +331,10 @@ impl Session {
         self.queue.push(input::scroll(amount));
     }
 
+    pub fn hscroll(&mut self, amount: i16) {
+        self.queue.push(input::hscroll(amount));
+    }
+
     pub fn text(&mut self, text: &str) {
         self.queue.extend(input::utf8_text(text));
     }

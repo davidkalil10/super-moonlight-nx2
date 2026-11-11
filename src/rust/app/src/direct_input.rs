@@ -6,6 +6,7 @@
 extern crate alloc;
 
 use crate::json::{self, Kind, Value};
+use crate::pointer::{KeyboardSample, MouseSample, Pointer};
 use crate::reply::{RUMBLE_PLAYERS, Rumble};
 use alloc::vec::Vec;
 use moonlight_nx2_sunshine::control::{ControlSender, HostEvent};
@@ -48,6 +49,7 @@ struct Record {
 
 pub struct DirectInput {
     session: Session,
+    pointer: Pointer,
     last_pad: [Option<Pad>; PADS],
     fingers: Vec<Touch>,
     stopped: bool,
@@ -58,6 +60,7 @@ impl DirectInput {
     pub fn new(features: u32) -> Self {
         Self {
             session: Session::new(features),
+            pointer: Pointer::default(),
             last_pad: [None; PADS],
             fingers: Vec::new(),
             stopped: false,
@@ -145,7 +148,18 @@ impl DirectInput {
         if !lifted.is_empty() {
             let _ = self.session.touch(false, &lifted);
         }
+        self.pointer.release(&mut self.session);
         self.stopped = true;
+    }
+
+    /// The USB mouse since the last sample; changes only.
+    pub fn mouse(&mut self, sample: &MouseSample) {
+        self.pointer.mouse(sample, &mut self.session);
+    }
+
+    /// The USB keyboard now; `None` when none is attached.
+    pub fn keyboard(&mut self, sample: Option<&KeyboardSample>) {
+        self.pointer.keyboard(sample, &mut self.session);
     }
 
     /// Removes every pad on the host while the connection still runs.

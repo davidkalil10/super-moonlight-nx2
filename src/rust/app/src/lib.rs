@@ -24,6 +24,7 @@ pub mod netprobe;
 pub mod pads;
 pub mod pairings;
 pub mod policy;
+pub mod pointer;
 pub mod presence_watch;
 pub mod reconnect;
 pub mod reply;
