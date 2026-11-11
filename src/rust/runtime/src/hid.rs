@@ -1,8 +1,10 @@
 //! Decodes platform controller and touch samples for the UI and stream.
 
+extern crate alloc;
+
 use crate::render::Error;
 use moonlight_nx2_app::input::{EXTRA_PADS, Extra, Motion, PadState, Touches};
-use moonlight_nx2_app::pads::{PLAYERS, Routing, SOURCES, Slots, Source};
+use moonlight_nx2_app::pads::{self, PLAYERS, Routing, SOURCES, Slots, Source};
 
 pub const TOUCH_OFFSET: usize = 128;
 pub const TOUCH_BYTES: usize = 656;
@@ -232,6 +234,15 @@ pub fn route(
     Ok(slots)
 }
 
+fn change_line(change: pads::Change, mask: u16, motion: bool) -> alloc::string::String {
+    alloc::format!(
+        "input: player {} {} from {} motion={motion} mask={mask:#x}",
+        change.player + 1,
+        if change.arrived { "arrived" } else { "removed" },
+        pads::source_name(change.source),
+    )
+}
+
 fn source_states(sources: &[u8; SOURCES_BYTES]) -> [Source; SOURCES] {
     core::array::from_fn(|source| {
         let pad = &sources[source * SOURCE_BYTES..][..SLOT_BYTES];
@@ -244,13 +255,13 @@ fn source_states(sources: &[u8; SOURCES_BYTES]) -> [Source; SOURCES] {
 
 #[cfg(target_os = "none")]
 mod device {
-    use super::{Error, FrameInput, SOURCES_BYTES, route};
+    use super::{Error, FrameInput, SLOT_BYTES, SOURCE_BYTES, SOURCES_BYTES, change_line, route};
     use crate::{render::Renderer, sdk};
     use core::{
         marker::PhantomData,
         sync::atomic::{AtomicBool, AtomicU8, Ordering},
     };
-    use moonlight_nx2_app::pads::{PLAYERS, Routing, Slots};
+    use moonlight_nx2_app::pads::{self, PLAYERS, Routing, Slots};
 
     const UNROUTED: u8 = u8::MAX;
 
@@ -283,15 +294,28 @@ mod device {
         }
     }
 
+    fn has_motion(sources: &[u8; SOURCES_BYTES], source: u8) -> bool {
+        let motion = &sources[usize::from(source) * SOURCE_BYTES + SLOT_BYTES..][..SLOT_BYTES];
+        motion[24] & 1 != 0
+    }
+
     /// Motors stop when a player changes controller, so none keeps an old player's rumble.
-    fn publish_routes(slots: &Slots) {
-        let mut changed = false;
-        for (route, slot) in ROUTES.iter().zip(slots) {
-            let source = slot.unwrap_or(UNROUTED);
-            changed |= route.swap(source, Ordering::AcqRel) != source;
+    fn publish_routes(slots: &Slots, sources: &[u8; SOURCES_BYTES]) {
+        let old: Slots = core::array::from_fn(|player| {
+            Some(ROUTES[player].swap(slots[player].unwrap_or(UNROUTED), Ordering::AcqRel))
+                .filter(|&source| source != UNROUTED)
+        });
+        if old == *slots {
+            return;
         }
-        if changed {
-            unsafe { moonlightPlatformRumbleStop() };
+        unsafe { moonlightPlatformRumbleStop() };
+        let mask = pads::mask(slots);
+        for change in pads::changes(&old, slots) {
+            crate::render_platform::log(&change_line(
+                change,
+                mask,
+                has_motion(sources, change.source),
+            ));
         }
     }
 
@@ -320,7 +344,7 @@ mod device {
                 return Err(Error::Busy);
             }
             unsafe { moonlightPlatformInputStart() };
-            publish_routes(&[None; PLAYERS]);
+            publish_routes(&[None; PLAYERS], &[0; SOURCES_BYTES]);
             Ok(Self {
                 sample: 0,
                 routing: Routing::new(),
@@ -345,7 +369,8 @@ mod device {
                 return Err(Error::Invalid);
             }
             crate::stream_stats::input_sampled(crate::render_platform::now_ns());
-            publish_routes(&route(&mut self.routing, claim, &self.sources, input)?);
+            let slots = route(&mut self.routing, claim, &self.sources, input)?;
+            publish_routes(&slots, &self.sources);
             FrameInput::decode(input)
         }
     }
