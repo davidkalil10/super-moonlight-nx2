@@ -390,6 +390,18 @@ impl HostBook {
         self.dirty = true;
     }
 
+    /// Takes the host off the removed list so discovery can list it again.
+    pub fn unremove(&mut self, host: &Host) {
+        let before = self.removed.len();
+        self.removed.retain(|other| {
+            !same(
+                (&other.address, &other.uniqueid),
+                (&host.address, &host.uniqueid),
+            )
+        });
+        self.dirty |= self.removed.len() != before;
+    }
+
     fn write_extras(&self, out: &mut String, address: &Address) {
         if let Some((_, name)) = self.played.iter().find(|(known, _)| known == address) {
             out.push_str(",\"lastPlayed\":");

@@ -251,7 +251,7 @@ pub fn run(args: &[String]) -> WorkerResult {
         if monitor.overflowed() && !failed {
             eprintln!("{{\"event\":\"listener-overflow\"}}");
             failed = true;
-            request_stop(&mut lifecycle, &mut stopping);
+            request_stop(&mut input, &mut lifecycle, &mut stopping);
         }
         while let Ok(event) = events.try_recv() {
             match event {
@@ -259,12 +259,12 @@ pub fn run(args: &[String]) -> WorkerResult {
                 ListenerEvent::StageFailed { stage, code } => {
                     eprintln!("{{\"event\":\"stage-failed\",\"stage\":{stage},\"code\":{code}}}");
                     failed = true;
-                    request_stop(&mut lifecycle, &mut stopping);
+                    request_stop(&mut input, &mut lifecycle, &mut stopping);
                 }
                 ListenerEvent::Terminated(code) => {
                     eprintln!("{{\"event\":\"terminated\",\"code\":{code}}}");
                     failed |= code != 0;
-                    request_stop(&mut lifecycle, &mut stopping);
+                    request_stop(&mut input, &mut lifecycle, &mut stopping);
                 }
                 ListenerEvent::Status(value) => {
                     let status = if value == 1 { "poor" } else { "okay" };
@@ -273,6 +273,7 @@ pub fn run(args: &[String]) -> WorkerResult {
             }
         }
         if announced && stopping.is_none() {
+            input.set_motion_rates(monitor.motion_rates());
             monitor.take_rumble(|rumble| {
                 eprintln!(
                     "{{\"event\":\"rumble\",\"controller\":{},\"low\":{},\"high\":{}}}",
@@ -290,39 +291,13 @@ pub fn run(args: &[String]) -> WorkerResult {
         if native_connected && started && !announced && stopping.is_none() {
             eprintln!("{{\"event\":\"video\",\"codec\":\"{}\"}}", options.codec);
             eprintln!("{{\"event\":\"connected\"}}");
-            let buttons = native::A_FLAG
-                | native::B_FLAG
-                | native::X_FLAG
-                | native::Y_FLAG
-                | native::UP_FLAG
-                | native::DOWN_FLAG
-                | native::LEFT_FLAG
-                | native::RIGHT_FLAG
-                | native::LB_FLAG
-                | native::RB_FLAG
-                | native::PLAY_FLAG
-                | native::BACK_FLAG
-                | native::LS_CLK_FLAG
-                | native::RS_CLK_FLAG
-                | native::SPECIAL_FLAG;
-            unsafe {
-                native::LiSendControllerArrivalEvent(
-                    0,
-                    1,
-                    native::LI_CTYPE_XBOX as u8,
-                    buttons,
-                    (native::LI_CCAP_ANALOG_TRIGGERS
-                        | native::LI_CCAP_RUMBLE
-                        | native::LI_CCAP_ACCEL
-                        | native::LI_CCAP_GYRO) as u16,
-                )
-            };
+            input.connect(Instant::now());
             announced = true;
         }
         if stopping.is_none() {
             let mut chunk = [0u8; 4096];
             match io::stdin().read(&mut chunk) {
-                Ok(0) => request_stop(&mut lifecycle, &mut stopping),
+                Ok(0) => request_stop(&mut input, &mut lifecycle, &mut stopping),
                 Ok(count) => {
                     for byte in &chunk[..count] {
                         if *byte == b'\n' {
@@ -436,7 +411,7 @@ pub(super) fn forward_queued_input(
     queued: &mut VecDeque<Vec<u8>>,
     queued_bytes: &mut usize,
 ) -> WorkerResult {
-    if !started || stopping || stopped {
+    if !started || stopping || stopped || !input.ready(Instant::now()) {
         return Ok(());
     }
     while let Some(line) = queued.pop_front() {
@@ -470,8 +445,13 @@ fn write_some(file: &mut File, bytes: &[u8], offset: &mut usize) -> io::Result<(
     }
 }
 
-fn request_stop(lifecycle: &mut Lifecycle<NativeEngine>, deadline: &mut Option<Instant>) {
+fn request_stop(
+    input: &mut DirectInput,
+    lifecycle: &mut Lifecycle<NativeEngine>,
+    deadline: &mut Option<Instant>,
+) {
     if deadline.is_none() {
+        input.disconnect();
         lifecycle.request_stop();
         *deadline = Some(Instant::now() + STOP_TIMEOUT);
     }

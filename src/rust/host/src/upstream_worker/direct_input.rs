@@ -1,9 +1,13 @@
 use super::native;
+use moonlight_nx2_host::gamepads::{Gamepads, MotionGate, MotionKind, MotionRates, PADS};
 use serde::Deserialize;
+use std::time::{Duration, Instant};
 
 const MAX_LINE: usize = 3840;
 const MAX_TOUCHES: usize = 32;
-const PADS: u8 = 8;
+/// Long enough for the input thread to send the reset before the primary's arrival.
+const RESET_SETTLE: Duration = Duration::from_millis(200);
+
 /// Touch positions reach the mouse on this virtual grid.
 const MOUSE_GRID: f64 = 10_000.0;
 
@@ -61,12 +65,16 @@ pub enum Error {
 }
 
 /// The primary pad (index 0) is announced by the stream worker; other players are announced here
-/// when they first connect and leave the active mask when they disconnect.
+/// when they connect and leave the active mask when they disconnect.
 pub struct DirectInput {
     touch_supported: Option<bool>,
-    active: u16,
-    announced: u16,
+    gamepads: Gamepads,
     motion_supported: bool,
+    motion: MotionGate,
+    motion_rates: MotionRates,
+    started: Instant,
+    live: bool,
+    settle_until: Option<Instant>,
     mouse_finger: Option<u32>,
 }
 
@@ -74,15 +82,55 @@ impl Default for DirectInput {
     fn default() -> Self {
         Self {
             touch_supported: None,
-            active: 1,
-            announced: 1,
+            gamepads: Gamepads::default(),
             motion_supported: true,
+            motion: MotionGate::default(),
+            motion_rates: [[0; 2]; PADS],
+            started: Instant::now(),
+            live: false,
+            settle_until: None,
             mouse_finger: None,
         }
     }
 }
 
 impl DirectInput {
+    /// Frees every pad an earlier session may have left on the host. The primary arrives once
+    /// the removals have left the input queue, or its first event would be merged into them.
+    pub fn connect(&mut self, now: Instant) {
+        for index in 0..PADS as u8 {
+            send_empty(index, 0);
+        }
+        eprintln!("{{\"event\":\"controller\",\"action\":\"reset\",\"mask\":0}}");
+        self.gamepads = Gamepads::default();
+        self.settle_until = Some(now + RESET_SETTLE);
+        self.live = true;
+    }
+
+    /// False while the reset settles; then announces the primary and lets input through.
+    pub fn ready(&mut self, now: Instant) -> bool {
+        match self.settle_until {
+            Some(due) if now < due => false,
+            Some(_) => {
+                self.settle_until = None;
+                announce(0, self.gamepads.mask());
+                true
+            }
+            None => true,
+        }
+    }
+
+    /// Removes every pad while the connection still runs, so the host frees them.
+    pub fn disconnect(&mut self) {
+        if !std::mem::take(&mut self.live) {
+            return;
+        }
+        for update in self.gamepads.remove_all() {
+            send_empty(update.index, update.mask);
+            log_controller("removal", update.index, update.mask);
+        }
+    }
+
     pub fn handle(&mut self, line: &[u8]) -> Result<Vec<bool>, Error> {
         if line.is_empty() || line.len() > MAX_LINE {
             return Err(Error::Invalid);
@@ -100,25 +148,20 @@ impl DirectInput {
                 right_stick_x,
                 right_stick_y,
             } => {
-                if index >= PADS {
+                if usize::from(index) >= PADS {
                     return Err(Error::Invalid);
                 }
-                let bit = 1u16 << index;
-                if index != 0 {
-                    if connected {
-                        self.active |= bit;
-                        if self.announced & bit == 0 {
-                            self.announced |= bit;
-                            announce(index, self.active);
-                        }
-                    } else {
-                        self.active &= !bit;
-                    }
+                let was = self.gamepads.mask();
+                let update = self.gamepads.update(index, connected);
+                if update.arrived {
+                    announce(index, update.mask);
+                } else if update.mask != was {
+                    log_controller("removal", index, update.mask);
                 }
                 let result = unsafe {
                     native::LiSendMultiControllerEvent(
                         i16::from(index),
-                        self.active as i16,
+                        update.mask as i16,
                         i32::from(button_flags),
                         left_trigger,
                         right_trigger,
@@ -139,7 +182,7 @@ impl DirectInput {
             }
             Message::Touch { mouse, events } => self.touch(mouse, events),
             Message::Motion { index, accel, gyro } => {
-                if index >= PADS
+                if usize::from(index) >= PADS
                     || ![accel, gyro]
                         .iter()
                         .flatten()
@@ -153,16 +196,35 @@ impl DirectInput {
         }
     }
 
-    /// Motion is best effort: a host without motion support stops it for the session.
+    /// The report rates the host asked for, read from the listener before each batch of input.
+    pub fn set_motion_rates(&mut self, rates: MotionRates) {
+        for (index, (old, new)) in self.motion_rates.iter().zip(&rates).enumerate() {
+            if old != new {
+                eprintln!(
+                    "{{\"event\":\"motion-request\",\"controller\":{index},\"accel\":{},\"gyro\":{}}}",
+                    new[0], new[1]
+                );
+            }
+        }
+        self.motion_rates = rates;
+        self.motion.set_rates(&rates);
+    }
+
+    /// Motion goes out only as the host asked for it. It is best effort: a host without motion
+    /// support stops it for the session.
     fn motion(&mut self, index: u8, accel: [f32; 3], gyro: [f32; 3]) {
         if !self.motion_supported {
             return;
         }
-        for (kind, [x, y, z]) in [
-            (native::LI_MOTION_TYPE_ACCEL, accel),
-            (native::LI_MOTION_TYPE_GYRO, gyro),
+        let now_us = self.started.elapsed().as_micros() as u64;
+        for (kind, wire, [x, y, z]) in [
+            (MotionKind::Accel, native::LI_MOTION_TYPE_ACCEL, accel),
+            (MotionKind::Gyro, native::LI_MOTION_TYPE_GYRO, gyro),
         ] {
-            let result = unsafe { native::LiSendControllerMotionEvent(index, kind as u8, x, y, z) };
+            if !self.motion.due(index, kind, now_us) {
+                continue;
+            }
+            let result = unsafe { native::LiSendControllerMotionEvent(index, wire as u8, x, y, z) };
             if result == native::LI_ERR_UNSUPPORTED {
                 self.motion_supported = false;
                 eprintln!("{{\"event\":\"motion\",\"supported\":false}}");
@@ -271,7 +333,8 @@ impl DirectInput {
     }
 }
 
-/// Announces another player like the primary pad, with motion sensors.
+/// Announces a pad by its buttons and sensors but no type, so Sunshine picks a DualShock 4 or
+/// DualSense for its motion unless the PC sets a gamepad type.
 fn announce(index: u8, active: u16) {
     let buttons = native::A_FLAG
         | native::B_FLAG
@@ -290,15 +353,31 @@ fn announce(index: u8, active: u16) {
         | native::SPECIAL_FLAG;
     let capabilities = native::LI_CCAP_ANALOG_TRIGGERS
         | native::LI_CCAP_RUMBLE
+        | native::LI_CCAP_TRIGGER_RUMBLE
         | native::LI_CCAP_ACCEL
         | native::LI_CCAP_GYRO;
-    unsafe {
+    let result = unsafe {
         native::LiSendControllerArrivalEvent(
             index,
             active,
-            native::LI_CTYPE_XBOX as u8,
+            native::LI_CTYPE_UNKNOWN as u8,
             buttons,
             capabilities as u16,
         )
     };
+    eprintln!(
+        "{{\"event\":\"controller\",\"action\":\"arrival\",\"controller\":{index},\"type\":\"unknown\",\"caps\":\"{capabilities:#x}\",\"mask\":\"{active:#x}\",\"result\":{result}}}"
+    );
+}
+
+fn send_empty(index: u8, active: u16) {
+    unsafe {
+        native::LiSendMultiControllerEvent(i16::from(index), active as i16, 0, 0, 0, 0, 0, 0, 0)
+    };
+}
+
+fn log_controller(action: &str, index: u8, active: u16) {
+    eprintln!(
+        "{{\"event\":\"controller\",\"action\":\"{action}\",\"controller\":{index},\"mask\":\"{active:#x}\"}}"
+    );
 }

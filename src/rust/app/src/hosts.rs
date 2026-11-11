@@ -113,6 +113,7 @@ impl Hosts {
             Action::RenameHost(host) => self.book.rename(host),
             Action::ForgetHost(host) => {
                 self.book.forget(host);
+                self.book.unremove(host);
                 false
             }
             _ => false,

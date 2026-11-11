@@ -43,6 +43,7 @@ unsafe extern "C" {
         denominator: *mut u16,
     ) -> u32;
     pub fn nwindowSetSwapInterval(window: *mut c_void, interval: u32) -> u32;
+    pub fn nwindowSetVrr(window: *mut c_void, enable: bool) -> u32;
     pub fn nwindowGetVi2Display(window: *mut c_void, display: *mut *mut c_void) -> u32;
     pub fn vi2QueryDisplayRefreshRate(display: *mut c_void, hz: *mut u32, vrr: *mut bool) -> u32;
     pub fn vi2QueryDisplayModeCapability(

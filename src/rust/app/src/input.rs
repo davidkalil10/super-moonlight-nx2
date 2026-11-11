@@ -42,12 +42,24 @@ pub struct PadState {
     pub sticks: [i32; 4],
 }
 
-/// One motion sample: acceleration in 1/1000 m/s^2, angular velocity in 1/1000 deg/s, on the
-/// host gamepad's axes.
+/// One motion sample: acceleration in 1/1000 m/s^2 with gravity, angular velocity in 1/1000
+/// deg/s. The platform reads the Switch's axes; records carry SDL's, as Moonlight sends them.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct Motion {
     pub accel: [i32; 3],
     pub gyro: [i32; 3],
+}
+
+impl Motion {
+    /// The Switch has x right, y away from the player and z out of the face; SDL, like the
+    /// DualShock 4, has x right, y out of the face and z toward the player.
+    pub fn to_sdl_axes(self) -> Self {
+        let turn = |[x, y, z]: [i32; 3]| [x, z, y.saturating_neg()];
+        Self {
+            accel: turn(self.accel),
+            gyro: turn(self.gyro),
+        }
+    }
 }
 
 /// What a frame reads besides the primary pad and the touches: players 2 to 8 and one motion
@@ -386,7 +398,13 @@ impl Recorder {
         }
 
         let buttons = if pad.connected { pad.buttons } else { 0 };
-        if pad.connected && stop_held(u64::from(buttons)) {
+        let extra_stop = extra.is_some_and(|extra| {
+            extra
+                .pads
+                .iter()
+                .any(|pad| pad.connected && stop_held(u64::from(pad.buttons)))
+        });
+        if (pad.connected && stop_held(u64::from(buttons))) || extra_stop {
             self.stopped = true;
             return self.stop_record(pad.connected, out);
         }
@@ -465,7 +483,7 @@ impl Recorder {
                     0 => primary,
                     _ => extra.pads[index - 1].connected,
                 };
-                extended.motion[index] = motion.filter(|_| connected);
+                extended.motion[index] = motion.filter(|_| connected).map(Motion::to_sdl_axes);
             }
         }
         extended

@@ -1,4 +1,5 @@
 use super::native;
+use moonlight_nx2_host::gamepads::{self, MotionKind, MotionRates, PADS};
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 
@@ -6,7 +7,7 @@ const MAX_EVENTS: usize = 32;
 static USED: AtomicBool = AtomicBool::new(false);
 static ACTIVE: Mutex<Option<Arc<State>>> = Mutex::new(None);
 /// Players the client can rumble; higher controller numbers are dropped.
-pub const RUMBLE_PLAYERS: usize = 8;
+pub const RUMBLE_PLAYERS: usize = PADS;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Event {
@@ -23,7 +24,11 @@ struct State {
     /// Latest motor values per player (low << 16 | high); `rumble_dirty` marks unread ones.
     /// Kept out of the bounded event queue: rumble bursts coalesce instead of overflowing it.
     rumble: [AtomicU32; RUMBLE_PLAYERS],
+    /// Trigger motors per player (left << 16 | right), folded into the pad motors.
+    triggers: [AtomicU32; RUMBLE_PLAYERS],
     rumble_dirty: AtomicU16,
+    /// Motion report rates the host asked for per player, accel then gyro, in Hz.
+    motion: [[AtomicU16; 2]; RUMBLE_PLAYERS],
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -52,13 +57,28 @@ impl ListenerMonitor {
         for (index, value) in self.state.rumble.iter().enumerate() {
             if dirty & (1 << index) != 0 {
                 let value = value.load(Ordering::Acquire);
+                let triggers = self.state.triggers[index].load(Ordering::Acquire);
+                let (low, high) = gamepads::fold_triggers(
+                    (value >> 16) as u16,
+                    value as u16,
+                    (triggers >> 16) as u16,
+                    triggers as u16,
+                );
                 sink(Rumble {
                     controller: index as u16,
-                    low: (value >> 16) as u16,
-                    high: value as u16,
+                    low,
+                    high,
                 });
             }
         }
+    }
+
+    pub fn motion_rates(&self) -> MotionRates {
+        core::array::from_fn(|index| {
+            self.state.motion[index]
+                .each_ref()
+                .map(|rate| rate.load(Ordering::Acquire))
+        })
     }
 }
 
@@ -73,7 +93,9 @@ impl ListenerOwner {
             overflow: AtomicBool::new(false),
             sender,
             rumble: Default::default(),
+            triggers: Default::default(),
             rumble_dirty: AtomicU16::new(0),
+            motion: Default::default(),
         });
         *ACTIVE.lock().map_err(|_| ())? = Some(Arc::clone(&state));
         Ok((Self { state }, receiver))
@@ -87,6 +109,8 @@ impl ListenerOwner {
         callbacks.connectionTerminated = Some(terminated);
         callbacks.connectionStatusUpdate = Some(status);
         callbacks.rumble = Some(rumble);
+        callbacks.rumbleTriggers = Some(rumble_triggers);
+        callbacks.setMotionEventState = Some(motion_state);
         callbacks
     }
 
@@ -152,4 +176,30 @@ unsafe extern "C" fn rumble(controller: u16, low: u16, high: u16) {
     }
     state.rumble[index].store(u32::from(low) << 16 | u32::from(high), Ordering::Release);
     state.rumble_dirty.fetch_or(1 << index, Ordering::AcqRel);
+}
+
+unsafe extern "C" fn rumble_triggers(controller: u16, left: u16, right: u16) {
+    let Some(state) = active() else {
+        return;
+    };
+    let index = usize::from(controller);
+    if !state.open.load(Ordering::Acquire) || index >= RUMBLE_PLAYERS {
+        return;
+    }
+    state.triggers[index].store(u32::from(left) << 16 | u32::from(right), Ordering::Release);
+    state.rumble_dirty.fetch_or(1 << index, Ordering::AcqRel);
+}
+
+unsafe extern "C" fn motion_state(controller: u16, kind: u8, rate_hz: u16) {
+    let Some(state) = active() else {
+        return;
+    };
+    let index = usize::from(controller);
+    let Some(kind) = MotionKind::from_wire(kind) else {
+        return;
+    };
+    if !state.open.load(Ordering::Acquire) || index >= RUMBLE_PLAYERS {
+        return;
+    }
+    state.motion[index][kind as usize].store(rate_hz, Ordering::Release);
 }

@@ -16,10 +16,10 @@ BUILDS = Path("/media/storage2/builds/moonlight")
 TARGET = "aarch64-unknown-none"
 RUST_COMMIT = "6efa357bff60d192688e02de0c78cae24a7f3a55"
 SDK = {
-    "ounce-sdk": "20261110",
-    "libounce": "cc442785",
-    "ouncevk": "99b78bc",
-    "ouncehen": "ed1c5f0",
+    "ounce-sdk": "20261111",
+    "libounce": "8e7da1ae",
+    "ouncevk": "3cb2798",
+    "ouncehen": "8fe3e3f",
 }
 SDK_FILES = (
     "ounce-sdk-version.txt",
@@ -27,6 +27,9 @@ SDK_FILES = (
     "libounce/switch.specs",
     "libounce/include/switch2/services/gsv.h",
     "libounce/lib/libnx.a",
+    "libounce/lib/libounce.a",
+    "libounce/lib/libounce_core.a",
+    "libounce/lib/libounce_malloc.a",
     "portlibs/switch2/include/ouncehen.h",
     "portlibs/switch2/include/vulkan/vulkan.h",
     "portlibs/switch2/lib/libvulkan.a",

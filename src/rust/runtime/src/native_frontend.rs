@@ -415,6 +415,32 @@ fn execute(renderer: &mut Renderer, connections: &mut NativeConnections, launch:
                     display_context(&mut app, docked, probe.capabilities());
                     pending = false;
                 }
+                let output = probe.output();
+                pending |= probe.observe_output(now, display.width, display.height);
+                if probe.output() != output {
+                    log(&format!(
+                        "display: console output {}x{}@{} docked=true; Auto up to {:?}",
+                        display.width,
+                        display.height,
+                        display.nominal_hz,
+                        moonlight_nx2_app::dock::output_ceiling(probe.output())
+                    ));
+                }
+            }
+            let settings = app.client.bridge.model().stream_settings();
+            let size = settings.size();
+            let wanted = moonlight_nx2_app::dock::requests_120hz(
+                dock.current(),
+                (!settings.size_auto()).then(|| (size.width(), size.height())),
+                settings.fps(),
+                probe.output(),
+            );
+            if wanted != probe.requested()
+                && renderer
+                    .set_frame_rates(wanted.then_some(FrameRates::EVERY_REFRESH))
+                    .is_ok()
+            {
+                pending |= probe.set_requested(wanted);
             }
         }
         if let Ok(info) = renderer.info()
@@ -504,15 +530,14 @@ fn execute(renderer: &mut Renderer, connections: &mut NativeConnections, launch:
 
 /// Docked, the window takes the size the console outputs (0x0), and follows it: a TV that goes
 /// to 120 Hz may do so at a smaller size than its 60 Hz mode, and a layer left at 4K is then
-/// shown unscaled. The window presents every refresh, which also asks the display for 120 Hz:
-/// the handheld panel has it, a TV has it or stays at 60.
+/// shown unscaled. The window opens without a 120 Hz or VRR request, so the console picks its
+/// own output mode; the frontend asks for 120 Hz only where `dock::requests_120hz` says so.
 fn render_config(low_latency: bool) -> Config {
     Config {
         window_mode: WindowMode::PerMode {
             docked_width: 0,
             docked_height: 0,
         },
-        frame_rates: Some(FrameRates::EVERY_REFRESH),
         present: present_mode(low_latency),
         ..Config::default()
     }

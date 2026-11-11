@@ -11,6 +11,7 @@ pub mod controller;
 pub mod cover;
 #[cfg(unix)]
 pub mod display;
+pub mod gamepads;
 pub mod helper;
 pub mod input;
 pub mod listener;
@@ -99,6 +100,8 @@ pub enum Operation<'a> {
     },
     Stop,
     Idr,
+    /// The console asks to be dropped from the trusted list.
+    Revoke,
     /// Link measurement for the console: echo `sequence` with `bytes` of padding.
     Probe {
         sequence: u32,
@@ -128,7 +131,7 @@ impl Operation<'_> {
                     && (1..=120).contains(&options.fps)
                     && (1..=1_000_000).contains(&options.bitrate_kbps)
             }
-            Self::Stop | Self::Idr => true,
+            Self::Stop | Self::Idr | Self::Revoke => true,
             Self::Probe { bytes, .. } => bytes <= probe::MAX_BYTES,
         }
     }

@@ -44,7 +44,7 @@ typedef struct {
 } Vibration;
 static Vibration vibration[SOURCES];
 
-_Static_assert(sizeof(GsvSync) == 8, "GsvSync ABI");
+_Static_assert(sizeof(GsvSync) == 12, "GsvSync ABI");
 _Static_assert(sizeof(GsvGpu) == 8, "GsvGpu ABI");
 _Static_assert(sizeof(Event) == 12, "Event ABI");
 _Static_assert(sizeof(TransferMemory) == 40, "TransferMemory ABI");
@@ -267,6 +267,27 @@ bool moonlightPlatformDirectoryCreate(const char *path)
 bool moonlightPlatformDirectoryExclusive(const char *path)
 {
     return mkdir(path, 0777) == 0;
+}
+
+/* Writes the entry names of a directory into out, newline separated; returns the length. */
+size_t moonlightPlatformDirectoryNames(const char *path, char *out, size_t size)
+{
+    DIR *directory = opendir(path);
+    if (!directory)
+        return 0;
+    size_t used = 0;
+    for (struct dirent *entry; (entry = readdir(directory));) {
+        size_t length = strlen(entry->d_name);
+        size_t needed = length + (used ? 1 : 0);
+        if (used + needed > size)
+            break;
+        if (used)
+            out[used++] = '\n';
+        memcpy(out + used, entry->d_name, length);
+        used += length;
+    }
+    closedir(directory);
+    return used;
 }
 
 static bool newest_log(char *path, size_t size)

@@ -43,6 +43,38 @@ impl Drop for File {
 }
 
 #[cfg(target_os = "none")]
+fn names(path: &CStr) -> Vec<alloc::string::String> {
+    unsafe extern "C" {
+        fn moonlightPlatformDirectoryNames(
+            path: *const c_char,
+            out: *mut c_char,
+            size: usize,
+        ) -> usize;
+    }
+    const NAMES_BYTES: usize = 16 * 1024;
+    let mut list = alloc::vec![0u8; NAMES_BYTES];
+    let length = unsafe {
+        moonlightPlatformDirectoryNames(path.as_ptr(), list.as_mut_ptr().cast(), list.len())
+    };
+    list.truncate(length.min(NAMES_BYTES));
+    list.split(|byte| *byte == b'\n')
+        .filter_map(|name| core::str::from_utf8(name).ok())
+        .map(alloc::string::String::from)
+        .collect()
+}
+
+#[cfg(not(target_os = "none"))]
+fn names(path: &CStr) -> Vec<alloc::string::String> {
+    use std::{ffi::OsStr, os::unix::ffi::OsStrExt};
+    std::fs::read_dir(OsStr::from_bytes(path.to_bytes()))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|entry| entry.file_name().into_string().ok())
+        .collect()
+}
+
+#[cfg(target_os = "none")]
 fn status(path: &CStr) -> u32 {
     unsafe extern "C" {
         fn moonlightPlatformFileStatus(path: *const c_char) -> u32;
@@ -126,6 +158,20 @@ impl Directory {
     }
 }
 
+/// Whether `name` is `<owner>-<app>.png`, or its `.part` file, for a numeric app id.
+pub fn is_cover_of(name: &str, owner: &str) -> bool {
+    let Some(rest) = name
+        .strip_prefix(owner)
+        .and_then(|rest| rest.strip_prefix('-'))
+    else {
+        return false;
+    };
+    let rest = rest.strip_suffix(".part").unwrap_or(rest);
+    rest.strip_suffix(".png")
+        .is_some_and(|app| !app.is_empty() && app.bytes().all(|byte| byte.is_ascii_digit()))
+        && !owner.is_empty()
+}
+
 /// Private application cover cache, separate from settings and host persistence.
 pub struct CoverDirectory(Directory);
 
@@ -158,6 +204,29 @@ impl CoverDirectory {
             self.0.path.to_str().ok()?
         ))
         .ok()
+    }
+
+    /// Deletes every cached cover of the host and returns how many files went.
+    pub fn forget(&self, host: &moonlight_nx2_ui::model::Host) -> usize {
+        let Some(directory) = self.0.path.to_str().ok() else {
+            return 0;
+        };
+        let Ok(listing) = CString::new(directory) else {
+            return 0;
+        };
+        let owners = [host.uniqueid.as_str(), host.address.as_str()];
+        let mut removed = 0;
+        for name in names(&listing) {
+            if !owners.iter().any(|owner| is_cover_of(&name, owner)) {
+                continue;
+            }
+            if let Ok(path) = CString::new(format!("{directory}/{name}"))
+                && unsafe { remove(path.as_ptr()) } == 0
+            {
+                removed += 1;
+            }
+        }
+        removed
     }
 
     pub fn read(&self, host: &moonlight_nx2_ui::model::Host, app: u32) -> Option<Vec<u8>> {
@@ -269,5 +338,53 @@ impl Files for Directory {
             || self
                 .path(name, ".bak")
                 .is_some_and(|path| status(&path) != 0)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use moonlight_nx2_ui::model::{Address, Host, Name};
+
+    fn host(address: &str, uniqueid: &str) -> Host {
+        Host {
+            name: Name::of("PC"),
+            address: Address::of(address),
+            uniqueid: Address::of(uniqueid),
+            mac: None,
+        }
+    }
+
+    #[test]
+    fn a_cover_name_belongs_to_one_owner() {
+        assert!(is_cover_of("ABC-12.png", "ABC"));
+        assert!(is_cover_of("ABC-12.png.part", "ABC"));
+        assert!(is_cover_of("192.168.1.5-7.png", "192.168.1.5"));
+        assert!(!is_cover_of("ABC-1-12.png", "ABC"));
+        assert!(!is_cover_of("ABCD-12.png", "ABC"));
+        assert!(!is_cover_of("ABC-x.png", "ABC"));
+        assert!(!is_cover_of("ABC-.png", "ABC"));
+        assert!(!is_cover_of("ABC-12.jpg", "ABC"));
+        assert!(!is_cover_of("-12.png", ""));
+    }
+
+    #[test]
+    fn forgetting_a_host_removes_only_its_covers() {
+        let folder = std::env::temp_dir().join(format!("moonlight-covers-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&folder);
+        let path = CString::new(folder.to_str().unwrap()).unwrap();
+        let cache = CoverDirectory::open(&path).unwrap();
+        let rig = host("192.168.1.5", "ABC");
+        let den = host("192.168.1.6", "DEF");
+        assert!(cache.write(&rig, 1, b"png"));
+        assert!(cache.write(&rig, 22, b"png"));
+        assert!(cache.write(&den, 1, b"png"));
+        std::fs::write(folder.join("192.168.1.5-3.png"), b"png").unwrap();
+
+        assert_eq!(cache.forget(&rig), 3);
+        assert!(cache.read(&rig, 1).is_none() && cache.read(&rig, 22).is_none());
+        assert!(cache.read(&den, 1).is_some());
+        assert_eq!(cache.forget(&rig), 0);
+        let _ = std::fs::remove_dir_all(&folder);
     }
 }
