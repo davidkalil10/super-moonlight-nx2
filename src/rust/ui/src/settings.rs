@@ -30,6 +30,7 @@ pub enum Setting {
     FrameCounter,
     TouchMouse,
     LowLatency,
+    PcHelper,
     Theme,
     RumbleOn,
     Rumble,
@@ -37,7 +38,7 @@ pub enum Setting {
 }
 
 impl Setting {
-    pub const COUNT: usize = 16;
+    pub const COUNT: usize = 17;
     pub const ALL: [Setting; Self::COUNT] = [
         Setting::Size,
         Setting::Fps,
@@ -51,6 +52,7 @@ impl Setting {
         Setting::FrameCounter,
         Setting::TouchMouse,
         Setting::LowLatency,
+        Setting::PcHelper,
         Setting::Theme,
         Setting::RumbleOn,
         Setting::Rumble,
@@ -80,7 +82,7 @@ impl Setting {
             | Self::RumbleOn
             | Self::Rumble
             | Self::ButtonLayout => 2,
-            Self::LowLatency => 3,
+            Self::LowLatency | Self::PcHelper => 3,
             Self::QuitOnReturn | Self::StreamInfo | Self::FrameCounter | Self::Theme => 4,
         }
     }
@@ -97,6 +99,7 @@ impl Setting {
             Self::MenuChord => "Hold + and \u{2212} for a second to open the stream menu",
             Self::TouchMouse => "Touches move the PC mouse instead of sending touch",
             Self::LowLatency => "Applies after restarting the app",
+            Self::PcHelper => "Reach paired PCs through the PC helper instead of Sunshine itself",
             Self::QuitOnReturn => "Disconnect also quits the app on the PC",
             Self::StreamInfo => "A small badge with the stream mode over the video",
             Self::FrameCounter => "Adds the frame rate and delays to the badge",
@@ -302,6 +305,7 @@ const ROWS: [Row; Setting::COUNT] = [
     row("frameCounter", "Frame counter", RowKind::Toggle, 2, 0),
     row("touchMouse", "Touch as mouse", RowKind::Toggle, 2, 0),
     row("lowLatency", "Low latency (restart)", RowKind::Toggle, 2, 0),
+    row("pcHelper", "Use the PC helper", RowKind::Toggle, 2, 0),
     row("theme", "Theme", RowKind::Theme, 3, 0),
     row("rumbleOn", "Rumble", RowKind::Toggle, 2, 1),
     row("rumble", "Rumble strength", RowKind::Percent, 5, 4),
