@@ -454,6 +454,11 @@ impl Renderer {
         Ok(self.objects.storage.bytes_mut())
     }
 
+    /// Whether the GPU was still busy when the last storage_mut was asked for.
+    pub fn last_write_busy(&self) -> bool {
+        self.objects.last_write_busy
+    }
+
     pub fn flush_page(&mut self, range: core::ops::Range<usize>) -> Result<(), Error> {
         self.active()?;
         let range = if cfg!(feature = "ui-pattern") {
