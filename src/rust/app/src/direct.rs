@@ -387,6 +387,9 @@ fn parse_request(payload: &[u8]) -> Result<(Job, Option<Start>, Option<Address>)
 fn transport_failure(error: &exchange::Error) -> Next {
     match error {
         exchange::Error::TimedOut => failure("timeout", UNREACHABLE),
+        exchange::Error::Http(http::Error::TooLarge) => {
+            failure("too_large", "The PC's reply was too large")
+        }
         exchange::Error::Tls(rustls::Error::InvalidCertificate(_)) => {
             failure("not_paired", CHANGED)
         }
@@ -644,6 +647,7 @@ impl<D: Dial> DirectLink<D> {
             }
         };
 
+        let limit = if step == Step::Asset { covers::MAX_BYTES } else { MAX_REPLY_BYTES };
         let port = if secure { self.https_port } else { HTTP_PORT };
         let request = http::get(self.host.as_str(), port, &target);
         let socket = self
@@ -651,7 +655,7 @@ impl<D: Dial> DirectLink<D> {
             .dial(self.address, port)
             .map_err(|_| failure("backend_failed", UNREACHABLE))?;
         if !secure {
-            return Ok(Exchange::plain(socket, request, MAX_REPLY_BYTES, deadline_ms));
+            return Ok(Exchange::plain(socket, request, limit, deadline_ms));
         }
 
         let config = match step {
@@ -663,7 +667,7 @@ impl<D: Dial> DirectLink<D> {
             let _ = socket.close();
             return Err(failure("not_paired", NOT_PAIRED));
         };
-        Exchange::secure(socket, config, self.address, request, MAX_REPLY_BYTES, deadline_ms)
+        Exchange::secure(socket, config, self.address, request, limit, deadline_ms)
             .map_err(|_| failure("backend_failed", UNREACHABLE))
     }
 
