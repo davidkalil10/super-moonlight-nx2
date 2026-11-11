@@ -9,6 +9,9 @@ publish.workspace = true
 moonlight-nx2-core = { path = "../core" }
 moonlight-nx2-io = { path = "../io" }
 moonlight-nx2-ui = { path = "../ui" }
+moonlight-nx2-sunshine = { path = "../sunshine" }
+rustls = { version = "0.23", default-features = false }
+zeroize = { version = "1", default-features = false }
 
 [lints]
 workspace = true
