@@ -1080,6 +1080,7 @@ mod verified_tests {
         caps.verify_mode(Codec::Hevc, Size::P1080, 60);
         let mut settings = Settings::default();
         settings.value[Setting::Codec as usize] = Codec::H264 as u8;
+        settings.value[Setting::Size as usize] = Size::P1080 as u8;
         assert!(settings.adjust(Setting::Fps, 1, false, &caps).is_none());
         assert!(settings.adjust(Setting::Size, -1, false, &caps).is_none());
         let av1 = settings.adjust(Setting::Codec, 1, false, &caps).unwrap();
@@ -1124,7 +1125,7 @@ mod verified_tests {
             (used.codec(), used.size(), used.fps()),
             (Codec::H264, Size::P720, 60)
         );
-        assert_eq!(settings.size(), Size::P1080);
+        assert!(settings.size_auto());
     }
 }
 
