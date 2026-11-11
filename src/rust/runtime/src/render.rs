@@ -249,6 +249,8 @@ struct Objects {
     sequence: u32,
     rebuild: bool,
     retained: bool,
+    storage_writes: u32,
+    storage_busy: u32,
     config: Config,
     info: Info,
 }
@@ -326,6 +328,8 @@ impl Renderer {
                 sequence: 0,
                 rebuild: false,
                 retained: false,
+                storage_writes: 0,
+                storage_busy: 0,
                 config,
                 info: Info::default(),
             })),
@@ -442,6 +446,7 @@ impl Renderer {
 
     pub fn storage_mut(&mut self) -> Result<&mut [u8], Error> {
         self.active()?;
+        self.objects.count_busy_write();
         self.objects.wait_all()?;
         self.objects.storage.flush(frame::VIDEO_BASE..UI_CONTROL_END);
         Ok(self.objects.storage.bytes_mut())
@@ -1735,6 +1740,24 @@ impl Objects {
             self.device().end_command_buffer(command)?;
         }
         Ok(())
+    }
+
+    /// Counts the CPU writes that found a submit still reading the buffers. Each one is a write
+    /// the old, unwaited logic would have made into memory in use; the wait that follows keeps
+    /// the real ones apart.
+    fn count_busy_write(&mut self) {
+        let busy = self.flights.iter().any(|flight| {
+            flight.pending
+                && !unsafe { self.device().get_fence_status(flight.fence) }.unwrap_or(true)
+        });
+        self.storage_writes += 1;
+        self.storage_busy += u32::from(busy);
+        if self.storage_writes.is_multiple_of(600) {
+            log(&format!(
+                "render: storage writes={} while_gpu_busy={}",
+                self.storage_writes, self.storage_busy
+            ));
+        }
     }
 
     fn flush_mapped(&self, input: bool) {
