@@ -5,6 +5,7 @@ extern crate alloc;
 
 use alloc::{format, string::String};
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use crate::perf::Path;
 use moonlight_nx2_core::stats::StreamStats;
 
 const FIELDS: usize = 12;
@@ -222,4 +223,62 @@ pub fn request_idr() {
 
 pub fn take_idr_request() -> bool {
     IDR_WANTED.swap(false, Ordering::AcqRel)
+}
+
+static DECODER_PATH: AtomicU32 = AtomicU32::new(0);
+static DECODER_SUBMITS: AtomicU32 = AtomicU32::new(0);
+static DECODER_BUSY: AtomicU32 = AtomicU32::new(0);
+static DECODER_FRAMES: AtomicU32 = AtomicU32::new(0);
+static DECODER_ERRORS: AtomicU32 = AtomicU32::new(0);
+static DECODE_SUM_US: AtomicU64 = AtomicU64::new(0);
+static DECODE_MAX_US: AtomicU32 = AtomicU32::new(0);
+
+#[derive(Clone, Copy)]
+pub enum DecoderEvent {
+    Submit,
+    Busy,
+    Error,
+}
+
+/// The decode path the counters below belong to, set when a decoder opens.
+pub fn decoder_path(path: Path) {
+    DECODER_PATH.store(path as u32, Ordering::Relaxed);
+}
+
+pub fn decoder(event: DecoderEvent) {
+    let counter = match event {
+        DecoderEvent::Submit => &DECODER_SUBMITS,
+        DecoderEvent::Busy => &DECODER_BUSY,
+        DecoderEvent::Error => &DECODER_ERRORS,
+    };
+    counter.fetch_add(1, Ordering::Relaxed);
+}
+
+/// A frame first seen finished, `decode_ns` after its unit was submitted.
+pub fn decoded(decode_ns: u64) {
+    let decode_us = u32::try_from(decode_ns / 1000).unwrap_or(u32::MAX);
+    DECODER_FRAMES.fetch_add(1, Ordering::Relaxed);
+    DECODE_SUM_US.fetch_add(u64::from(decode_us), Ordering::Relaxed);
+    DECODE_MAX_US.fetch_max(decode_us, Ordering::Relaxed);
+}
+
+/// The decoder counters since the last call as a log line, None when nothing was submitted.
+pub fn take_decoder_text() -> Option<String> {
+    let submits = DECODER_SUBMITS.swap(0, Ordering::Relaxed);
+    let busy = DECODER_BUSY.swap(0, Ordering::Relaxed);
+    let frames = DECODER_FRAMES.swap(0, Ordering::Relaxed);
+    let errors = DECODER_ERRORS.swap(0, Ordering::Relaxed);
+    let sum = DECODE_SUM_US.swap(0, Ordering::Relaxed);
+    let max = DECODE_MAX_US.swap(0, Ordering::Relaxed);
+    let path = match DECODER_PATH.load(Ordering::Relaxed) {
+        path if path == Path::Copy as u32 => Path::Copy,
+        path if path == Path::InPlace as u32 => Path::InPlace,
+        _ => Path::Sdk,
+    };
+    (submits + busy + frames + errors != 0).then(|| {
+        format!(
+            "decoder path={path:?} submits={submits} busy={busy} frames={frames} errors={errors} decode mean/max us={}/{max}",
+            sum.checked_div(u64::from(frames)).unwrap_or(0)
+        )
+    })
 }

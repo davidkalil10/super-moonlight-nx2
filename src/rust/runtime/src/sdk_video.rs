@@ -9,7 +9,7 @@ use crate::{
     device::log,
     perf::Path,
     sdk,
-    stream_stats::{self, Stage},
+    stream_stats::{self, DecoderEvent, Stage},
 };
 use alloc::format;
 use moonlight_nx2_core::{
@@ -225,6 +225,9 @@ pub struct SdkVideo {
     submitted: [u64; UNITS],
     microseconds_reported: bool,
     busy_submits: u64,
+    /// Submission times of the units not yet seen decoded, oldest first.
+    in_flight: [u64; UNITS],
+    in_flight_count: usize,
 }
 
 impl SdkVideo {
@@ -260,6 +263,8 @@ impl SdkVideo {
             submitted: [0; UNITS],
             microseconds_reported: false,
             busy_submits: 0,
+            in_flight: [0; UNITS],
+            in_flight_count: 0,
         }
     }
 
@@ -272,6 +277,25 @@ impl SdkVideo {
 
     fn high_level(&self) -> bool {
         self.path == Path::Sdk
+    }
+
+    fn submitted_at(&mut self, now_ns: u64) {
+        if self.in_flight_count == UNITS {
+            self.in_flight.rotate_left(1);
+            self.in_flight_count -= 1;
+        }
+        self.in_flight[self.in_flight_count] = now_ns;
+        self.in_flight_count += 1;
+    }
+
+    /// Frames finish in submission order, so a newly ready one is the oldest unit's.
+    fn decoded_at(&mut self, now_ns: u64) {
+        if self.in_flight_count == 0 {
+            return;
+        }
+        stream_stats::decoded(now_ns.saturating_sub(self.in_flight[0]));
+        self.in_flight.rotate_left(1);
+        self.in_flight_count -= 1;
     }
 
     /// Input timestamps are sent in microseconds and the header documents nanoseconds for
@@ -366,6 +390,7 @@ fn check(operation: &str, result: u32) -> Result<(), BackendError> {
     if result == 0 {
         return Ok(());
     }
+    stream_stats::decoder(DecoderEvent::Error);
     log(&format!("sdk-video: {operation} result=0x{result:x}"));
     Err(BackendError::Refused)
 }
@@ -407,6 +432,8 @@ impl Backend for SdkVideo {
             );
         }
         let mut images = [0; SURFACES];
+        stream_stats::decoder_path(self.path);
+        self.in_flight_count = 0;
         if self.high_level() {
             let result = unsafe {
                 moonlightSdkDecoderOpen(
@@ -499,9 +526,12 @@ impl Backend for SdkVideo {
         };
         if result == SUBMIT_BUSY || (self.high_level() && result & 0x3f_ffff == TIMED_OUT) {
             self.busy_submits += 1;
+            stream_stats::decoder(DecoderEvent::Busy);
             return Err(BackendError::Busy);
         }
         check("submit", result)?;
+        stream_stats::decoder(DecoderEvent::Submit);
+        self.submitted_at(unsafe { sdk::moonlightNowNs() });
         self.submitted.rotate_left(1);
         self.submitted[UNITS - 1] = pts_us;
         Ok(())
@@ -521,9 +551,12 @@ impl Backend for SdkVideo {
             }
         })?;
         if ready {
-            #[cfg(feature = "diagnostic-sdk-decode")]
-            if self.ready != Some(surface) && self.chatty() {
-                log(&format!("b2ar: ready surface={surface}"));
+            if self.ready != Some(surface) {
+                #[cfg(feature = "diagnostic-sdk-decode")]
+                if self.chatty() {
+                    log(&format!("b2ar: ready surface={surface}"));
+                }
+                self.decoded_at(unsafe { sdk::moonlightNowNs() });
             }
             self.ready = Some(surface);
         }

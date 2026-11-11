@@ -411,6 +411,9 @@ impl Stream {
         if let Some(wake) = crate::stream_stats::take_wake_text() {
             log(&format!("stream: {wake}"));
         }
+        if let Some(decoder) = crate::stream_stats::take_decoder_text() {
+            log(&format!("stream: {decoder}"));
+        }
         let Some(audio) = running.audio_stats() else {
             return;
         };
