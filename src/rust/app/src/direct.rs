@@ -35,7 +35,7 @@ use moonlight_nx2_ui::{
 use crate::{
     covers,
     direct_input::{self, DirectInput},
-    direct_keys::Keys,
+    direct_keys::{self, Keys},
     json,
     link::{Link, LinkError},
     pointer::{KeyboardSample, MouseSample},
@@ -53,6 +53,12 @@ pub trait Dial {
     /// A UDP socket connected to `address`, for the stream's control channel.
     fn datagram(&mut self, _address: [u8; 4], _port: u16) -> Result<Box<dyn Datagram>, IoError> {
         Err(IoError::Failed)
+    }
+    /// A line for the console log.
+    fn log(&mut self, _line: &str) {}
+    /// A monotonic clock for timing slow steps in the log.
+    fn now_ms(&self) -> u64 {
+        0
     }
 }
 
@@ -73,6 +79,14 @@ impl<D: Dial + ?Sized> Dial for Box<D> {
 
     fn datagram(&mut self, address: [u8; 4], port: u16) -> Result<Box<dyn Datagram>, IoError> {
         (**self).datagram(address, port)
+    }
+
+    fn log(&mut self, line: &str) {
+        (**self).log(line)
+    }
+
+    fn now_ms(&self) -> u64 {
+        (**self).now_ms()
     }
 }
 
@@ -851,13 +865,23 @@ impl<D: Dial> DirectLink<D> {
     fn start_pairing(&mut self, files: &mut impl Files) -> Next {
         let random = self.dial.random();
         if self.identity.is_none() {
-            let Ok(identity) = Identity::generate(random) else {
+            let started = self.dial.now_ms();
+            let identity = Identity::generate(random);
+            let took = self.dial.now_ms().saturating_sub(started);
+            self.dial.log(&format!("direct: generated the console key ok={} ms={took}", identity.is_ok()));
+            let Ok(identity) = identity else {
                 return failure("backend_failed", NO_RANDOM);
             };
             let mut keys = core::mem::take(&mut self.keys);
-            let saved = keys.set_identity(&identity) && keys.save(files);
+            let encoded = keys.set_identity(&identity);
+            let size = keys.format().map(|text| text.len());
+            let saved = encoded && keys.save(files);
             self.keys = keys;
             if !saved {
+                self.dial.log(&format!(
+                    "direct: key file {} not saved encoded={encoded} bytes={size:?}",
+                    direct_keys::FILE
+                ));
                 return failure("backend_failed", KEY_NOT_SAVED);
             }
             self.identity = Some(identity);

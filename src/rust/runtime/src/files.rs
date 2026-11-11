@@ -148,10 +148,11 @@ impl Directory {
     }
 
     fn path(&self, name: &str, suffix: &str) -> Option<CString> {
-        if !matches!(
+        let known = matches!(
             name,
             "hosts.json" | "settings.json" | "settings-0.json" | "settings-1.json" | "pairings"
-        ) {
+        ) || name == moonlight_nx2_app::direct_keys::FILE;
+        if !known {
             return None;
         }
         CString::new(format!("{}/{name}{suffix}", self.path.to_str().ok()?)).ok()
@@ -273,6 +274,9 @@ impl CoverDirectory {
     }
 }
 
+/// The largest settings-style file; the Sunshine key book holds an RSA key and certificates.
+const MAX_FILE_BYTES: usize = moonlight_nx2_app::direct_keys::MAX_BYTES;
+
 impl Files for Directory {
     fn read(&mut self, name: &str, buffer: &mut [u8]) -> Option<usize> {
         let mut path = self.path(name, "")?;
@@ -287,7 +291,7 @@ impl Files for Directory {
     }
 
     fn write(&mut self, name: &str, bytes: &[u8]) -> bool {
-        if bytes.len() > 4096 {
+        if bytes.len() > MAX_FILE_BYTES {
             return false;
         }
         let Some(path) = self.path(name, "") else {
@@ -353,6 +357,39 @@ mod tests {
             uniqueid: Address::of(uniqueid),
             mac: None,
         }
+    }
+
+    fn fill(bytes: &mut [u8]) -> bool {
+        use std::io::Read;
+        std::fs::File::open("/dev/urandom").and_then(|mut file| file.read_exact(bytes)).is_ok()
+    }
+
+    #[test]
+    fn the_sunshine_key_book_survives_the_directory() {
+        use moonlight_nx2_app::{
+            direct_keys::{FILE, Keys},
+            pairings::Loaded,
+            sunshine::{identity::Identity, random::Random},
+        };
+        let folder = std::env::temp_dir().join(format!("moonlight-keys-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&folder);
+        let path = CString::new(folder.to_str().unwrap()).unwrap();
+        let mut directory = Directory::create(&path).unwrap();
+        let identity = Identity::generate(Random(fill)).unwrap();
+        let mut keys = Keys::default();
+        assert!(keys.set_identity(&identity));
+        assert!(keys.pin(&Address::of("192.168.8.245"), identity.cert_der()));
+        let size = keys.format().unwrap().len();
+        assert!(size > 4096, "the book is {size} bytes");
+
+        assert!(keys.save(&mut directory));
+        assert!(keys.save(&mut directory), "a save over an existing book");
+        assert!(folder.join(FILE).exists());
+        let (loaded, state) = Keys::load(&mut directory);
+        assert_eq!(state, Loaded::Read);
+        assert_eq!(loaded.identity().unwrap().uniqueid, identity.uniqueid());
+        assert!(loaded.server(&Address::of("192.168.8.245")).is_some());
+        let _ = std::fs::remove_dir_all(&folder);
     }
 
     #[test]

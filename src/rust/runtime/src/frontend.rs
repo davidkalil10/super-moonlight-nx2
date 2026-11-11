@@ -627,7 +627,7 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
                 .driver
                 .service_mut()
                 .set_link_timeout(now_ms, PAIRING_LIMIT_MS + 5_000);
-            crate::render_platform::log("pairing: showing a code and waiting for the PC");
+            crate::render_platform::log("pairing: trying the PC helper with a pairing code");
         }
         self.handshake = Some(Handshake {
             socket,

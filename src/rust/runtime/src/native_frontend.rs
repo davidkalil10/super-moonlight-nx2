@@ -175,6 +175,14 @@ impl moonlight_nx2_app::direct::Dial for NativeDial {
         crate::system::nickname().unwrap_or_else(|| alloc::string::String::from(DEVICE_NAME))
     }
 
+    fn log(&mut self, line: &str) {
+        crate::render_platform::log(line);
+    }
+
+    fn now_ms(&self) -> u64 {
+        (unsafe { sdk::moonlightNowNs() }) / 1_000_000
+    }
+
     fn datagram(
         &mut self,
         address: [u8; 4],
