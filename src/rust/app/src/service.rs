@@ -1565,10 +1565,14 @@ impl Service {
                     Some(false),
                     format_args!("Pairing failed: {}", message.as_str()),
                 ),
-            (_, Reply::Failure { code, .. }) => {
+            (_, Reply::Failure { code, message }) => {
                 let uncertain =
                     matches!(code, Code::Timeout | Code::BackendFailed | Code::Cancelled);
-                self.operation_failed(pending, code.message(), uncertain)
+                let reason = match message.as_str() {
+                    "" => code.message(),
+                    message => message,
+                };
+                self.operation_failed(pending, reason, uncertain)
             }
             _ => {
                 self.stats.malformed += 1;

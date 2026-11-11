@@ -28,6 +28,8 @@ const SIGNATURE_MAX: usize = 1024;
 pub enum Error {
     /// Sunshine said no: another pairing is running or the PIN was refused.
     Refused,
+    /// Sunshine did not accept the console's certificate over HTTPS.
+    Unauthorized,
     /// The server's proof does not match: the PIN typed differs, or someone is in between.
     WrongPin,
     /// The server's pairing secret is not signed by the certificate it sent.
@@ -116,6 +118,7 @@ pub fn new_pin(random: Random) -> Result<[u8; PIN_DIGITS], Error> {
 fn paired(body: &str) -> Result<(), Error> {
     match xml::root_status(body) {
         Some((200, _)) => {}
+        Some((401, _)) => return Err(Error::Unauthorized),
         Some(_) => return Err(Error::Refused),
         None => return Err(Error::Malformed),
     }
@@ -251,5 +254,18 @@ impl Pairing {
 
     pub fn random(&self) -> Random {
         self.random
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_refused_client_certificate_is_not_a_refused_pin() {
+        let refused = r#"<?xml version="1.0" encoding="utf-8"?><root status_code="401" query="/pair" status_message="The client is not authorized. Certificate verification failed."/>"#;
+        assert_eq!(paired(refused), Err(Error::Unauthorized));
+        let declined = r#"<root status_code="200"><paired>0</paired></root>"#;
+        assert_eq!(paired(declined), Err(Error::Refused));
     }
 }

@@ -100,6 +100,8 @@ const UNREACHABLE: &str = "Sunshine did not answer on this PC";
 const CHANGED: &str = "This PC's certificate changed; pair it again";
 const KEY_NOT_SAVED: &str = "The console's Sunshine key could not be saved";
 const REFUSED: &str = "Sunshine refused the pairing; check the PIN and try again";
+const LISTED: &str = "Sunshine refused this console's certificate. It may be listed more than once \
+                      under Clients in Sunshine's web UI; remove it there and pair again";
 const WRONG_PIN: &str = "The PIN typed in Sunshine did not match";
 const NO_RANDOM: &str = "The console has no random source";
 const OLD_HOST: &str = "This host is too old for direct pairing; update Sunshine";
@@ -397,6 +399,7 @@ fn transport_failure(error: &exchange::Error) -> Next {
         exchange::Error::Tls(rustls::Error::InvalidCertificate(_)) => {
             failure("not_paired", CHANGED)
         }
+        exchange::Error::Tls(rustls::Error::AlertReceived(_)) => failure("not_paired", LISTED),
         _ => failure("backend_failed", UNREACHABLE),
     }
 }
@@ -758,7 +761,10 @@ impl<D: Dial> DirectLink<D> {
                 Err(serverinfo::Error::Status(401)) if matches!(job, Job::Pair { .. }) => {
                     self.start_pairing(files)
                 }
-                Err(serverinfo::Error::Status(401)) => failure("not_paired", NOT_PAIRED),
+                Err(serverinfo::Error::Status(401)) if job == Job::List => {
+                    failure("backend_failed", LISTED)
+                }
+                Err(serverinfo::Error::Status(401)) => failure("not_paired", LISTED),
                 Err(_) => failure("backend_failed", UNREACHABLE),
             },
             Step::AppList => match apps::parse(body) {
@@ -773,7 +779,7 @@ impl<D: Dial> DirectLink<D> {
                     self.apps = list;
                     next
                 }
-                Err(serverinfo::Error::Status(401)) => failure("not_paired", NOT_PAIRED),
+                Err(serverinfo::Error::Status(401)) => failure("not_paired", LISTED),
                 Err(_) => failure("backend_failed", UNREACHABLE),
             },
             Step::Asset => {
@@ -790,7 +796,7 @@ impl<D: Dial> DirectLink<D> {
                 next
             }
             Step::Cancel => match serverinfo::parse(body) {
-                Err(serverinfo::Error::Status(401)) => failure("not_paired", NOT_PAIRED),
+                Err(serverinfo::Error::Status(401)) => failure("not_paired", LISTED),
                 _ => Next::Call(Step::SecureInfo),
             },
             Step::Pair(_) => self.paired_step(body, files),
@@ -805,7 +811,7 @@ impl<D: Dial> DirectLink<D> {
                     active.rtsp = Some(Handshake::new(self.address, port, stream_request(start), key));
                     Next::Call(Step::Rtsp)
                 }
-                Err(serverinfo::Error::Status(401)) => failure("not_paired", NOT_PAIRED),
+                Err(serverinfo::Error::Status(401)) => failure("not_paired", LISTED),
                 Err(_) => failure("backend_failed", "Sunshine did not start the app"),
             },
             Step::Rtsp => self.rtsp_step(&response, now_ms),
@@ -995,6 +1001,7 @@ impl<D: Dial> DirectLink<D> {
             Ok(stage) => return Next::Call(Step::Pair(stage)),
             Err(pairing::Error::WrongPin) => return failure("backend_failed", WRONG_PIN),
             Err(pairing::Error::Refused) => return failure("busy", REFUSED),
+            Err(pairing::Error::Unauthorized) => return failure("not_paired", LISTED),
             Err(pairing::Error::Untrusted) => return failure("backend_failed", WRONG_PIN),
             Err(_) => return failure("backend_failed", UNREACHABLE),
         }
