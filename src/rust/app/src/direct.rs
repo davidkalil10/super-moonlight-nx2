@@ -1,6 +1,7 @@
 //! The control-v1 link answered on the console itself: list, pair, unpair, quit and covers go
 //! straight to Sunshine, and start launches the app and runs its RTSP and control handshakes.
-//! Video and audio are not wired to the console's media path yet.
+//! Once control is up the start answers with a stream frame and the runtime opens media from
+//! the live session.
 //! Design: moonlight-nx2-dev/src/rust/sunshine/README.md.
 
 extern crate alloc;
@@ -10,11 +11,11 @@ use alloc::{boxed::Box, collections::VecDeque, format, string::String, sync::Arc
 use moonlight_nx2_core::control::{Frame, Header, Kind};
 use moonlight_nx2_io::{
     socket::{IoError, Socket},
-    udp::{Datagram, MAX_DATAGRAM},
+    udp::Datagram,
 };
 use moonlight_nx2_sunshine::{
     HTTP_PORT, HTTPS_PORT, WEB_UI_PORT, apps,
-    control::{ControlSender, HostEvent},
+    control::HostEvent,
     control_stream::{self, ControlStream},
     exchange::{self, Exchange},
     hex, http,
@@ -34,12 +35,11 @@ use moonlight_nx2_ui::{
 
 use crate::{
     covers,
-    direct_input::{self, DirectInput},
+    direct_input::DirectInput,
+    direct_stream::Live,
     direct_keys::{self, Keys},
     json,
     link::{Link, LinkError},
-    pointer::{KeyboardSample, MouseSample},
-    reply::Rumble,
     request::DEFAULT_PAIR_TIMEOUT_S,
 };
 
@@ -103,8 +103,6 @@ const REFUSED: &str = "Sunshine refused the pairing; check the PIN and try again
 const WRONG_PIN: &str = "The PIN typed in Sunshine did not match";
 const NO_RANDOM: &str = "The console has no random source";
 const OLD_HOST: &str = "This host is too old for direct pairing; update Sunshine";
-const NO_MEDIA: &str = "Sunshine is streaming, but its video is not wired up in this build; \
-                        quit the app to end it";
 const NO_APP: &str = "Sunshine has no app with that name";
 const OTHER_APP: &str = "Another app is running on this PC; quit it first";
 const NO_CONTROL: &str = "Sunshine's control channel did not answer";
@@ -135,6 +133,8 @@ struct Start {
     bitrate_kbps: u32,
     codec: Option<Codec>,
     options: launch::Options,
+    udp: bool,
+    telemetry: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -149,15 +149,6 @@ enum Step {
     Launch { app: u32, resume: bool },
     Rtsp,
     Control,
-}
-
-/// A stream whose control channel is up.
-pub struct Live {
-    pub app: u32,
-    pub negotiated: Negotiated,
-    pub control: ControlStream,
-    pub input: DirectInput,
-    socket: Box<dyn Datagram>,
 }
 
 struct Active<S: Socket> {
@@ -286,6 +277,7 @@ fn parse_start(root: json::Value<'_>) -> Option<Start> {
             .and_then(|value| value.as_bool())
             .unwrap_or(false)
     };
+    let text = |key: &str| options.and_then(|options| options.member(key)).and_then(|value| value.as_plain_str());
     let small = |key: &str, default: u16| {
         number(key).and_then(|value| u16::try_from(value).ok()).filter(|value| *value > 0).unwrap_or(default)
     };
@@ -306,7 +298,41 @@ fn parse_start(root: json::Value<'_>) -> Option<Start> {
             sops: flag("sops"),
             local_audio: flag("local_audio"),
         },
+        udp: text("transport") == Some("udp-v1"),
+        telemetry: text("telemetry") == Some("upstream-v1"),
     })
+}
+
+/// The stream frame the service checks a start against. Media itself opens from the
+/// negotiated session, so the tokens only have to be well formed and distinct.
+fn handoff(start: &Start, stream: &Negotiated) -> String {
+    let codec = match stream.codec {
+        Codec::H264 => "h264",
+        Codec::Hevc => "hevc",
+        Codec::Av1 => "av1",
+    };
+    let token = |digit: char| core::iter::repeat_n(digit, 64).collect::<String>();
+    let video = if start.udp {
+        format!(
+            "\"transport\":\"udp-v1\",\"udp\":{{\"version\":1,\"port\":{},\"token\":\"{}\",\"fragment_bytes\":1360,\"unit_slots\":8,\"feedback\":\"input-drop-v1\",\"deadline_us\":100000,\"spread_us\":0,\"pace_bytes_per_ms\":1000,\"hello_ms\":1000}},",
+            stream.video_port,
+            token('2')
+        )
+    } else {
+        String::new()
+    };
+    let telemetry = if start.telemetry { ",\"telemetry\":\"upstream-v1\"" } else { "" };
+    format!(
+        "{{\"codec\":\"{codec}\",\"width\":{},\"height\":{},\"fps\":{},\"video\":{{{video}\"port\":{},\"token\":\"{}\",\"max_payload\":{},\"ack\":\"input-v1\"}},\"audio\":{{\"port\":{},\"token\":\"{}\",\"rate\":48000,\"channels\":2,\"format\":\"s16le\",\"chunk_bytes\":1920,\"ack\":\"header\"}}{telemetry}}}",
+        stream.width,
+        stream.height,
+        stream.fps,
+        stream.video_port,
+        token('0'),
+        crate::stream::MAX_VIDEO_PAYLOAD,
+        stream.audio_port,
+        token('1'),
+    )
 }
 
 fn codecs(preferred: Option<Codec>) -> &'static [Codec] {
@@ -416,7 +442,7 @@ impl<D: Dial> DirectLink<D> {
                 let _ = exchange.close();
             }
             if let Some(live) = active.live.take() {
-                end(live, 0);
+                live.end(0);
             }
         }
         self.end_live(0);
@@ -434,7 +460,7 @@ impl<D: Dial> DirectLink<D> {
 
     fn end_live(&mut self, now_ms: u64) {
         if let Some(live) = self.live.take() {
-            end(live, now_ms);
+            live.end(now_ms);
         }
     }
 
@@ -529,7 +555,7 @@ impl<D: Dial> DirectLink<D> {
             Job::Stop => failure("invalid_state", "No stream is running"),
             Job::Idr => match self.live.as_mut() {
                 Some(live) => {
-                    let queued = live.control.request_idr(now_ms).is_ok();
+                    let queued = live.request_idr(now_ms).is_ok();
                     result("idr", &format!("{{\"event\":\"idr\",\"queued\":{queued}}}"))
                 }
                 None => failure("invalid_state", "No stream is running"),
@@ -827,15 +853,8 @@ impl<D: Dial> DirectLink<D> {
             .as_ref()
             .and_then(|start| self.apps.iter().find(|app| app.title == start.app))
             .map(|app| app.id);
-        let mut input = DirectInput::new(features);
-        input.connect();
-        active.live = Some(Live {
-            app: app.unwrap_or(0),
-            negotiated,
-            control,
-            input,
-            socket,
-        });
+        let input = DirectInput::new(features);
+        active.live = Some(Live::new(app.unwrap_or(0), negotiated, control, input, socket, now_ms));
         active.deadline_ms = now_ms.saturating_add(CONTROL_MS);
         Next::Call(Step::Control)
     }
@@ -848,18 +867,20 @@ impl<D: Dial> DirectLink<D> {
             active.live = None;
             return Some(failure("backend_failed", NO_CONTROL));
         }
-        match live.control.state() {
+        match live.state() {
             control_stream::State::Streaming => {}
             control_stream::State::Connecting if now_ms < active.deadline_ms => return None,
             _ => {
                 if let Some(live) = active.live.take() {
-                    end(live, now_ms);
+                    live.end(now_ms);
                 }
                 return Some(failure("timeout", NO_CONTROL));
             }
         }
-        self.live = active.live.take();
-        Some(failure("unsupported", NO_MEDIA))
+        let live = active.live.take()?;
+        let handoff = active.start.as_ref().map(|start| handoff(start, &live.negotiated));
+        self.live = Some(live);
+        Some(Next::Reply(Kind::Stream, handoff.unwrap_or_default()))
     }
 
     fn start_pairing(&mut self, files: &mut impl Files) -> Next {
@@ -1002,100 +1023,6 @@ fn stream_request(start: &Start) -> StreamRequest {
         audio_channels: 2,
         controllers: 1,
     }
-}
-
-/// Says goodbye on the control channel without waiting for the host.
-fn end(mut live: Live, now_ms: u64) {
-    live.input.release();
-    live.input.disconnect();
-    let _ = live.flush_input(now_ms);
-    live.control.disconnect(now_ms);
-    while let Some(datagram) = live.control.output(now_ms) {
-        if live.socket.send(&datagram).is_err() {
-            break;
-        }
-    }
-    let _ = live.socket.close();
-}
-
-impl Live {
-    /// Moves datagrams both ways; false once the channel ended.
-    fn pump(
-        &mut self,
-        now_ms: u64,
-        events: &mut VecDeque<HostEvent>,
-        replies: &mut VecDeque<(Kind, u32, Vec<u8>)>,
-    ) -> bool {
-        let mut buffer = [0u8; MAX_DATAGRAM + 1];
-        loop {
-            match self.socket.recv(&mut buffer) {
-                Ok(length) if length <= MAX_DATAGRAM => {
-                    let input = &mut self.input;
-                    self.control.input(&buffer[..length], now_ms, &mut |event| {
-                        if let Some(rumble) = input.host_event(event) {
-                            replies.push_back((Kind::Event, 0, rumble_event(rumble).into_bytes()));
-                        }
-                        events.push_back(event);
-                    });
-                }
-                Ok(_) => {}
-                Err(IoError::WouldBlock | IoError::Interrupted) => break,
-                Err(_) => return false,
-            }
-        }
-        for _ in 0..2 {
-            while let Some(datagram) = self.control.output(now_ms) {
-                match self.socket.send(&datagram) {
-                    Ok(()) | Err(IoError::WouldBlock) => {}
-                    Err(_) => return false,
-                }
-            }
-            if self.flush_input(now_ms).is_err() {
-                break;
-            }
-        }
-        !matches!(self.control.state(), control_stream::State::Ended(_))
-    }
-
-    /// Takes one input record from the console's recorder and sends what changed.
-    pub fn record(&mut self, record: &[u8], now_ms: u64) -> Result<bool, direct_input::Error> {
-        let changed = self.input.apply(record, now_ms.saturating_mul(1000))?;
-        self.flush_input(now_ms)?;
-        Ok(changed)
-    }
-
-    fn flush_input(&mut self, now_ms: u64) -> Result<(), direct_input::Error> {
-        if !self.control.started() {
-            return Ok(());
-        }
-        self.input.flush(&mut control_stream::Sender {
-            stream: &mut self.control,
-            now_ms,
-        })
-    }
-
-    /// Takes the USB mouse and keyboard; flushed with the next pump.
-    pub fn pointer(&mut self, mouse: Option<&MouseSample>, keyboard: Option<&KeyboardSample>) {
-        if let Some(mouse) = mouse {
-            self.input.mouse(mouse);
-        }
-        self.input.keyboard(keyboard);
-    }
-
-    /// Where input sends its messages.
-    pub fn sender(&mut self, now_ms: u64) -> impl ControlSender + '_ {
-        control_stream::Sender {
-            stream: &mut self.control,
-            now_ms,
-        }
-    }
-}
-
-fn rumble_event(rumble: Rumble) -> String {
-    format!(
-        "{{\"event\":\"rumble\",\"controller\":{},\"low\":{},\"high\":{}}}",
-        rumble.player, rumble.low, rumble.high
-    )
 }
 
 /// A random version 4 UUID for the requests' `uuid` argument.

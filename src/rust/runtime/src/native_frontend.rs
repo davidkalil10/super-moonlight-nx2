@@ -9,7 +9,7 @@ use crate::{
     display::{FrameRates, Probe, WindowMode},
     files::Directory,
     frontend::{AuthError, Connections, Frontend, MediaRequest},
-    frontend_stream::Stream,
+    frontend_stream::{Control, Stream},
     hid::{InputGate, Sampler},
     net::NetSocket,
     render::{Config, Renderer},
@@ -390,10 +390,16 @@ fn execute(renderer: &mut Renderer, connections: &mut NativeConnections, launch:
         let now_ms = now / 1_000_000;
         for request in app.take_media() {
             match request {
-                MediaRequest::Open(descriptor) => {
-                    let peer = app.peer();
-                    stream.open(&mut app.client, *descriptor, peer, now_ms);
-                }
+                MediaRequest::Open(descriptor) => match app.direct_media() {
+                    Some((negotiated, outbox)) => {
+                        let control = Control(Box::new(outbox));
+                        stream.open_direct(&mut app.client, &negotiated, control, now_ms);
+                    }
+                    None => {
+                        let peer = app.peer();
+                        stream.open(&mut app.client, *descriptor, peer, now_ms);
+                    }
+                },
                 MediaRequest::Close => stream.begin_close(&mut app.client, now_ms),
             }
         }

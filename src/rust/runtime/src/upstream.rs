@@ -5,7 +5,8 @@ extern crate alloc;
 use alloc::boxed::Box;
 
 use moonlight_nx2_app::{
-    direct::{Dial, DirectLink, Live},
+    direct::{Dial, DirectLink},
+    direct_stream::Live,
     link::{Link, LinkError},
 };
 use moonlight_nx2_core::control::Frame;

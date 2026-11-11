@@ -66,6 +66,9 @@ pub trait ControlSender {
         delivery: Delivery,
         payload: &[u8],
     ) -> Result<(), SendError>;
+
+    /// Frames `first..=last` never decoded; reported to the host with the loss stats.
+    fn frames_lost(&mut self, _first: u32, _last: u32) {}
 }
 
 /// What the host asks of the console during a stream.

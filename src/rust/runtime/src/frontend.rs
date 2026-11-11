@@ -422,6 +422,17 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
         self.control.is_some() && self.authenticated
     }
 
+    /// The live Sunshine session media opens from when the link is direct.
+    pub fn direct_media(
+        &mut self,
+    ) -> Option<(
+        moonlight_nx2_app::sunshine::stream::Negotiated,
+        moonlight_nx2_app::direct_stream::Outbox,
+    )> {
+        let live = self.control.as_mut()?.live()?;
+        Some((live.negotiated.clone(), live.outbox()))
+    }
+
     pub fn take_media(&mut self) -> Vec<MediaRequest> {
         core::mem::take(&mut self.media)
     }
@@ -471,8 +482,12 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
             return;
         }
         if control.direct() {
-            self.typing.take_pending();
-            crate::render_platform::log("keyboard: direct link has no text route yet");
+            let text = self.typing.take_pending();
+            let sent = match (text, control.live()) {
+                (Some(text), Some(live)) => live.text(&text),
+                _ => false,
+            };
+            crate::render_platform::log(&alloc::format!("keyboard: direct text sent={sent}"));
         } else if self.client.bridge.model().screen() != Screen::Streaming {
             self.typing.take_pending();
         } else {
@@ -586,7 +601,9 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
         }
         let pc = self.client.bridge.model().host().map(|host| host.address);
         let helper_key = pc.is_some_and(|pc| self.pairings.find(&pc).is_some());
-        if !helper_key && self.open_direct(connections, true) {
+        let settings = self.client.bridge.model().settings();
+        let helper_first = helper_key && settings.on(moonlight_nx2_ui::settings::Setting::PcHelper);
+        if !helper_first && self.open_direct(connections, true) {
             return;
         }
         let Some(target) = self.target(connections) else {

@@ -107,6 +107,10 @@ impl ControlSender for Control {
     ) -> Result<(), SendError> {
         self.0.send(kind, channel, delivery, payload)
     }
+
+    fn frames_lost(&mut self, first: u32, last: u32) {
+        self.0.frames_lost(first, last);
+    }
 }
 
 fn direct_codec(codec: SunshineCodec) -> codec::Codec {
@@ -350,7 +354,6 @@ impl Stream {
 
     /// Opens media straight from Sunshine once PLAY succeeded: RTP video and audio on the
     /// negotiated ports, Opus decoded on the console, keyframe requests through `control`.
-    #[expect(dead_code, reason = "the direct launch calls this once it hands over a stream")]
     pub fn open_direct<F: Files + Clone>(
         &mut self,
         client: &mut Client<F>,

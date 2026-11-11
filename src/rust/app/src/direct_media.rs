@@ -61,6 +61,10 @@ impl<C: ControlSender> video::Events for ControlEvents<C> {
         );
         self.unsent += u64::from(sent.is_err());
     }
+
+    fn frames_lost(&mut self, first: u32, last: u32) {
+        self.control.frames_lost(first, last);
+    }
 }
 
 fn send_ping<U: Datagram>(socket: &mut U, ping: &mut Ping, now_us: u64) -> Result<(), IoError> {
