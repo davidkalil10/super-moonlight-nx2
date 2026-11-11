@@ -17,7 +17,8 @@ use crate::{
 use alloc::{boxed::Box, format, vec};
 use core::cell::Cell;
 use moonlight_nx2_app::{
-    direct_media::{self, ControlEvents, DirectAudio, DirectVideo},
+    direct_media::{self, ControlEvents, DirectAudio, DirectVideo, InputSink},
+    direct_stream::Outbox,
     media::{Closed, Media, Memory, UdpMedia},
     policy::{Epoch, Observation, Telemetry},
     reply::Descriptor,
@@ -94,8 +95,15 @@ enum Active {
     Direct(Box<DirectSession>),
 }
 
-/// The Sunshine control stream the direct launch owns; video asks it for keyframes.
-pub struct Control(pub Box<dyn ControlSender>);
+/// The Sunshine control stream the direct launch owns; video asks it for keyframes and hands
+/// it the input record of each frame.
+pub struct Control(pub Outbox);
+
+impl InputSink for Control {
+    fn input(&mut self, record: &[u8]) {
+        self.0.input(record);
+    }
+}
 
 impl ControlSender for Control {
     fn send(

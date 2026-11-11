@@ -137,12 +137,6 @@ impl Live {
         self.channel.borrow_mut().control.request_idr(now_ms)
     }
 
-    /// Takes one input record from the console's recorder and sends what changed.
-    pub fn record(&mut self, record: &[u8], now_ms: u64) -> Result<bool, direct_input::Error> {
-        self.channel.borrow_mut().now_ms = now_ms;
-        self.outbox().apply(record)
-    }
-
     /// Takes the USB mouse and keyboard; flushed with the next pump.
     pub fn pointer(&mut self, mouse: Option<&MouseSample>, keyboard: Option<&KeyboardSample>) {
         let mut channel = self.channel.borrow_mut();
@@ -191,6 +185,12 @@ impl Outbox {
         channel.flush_input()?;
         channel.send_out();
         Ok(changed)
+    }
+}
+
+impl crate::direct_media::InputSink for Outbox {
+    fn input(&mut self, record: &[u8]) {
+        let _ = self.apply(record);
     }
 }
 

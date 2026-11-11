@@ -31,7 +31,7 @@ impl<S: Socket + 'static> Upstream<S> {
     }
 
     /// The stream whose control channel is up: its negotiated media settings and the
-    /// input session the media path feeds each record to with `Live::record`.
+    /// input session the media path feeds each record to through its `Outbox`.
     pub fn live(&mut self) -> Option<&mut Live> {
         self.0.live()
     }

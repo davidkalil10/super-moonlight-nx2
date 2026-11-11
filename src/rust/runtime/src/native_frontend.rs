@@ -309,7 +309,7 @@ fn execute(
                     let slots = renderer.frame_slots().ok();
                     match app.direct_media() {
                         Some((negotiated, outbox)) => {
-                            let control = Control(Box::new(outbox));
+                            let control = Control(outbox);
                             stream.open_direct(
                                 &mut app.client,
                                 &negotiated,
