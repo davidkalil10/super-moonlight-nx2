@@ -424,6 +424,50 @@ mod device {
 #[cfg(target_os = "none")]
 pub use device::{Sampler, rumble, stop_rumble};
 
+/// The USB mouse and keyboard, for the direct input path.
+#[cfg(target_os = "none")]
+pub mod pointer {
+    use moonlight_nx2_app::pointer::{KeyboardSample, MouseSample};
+
+    unsafe extern "C" {
+        fn moonlightPlatformMouse(out: *mut i32) -> bool;
+        fn moonlightPlatformKeyboard(out: *mut u64) -> bool;
+    }
+
+    pub fn mouse() -> Option<MouseSample> {
+        let mut out = [0i32; 6];
+        unsafe { moonlightPlatformMouse(out.as_mut_ptr()) }.then_some(MouseSample {
+            dx: out[0],
+            dy: out[1],
+            wheel_x: out[2],
+            wheel_y: out[3],
+            buttons: out[4] as u32,
+            connected: out[5] != 0,
+        })
+    }
+
+    pub fn keyboard() -> Option<KeyboardSample> {
+        let mut out = [0u64; 5];
+        unsafe { moonlightPlatformKeyboard(out.as_mut_ptr()) }.then_some(KeyboardSample {
+            modifiers: out[0],
+            keys: [out[1], out[2], out[3], out[4]],
+        })
+    }
+}
+
+#[cfg(not(target_os = "none"))]
+pub mod pointer {
+    use moonlight_nx2_app::pointer::{KeyboardSample, MouseSample};
+
+    pub fn mouse() -> Option<MouseSample> {
+        None
+    }
+
+    pub fn keyboard() -> Option<KeyboardSample> {
+        None
+    }
+}
+
 #[cfg(not(target_os = "none"))]
 pub fn rumble(_player: u8, _low: u16, _high: u16) {}
 

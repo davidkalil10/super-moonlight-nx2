@@ -352,6 +352,62 @@ bool moonlightPlatformInputRead(uint64_t sample, uint8_t *input, size_t bytes, u
     return true;
 }
 
+/* USB keyboard and mouse. Mouse: out = dx, dy, wheel x, wheel y (summed over the states since
+   the last read), buttons, connected. Keyboard: out = modifiers, then the four key bitmaps. */
+static bool pointer_ready;
+static uint64_t mouse_seen;
+
+static void pointer_init(void)
+{
+    if (pointer_ready)
+        return;
+    hidInitializeMouse();
+    hidInitializeKeyboard();
+    pointer_ready = true;
+}
+
+bool moonlightPlatformMouse(int32_t out[6])
+{
+    pointer_init();
+    HidMouseState states[16];
+    size_t count = hidGetMouseStates(states, 16);
+    bool first = mouse_seen == 0;
+    memset(out, 0, 6 * sizeof(int32_t));
+    uint64_t newest = mouse_seen;
+    uint64_t latest = 0;
+    for (size_t i = 0; i < count; i++) {
+        if (states[i].sampling_number >= latest) {
+            latest = states[i].sampling_number;
+            out[4] = (int32_t)states[i].buttons;
+            out[5] = (states[i].attributes & HidMouseAttribute_IsConnected) != 0;
+        }
+        if (first || states[i].sampling_number <= mouse_seen) {
+            if (states[i].sampling_number > newest)
+                newest = states[i].sampling_number;
+            continue;
+        }
+        out[0] += states[i].delta_x;
+        out[1] += states[i].delta_y;
+        out[2] += states[i].wheel_delta_x;
+        out[3] += states[i].wheel_delta_y;
+        if (states[i].sampling_number > newest)
+            newest = states[i].sampling_number;
+    }
+    mouse_seen = newest;
+    return count > 0;
+}
+
+bool moonlightPlatformKeyboard(uint64_t out[5])
+{
+    pointer_init();
+    HidKeyboardState state = {0};
+    if (hidGetKeyboardStates(&state, 1) == 0)
+        return false;
+    out[0] = state.modifiers;
+    memcpy(&out[1], state.keys, sizeof(state.keys));
+    return true;
+}
+
 bool moonlightPlatformStart(void)
 {
     if (!moonlightPlatformDirectoryCreate("sdmc:/switch") ||
