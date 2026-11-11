@@ -2,7 +2,7 @@ use super::{
     Deadline, WorkerError, WorkerResult,
     audio_callbacks::AudioOwner,
     connect,
-    direct_input::DirectInput,
+    direct_input::{self, DirectInput},
     key_directory,
     lifecycle::{Event as LifecycleEvent, Lifecycle},
     listener_callbacks::{Event as ListenerEvent, ListenerOwner},
@@ -273,6 +273,7 @@ pub fn run(args: &[String]) -> WorkerResult {
             }
         }
         if announced && stopping.is_none() {
+            input.set_motion_rates(monitor.motion_rates());
             monitor.take_rumble(|rumble| {
                 eprintln!(
                     "{{\"event\":\"rumble\",\"controller\":{},\"low\":{},\"high\":{}}}",
@@ -290,33 +291,7 @@ pub fn run(args: &[String]) -> WorkerResult {
         if native_connected && started && !announced && stopping.is_none() {
             eprintln!("{{\"event\":\"video\",\"codec\":\"{}\"}}", options.codec);
             eprintln!("{{\"event\":\"connected\"}}");
-            let buttons = native::A_FLAG
-                | native::B_FLAG
-                | native::X_FLAG
-                | native::Y_FLAG
-                | native::UP_FLAG
-                | native::DOWN_FLAG
-                | native::LEFT_FLAG
-                | native::RIGHT_FLAG
-                | native::LB_FLAG
-                | native::RB_FLAG
-                | native::PLAY_FLAG
-                | native::BACK_FLAG
-                | native::LS_CLK_FLAG
-                | native::RS_CLK_FLAG
-                | native::SPECIAL_FLAG;
-            unsafe {
-                native::LiSendControllerArrivalEvent(
-                    0,
-                    1,
-                    native::LI_CTYPE_XBOX as u8,
-                    buttons,
-                    (native::LI_CCAP_ANALOG_TRIGGERS
-                        | native::LI_CCAP_RUMBLE
-                        | native::LI_CCAP_ACCEL
-                        | native::LI_CCAP_GYRO) as u16,
-                )
-            };
+            direct_input::announce(0, 1);
             announced = true;
         }
         if stopping.is_none() {
