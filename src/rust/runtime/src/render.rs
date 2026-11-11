@@ -369,6 +369,26 @@ impl Renderer {
         Ok(self.objects.info)
     }
 
+    /// Asks for 120 Hz and VRR, or withdraws the request with `None`; a repeat is ignored.
+    pub fn set_frame_rates(
+        &mut self,
+        rates: Option<crate::display::FrameRates>,
+    ) -> Result<(), Error> {
+        self.active()?;
+        if rates.is_some_and(|rates| !rates.valid()) {
+            return Err(Error::Unsupported);
+        }
+        if self.objects.config.frame_rates != rates {
+            sdk::set_frame_rates(rates);
+            self.objects.config.frame_rates = rates;
+        }
+        Ok(())
+    }
+
+    pub fn frame_rates(&self) -> Option<crate::display::FrameRates> {
+        self.objects.config.frame_rates
+    }
+
     fn acquire_slot(&mut self) -> Result<usize, Error> {
         match self.free_slot_within(self.objects.config.upload_wait_ns)? {
             Some(slot) => Ok(slot),
@@ -1926,7 +1946,7 @@ impl Objects {
         }
         self.instance = None;
         if self.layer_claimed {
-            if sdk::release_layer(self.config.frame_rates.is_some()) != 0 {
+            if sdk::release_layer() != 0 {
                 return Err(self.retain());
             }
             self.layer_claimed = false;

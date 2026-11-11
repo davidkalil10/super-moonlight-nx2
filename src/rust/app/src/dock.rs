@@ -7,6 +7,7 @@ use crate::{
     stream,
 };
 use moonlight_nx2_core::codec::Capabilities;
+use moonlight_nx2_ui::settings::Size;
 
 /// A changed reading switches only when a second read this long after the first agrees.
 pub const CONFIRM_MS: u64 = 100;
@@ -113,4 +114,32 @@ pub fn render_size(width: u32, height: u32, docked: bool) -> (u32, u32) {
     } else {
         (width.min(BASE_WIDTH), height.min(BASE_HEIGHT))
     }
+}
+
+/// The largest stream size inside the console's own docked output: what Auto streams at
+/// docked. An output not known yet keeps the 4K ceiling.
+pub fn output_ceiling(output: Option<(u32, u32)>) -> (u32, u32) {
+    let Some((width, height)) = output else {
+        return (3840, 2160);
+    };
+    Size::largest_first()
+        .find(|&(size_width, size_height)| size_width <= width && size_height <= height)
+        .unwrap_or((BASE_WIDTH, BASE_HEIGHT))
+}
+
+/// Whether the window asks the display for 120 Hz and VRR, for the saved `size` (`None` is
+/// Auto) and `fps`. Handheld always: the panel keeps its size, and 120 fps is offered once
+/// presented. Docked only for a stream at 120 fps no taller than 1440p, so Auto on a 4K
+/// output never trades it for 120 Hz.
+pub fn requests_120hz(
+    docked: bool,
+    size: Option<(u32, u32)>,
+    fps: u32,
+    output: Option<(u32, u32)>,
+) -> bool {
+    if !docked {
+        return true;
+    }
+    let (_, height) = size.unwrap_or_else(|| output_ceiling(output));
+    fps == 120 && height <= FAST_HEIGHT
 }

@@ -77,16 +77,7 @@ pub fn create_surface(
             ));
             return Err(vk::Result::ERROR_INITIALIZATION_FAILED);
         }
-        if let Some(rates) = config.frame_rates {
-            let code =
-                crate::sdk::nwindowSetFrameRates(window, rates.at_120hz, rates.at_60hz, rates.vrr);
-            log(&alloc::format!(
-                "render: window frame rates {}/{} vrr={} result=0x{code:x}",
-                rates.at_120hz,
-                rates.at_60hz,
-                rates.vrr
-            ));
-        }
+        set_frame_rates(config.frame_rates);
         ash::nn::vi_surface::Instance::load(entry, instance).create_vi_surface(
             &vk::ViSurfaceCreateInfoNN::default().window(window),
             allocator,
@@ -100,23 +91,50 @@ pub fn create_surface(
     }
 }
 
-pub fn release_layer(rates_requested: bool) -> u32 {
+/// Asks the display for 120 Hz and VRR with `rates`, or withdraws both: the window then
+/// presents every 1/60 s and the console picks its own output mode again.
+pub fn set_frame_rates(rates: Option<crate::display::FrameRates>) {
     #[cfg(target_os = "none")]
-    {
-        unsafe {
-            let window = crate::sdk::nwindowGetDefault();
-            if rates_requested {
-                let result = crate::sdk::nwindowSetSwapInterval(window, 1);
+    unsafe {
+        let window = crate::sdk::nwindowGetDefault();
+        match rates {
+            Some(rates) => {
+                let code = crate::sdk::nwindowSetFrameRates(
+                    window,
+                    rates.at_120hz,
+                    rates.at_60hz,
+                    rates.vrr,
+                );
                 log(&alloc::format!(
-                    "render: window interval back to 1/60 result=0x{result:x}"
+                    "render: window frame rates {}/{} vrr={} result=0x{code:x}",
+                    rates.at_120hz,
+                    rates.at_60hz,
+                    rates.vrr
                 ));
             }
-            crate::sdk::nwindowReleaseVi2Layer(window)
+            None => {
+                let interval = crate::sdk::nwindowSetSwapInterval(window, 1);
+                let vrr = crate::sdk::nwindowSetVrr(window, false);
+                log(&alloc::format!(
+                    "render: window interval 1/60, 120Hz and VRR request withdrawn result=0x{interval:x}/0x{vrr:x}"
+                ));
+            }
         }
     }
     #[cfg(not(target_os = "none"))]
     {
-        let _ = rates_requested;
+        let _ = rates;
+    }
+}
+
+pub fn release_layer() -> u32 {
+    set_frame_rates(None);
+    #[cfg(target_os = "none")]
+    {
+        unsafe { crate::sdk::nwindowReleaseVi2Layer(crate::sdk::nwindowGetDefault()) }
+    }
+    #[cfg(not(target_os = "none"))]
+    {
         0
     }
 }
