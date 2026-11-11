@@ -97,7 +97,10 @@ fn two_pads_reach_the_host_with_their_own_numbers_and_masks() {
         arrived,
     };
     assert_eq!(sent, [update(0, 0b01, false), update(1, 0b11, true)]);
-    let removal = format!(r#"{{"v":2,"pads":[{{"index":1,"pad":{}}}]}}"#, pad(false, 0));
+    let removal = format!(
+        r#"{{"v":2,"pads":[{{"index":1,"pad":{}}}]}}"#,
+        pad(false, 0)
+    );
     let line = &lines(&mut forwarder, &removal)[0];
     assert_eq!(line["index"], 1);
     assert_eq!(pads.update(1, false), update(1, 0b01, false));

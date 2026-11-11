@@ -1,10 +1,13 @@
 use super::native;
 use moonlight_nx2_host::gamepads::{Gamepads, MotionGate, MotionKind, MotionRates, PADS};
 use serde::Deserialize;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 const MAX_LINE: usize = 3840;
 const MAX_TOUCHES: usize = 32;
+/// Long enough for the input thread to send the reset before the primary's arrival.
+const RESET_SETTLE: Duration = Duration::from_millis(200);
+
 /// Touch positions reach the mouse on this virtual grid.
 const MOUSE_GRID: f64 = 10_000.0;
 
@@ -71,6 +74,7 @@ pub struct DirectInput {
     motion_rates: MotionRates,
     started: Instant,
     live: bool,
+    settle_until: Option<Instant>,
     mouse_finger: Option<u32>,
 }
 
@@ -84,22 +88,36 @@ impl Default for DirectInput {
             motion_rates: [[0; 2]; PADS],
             started: Instant::now(),
             live: false,
+            settle_until: None,
             mouse_finger: None,
         }
     }
 }
 
 impl DirectInput {
-    /// Frees every pad an earlier session may have left on the host, so the primary arrives
-    /// fresh with this session's type and sensors, then announces it.
-    pub fn connect(&mut self) {
+    /// Frees every pad an earlier session may have left on the host. The primary arrives once
+    /// the removals have left the input queue, or its first event would be merged into them.
+    pub fn connect(&mut self, now: Instant) {
         for index in 0..PADS as u8 {
             send_empty(index, 0);
         }
         eprintln!("{{\"event\":\"controller\",\"action\":\"reset\",\"mask\":0}}");
         self.gamepads = Gamepads::default();
-        announce(0, self.gamepads.mask());
+        self.settle_until = Some(now + RESET_SETTLE);
         self.live = true;
+    }
+
+    /// False while the reset settles; then announces the primary and lets input through.
+    pub fn ready(&mut self, now: Instant) -> bool {
+        match self.settle_until {
+            Some(due) if now < due => false,
+            Some(_) => {
+                self.settle_until = None;
+                announce(0, self.gamepads.mask());
+                true
+            }
+            None => true,
+        }
     }
 
     /// Removes every pad while the connection still runs, so the host frees them.
