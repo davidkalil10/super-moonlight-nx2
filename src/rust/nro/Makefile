@@ -22,7 +22,9 @@ ARCH := -march=armv8-a+crc+crypto -mtune=cortex-a57 -mtp=soft -fPIE
 CPPFLAGS += -I$(LIBNX)/include
 CFLAGS := $(ARCH) -std=gnu11 -O2 -g -Wall -Wextra -Werror -ffunction-sections -fdata-sections
 LDFLAGS := $(ARCH) -specs=$(LIBNX)/switch.specs -Wl,-Map,$(OUTPUT).map -Wl,--wrap=gsvRegisterFrame
-LIBS := -L$(DEVKITPRO)/portlibs/switch2/lib -L$(LIBNX)/lib -lvulkan -lnx -lm
+MIMALLOC ?= 1
+NX_LIBRARY := $(if $(filter 0,$(MIMALLOC)),-lounce_core,-lnx)
+LIBS := -L$(DEVKITPRO)/portlibs/switch2/lib -L$(LIBNX)/lib -lvulkan $(NX_LIBRARY) -lm
 OBJECTS := $(BUILD_DIR)/platform.o $(BUILD_DIR)/io_adapter.o $(BUILD_DIR)/system.o $(BUILD_DIR)/sdk_viddec.o
 
 .PHONY: all
