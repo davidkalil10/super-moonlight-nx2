@@ -172,7 +172,9 @@ impl System {
             self.in_focus = in_focus;
             log(&format!("system: focus state={focus} in_focus={in_focus}"));
         }
-        let woke = resumed || stalled_ms >= STALL_MS;
+        let covered = app.keyboard_covers(now_ms);
+        let in_focus = in_focus || covered;
+        let woke = (resumed && !covered) || stalled_ms >= STALL_MS;
         if woke {
             log(&format!(
                 "system: woke resume_message={resumed} stalled_ms={stalled_ms}"

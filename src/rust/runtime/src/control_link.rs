@@ -180,7 +180,7 @@ impl<S: Socket + 'static> Link for Control<S> {
                 .iter()
                 .any(|name| op.string_is(name))
                 || (self.access == Access::Streaming
-                    && (op.string_is("start") || op.string_is("idr")))
+                    && (op.string_is("start") || op.string_is("idr") || op.string_is("text")))
         });
         if !allowed
             || self.rejected
@@ -251,6 +251,16 @@ mod tests {
         assert!(refused.rejected());
         let mut permitted = Control::open(SocketStub, [b'0'; 64], Access::Streaming, 0).unwrap();
         assert_eq!(permitted.request(br#"{"op":"idr"}"#), Err(LinkError::Again));
+        assert!(!permitted.rejected());
+    }
+
+    #[test]
+    fn text_requests_pass_only_with_streaming_access() {
+        let request = br#"{"op":"text","text":"hi"}"#;
+        let mut refused = Control::open(SocketStub, [b'0'; 64], Access::User, 0).unwrap();
+        assert_eq!(refused.request(request), Err(LinkError::Closed));
+        let mut permitted = Control::open(SocketStub, [b'0'; 64], Access::Streaming, 0).unwrap();
+        assert_eq!(permitted.request(request), Err(LinkError::Again));
         assert!(!permitted.rejected());
     }
 }

@@ -1158,6 +1158,7 @@ impl Builder<'_> {
 
         let items = [
             (item::RESUME_STREAM, "Resume", None, pal.ink),
+            (item::SHOW_KEYBOARD, "Show keyboard", None, pal.ink),
             (
                 item::TOGGLE_STATS,
                 "Show stats on screen",

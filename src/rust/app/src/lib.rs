@@ -32,6 +32,7 @@ pub mod request;
 pub mod service;
 pub mod stream;
 pub mod suspend;
+pub mod typing;
 pub mod system_status;
 pub mod wake;
 pub mod wake_connect;

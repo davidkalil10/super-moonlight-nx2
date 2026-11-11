@@ -33,6 +33,7 @@ pub enum Started {
     StartPending,
     StopPending,
     IdrReady { queued: bool },
+    TextReady { queued: bool },
     RevokeReady,
     ProbeReady { sequence: u32, bytes: u32 },
 }
@@ -369,6 +370,15 @@ impl Backend for HostBackend {
                     .ok_or_else(|| Box::new(Error::Unsupported))?;
                 Ok(Started::IdrReady {
                     queued: relay.request_idr(Instant::now()),
+                })
+            }
+            Operation::Text { text } => {
+                let relay = self
+                    .relay
+                    .as_mut()
+                    .ok_or_else(|| Box::new(Error::Unsupported))?;
+                Ok(Started::TextReady {
+                    queued: relay.send_text(text),
                 })
             }
             Operation::Revoke => Ok(Started::RevokeReady),

@@ -261,6 +261,14 @@ impl<'a> Connection<'a> {
                             out,
                         )
                     })?,
+                    Ok(Started::TextReady { queued }) => self.enqueue(now, |out| {
+                        response::result(
+                            id,
+                            response::OperationName::Text,
+                            &json!({"queued":queued}),
+                            out,
+                        )
+                    })?,
                     Ok(Started::RevokeReady) => {
                         self.revoked = true;
                         self.enqueue(now, |out| {
