@@ -11,6 +11,7 @@ pub mod controller;
 pub mod cover;
 #[cfg(unix)]
 pub mod display;
+pub mod gamepads;
 pub mod helper;
 pub mod input;
 pub mod listener;

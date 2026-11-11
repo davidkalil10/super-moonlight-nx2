@@ -1904,6 +1904,26 @@ mod app_options_tests {
     }
 
     #[test]
+    fn rumble_defaults_on_and_off_silences_every_strength() {
+        let mut json = crate::json::Json::new();
+        let old = Settings::from_json(br#"{"version":8,"rumble":50}"#, &mut json);
+        assert!(old.on(Setting::RumbleOn));
+        assert_eq!(old.rumble_percent(), 50);
+        let off = old
+            .adjust(Setting::RumbleOn, -1, false, &Capabilities::ALL)
+            .unwrap();
+        assert_eq!(off.rumble_percent(), 0);
+        let saved = Settings::from_json(off.to_json().as_str().as_bytes(), &mut json);
+        assert!(!saved.on(Setting::RumbleOn));
+        assert_eq!(saved.rumble_percent(), 0);
+        let on = saved
+            .adjust(Setting::RumbleOn, 1, false, &Capabilities::ALL)
+            .unwrap();
+        assert_eq!(on.rumble_percent(), 50);
+        assert_eq!(Setting::RumbleOn.category(), Setting::Rumble.category());
+    }
+
+    #[test]
     fn settings_open_from_every_menu_page_and_return_to_it() {
         let mut model = browsing();
         for expected in [Screen::Apps, Screen::AppOptions] {
