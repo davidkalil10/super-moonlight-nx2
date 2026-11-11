@@ -1,6 +1,6 @@
 //! Sunshine without the PC helper: the console's identity, PIN pairing, serverinfo, the app
-//! list and covers over HTTP and pinned TLS, and the stream's launch and control.
-//! Sans-IO; sockets are moonlight-nx2-io's.
+//! list and covers over HTTP and pinned TLS, the stream's launch and control, and its RTP
+//! video and audio with FEC. Sans-IO; sockets are moonlight-nx2-io's.
 //! Component docs and tests live in moonlight-nx2-dev/src/rust/sunshine.
 
 #![no_std]
@@ -8,16 +8,21 @@
 extern crate alloc;
 
 pub mod apps;
+pub mod audio;
 pub mod control;
 pub mod exchange;
 pub mod hex;
 pub mod http;
 pub mod identity;
+pub mod media;
 pub mod pairing;
 pub mod random;
+pub mod rs;
+pub mod rtp;
 pub mod serverinfo;
 pub mod stream;
 pub mod tls;
+pub mod video;
 pub mod xml;
 
 /// The ports Sunshine serves the GameStream HTTP API on.
