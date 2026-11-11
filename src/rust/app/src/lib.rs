@@ -11,6 +11,7 @@ pub mod dock;
 pub mod covers;
 pub mod direct;
 pub mod direct_keys;
+pub mod direct_input;
 pub mod driver;
 pub mod hosts;
 pub mod input;
