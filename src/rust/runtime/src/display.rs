@@ -126,14 +126,22 @@ const FAST_STREAM_AT_60HZ: bool = cfg!(feature = "sdk-video-120-decode");
 /// change not confirmed yet reads 60 Hz for less than that.
 const SLOW_SECONDS: u32 = 3;
 
+/// How long the docked output must stay the same, with no 120 Hz request, before it counts as
+/// the console's own mode. A withdrawn request or a dock change takes a moment to settle.
+const OUTPUT_SETTLE_NS: u64 = 2_000_000_000;
+
 /// The per-second present rate and the display modes of each operation mode. Sizes are shown
-/// at 60 from the start, up to 1080p handheld and 2160p docked. A rate above 60 counts once a
-/// full second presented on pace at the layer's size; the set of the other operation mode is
-/// kept, so docking back reuses what was already shown.
+/// at 60 from the start, up to 1080p handheld and up to the console's own output docked (2160p
+/// until it is known). A rate above 60 counts once a full second presented on pace at the
+/// layer's size while 120 Hz is requested; docked, it is dropped with the request. The set of
+/// the other operation mode is kept, so docking back reuses what was already shown.
 pub struct Probe {
     docked: bool,
+    requested: bool,
     verified: [moonlight_nx2_app::policy::DisplayCapabilities; 2],
     best: [(u32, u32, u32); 2],
+    output: Option<(u32, u32)>,
+    seen: Option<(u32, u32, u64)>,
     slow_seconds: u32,
     second_ns: u64,
     presented: u64,
@@ -144,31 +152,104 @@ impl Probe {
     /// Every size up to the largest of its operation mode is shown at 60 from the start: the
     /// layer scales, so only rates above 60 wait for the display to present them.
     pub fn new(docked: bool, now_ns: u64, presented: u64) -> Self {
-        use moonlight_nx2_app::policy::{DisplayEvidence, DisplayMode};
-        let best = [(1920, 1080, 60), (3840, 2160, 60)];
-        let mut verified: [moonlight_nx2_app::policy::DisplayCapabilities; 2] = Default::default();
-        for (set, (best_width, best_height, fps)) in verified.iter_mut().zip(best) {
-            for (width, height) in Size::largest_first() {
-                if width <= best_width && height <= best_height {
-                    let mode = DisplayMode { width, height, fps };
-                    set.record(mode, DisplayEvidence::PresentedAndCloseVerified);
-                }
-            }
-        }
-        Self {
+        let mut probe = Self {
             docked,
-            verified,
-            best,
+            requested: false,
+            verified: Default::default(),
+            best: [(1920, 1080, 60), (3840, 2160, 60)],
+            output: None,
+            seen: None,
             slow_seconds: 0,
             second_ns: now_ns,
             presented,
             rate: 0,
+        };
+        for index in 0..2 {
+            probe.reset(index);
         }
+        probe
+    }
+
+    /// Starts the set of `index` again at 60 fps, up to its ceiling.
+    fn reset(&mut self, index: usize) {
+        use moonlight_nx2_app::policy::{DisplayEvidence, DisplayMode};
+        let (best_width, best_height) = match index {
+            0 => (1920, 1080),
+            _ => moonlight_nx2_app::dock::output_ceiling(self.output),
+        };
+        self.verified[index] = Default::default();
+        for (width, height) in Size::largest_first() {
+            if width <= best_width && height <= best_height {
+                let mode = DisplayMode {
+                    width,
+                    height,
+                    fps: 60,
+                };
+                self.verified[index].record(mode, DisplayEvidence::PresentedAndCloseVerified);
+            }
+        }
+        self.best[index] = (best_width, best_height, 60);
     }
 
     pub fn set_docked(&mut self, docked: bool) {
         self.docked = docked;
         self.slow_seconds = 0;
+        self.seen = None;
+        if docked {
+            self.output = None;
+            self.reset(1);
+        }
+    }
+
+    pub fn requested(&self) -> bool {
+        self.requested
+    }
+
+    /// The window's 120 Hz request changed. Returns true when the docked set changed: a
+    /// withdrawn request drops the 120 fps it verified.
+    pub fn set_requested(&mut self, requested: bool) -> bool {
+        let dropped = self.docked && self.requested && !requested;
+        self.requested = requested;
+        self.slow_seconds = 0;
+        self.seen = None;
+        if dropped {
+            self.reset(1);
+        }
+        dropped
+    }
+
+    /// The console's own docked output, once settled without a request.
+    pub fn output(&self) -> Option<(u32, u32)> {
+        self.output
+    }
+
+    /// Call with the window's size on every display poll. Returns true when the docked set
+    /// changed because the console's own output did.
+    pub fn observe_output(&mut self, now_ns: u64, width: u32, height: u32) -> bool {
+        if !self.docked || self.requested || width == 0 || height == 0 {
+            return false;
+        }
+        let since = match self.seen {
+            Some((seen_width, seen_height, since))
+                if (seen_width, seen_height) == (width, height) =>
+            {
+                since
+            }
+            _ => {
+                self.seen = Some((width, height, now_ns));
+                return false;
+            }
+        };
+        if now_ns.saturating_sub(since) < OUTPUT_SETTLE_NS || self.output == Some((width, height)) {
+            return false;
+        }
+        self.output = Some((width, height));
+        let ceiling = moonlight_nx2_app::dock::output_ceiling(self.output);
+        if (self.best[1].0, self.best[1].1) == ceiling {
+            return false;
+        }
+        self.reset(1);
+        true
     }
 
     pub fn capabilities(&self) -> moonlight_nx2_app::policy::DisplayCapabilities {
@@ -194,7 +275,7 @@ impl Probe {
         use moonlight_nx2_app::policy::{DisplayEvidence, DisplayMode};
         let index = usize::from(self.docked);
         let (best_width, best_height, best_fps) = self.best[index];
-        if hz != 60 || best_fps <= 60 || FAST_STREAM_AT_60HZ {
+        if hz != 60 || best_fps <= 60 || FAST_STREAM_AT_60HZ || !self.requested {
             self.slow_seconds = 0;
             return false;
         }
@@ -252,5 +333,101 @@ impl Probe {
             );
         }
         grew
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use moonlight_nx2_app::{
+        policy::DisplayCapabilities,
+        request::{Codec, Options},
+    };
+
+    const SECOND: u64 = 1_000_000_000;
+
+    fn mode(width: u32, height: u32, fps: u32) -> Options {
+        Options {
+            width,
+            height,
+            fps,
+            codec: Codec::Hevc,
+            bitrate_kbps: 1,
+            sops: false,
+            local_audio: false,
+            quit_on_stop: false,
+            transport: None,
+        }
+    }
+
+    fn largest_at(set: DisplayCapabilities, fps: u32) -> Option<u32> {
+        [2160, 1440, 1080, 720]
+            .into_iter()
+            .find(|&height| set.supports(&mode(height * 16 / 9, height, fps)))
+    }
+
+    fn settle(probe: &mut Probe, width: u32, height: u32) -> bool {
+        probe.observe_output(0, width, height);
+        probe.observe_output(OUTPUT_SETTLE_NS, width, height)
+    }
+
+    #[test]
+    fn docked_sizes_follow_the_console_output_once_settled() {
+        let mut probe = Probe::new(true, 0, 0);
+        assert_eq!(largest_at(probe.capabilities(), 60), Some(2160));
+        probe.observe_output(0, 2560, 1440);
+        assert!(!probe.observe_output(SECOND, 2560, 1440));
+        assert_eq!(probe.output(), None);
+        assert!(probe.observe_output(OUTPUT_SETTLE_NS, 2560, 1440));
+        assert_eq!(probe.output(), Some((2560, 1440)));
+        assert_eq!(largest_at(probe.capabilities(), 60), Some(1440));
+        assert!(settle(&mut probe, 3840, 2160));
+        assert_eq!(largest_at(probe.capabilities(), 60), Some(2160));
+    }
+
+    #[test]
+    fn the_output_is_not_learned_while_120_hz_is_requested() {
+        let mut probe = Probe::new(true, 0, 0);
+        assert!(!settle(&mut probe, 3840, 2160), "4K is already the ceiling");
+        assert_eq!(probe.output(), Some((3840, 2160)));
+        probe.set_requested(true);
+        assert!(!settle(&mut probe, 2560, 1440));
+        assert_eq!(probe.output(), Some((3840, 2160)));
+    }
+
+    #[test]
+    fn a_withdrawn_docked_request_drops_the_120_fps_it_verified() {
+        let mut probe = Probe::new(true, 0, 0);
+        settle(&mut probe, 3840, 2160);
+        assert!(!probe.set_requested(true));
+        assert!(probe.verify(2560, 1440, 120, true));
+        assert_eq!(largest_at(probe.capabilities(), 120), Some(1440));
+        assert!(probe.set_requested(false));
+        assert_eq!(largest_at(probe.capabilities(), 120), None);
+        assert_eq!(largest_at(probe.capabilities(), 60), Some(2160));
+    }
+
+    #[test]
+    fn handheld_keeps_1080p120_and_only_caps_at_60_while_requested() {
+        let mut probe = Probe::new(false, 0, 0);
+        assert!(!settle(&mut probe, 1920, 1080));
+        probe.set_requested(true);
+        assert!(probe.verify(1920, 1080, 120, true));
+        assert_eq!(largest_at(probe.capabilities(), 120), Some(1080));
+        assert!(!probe.set_requested(false));
+        for _ in 0..SLOW_SECONDS {
+            assert!(!probe.cap_at_60(60));
+        }
+        assert_eq!(largest_at(probe.capabilities(), 120), Some(1080));
+    }
+
+    #[test]
+    fn docking_forgets_the_last_output() {
+        let mut probe = Probe::new(true, 0, 0);
+        settle(&mut probe, 2560, 1440);
+        probe.set_docked(false);
+        probe.set_docked(true);
+        assert_eq!(probe.output(), None);
+        assert_eq!(largest_at(probe.capabilities(), 60), Some(2160));
     }
 }
