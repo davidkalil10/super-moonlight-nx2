@@ -23,7 +23,7 @@ CPPFLAGS += -I$(LIBNX)/include
 CFLAGS := $(ARCH) -std=gnu11 -O2 -g -Wall -Wextra -Werror -ffunction-sections -fdata-sections
 LDFLAGS := $(ARCH) -specs=$(LIBNX)/switch.specs -Wl,-Map,$(OUTPUT).map -Wl,--wrap=gsvRegisterFrame
 LIBS := -L$(DEVKITPRO)/portlibs/switch2/lib -L$(LIBNX)/lib -lvulkan -lnx -lm
-OBJECTS := $(BUILD_DIR)/platform.o $(BUILD_DIR)/io_adapter.o $(BUILD_DIR)/system.o $(BUILD_DIR)/sdk_viddec.o
+OBJECTS := $(BUILD_DIR)/platform.o $(BUILD_DIR)/io_adapter.o $(BUILD_DIR)/system.o $(BUILD_DIR)/sdk_viddec.o $(BUILD_DIR)/opus.o
 
 .PHONY: all
 all: $(OUTPUT).nro
@@ -40,6 +40,9 @@ $(BUILD_DIR)/system.o: $(SOURCE_DIR)/system.c
 $(BUILD_DIR)/sdk_viddec.o: $(SOURCE_DIR)/sdk_viddec.c
 	$(CC) $(CPPFLAGS) $(CFLAGS) -MMD -MP -c $< -o $@
 
+$(BUILD_DIR)/opus.o: $(SOURCE_DIR)/opus.c
+	$(CC) $(CPPFLAGS) $(CFLAGS) -MMD -MP -c $< -o $@
+
 $(OUTPUT).elf: $(OBJECTS) $(RUST_LIBRARY)
 	$(CC) $(LDFLAGS) $(OBJECTS) $(RUST_LIBRARY) $(LIBS) -o $@
 
@@ -53,6 +56,7 @@ $(OUTPUT).nro: $(OUTPUT).elf $(OUTPUT).nacp $(ICON_PATH)
 -include $(BUILD_DIR)/io_adapter.d
 -include $(BUILD_DIR)/system.d
 -include $(BUILD_DIR)/sdk_viddec.d
+-include $(BUILD_DIR)/opus.d
 
 ifeq ($(BREADCRUMBS),1)
 OBJECTS += $(BUILD_DIR)/breadcrumb.o
