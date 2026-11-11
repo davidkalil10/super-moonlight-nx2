@@ -31,6 +31,7 @@ pub enum Request {
     },
     Stop,
     Idr,
+    Revoke,
     Probe {
         #[serde(default)]
         sequence: u32,
@@ -110,6 +111,7 @@ impl Request {
             Self::Quit { host } => Operation::Quit { host },
             Self::Stop => Operation::Stop,
             Self::Idr => Operation::Idr,
+            Self::Revoke => Operation::Revoke,
             Self::Probe { sequence, bytes } => Operation::Probe {
                 sequence: *sequence,
                 bytes: *bytes,

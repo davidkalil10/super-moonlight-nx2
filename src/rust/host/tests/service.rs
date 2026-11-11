@@ -474,3 +474,56 @@ fn the_first_session_after_the_stored_record_succeeds_at_once() {
     assert!(console.accepted() && console.lists(1));
     assert!(typed.join().unwrap().status.success());
 }
+
+#[test]
+fn a_console_that_forgets_the_pc_is_revoked_and_must_pair_again_with_a_code() {
+    let helper = Helper::start("revoke");
+    let other = [0xd2; 16];
+    let (key, _) = helper.pair(CONSOLE, b"00000007", "00000007");
+    let (other_key, _) = helper.pair(other, b"00000008", "00000008");
+    let (key, other_key) = (key.unwrap(), other_key.unwrap());
+
+    let mut console = helper.open(CONSOLE, &key).unwrap();
+    assert!(console.accepted());
+    console.send(Kind::Request, 1, br#"{"op":"revoke"}"#);
+    let (kind, id, value) = console.receive().unwrap();
+    assert_eq!((kind, id), (Kind::Event, 1));
+    assert_eq!(value["op"], "revoke");
+    assert_eq!(value["value"]["event"], "revoked");
+    console
+        .socket
+        .set_read_timeout(Some(Duration::from_secs(4)))
+        .unwrap();
+    assert!(console.closed());
+
+    let listed = String::from_utf8(helper.command(&["consoles"]).stdout).unwrap();
+    assert!(!listed.contains(&"c1".repeat(16)), "{listed}");
+    assert!(listed.contains(&"d2".repeat(16)), "{listed}");
+    assert_eq!(
+        helper.open(CONSOLE, &key).err(),
+        Some(Error::Refused(Status::UnknownConsole))
+    );
+    assert!(helper.open(other, &other_key).unwrap().accepted());
+
+    let (fresh, _) = helper.pair(CONSOLE, b"00000009", "00000009");
+    let mut again = helper.open(CONSOLE, &fresh.unwrap()).unwrap();
+    assert!(again.accepted() && again.lists(1));
+}
+
+#[test]
+fn a_wrong_code_does_not_bring_a_revoked_console_back() {
+    let helper = Helper::start("revoked-wrong-code");
+    let (key, _) = helper.pair(CONSOLE, b"00000010", "00000010");
+    let key = key.unwrap();
+    let mut console = helper.open(CONSOLE, &key).unwrap();
+    assert!(console.accepted());
+    console.send(Kind::Request, 1, br#"{"op":"revoke"}"#);
+    console.receive().unwrap();
+
+    let (rejected, _) = helper.pair(CONSOLE, b"00000011", "00000012");
+    assert!(rejected.is_err());
+    assert_eq!(
+        helper.open(CONSOLE, &key).err(),
+        Some(Error::Refused(Status::UnknownConsole))
+    );
+}
