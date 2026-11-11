@@ -20,6 +20,7 @@ use moonlight_nx2_sunshine::{
     exchange::{self, Exchange},
     hex, http,
     identity::Identity,
+    input::{FEATURE_CONTROLLER_TOUCH, FEATURE_PEN_TOUCH},
     launch,
     pairing::{self, Pairing, Stage},
     random::Random,
@@ -917,6 +918,11 @@ impl<D: Dial> DirectLink<D> {
             return failure("backend_failed", "Sunshine refused the stream setup");
         };
         let features = handshake.host_features();
+        self.dial.log(&format!(
+            "direct: host features={features:#x} pen_touch={} controller_touch={}",
+            features & FEATURE_PEN_TOUCH != 0,
+            features & FEATURE_CONTROLLER_TOUCH != 0
+        ));
         let socket = match self.dial.datagram(self.address, negotiated.control_port) {
             Ok(socket) => socket,
             Err(_) => return failure("backend_failed", NO_CONTROL),

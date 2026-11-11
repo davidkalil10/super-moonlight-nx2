@@ -135,6 +135,11 @@ impl Session {
         }
     }
 
+    /// The host's Sunshine feature flags this session was made with.
+    pub fn features(&self) -> u32 {
+        self.features
+    }
+
     /// Enables haptics, frees every pad an earlier session may have left on the host, and then
     /// announces the primary. Each pad has its own reliable ordered channel, so the removals
     /// reach the host before the arrival without a pause.

@@ -296,6 +296,13 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
         Some((live.negotiated.clone(), live.outbox()))
     }
 
+    /// The direct input counters since the last call, while a stream is live.
+    pub fn take_input_counters(
+        &mut self,
+    ) -> Option<(moonlight_nx2_app::direct_input::Counters, usize)> {
+        Some(self.control.as_mut()?.live()?.take_input_counters())
+    }
+
     pub fn take_media(&mut self) -> Vec<MediaRequest> {
         core::mem::take(&mut self.media)
     }

@@ -10,7 +10,7 @@ use crate::pointer::{KeyboardSample, MouseSample, Pointer};
 use crate::reply::{RUMBLE_PLAYERS, Rumble};
 use alloc::vec::Vec;
 use moonlight_nx2_sunshine::control::{ControlSender, HostEvent};
-use moonlight_nx2_sunshine::input::PadValues;
+use moonlight_nx2_sunshine::input::{FEATURE_PEN_TOUCH, PadValues};
 use moonlight_nx2_sunshine::session::{self, Feedback, PADS, Session, Touch, TouchAction};
 
 const LIMIT: usize = 3840;
@@ -47,8 +47,23 @@ struct Record {
     stop: Option<bool>,
 }
 
+/// What the input session did since the last report.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Counters {
+    pub records: u32,
+    pub rejected: u32,
+    pub pad_changes: u32,
+    /// Sunshine controller numbers that got a pad state; player 1 is 0.
+    pub pads: u16,
+    pub touches: u32,
+    pub mouse_touches: u32,
+    pub sent: u32,
+    pub send_errors: u32,
+}
+
 pub struct DirectInput {
     session: Session,
+    counters: Counters,
     pointer: Pointer,
     last_pad: [Option<Pad>; PADS],
     fingers: Vec<Touch>,
@@ -60,6 +75,7 @@ impl DirectInput {
     pub fn new(features: u32) -> Self {
         Self {
             session: Session::new(features),
+            counters: Counters::default(),
             pointer: Pointer::default(),
             last_pad: [None; PADS],
             fingers: Vec::new(),
@@ -73,6 +89,13 @@ impl DirectInput {
 
     /// Turns one record into packets; true after the record that stops the session.
     pub fn apply(&mut self, bytes: &[u8], now_us: u64) -> Result<bool, Error> {
+        self.counters.records += 1;
+        let applied = self.apply_record(bytes, now_us);
+        self.counters.rejected += u32::from(applied.is_err());
+        applied
+    }
+
+    fn apply_record(&mut self, bytes: &[u8], now_us: u64) -> Result<bool, Error> {
         if self.stopped {
             return Err(Error::Stopped);
         }
@@ -110,6 +133,8 @@ impl DirectInput {
                     .pad(index, pad.connected, &pad.values)
                     .map_err(|_| Error::Invalid)?;
                 self.last_pad[usize::from(index)] = Some(pad);
+                self.counters.pad_changes += 1;
+                self.counters.pads |= 1 << index;
             }
         }
         for sample in record.motion {
@@ -118,6 +143,9 @@ impl DirectInput {
                 .map_err(|_| Error::Invalid)?;
         }
         if !touches.is_empty() {
+            let mouse = record.mouse == Some(true) || self.session.features() & FEATURE_PEN_TOUCH == 0;
+            self.counters.touches += touches.len() as u32;
+            self.counters.mouse_touches += if mouse { touches.len() as u32 } else { 0 };
             self.session
                 .touch(record.mouse == Some(true), &touches)
                 .map_err(|_| Error::Invalid)?;
@@ -177,9 +205,17 @@ impl DirectInput {
     }
 
     pub fn flush(&mut self, sender: &mut impl ControlSender) -> Result<(), Error> {
-        self.session
-            .flush(sender)
-            .map_err(|_: session::Error| Error::Link)
+        let waiting = self.session.pending().len();
+        let flushed = self.session.flush(sender);
+        let sent = waiting.saturating_sub(self.session.pending().len());
+        self.counters.sent += sent as u32;
+        self.counters.send_errors += u32::from(flushed.is_err());
+        flushed.map_err(|_: session::Error| Error::Link)
+    }
+
+    /// The counters since the last call, and the packets still waiting.
+    pub fn take_counters(&mut self) -> (Counters, usize) {
+        (core::mem::take(&mut self.counters), self.session.pending().len())
     }
 
     pub fn session(&self) -> &Session {
@@ -362,4 +398,27 @@ fn touch(value: Value<'_>) -> Result<Touch, Error> {
         y: decimal(value, "y")?,
         pressure: decimal(value, "pressure")?,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const PAD: &[u8] = br#"{"v":1,"pad":{"connected":true,"buttonFlags":4096,"leftTrigger":0,"rightTrigger":0,"leftStickX":0,"leftStickY":0,"rightStickX":0,"rightStickY":0}}"#;
+
+    #[test]
+    fn counters_follow_records() {
+        let mut input = DirectInput::new(0);
+        input.connect();
+        assert_eq!(input.apply(PAD, 0), Ok(false));
+        assert_eq!(input.apply(PAD, 1), Ok(false));
+        assert_eq!(input.apply(b"{}", 2), Err(Error::Invalid));
+        let (counters, waiting) = input.take_counters();
+        assert_eq!(counters.records, 3);
+        assert_eq!(counters.rejected, 1);
+        assert_eq!(counters.pad_changes, 1);
+        assert_eq!(counters.pads, 1);
+        assert!(waiting > 0);
+        assert_eq!(input.take_counters().0, Counters::default());
+    }
 }

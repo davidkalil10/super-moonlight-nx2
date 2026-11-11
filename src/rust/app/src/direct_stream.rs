@@ -146,6 +146,11 @@ impl Live {
         channel.input.keyboard(keyboard);
     }
 
+    /// The input counters since the last call, and the packets still waiting.
+    pub fn take_input_counters(&mut self) -> (direct_input::Counters, usize) {
+        self.channel.borrow_mut().input.take_counters()
+    }
+
     /// Types `text` on the PC; false when it holds characters Sunshine cannot type.
     pub fn text(&mut self, text: &str) -> bool {
         self.channel.borrow_mut().input.text(text)

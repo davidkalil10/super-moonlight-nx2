@@ -448,6 +448,19 @@ fn execute(
                 app.stats().media_opened
             ));
             stream.report();
+            if let Some((counters, waiting)) = app.take_input_counters() {
+                log(&format!(
+                    "input: direct records={} rejected={} pad_changes={} pads={:#x} touches={} as_mouse={} sent={} waiting={waiting} send_errors={}",
+                    counters.records,
+                    counters.rejected,
+                    counters.pad_changes,
+                    counters.pads,
+                    counters.touches,
+                    counters.mouse_touches,
+                    counters.sent,
+                    counters.send_errors
+                ));
+            }
             second = now;
         }
     }
