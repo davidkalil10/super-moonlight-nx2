@@ -291,7 +291,7 @@ pub fn run(args: &[String]) -> WorkerResult {
         if native_connected && started && !announced && stopping.is_none() {
             eprintln!("{{\"event\":\"video\",\"codec\":\"{}\"}}", options.codec);
             eprintln!("{{\"event\":\"connected\"}}");
-            input.connect();
+            input.connect(Instant::now());
             announced = true;
         }
         if stopping.is_none() {
@@ -411,7 +411,7 @@ pub(super) fn forward_queued_input(
     queued: &mut VecDeque<Vec<u8>>,
     queued_bytes: &mut usize,
 ) -> WorkerResult {
-    if !started || stopping || stopped {
+    if !started || stopping || stopped || !input.ready(Instant::now()) {
         return Ok(());
     }
     while let Some(line) = queued.pop_front() {
