@@ -1,0 +1,27 @@
+[package]
+name = "moonlight-nx2-sunshine"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+moonlight-nx2-io = { path = "../io" }
+aes = { version = "0.9", default-features = false }
+aes-gcm = { version = "0.11", default-features = false, features = ["aes", "alloc"] }
+der = { version = "0.8", default-features = false, features = ["alloc", "pem", "oid"] }
+hmac = { version = "0.13", default-features = false }
+once_cell = { version = "1", default-features = false, features = ["alloc", "race"] }
+rand_core = { version = "0.10", default-features = false }
+rsa = { version = "0.10", default-features = false, features = ["encoding", "pkcs1v15"] }
+rustls = { version = "0.23", default-features = false }
+rustls-pki-types = { version = "1", default-features = false, features = ["alloc"] }
+sha2 = { version = "0.11", default-features = false, features = ["oid"] }
+subtle = { version = "2.6", default-features = false }
+spki = { version = "0.8", default-features = false, features = ["alloc"] }
+x25519-dalek = { version = "3", default-features = false, features = ["zeroize"] }
+x509-cert = { version = "0.3", default-features = false, features = ["builder"] }
+zeroize = { version = "1", default-features = false }
+
+[lints]
+workspace = true
