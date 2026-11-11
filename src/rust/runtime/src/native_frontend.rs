@@ -274,6 +274,7 @@ fn execute(renderer: &mut Renderer, connections: &mut NativeConnections, launch:
     let mut stream = Stream::new(stream_capabilities());
     let mut system = crate::system::System::start(unsafe { sdk::moonlightNowNs() } / 1_000_000);
     let mut second = start;
+    let (mut publishes, mut busy_publishes) = ([0u32; 2], [0u32; 2]);
     while unsafe { sdk::appletMainLoop() } && !app.exiting() && !sdk::process_retired() {
         let now = unsafe { sdk::moonlightNowNs() };
         let input = match sampler
@@ -322,6 +323,17 @@ fn execute(renderer: &mut Renderer, connections: &mut NativeConnections, launch:
         };
         if frame.published {
             let _ = renderer.flush_page(app.client.bridge.shown_page());
+            let slot = app.client.bridge.shown_slot();
+            publishes[slot] += 1;
+            busy_publishes[slot] += u32::from(renderer.last_write_busy());
+            log(&format!(
+                "ui: publish slot={slot} gpu_busy_at_write={} slot0={}/{} slot1={}/{}",
+                renderer.last_write_busy(),
+                busy_publishes[0],
+                publishes[0],
+                busy_publishes[1],
+                publishes[1]
+            ));
         }
         let now_ms = now / 1_000_000;
         for request in app.take_media() {

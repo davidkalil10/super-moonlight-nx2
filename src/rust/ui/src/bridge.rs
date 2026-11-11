@@ -32,6 +32,9 @@ pub const EDIT: usize = BLOCK + 60;
 pub const HOST_ACK: usize = BLOCK + 64;
 pub const HOST_BUSY: usize = BLOCK + 68;
 pub const FILTER: usize = BLOCK + 72;
+pub const CHECK: usize = BLOCK + 76;
+pub const SUM_VALUE: usize = BLOCK + 80;
+pub const SUM_SEQ: usize = BLOCK + 84;
 pub const PROTOCOL_MAGIC: u32 = 0x4955_4248;
 pub const PAGES_OFFSET: usize = 40_030_208;
 pub const PAGE_BUFFER_BYTES: usize = 4 << 20;
@@ -128,6 +131,7 @@ pub struct Bridge<F> {
     placed: [Option<Placement>; 2],
     pattern: u32,
     pattern_shown: u32,
+    checked: u32,
 }
 
 impl<F: Files> Bridge<F> {
@@ -171,6 +175,7 @@ impl<F: Files> Bridge<F> {
             shown_screen: None,
             pattern: 0,
             pattern_shown: 0,
+            checked: 0,
             published_at: 0,
             stale: false,
             header_rewrites: 0,
@@ -574,6 +579,35 @@ impl<F: Files> Bridge<F> {
     /// Picks the scaling filter the shaders use: 0 or 2 bilinear, 1 exact, 3 Lanczos.
     pub fn set_filter(&mut self, storage: &mut Storage, mode: u32) {
         put(storage, FILTER, mode);
+    }
+
+    /// Asks the shader to checksum each page body it applies, for `check_page`.
+    pub fn enable_check(&mut self, storage: &mut Storage) {
+        put(storage, CHECK, 1);
+    }
+
+    /// Compares the checksum the GPU took of the page body when it applied the current page
+    /// with the one of the bytes the CPU wrote. None until the GPU has applied it, or once
+    /// the page was checked; otherwise whether they agree.
+    pub fn check_page(&mut self, storage: &Storage) -> Option<bool> {
+        if self.checked == self.sequence || word(storage, SUM_SEQ) != self.sequence {
+            return None;
+        }
+        let range = self.shown_page();
+        let body = storage.get(range.start + page::BODY_OFFSET..range.end)?;
+        let sum = body
+            .chunks_exact(4)
+            .fold(0u32, |sum, word| {
+                sum.wrapping_mul(31)
+                    .wrapping_add(u32::from_ne_bytes(word.try_into().unwrap()))
+            });
+        self.checked = self.sequence;
+        Some(sum == word(storage, SUM_VALUE))
+    }
+
+    /// The page buffer, 0 or 1, of the page last shown.
+    pub fn shown_slot(&self) -> usize {
+        (self.sequence & 1) as usize
     }
 
     /// The storage bytes of the page last shown, for the owner to write back from its cache.

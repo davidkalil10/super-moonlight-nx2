@@ -127,6 +127,10 @@ pub struct Client<F> {
     pub bridge: Box<Bridge<F>>,
     #[cfg(feature = "ui-pattern")]
     filter_step: usize,
+    #[cfg(feature = "ui-pattern")]
+    page_checks: u32,
+    #[cfg(feature = "ui-pattern")]
+    page_check_bad: u32,
     composer: Composer,
     hosts: Store<F>,
     ui_schedule: crate::hid::UiSchedule,
@@ -285,6 +289,10 @@ impl<F: Files + Clone> Client<F> {
             bridge,
             #[cfg(feature = "ui-pattern")]
             filter_step: 2,
+            #[cfg(feature = "ui-pattern")]
+            page_checks: 0,
+            #[cfg(feature = "ui-pattern")]
+            page_check_bad: 0,
             composer: Composer::new(Glyphs::new(atlas).ok_or(Error::Atlas)?, 0),
             hosts,
             ui_schedule: crate::hid::UiSchedule::default(),
@@ -414,6 +422,20 @@ impl<F: Files + Clone> Client<F> {
             self.refresh_stream_stats();
         }
         let storage = storage(bytes)?;
+        #[cfg(feature = "ui-pattern")]
+        {
+            self.bridge.enable_check(storage);
+            if let Some(agrees) = self.bridge.check_page(storage) {
+                self.page_checks += 1;
+                self.page_check_bad += u32::from(!agrees);
+                if !agrees || self.page_checks.is_multiple_of(20) {
+                    crate::render_platform::log(&format!(
+                        "ui: page body checksum agrees={agrees} checked={} mismatched={}",
+                        self.page_checks, self.page_check_bad
+                    ));
+                }
+            }
+        }
         let active = self.bridge.model().screen() == Screen::Streaming
             && self
                 .bridge

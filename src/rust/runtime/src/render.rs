@@ -251,6 +251,7 @@ struct Objects {
     retained: bool,
     storage_writes: u32,
     storage_busy: u32,
+    last_write_busy: bool,
     config: Config,
     info: Info,
 }
@@ -330,6 +331,7 @@ impl Renderer {
                 retained: false,
                 storage_writes: 0,
                 storage_busy: 0,
+                last_write_busy: false,
                 config,
                 info: Info::default(),
             })),
@@ -1752,6 +1754,7 @@ impl Objects {
         });
         self.storage_writes += 1;
         self.storage_busy += u32::from(busy);
+        self.last_write_busy = busy;
         if self.storage_writes.is_multiple_of(600) {
             log(&format!(
                 "render: storage writes={} while_gpu_busy={}",

@@ -9,18 +9,18 @@
       "-O",
       "--target-env=vulkan1.0",
       "-I",
-      "/media/storage2/builds/moonlight/20261111T-atlas6-shaders",
+      "/media/storage2/builds/moonlight/20261111T-atlas8-shaders",
       "-I",
       "/media/storage2/builds/moonlight/wt-merged/src/rust/runtime/shaders",
-      "/media/storage2/builds/moonlight/20261111T-atlas6-shaders/ui-text.frag",
+      "/media/storage2/builds/moonlight/20261111T-atlas8-shaders/ui-text.frag",
       "-o",
-      "/media/storage2/builds/moonlight/20261111T-atlas6-shaders/ui-text.spv"
+      "/media/storage2/builds/moonlight/20261111T-atlas8-shaders/ui-text.spv"
     ],
     [
       "spirv-val",
       "--target-env",
       "vulkan1.0",
-      "/media/storage2/builds/moonlight/20261111T-atlas6-shaders/ui-text.spv"
+      "/media/storage2/builds/moonlight/20261111T-atlas8-shaders/ui-text.spv"
     ]
   ],
   "compiler": "shaderc v2026.2 2026-04-24spirv-tools v2026.2 2026-04-24glslang d5f08ae5c5a9a45165578445cbd0f9adf0223448\nTarget: SPIR-V 1.0",
@@ -28,12 +28,12 @@
     "ui-text.frag": "781ac88178e92696b67f97aa8c56932fff581f91ecd9ac930c414c98d8495e3a",
     "ui.frag": "87afbe80dcc79289904fc6ee14b8271068e56980e88f8529e8322c55ab31b936",
     "storage.glsl": "81c18548664c68dfcf7bb9b2ce683234dbcd08b161a6c1756555ace8a912d3e6",
-    "layout.glsl": "bcbdeed3845e97ed32584d93d8585e84a3d614896bee73a828741fc3402c42fd"
+    "layout.glsl": "8bde7cd080352056066fbe91d12e71cac74cc13e9b3f51c8eeef146d2b7d1306"
   },
   "shader": {
     "path": "ui-text.spv",
     "bytes": 65744,
-    "sha256": "d0b7426cfe60cff0c48974d321158e1ba2ec3f6de13f10c01b9264d16732496d"
+    "sha256": "2f0d7343b20e519c52030cba2b98e0aeb1ffa2e3cfa5375eb99c9042ca4ba56f"
   },
   "scope": "Text branch separated; original colors, sampled alpha and blending retained"
 }

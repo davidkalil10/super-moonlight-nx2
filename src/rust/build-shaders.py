@@ -69,7 +69,7 @@ CONTROL = {
 UI = {name: 0xC000 + 4 * index for index, name in enumerate((
     "uiMagic", "uiEpoch", "uiSequence", "uiPage", "uiApplied", "uiCursor", "uiOverlay",
     "uiTouchItem", "cmdSequence", "cmdOp", "cmdItem", "cmdValue", "cmdPage", "cmdEpoch",
-    "uiShown", "uiEdit", "hostAck", "hostBusy", "uiFilter"))}
+    "uiShown", "uiEdit", "hostAck", "hostBusy", "uiFilter", "uiCheck", "uiSumValue", "uiSumSeq"))}
 INPUT = {"pad": 0, "touch": 128, "previousButtons": 784, "chordFrames": 788,
          "stickRepeat": 792, "touchHeld": 796}
 VIDEO_BASE = 0xB000

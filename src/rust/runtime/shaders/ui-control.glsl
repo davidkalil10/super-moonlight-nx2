@@ -138,6 +138,13 @@ void uiApply() {
     storage.words[UI_OVERLAY] = 0u;
   if (!sameEpoch || !uiHasItem(base, uiWord(UI_EDIT)))
     storage.words[UI_EDIT] = 0u;
+  if (uiWord(UI_CHECK) != 0u) {
+    uint sum = 0u;
+    for (uint i = 0u; i < uiWord(base + UI_HDR_BODY) / 4u; i++)
+      sum = sum * 31u + uiWord(base + UI_BODY + i);
+    storage.words[UI_SUM_VALUE] = sum;
+    storage.words[UI_SUM_SEQ] = sequence;
+  }
   storage.words[UI_CURSOR] = cursor;
   storage.words[UI_SHOWN] = page;
   memoryBarrierBuffer();
