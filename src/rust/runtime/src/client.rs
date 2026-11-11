@@ -429,7 +429,7 @@ impl<F: Files + Clone> Client<F> {
                 self.page_checks += 1;
                 self.page_check_bad += u32::from(!agrees);
                 if !agrees || self.page_checks.is_multiple_of(20) {
-                    crate::render_platform::log(&format!(
+                    crate::render_platform::log(&alloc::format!(
                         "ui: page body checksum agrees={agrees} checked={} mismatched={}",
                         self.page_checks, self.page_check_bad
                     ));
