@@ -7,6 +7,7 @@ pub const PADS: usize = 8;
 /// What one controller event sends: the active mask, and whether to announce the pad first.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Update {
+    pub index: u8,
     pub mask: u16,
     pub arrived: bool,
 }
@@ -37,6 +38,7 @@ impl Gamepads {
             }
         }
         Update {
+            index,
             mask: self.active,
             arrived,
         }
@@ -44,6 +46,23 @@ impl Gamepads {
 
     pub fn mask(&self) -> u16 {
         self.active
+    }
+
+    /// Removes every pad, primary included, each with the mask left after it goes.
+    pub fn remove_all(&mut self) -> Vec<Update> {
+        let mut removed = Vec::new();
+        for index in 0..PADS as u8 {
+            let bit = 1 << index;
+            if self.active & bit != 0 {
+                self.active &= !bit;
+                removed.push(Update {
+                    index,
+                    mask: self.active,
+                    arrived: false,
+                });
+            }
+        }
+        removed
     }
 }
 
@@ -117,24 +136,28 @@ pub fn fold_triggers(low: u16, high: u16, left_trigger: u16, right_trigger: u16)
 mod tests {
     use super::*;
 
-    fn sent(mask: u16, arrived: bool) -> Update {
-        Update { mask, arrived }
+    fn sent(index: u8, mask: u16, arrived: bool) -> Update {
+        Update {
+            index,
+            mask,
+            arrived,
+        }
     }
 
     #[test]
     fn the_primary_stays_in_the_mask_and_is_never_announced_again() {
         let mut pads = Gamepads::default();
-        assert_eq!(pads.update(0, true), sent(1, false));
-        assert_eq!(pads.update(0, false), sent(1, false));
+        assert_eq!(pads.update(0, true), sent(0, 1, false));
+        assert_eq!(pads.update(0, false), sent(0, 1, false));
     }
 
     #[test]
     fn another_pad_arrives_once_and_leaves_on_removal() {
         let mut pads = Gamepads::default();
-        assert_eq!(pads.update(2, true), sent(0b101, true));
-        assert_eq!(pads.update(2, true), sent(0b101, false));
-        assert_eq!(pads.update(1, true), sent(0b111, true));
-        assert_eq!(pads.update(2, false), sent(0b011, false));
+        assert_eq!(pads.update(2, true), sent(2, 0b101, true));
+        assert_eq!(pads.update(2, true), sent(2, 0b101, false));
+        assert_eq!(pads.update(1, true), sent(1, 0b111, true));
+        assert_eq!(pads.update(2, false), sent(2, 0b011, false));
         assert_eq!(pads.mask(), 0b011);
     }
 
@@ -143,13 +166,39 @@ mod tests {
         let mut pads = Gamepads::default();
         pads.update(3, true);
         pads.update(3, false);
-        assert_eq!(pads.update(3, true), sent(0b1001, true));
+        assert_eq!(pads.update(3, true), sent(3, 0b1001, true));
     }
 
     #[test]
     fn a_removal_of_an_unknown_pad_keeps_the_mask() {
         let mut pads = Gamepads::default();
-        assert_eq!(pads.update(5, false), sent(1, false));
+        assert_eq!(pads.update(5, false), sent(5, 1, false));
+    }
+
+    #[test]
+    fn two_pads_get_their_own_numbers_and_masks() {
+        let mut pads = Gamepads::default();
+        assert_eq!(pads.update(0, true), sent(0, 0b01, false));
+        assert_eq!(pads.update(1, true), sent(1, 0b11, true));
+        assert_eq!(pads.update(0, true), sent(0, 0b11, false));
+        assert_eq!(pads.update(1, true), sent(1, 0b11, false));
+    }
+
+    #[test]
+    fn the_end_of_a_stream_removes_every_pad() {
+        let mut pads = Gamepads::default();
+        pads.update(1, true);
+        pads.update(3, true);
+        assert_eq!(
+            pads.remove_all(),
+            [
+                sent(0, 0b1010, false),
+                sent(1, 0b1000, false),
+                sent(3, 0, false)
+            ]
+        );
+        assert_eq!(pads.mask(), 0);
+        assert!(pads.remove_all().is_empty());
     }
 
     #[test]

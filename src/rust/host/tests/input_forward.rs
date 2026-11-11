@@ -39,7 +39,10 @@ fn a_removed_player_is_sent_once_as_disconnected() {
     let mut forwarder = Forwarder::new();
     let connect = format!(r#"{{"v":2,"pads":[{{"index":2,"pad":{}}}]}}"#, pad(true, 0));
     lines(&mut forwarder, &connect);
-    let remove = format!(r#"{{"v":2,"pads":[{{"index":2,"pad":{}}}]}}"#, pad(false, 0));
+    let remove = format!(
+        r#"{{"v":2,"pads":[{{"index":2,"pad":{}}}]}}"#,
+        pad(false, 0)
+    );
     let sent = lines(&mut forwarder, &remove);
     assert_eq!(sent.len(), 1);
     assert_eq!(sent[0]["index"], 2);
@@ -69,4 +72,33 @@ fn players_past_the_eighth_are_refused() {
     let mut forwarder = Forwarder::new();
     let record = format!(r#"{{"v":2,"pads":[{{"index":8,"pad":{}}}]}}"#, pad(true, 0));
     assert!(forwarder.apply(record.as_bytes()).is_err());
+}
+
+#[test]
+fn two_pads_reach_the_host_with_their_own_numbers_and_masks() {
+    use moonlight_nx2_host::gamepads::{Gamepads, Update};
+    let mut forwarder = Forwarder::new();
+    let mut pads = Gamepads::default();
+    let record = format!(
+        r#"{{"v":2,"pad":{},"pads":[{{"index":1,"pad":{}}}]}}"#,
+        pad(true, 0x1000),
+        pad(true, 0x2000)
+    );
+    let sent: Vec<Update> = lines(&mut forwarder, &record)
+        .iter()
+        .map(|line| {
+            let index = line.get("index").map_or(0, |index| index.as_u64().unwrap()) as u8;
+            pads.update(index, line["connected"].as_bool().unwrap())
+        })
+        .collect();
+    let update = |index, mask, arrived| Update {
+        index,
+        mask,
+        arrived,
+    };
+    assert_eq!(sent, [update(0, 0b01, false), update(1, 0b11, true)]);
+    let removal = format!(r#"{{"v":2,"pads":[{{"index":1,"pad":{}}}]}}"#, pad(false, 0));
+    let line = &lines(&mut forwarder, &removal)[0];
+    assert_eq!(line["index"], 1);
+    assert_eq!(pads.update(1, false), update(1, 0b01, false));
 }
