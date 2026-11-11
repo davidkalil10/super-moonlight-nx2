@@ -41,6 +41,7 @@ PRODUCTION = {
     "production-120-decode": "frontend,sdk-video-120-decode",
     "production-pattern": "frontend,ui-pattern",
     "production-uncached": "frontend,ui-pattern,ui-uncached",
+    "production-perf": "frontend,ui-pattern,perf-chord",
 }
 # Diagnostics of the SDK video decoder: the frontend with reference clips replayed first.
 SDK_DIAGNOSTICS = ("sdk-decode", "sdk-modes")

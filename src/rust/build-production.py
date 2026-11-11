@@ -43,11 +43,15 @@ def main():
                         help="Both stick clicks step two test pages; ZL+ZR steps the scaling filter: exact, bilinear, Lanczos")
     parser.add_argument("--ui-uncached", action="store_true",
                         help="the pattern build with the UI buffers in non-cached host memory")
+    parser.add_argument("--perf-chord", action="store_true",
+                        help="the pattern build where L3+ZL steps the decode path, L3+ZR the latency mode and R3+ZL the clock request")
     parser.add_argument("--diagnostic", choices=SDK_DIAGNOSTICS,
                         help="build this decoder diagnostic instead of the app")
     parser.add_argument("--trials", choices=TRIALS, default=TRIALS[0],
                         help="the sessions an sdk-modes diagnostic runs")
     args = parser.parse_args()
+    if args.perf_chord and (args.ui_pattern or args.decode120 or args.tcp_video or args.diagnostic):
+        parser.error("--perf-chord goes alone")
     if args.ui_uncached and not args.ui_pattern:
         parser.error("--ui-uncached goes with --ui-pattern")
     if args.ui_pattern and (args.decode120 or args.tcp_video or args.diagnostic):
@@ -63,6 +67,8 @@ def main():
         diagnostic += "-tcp"
     if args.ui_pattern:
         diagnostic += "-uncached" if args.ui_uncached else "-pattern"
+    if args.perf_chord:
+        diagnostic += "-perf"
     name = diagnostic
     if diagnostic == "sdk-modes" and args.trials != TRIALS[0]:
         name += f"-{args.trials}"

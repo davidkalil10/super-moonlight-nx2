@@ -36,7 +36,19 @@ pub struct InputGate {
     filter_held: bool,
     #[cfg(feature = "ui-pattern")]
     filter_edge: bool,
+    #[cfg(feature = "perf-chord")]
+    perf_held: [bool; PERF_CHORDS.len()],
+    #[cfg(feature = "perf-chord")]
+    perf_edges: [bool; PERF_CHORDS.len()],
 }
+
+/// L3+ZL steps the decode path, L3+ZR the latency mode, R3+ZL switches the clock request.
+#[cfg(feature = "perf-chord")]
+pub const PERF_CHORDS: [u64; 3] = [
+    (1 << 4) | (1 << 8),
+    (1 << 4) | (1 << 9),
+    (1 << 5) | (1 << 8),
+];
 
 #[cfg(feature = "ui-pattern")]
 const PATTERN_CHORD: u64 = (1 << 4) | (1 << 5);
@@ -69,6 +81,12 @@ impl InputGate {
             self.filter_edge |= filter && !self.filter_held;
             self.filter_held = filter;
         }
+        #[cfg(feature = "perf-chord")]
+        for (index, chord) in PERF_CHORDS.iter().enumerate() {
+            let held = input.held_anywhere(*chord);
+            self.perf_edges[index] |= held && !self.perf_held[index];
+            self.perf_held[index] = held;
+        }
         Ok(input)
     }
 
@@ -80,6 +98,14 @@ impl InputGate {
     #[cfg(feature = "ui-pattern")]
     pub fn take_filter_edge(&mut self) -> bool {
         core::mem::take(&mut self.filter_edge)
+    }
+
+    /// The perf chord pressed since the last call, as its index in `PERF_CHORDS`.
+    #[cfg(feature = "perf-chord")]
+    pub fn take_perf_edge(&mut self) -> Option<usize> {
+        let index = self.perf_edges.iter().position(|edge| *edge)?;
+        self.perf_edges[index] = false;
+        Some(index)
     }
 }
 

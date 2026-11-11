@@ -25,7 +25,8 @@ LDFLAGS := $(ARCH) -specs=$(LIBNX)/switch.specs -Wl,-Map,$(OUTPUT).map -Wl,--wra
 MIMALLOC ?= 1
 NX_LIBRARY := $(if $(filter 0,$(MIMALLOC)),-lounce_core,-lnx)
 LIBS := -L$(DEVKITPRO)/portlibs/switch2/lib -L$(LIBNX)/lib -lvulkan $(NX_LIBRARY) -lm
-OBJECTS := $(BUILD_DIR)/platform.o $(BUILD_DIR)/io_adapter.o $(BUILD_DIR)/system.o $(BUILD_DIR)/sdk_viddec.o
+OBJECTS := $(BUILD_DIR)/platform.o $(BUILD_DIR)/io_adapter.o $(BUILD_DIR)/system.o $(BUILD_DIR)/sdk_viddec.o \
+           $(BUILD_DIR)/sdk_decoder.o
 
 .PHONY: all
 all: $(OUTPUT).nro
@@ -42,6 +43,9 @@ $(BUILD_DIR)/system.o: $(SOURCE_DIR)/system.c
 $(BUILD_DIR)/sdk_viddec.o: $(SOURCE_DIR)/sdk_viddec.c
 	$(CC) $(CPPFLAGS) $(CFLAGS) -MMD -MP -c $< -o $@
 
+$(BUILD_DIR)/sdk_decoder.o: $(SOURCE_DIR)/sdk_decoder.c
+	$(CC) $(CPPFLAGS) $(CFLAGS) -MMD -MP -c $< -o $@
+
 $(OUTPUT).elf: $(OBJECTS) $(RUST_LIBRARY)
 	$(CC) $(LDFLAGS) $(OBJECTS) $(RUST_LIBRARY) $(LIBS) -o $@
 
@@ -55,6 +59,7 @@ $(OUTPUT).nro: $(OUTPUT).elf $(OUTPUT).nacp $(ICON_PATH)
 -include $(BUILD_DIR)/io_adapter.d
 -include $(BUILD_DIR)/system.d
 -include $(BUILD_DIR)/sdk_viddec.d
+-include $(BUILD_DIR)/sdk_decoder.d
 
 ifeq ($(BREADCRUMBS),1)
 OBJECTS += $(BUILD_DIR)/breadcrumb.o

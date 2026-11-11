@@ -287,6 +287,19 @@ fn execute(renderer: &mut Renderer, connections: &mut NativeConnections, launch:
                 break;
             }
         };
+        #[cfg(feature = "perf-chord")]
+        if let Some(chord) = input_gate.take_perf_edge() {
+            match chord {
+                0 => crate::perf::next_path(),
+                1 => crate::perf::next_latency(),
+                _ => crate::perf::toggle_clocks(),
+            }
+            let line = crate::perf::text();
+            log(&line);
+            if let Ok(bytes) = renderer.storage_mut() {
+                let _ = app.client.toast(bytes, &line, now);
+            }
+        }
         #[cfg(feature = "ui-pattern")]
         {
             if input_gate.take_pattern_edge() {
@@ -340,7 +353,13 @@ fn execute(renderer: &mut Renderer, connections: &mut NativeConnections, launch:
             match request {
                 MediaRequest::Open(descriptor) => {
                     let peer = app.peer();
-                    stream.open(&mut app.client, *descriptor, peer, now_ms);
+                    stream.open(
+                        &mut app.client,
+                        *descriptor,
+                        peer,
+                        renderer.frame_slots().ok(),
+                        now_ms,
+                    );
                 }
                 MediaRequest::Close => stream.begin_close(&mut app.client, now_ms),
             }

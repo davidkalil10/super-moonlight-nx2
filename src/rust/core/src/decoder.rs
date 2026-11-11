@@ -84,6 +84,34 @@ pub trait Backend<const N: usize = SURFACES> {
     fn release(&mut self, surface: usize) -> Result<(), BackendError>;
     fn close(&mut self) -> Result<(), BackendError>;
     fn now_ms(&self) -> u64;
+
+    /// Waits up to `timeout_ns` for the surface's frame. The default only checks.
+    fn wait(&mut self, surface: usize, timeout_ns: u64) -> Result<bool, BackendError> {
+        let _ = timeout_ns;
+        self.ready(surface)
+    }
+
+    /// Where the surface sits when the backend decodes into the presenter's frame slot of the
+    /// same index. Such a frame is not read back and stays with the caller until
+    /// `Decoder::release_surface`.
+    fn placement(&self, surface: usize) -> Option<Placement> {
+        let _ = surface;
+        None
+    }
+}
+
+/// The geometry of a frame decoded in place: both planes start a row apart by `stride`, the
+/// chroma plane `slice_height` rows after the luma plane at the start of the slot.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Placement {
+    pub stride: u32,
+    pub slice_height: u32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Placed {
+    pub surface: usize,
+    pub placement: Placement,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -103,6 +131,8 @@ pub struct FrameInfo {
     pub display: Size,
     /// The frame was read into the caller's staging memory, not into a held frame.
     pub staged: bool,
+    /// The frame stays in the decoder's surface, which is the presenter's slot of that index.
+    pub placed: Option<Placed>,
 }
 
 #[derive(Clone, Copy)]
@@ -148,6 +178,7 @@ pub struct Decoder<'a, B: Backend<N>, const N: usize = SURFACES> {
     held: [Option<FrameToken>; FRAMES],
     images: [u32; N],
     queued: Queue<N>,
+    placed: [bool; N],
     arrived: [Option<Output>; N],
     pending: [Option<Pending>; UNITS],
     generation: u64,
@@ -193,6 +224,7 @@ impl<'a, B: Backend<N>, const N: usize> Decoder<'a, B, N> {
             held: [None; FRAMES],
             images: [0; N],
             queued: Queue::full(),
+            placed: [false; N],
             arrived: [None; N],
             pending: [None; UNITS],
             generation: 0,
@@ -315,6 +347,46 @@ impl<'a, B: Backend<N>, const N: usize> Decoder<'a, B, N> {
         self.poll_into(None)
     }
 
+    /// Waits up to `timeout_ns` for the oldest unit's frame without taking it. False when
+    /// nothing is pending or the frame did not finish in time.
+    pub fn wait(&mut self, timeout_ns: u64) -> Result<bool, Error> {
+        self.active()?;
+        if self.pending[0].is_none() {
+            return Ok(false);
+        }
+        let Some(surface) = self.queued.front() else {
+            return Ok(false);
+        };
+        match self.backend.wait(surface, timeout_ns) {
+            Ok(ready) => Ok(ready),
+            Err(error) => Err(self.fail(error)),
+        }
+    }
+
+    /// Whether frames are decoded into the presenter's slots in place.
+    pub fn in_place(&self) -> bool {
+        self.backend.placement(0).is_some()
+    }
+
+    pub fn holds_surface(&self, surface: usize) -> bool {
+        !self.closed && self.placed.get(surface) == Some(&true)
+    }
+
+    /// Gives a surface taken in place back to the decoder, once the presenter no longer reads
+    /// its slot.
+    pub fn release_surface(&mut self, surface: usize) -> Result<(), Error> {
+        self.active()?;
+        if !self.holds_surface(surface) {
+            return Err(Error::Invalid);
+        }
+        if let Err(error) = self.backend.release(surface) {
+            return Err(self.fail(error));
+        }
+        self.placed[surface] = false;
+        self.queued.push(surface);
+        Ok(())
+    }
+
     /// Polls like `poll`, but reads a copied frame straight into `staging` when it holds a
     /// coded NV12 frame, sparing the caller a second copy. `frame` has no bytes for it.
     pub fn poll_into(&mut self, staging: Option<&mut [u8]>) -> Result<Option<FrameInfo>, Error> {
@@ -364,22 +436,31 @@ impl<'a, B: Backend<N>, const N: usize> Decoder<'a, B, N> {
             return Err(self.fail(BackendError::Malformed));
         };
 
-        let staged = staging.is_some();
-        let bytes = self.config.coded.nv12_bytes();
-        let target = match staging {
-            Some(staging) => &mut staging[..bytes],
-            None => &mut self.frames[frame][..bytes],
-        };
-        if let Err(error) = self.backend.readback(surface, target) {
-            return Err(self.fail(error));
-        }
-        if let Err(error) = self.backend.release(surface) {
-            return Err(self.fail(error));
-        }
-        self.queued.pop();
-        self.queued.push(surface);
+        let placed = self
+            .backend
+            .placement(surface)
+            .map(|placement| Placed { surface, placement });
+        let staged = staging.is_some() && placed.is_none();
         let token = self.next_token(frame);
-        self.held[frame] = Some(token);
+        if placed.is_some() {
+            self.queued.pop();
+            self.placed[surface] = true;
+        } else {
+            let bytes = self.config.coded.nv12_bytes();
+            let target = match staging {
+                Some(staging) => &mut staging[..bytes],
+                None => &mut self.frames[frame][..bytes],
+            };
+            if let Err(error) = self.backend.readback(surface, target) {
+                return Err(self.fail(error));
+            }
+            if let Err(error) = self.backend.release(surface) {
+                return Err(self.fail(error));
+            }
+            self.queued.pop();
+            self.queued.push(surface);
+            self.held[frame] = Some(token);
+        }
 
         let pts_us = self.pending[unit].unwrap().pts_us;
         self.pending.rotate_left(unit + 1);
@@ -394,6 +475,7 @@ impl<'a, B: Backend<N>, const N: usize> Decoder<'a, B, N> {
             coded: self.config.coded,
             display: self.config.display,
             staged,
+            placed,
         }))
     }
 
@@ -435,6 +517,7 @@ impl<'a, B: Backend<N>, const N: usize> Decoder<'a, B, N> {
                 unsafe { ManuallyDrop::drop(&mut self.backend) };
                 self.closed = true;
                 self.held.fill(None);
+                self.placed.fill(false);
                 Ok(())
             }
             Err(error) => {

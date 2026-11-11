@@ -179,6 +179,43 @@ pub fn take_stages_text() -> String {
     )
 }
 
+static WAKE_SUM_US: AtomicU64 = AtomicU64::new(0);
+static WAKE_MAX_US: AtomicU32 = AtomicU32::new(0);
+static WAKE_HITS: AtomicU32 = AtomicU32::new(0);
+static WAKE_MISSES: AtomicU32 = AtomicU32::new(0);
+static WAKE_BUDGET_SUM_US: AtomicU64 = AtomicU64::new(0);
+
+/// One wait of a turn for its unit's frame: how long, out of what budget, and whether the
+/// frame came.
+pub fn wake(waited_ns: u64, budget_ns: u64, hit: bool) {
+    let waited_us = u32::try_from(waited_ns / 1000).unwrap_or(u32::MAX);
+    WAKE_SUM_US.fetch_add(u64::from(waited_us), Ordering::Relaxed);
+    WAKE_MAX_US.fetch_max(waited_us, Ordering::Relaxed);
+    WAKE_BUDGET_SUM_US.fetch_add(budget_ns / 1000, Ordering::Relaxed);
+    if hit {
+        WAKE_HITS.fetch_add(1, Ordering::Relaxed);
+    } else {
+        WAKE_MISSES.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+/// The waits since the last call as a log line, None when the turns did not wait.
+pub fn take_wake_text() -> Option<String> {
+    let hits = WAKE_HITS.swap(0, Ordering::Relaxed);
+    let misses = WAKE_MISSES.swap(0, Ordering::Relaxed);
+    let sum = WAKE_SUM_US.swap(0, Ordering::Relaxed);
+    let max = WAKE_MAX_US.swap(0, Ordering::Relaxed);
+    let budget = WAKE_BUDGET_SUM_US.swap(0, Ordering::Relaxed);
+    let count = u64::from(hits + misses);
+    (count != 0).then(|| {
+        format!(
+            "wake count x mean/max us waited={count}x{}/{max} budget_mean={} hits={hits} misses={misses}",
+            sum / count,
+            budget / count
+        )
+    })
+}
+
 pub fn request_idr() {
     IDR_WANTED.store(true, Ordering::Release);
 }

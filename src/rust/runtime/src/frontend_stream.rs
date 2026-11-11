@@ -165,6 +165,7 @@ impl Stream {
         client: &mut Client<F>,
         mut descriptor: Descriptor,
         peer: Option<[u8; 4]>,
+        slots: Option<[*mut u8; SURFACES]>,
         now_ms: u64,
     ) -> bool {
         let Some(epoch) = client.session_epoch() else {
@@ -193,7 +194,9 @@ impl Stream {
             descriptor.codec.name()
         ));
         let opened = match peer {
-            Some(peer) if self.running.is_none() => self.start(&descriptor, peer, epoch, now_ms),
+            Some(peer) if self.running.is_none() => {
+                self.start(&descriptor, peer, epoch, slots, now_ms)
+            }
             _ => Err("no peer or a stream is already open"),
         };
         descriptor.wipe();
@@ -216,6 +219,7 @@ impl Stream {
         descriptor: &Descriptor,
         peer: [u8; 4],
         epoch: Epoch,
+        slots: Option<[*mut u8; SURFACES]>,
         now_ms: u64,
     ) -> Result<Running, &'static str> {
         let display = Size::new(descriptor.width, descriptor.height).ok_or("invalid size")?;
@@ -234,7 +238,11 @@ impl Stream {
             fps: descriptor.fps,
             matrix: Matrix::Bt709,
         };
-        let backend = Decoder::new(descriptor.fps);
+        log(&crate::perf::text());
+        let backend = Decoder::new(descriptor.fps).with_path(
+            crate::perf::path(),
+            slots.map(|slots| (slots, moonlight_nx2_core::frame::FRAME_BYTES)),
+        );
         let buffers = Box::into_raw(Buffers::new(coded));
         let memory = unsafe { &mut *buffers };
         let [first, second] = &mut memory.frames;
@@ -407,6 +415,9 @@ impl Stream {
             "stream: {}",
             crate::stream_stats::take_stages_text()
         ));
+        if let Some(wake) = crate::stream_stats::take_wake_text() {
+            log(&format!("stream: {wake}"));
+        }
         let Some(audio) = running.audio_stats() else {
             return;
         };

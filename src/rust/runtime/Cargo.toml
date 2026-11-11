@@ -16,6 +16,7 @@ sdk-video-120-decode = ["frontend"]
 video-tcp = []
 ui-pattern = ["frontend"]
 ui-uncached = ["ui-pattern"]
+perf-chord = ["ui-pattern"]
 host-renderer = []
 
 [dependencies]
