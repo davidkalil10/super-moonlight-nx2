@@ -13,8 +13,9 @@ from build import BUILDS, SDK_DIAGNOSTICS, TRIALS, digest, git, utc_stamp, write
 APP = Path(__file__).resolve().parents[2]
 REMOTE_BUILDS = Path("/Users/azkali/claude-builds/moonlight")
 FOUNDATION = REMOTE_BUILDS / "20261109T060400Z-ae67243-rust-foundation"
-SDK = REMOTE_BUILDS / "20261110-sdk-viddec/sdk"
-SDK_SHA256 = "7437e4f4b88f77e80ba0732b3f7bab3dcb05ef81c6b837129381fb4c1af024fb"
+SDK = REMOTE_BUILDS / "20261111-sdk/sdk"
+SDK_ARCHIVE = "ounce-sdk-20261111.tar.xz"
+SDK_SHA256 = "40db6b5aed4e3bf9cd8e464bd09ac1bb2d0d8eedf992cbceadd40828f2021610"
 BUILDER_IMAGE = "sha256:1fc388c3a0d34bd2045a6dadcb1020e069d5f876a187fd705de14b4440c00282"
 
 
@@ -70,7 +71,7 @@ def main():
     branch = git("branch", "--show-current") or "detached"
     version = nacp_version(description, revision)
     build_id = f"{utc_stamp()}-{revision[:7]}-{name}"
-    remote_sdk = shlex.quote(str(SDK / "ounce-sdk.tar.xz"))
+    remote_sdk = shlex.quote(str(SDK / SDK_ARCHIVE))
     remote_sdk_sha = m4(f"shasum -a 256 {remote_sdk}", capture_output=True, text=True).stdout.split()[0]
     if remote_sdk_sha != SDK_SHA256:
         raise ValueError("The pinned m4 SDK archive changed")
@@ -122,7 +123,7 @@ def main():
 
     container_script = "\n".join([
         "set -eu",
-        "tar -xJf /sdk/ounce-sdk.tar.xz -C /opt/devkitpro",
+        f"tar -xJf /sdk/{SDK_ARCHIVE} -C /opt/devkitpro",
         "export PATH=/opt/devkitpro/devkitA64/bin:/opt/devkitpro/tools/bin:$PATH",
         f"python3 -B /work/source/src/rust/build.py nro --directory /work/nro --rust-directory /work/rust {what} --nacp-version {shlex.quote(version)}",
     ])

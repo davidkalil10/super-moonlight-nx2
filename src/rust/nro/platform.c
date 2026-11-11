@@ -44,7 +44,7 @@ typedef struct {
 } Vibration;
 static Vibration vibration[SOURCES];
 
-_Static_assert(sizeof(GsvSync) == 8, "GsvSync ABI");
+_Static_assert(sizeof(GsvSync) == 12, "GsvSync ABI");
 _Static_assert(sizeof(GsvGpu) == 8, "GsvGpu ABI");
 _Static_assert(sizeof(Event) == 12, "Event ABI");
 _Static_assert(sizeof(TransferMemory) == 40, "TransferMemory ABI");
