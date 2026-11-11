@@ -389,7 +389,7 @@ pub use device::{Sampler, rumble, stop_rumble};
 /// The system software keyboard, which runs on its own thread in the platform layer.
 #[cfg(target_os = "none")]
 pub mod software_keyboard {
-    use alloc::string::String;
+    use super::alloc::string::String;
     use moonlight_nx2_app::typing::{Keyboard, Poll};
 
     unsafe extern "C" {
