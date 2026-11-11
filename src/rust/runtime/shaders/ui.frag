@@ -1,5 +1,7 @@
 #version 450
 #extension GL_GOOGLE_include_directive : require
+// Volatile keeps NVK off the incoherent constant load path.
+#define STORAGE_ACCESS readonly volatile
 #include "storage.glsl"
 layout(location = 0) flat in uvec4 rect;
 layout(location = 1) flat in uvec4 info;
