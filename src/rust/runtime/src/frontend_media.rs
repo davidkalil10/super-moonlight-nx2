@@ -5,6 +5,7 @@ use crate::{
     render::Renderer,
 };
 use moonlight_nx2_app::{
+    direct_stream::Outbox,
     media::{InputSource, PcmChannel, VideoChannel},
     policy::{Epoch, Observation},
 };
@@ -26,15 +27,31 @@ pub enum Error {
     ObservationOverflow,
 }
 
-struct Timed<I>(I);
+/// Video acknowledgements carry no input on a direct stream: it goes out on its own.
+struct NoInput;
 
-impl<I: InputSource> InputSource for Timed<I> {
-    fn take(&mut self, out: &mut [u8; MAX_INPUT_BYTES]) -> usize {
-        let length = self.0.take(out);
-        if length != 0 {
-            crate::stream_stats::input_sent(crate::render_platform::now_ns());
-        }
-        length
+impl InputSource for NoInput {
+    fn take(&mut self, _out: &mut [u8; MAX_INPUT_BYTES]) -> usize {
+        0
+    }
+}
+
+/// Records this frame's input and sends it on the control channel, whether or not video
+/// arrives.
+pub fn send_input<F: Files + Clone>(
+    outbox: &Outbox,
+    client: &mut Client<F>,
+    input: &FrameInput,
+    epoch: Epoch,
+) {
+    if client.session_epoch() != Some(epoch) {
+        return;
+    }
+    let mut record = [0u8; MAX_INPUT_BYTES];
+    let length = client.input(input).take(&mut record);
+    if length != 0 {
+        crate::stream_stats::input_sent(crate::render_platform::now_ns());
+        let _ = outbox.input(&record[..length]);
     }
 }
 
@@ -77,7 +94,6 @@ pub fn step<
     session: &mut Session<'_, B, S, D, V, N, P>,
     client: &mut Client<F>,
     renderer: &mut Renderer,
-    input: &FrameInput,
     tick: Tick,
 ) -> Result<media_session::Step, Error> {
     if client.session_epoch() != Some(tick.epoch) {
@@ -86,23 +102,20 @@ pub fn step<
     let mut observations = [None; 5];
     let mut count = 0;
     let mut overflow = false;
-    let result = {
-        let mut input = Timed(client.input(input));
-        session.step_observed(
-            renderer,
-            &mut input,
-            tick.now_ms,
-            tick.interactive,
-            &mut |event| {
-                if let Some(slot) = observations.get_mut(count) {
-                    *slot = Some(event);
-                    count += 1;
-                } else {
-                    overflow = true;
-                }
-            },
-        )
-    };
+    let result = session.step_observed(
+        renderer,
+        &mut NoInput,
+        tick.now_ms,
+        tick.interactive,
+        &mut |event| {
+            if let Some(slot) = observations.get_mut(count) {
+                *slot = Some(event);
+                count += 1;
+            } else {
+                overflow = true;
+            }
+        },
+    );
     for observation in observations.into_iter().flatten() {
         client.observe(tick.epoch, observation);
     }

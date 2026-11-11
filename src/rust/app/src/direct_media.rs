@@ -51,17 +51,6 @@ impl<C: ControlSender> ControlEvents<C> {
     }
 }
 
-/// Takes the console's input record that goes with each decoded frame.
-pub trait InputSink {
-    fn input(&mut self, record: &[u8]);
-}
-
-impl<C: ControlSender + InputSink> InputSink for ControlEvents<C> {
-    fn input(&mut self, record: &[u8]) {
-        self.control.input(record);
-    }
-}
-
 impl<C: ControlSender> video::Events for ControlEvents<C> {
     fn request_idr(&mut self) {
         let sent = self.control.send(
@@ -146,7 +135,7 @@ impl<U: Datagram, E: video::Events> DirectVideo<U, E> {
     }
 }
 
-impl<U: Datagram, E: video::Events + InputSink> VideoChannel for DirectVideo<U, E> {
+impl<U: Datagram, E: video::Events> VideoChannel for DirectVideo<U, E> {
     fn pump_video(&mut self, now_ms: u64) -> Result<(), Failure> {
         if !connected(&mut self.socket, &mut self.connected, Stream::Video)? {
             return Ok(());
@@ -195,11 +184,8 @@ impl<U: Datagram, E: video::Events + InputSink> VideoChannel for DirectVideo<U, 
     fn acknowledge_video(
         &mut self,
         _header: &[u8; HEADER_BYTES],
-        input: &[u8],
+        _input: &[u8],
     ) -> Result<bool, Failure> {
-        if !input.is_empty() {
-            self.events.input(input);
-        }
         Ok(true)
     }
 
@@ -394,7 +380,7 @@ where
     C: UdpConnector,
     C::Socket: Socket + 'a,
     D: Device,
-    E: video::Events + InputSink,
+    E: video::Events,
     O: OpusDecoder,
 {
     let closed = |audio| Closed {

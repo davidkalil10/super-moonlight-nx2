@@ -180,7 +180,9 @@ impl Live {
 pub struct Outbox(Rc<RefCell<Channel>>);
 
 impl Outbox {
-    fn apply(&self, record: &[u8]) -> Result<bool, direct_input::Error> {
+    /// Applies one input record from the console's recorder and sends what changed at once;
+    /// true after the record that stops the session.
+    pub fn input(&self, record: &[u8]) -> Result<bool, direct_input::Error> {
         let mut channel = self
             .0
             .try_borrow_mut()
@@ -190,12 +192,6 @@ impl Outbox {
         channel.flush_input()?;
         channel.send_out();
         Ok(changed)
-    }
-}
-
-impl crate::direct_media::InputSink for Outbox {
-    fn input(&mut self, record: &[u8]) {
-        let _ = self.apply(record);
     }
 }
 

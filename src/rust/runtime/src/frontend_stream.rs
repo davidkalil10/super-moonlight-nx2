@@ -17,7 +17,7 @@ use crate::{
 use alloc::{boxed::Box, format, vec};
 use core::cell::Cell;
 use moonlight_nx2_app::{
-    direct_media::{self, ControlEvents, DirectAudio, DirectVideo, InputSink},
+    direct_media::{self, ControlEvents, DirectAudio, DirectVideo},
     direct_stream::Outbox,
     media::Closed,
     policy::{Epoch, Observation, Telemetry},
@@ -54,15 +54,8 @@ type DirectSession = Session<
     DirectAudio<UdpSocket, HwOpus>,
 >;
 
-/// The Sunshine control stream the direct launch owns; video asks it for keyframes and hands
-/// it the input record of each frame.
+/// The Sunshine control stream the direct launch owns; video asks it for keyframes.
 pub struct Control(pub Outbox);
-
-impl InputSink for Control {
-    fn input(&mut self, record: &[u8]) {
-        self.0.input(record);
-    }
-}
 
 impl ControlSender for Control {
     fn send(
@@ -105,6 +98,7 @@ impl Buffers {
 /// before they are freed; buffers a retained session may still touch are never freed.
 struct Running {
     session: Box<DirectSession>,
+    input: Outbox,
     buffers: *mut Buffers,
     epoch: Epoch,
     draining: bool,
@@ -286,10 +280,12 @@ impl Stream {
         };
         let audio = self.audio.take();
         let mut connector = PeerConnector::new(stream.host);
+        let input = control.0.clone();
         let events = ControlEvents::new(control);
         match direct_media::open(&mut connector, stream, events, decoder, audio, now_ms) {
             Ok(media) => Ok(Running {
                 session: Box::new(Session::new(video, media)),
+                input,
                 buffers,
                 epoch,
                 draining: false,
@@ -358,7 +354,8 @@ impl Stream {
             now_ms,
             interactive,
         };
-        let result = frontend_media::step(&mut running.session, client, renderer, input, tick);
+        frontend_media::send_input(&running.input, client, input, running.epoch);
+        let result = frontend_media::step(&mut running.session, client, renderer, tick);
         let presented = result.is_ok();
         if let Ok(step) = &result
             && step.progress.video_records + step.progress.pcm_records > 0
