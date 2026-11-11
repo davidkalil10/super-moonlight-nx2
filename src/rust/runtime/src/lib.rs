@@ -18,6 +18,8 @@ use moonlight_nx2_ui as _;
 
 #[cfg(target_os = "none")]
 pub mod audio_device;
+#[cfg(all(target_os = "none", feature = "frontend"))]
+mod clocks;
 #[cfg(target_os = "none")]
 mod device;
 #[cfg(all(target_os = "none", feature = "frontend"))]
@@ -53,6 +55,8 @@ pub mod frontend_media;
 pub mod hid;
 #[cfg(any(target_os = "none", feature = "host-renderer"))]
 pub mod media_session;
+#[cfg(any(target_os = "none", feature = "host-renderer"))]
+pub mod perf;
 #[cfg(any(target_os = "none", feature = "host-renderer"))]
 mod policy_badge;
 #[cfg(any(target_os = "none", feature = "host-renderer"))]

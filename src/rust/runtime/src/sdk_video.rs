@@ -7,6 +7,7 @@ extern crate alloc;
 
 use crate::{
     device::log,
+    perf::Path,
     sdk,
     stream_stats::{self, Stage},
 };
@@ -14,7 +15,7 @@ use alloc::format;
 use moonlight_nx2_core::{
     annexb,
     codec::{Capabilities, Codec, Depth, Evidence, Mode, Size},
-    decoder::{Backend, BackendError, Config, SURFACES, UNITS},
+    decoder::{Backend, BackendError, Config, Placement, SURFACES, UNITS},
     viddec,
     video_wire::Output,
 };
@@ -47,6 +48,8 @@ const MODES: [(u32, u32, u32, bool, bool); 3] = [
     ),
 ];
 const SUBMIT_BUSY: u32 = (3603 << 9) | 111;
+const TIMED_OUT: u32 = 0xea01;
+const STAGE_POOL_CLOSE: u32 = 13;
 
 #[repr(C)]
 #[derive(Default)]
@@ -68,6 +71,23 @@ struct Layout {
     height: u32,
     reserved: u32,
     pitch: [u64; 2],
+    offset: [u32; 2],
+}
+
+impl Layout {
+    /// Both planes a whole number of rows apart from the start of the slot, as the renderer
+    /// reads a frame.
+    fn placement(&self) -> Option<Placement> {
+        let stride = u32::try_from(self.pitch[0]).ok()?;
+        let fits = stride != 0
+            && self.pitch[1] == self.pitch[0]
+            && self.offset[0] == 0
+            && self.offset[1] % stride == 0;
+        fits.then(|| Placement {
+            stride,
+            slice_height: self.offset[1] / stride,
+        })
+    }
 }
 
 unsafe extern "C" {
@@ -75,10 +95,37 @@ unsafe extern "C" {
         width: u32,
         height: u32,
         count: u32,
+        slots: *const *mut u8,
+        slot_bytes: usize,
         images: *mut u32,
         stage: *mut u32,
         sync_result: *mut u32,
+        place_result: *mut u32,
     ) -> u32;
+    fn moonlightSdkVideoWait(slot: u32, timeout_ns: u64, ready: *mut bool) -> u32;
+    fn moonlightSdkVideoLayout(slot: u32, layout: *mut Layout) -> u32;
+    fn moonlightSdkVideoInPlace() -> bool;
+    fn moonlightSdkDecoderOpen(width: u32, height: u32, count: u32, images: *mut u32) -> u32;
+    fn moonlightSdkDecoderStart(
+        codec: u32,
+        fps: u32,
+        codec_config: *const u8,
+        codec_config_bytes: usize,
+        max_sample_bytes: u64,
+    ) -> u32;
+    fn moonlightSdkDecoderSubmit(data: *const u8, bytes: usize, timestamp_ns: i64) -> u32;
+    fn moonlightSdkDecoderWait(slot: u32, timeout_ns: u64, ready: *mut bool) -> u32;
+    fn moonlightSdkDecoderOutput(slot: u32, out: *mut Properties) -> u32;
+    fn moonlightSdkDecoderRead(
+        slot: u32,
+        luma: *mut u8,
+        chroma: *mut u8,
+        pitch: usize,
+        rows: usize,
+        source_pitch: *mut u32,
+    ) -> u32;
+    fn moonlightSdkDecoderRelease(slot: u32) -> u32;
+    fn moonlightSdkDecoderClose();
     fn moonlightSdkVideoStart(
         codec: u32,
         fps: u32,
@@ -166,6 +213,9 @@ pub fn note_output_formats(size: Size) {
 
 pub struct SdkVideo {
     fps: u32,
+    path: Path,
+    slots: Option<([*mut u8; SURFACES], usize)>,
+    placements: [Option<Placement>; SURFACES],
     #[cfg(feature = "diagnostic-sdk-modes")]
     tuning: Tuning,
     config: Option<Config>,
@@ -198,6 +248,9 @@ impl SdkVideo {
     pub fn new(fps: u32) -> Self {
         Self {
             fps,
+            path: Path::Copy,
+            slots: None,
+            placements: [None; SURFACES],
             #[cfg(feature = "diagnostic-sdk-modes")]
             tuning: Tuning::NONE,
             config: None,
@@ -208,6 +261,17 @@ impl SdkVideo {
             microseconds_reported: false,
             busy_submits: 0,
         }
+    }
+
+    /// Decodes through `path`; `slots` are the presenter's frame slots for `Path::InPlace`.
+    pub fn with_path(mut self, path: Path, slots: Option<([*mut u8; SURFACES], usize)>) -> Self {
+        self.path = path;
+        self.slots = slots.filter(|_| path == Path::InPlace);
+        self
+    }
+
+    fn high_level(&self) -> bool {
+        self.path == Path::Sdk
     }
 
     /// Input timestamps are sent in microseconds and the header documents nanoseconds for
@@ -256,6 +320,24 @@ impl SdkVideo {
                 config.display.width(),
                 config.display.height()
             ));
+        }
+        if self.high_level() {
+            let result = unsafe {
+                moonlightSdkDecoderStart(
+                    session.codec,
+                    session.frame_rate,
+                    codec_config.as_ptr(),
+                    bytes,
+                    0,
+                )
+            };
+            log(&format!(
+                "sdk-decoder: start codec={:?} result=0x{result:x} codec_config_bytes={bytes} fps={} stream_fps={}",
+                config.codec, session.frame_rate, self.fps
+            ));
+            check("start", result)?;
+            self.started = true;
+            return Ok(());
         }
         let mut stage = 0;
         let result = unsafe {
@@ -325,26 +407,69 @@ impl Backend for SdkVideo {
             );
         }
         let mut images = [0; SURFACES];
+        if self.high_level() {
+            let result = unsafe {
+                moonlightSdkDecoderOpen(
+                    config.display.width(),
+                    config.display.height(),
+                    SURFACES as u32,
+                    images.as_mut_ptr(),
+                )
+            };
+            log(&format!("sdk-decoder: open result=0x{result:x}"));
+            check("open", result)?;
+            self.config = Some(config);
+            return Ok(images);
+        }
         let mut stage = 0;
         let mut sync_result = 0;
+        let mut place_result = 0;
+        let (slots, slot_bytes) = match &self.slots {
+            Some((slots, bytes)) => (slots.as_ptr(), *bytes),
+            None => (core::ptr::null(), 0),
+        };
         let result = unsafe {
             moonlightSdkVideoOpen(
                 config.display.width(),
                 config.display.height(),
                 SURFACES as u32,
+                slots,
+                slot_bytes,
                 images.as_mut_ptr(),
                 &mut stage,
                 &mut sync_result,
+                &mut place_result,
             )
         };
         log(&format!(
-            "sdk-video: open result=0x{result:x} stage={stage} sync=0x{sync_result:x} images={images:?}"
+            "sdk-video: open result=0x{result:x} stage={stage} sync=0x{sync_result:x} place=0x{place_result:x} images={images:?}"
         ));
         if result != 0 {
-            return Err(BackendError::Refused);
+            return Err(if stage == STAGE_POOL_CLOSE {
+                BackendError::Uncertain
+            } else {
+                BackendError::Refused
+            });
         }
         if sync_result != 0 {
             log("sdk-video: no sync session; frames are taken when their properties arrive");
+        }
+        self.placements = [None; SURFACES];
+        if unsafe { moonlightSdkVideoInPlace() } {
+            for (surface, placement) in self.placements.iter_mut().enumerate() {
+                let mut layout = Layout::default();
+                let result = unsafe { moonlightSdkVideoLayout(surface as u32, &mut layout) };
+                *placement = (result == 0).then(|| layout.placement()).flatten();
+                log(&format!(
+                    "sdk-video: in place surface={surface} result=0x{result:x} {layout:?} placement={placement:?}"
+                ));
+            }
+            if self.placements.iter().any(Option::is_none) {
+                self.placements = [None; SURFACES];
+                log("sdk-video: in place layout refused; closing");
+                let _ = self.close();
+                return Err(BackendError::Refused);
+            }
         }
         self.config = Some(config);
         Ok(images)
@@ -365,8 +490,14 @@ impl Backend for SdkVideo {
                 bytes.len()
             ));
         }
-        let result = unsafe { moonlightSdkVideoSubmit(bytes.as_ptr(), bytes.len(), timestamp_ns) };
-        if result == SUBMIT_BUSY {
+        let result = unsafe {
+            if self.high_level() {
+                moonlightSdkDecoderSubmit(bytes.as_ptr(), bytes.len(), timestamp_ns)
+            } else {
+                moonlightSdkVideoSubmit(bytes.as_ptr(), bytes.len(), timestamp_ns)
+            }
+        };
+        if result == SUBMIT_BUSY || (self.high_level() && result & 0x3f_ffff == TIMED_OUT) {
             self.busy_submits += 1;
             return Err(BackendError::Busy);
         }
@@ -377,9 +508,17 @@ impl Backend for SdkVideo {
     }
 
     fn ready(&mut self, surface: usize) -> Result<bool, BackendError> {
+        self.wait(surface, 0)
+    }
+
+    fn wait(&mut self, surface: usize, timeout_ns: u64) -> Result<bool, BackendError> {
         let mut ready = false;
         check("ready", unsafe {
-            moonlightSdkVideoReady(surface as u32, &mut ready)
+            match (self.high_level(), timeout_ns) {
+                (true, _) => moonlightSdkDecoderWait(surface as u32, timeout_ns, &mut ready),
+                (false, 0) => moonlightSdkVideoReady(surface as u32, &mut ready),
+                (false, _) => moonlightSdkVideoWait(surface as u32, timeout_ns, &mut ready),
+            }
         })?;
         if ready {
             #[cfg(feature = "diagnostic-sdk-decode")]
@@ -399,7 +538,11 @@ impl Backend for SdkVideo {
             log(&format!("b2ar: before output surface={surface}"));
         }
         check("output properties", unsafe {
-            moonlightSdkVideoOutput(surface as u32, &mut properties)
+            if self.high_level() {
+                moonlightSdkDecoderOutput(surface as u32, &mut properties)
+            } else {
+                moonlightSdkVideoOutput(surface as u32, &mut properties)
+            }
         })?;
         #[cfg(feature = "diagnostic-sdk-decode")]
         log(&format!(
@@ -437,14 +580,28 @@ impl Backend for SdkVideo {
         let mut layout = Layout::default();
         let read_start_ns = unsafe { sdk::moonlightNowNs() };
         let result = unsafe {
-            moonlightSdkVideoRead(
-                surface as u32,
-                luma.as_mut_ptr(),
-                chroma.as_mut_ptr(),
-                width,
-                config.coded.height() as usize,
-                &mut layout,
-            )
+            if self.high_level() {
+                let mut pitch = 0;
+                let result = moonlightSdkDecoderRead(
+                    surface as u32,
+                    luma.as_mut_ptr(),
+                    chroma.as_mut_ptr(),
+                    width,
+                    config.coded.height() as usize,
+                    &mut pitch,
+                );
+                layout.pitch = [u64::from(pitch); 2];
+                result
+            } else {
+                moonlightSdkVideoRead(
+                    surface as u32,
+                    luma.as_mut_ptr(),
+                    chroma.as_mut_ptr(),
+                    width,
+                    config.coded.height() as usize,
+                    &mut layout,
+                )
+            }
         };
         stream_stats::stage(Stage::Readback, read_start_ns, unsafe {
             sdk::moonlightNowNs()
@@ -458,11 +615,31 @@ impl Backend for SdkVideo {
 
     fn release(&mut self, surface: usize) -> Result<(), BackendError> {
         check("release image", unsafe {
-            moonlightSdkVideoRelease(surface as u32)
+            if self.high_level() {
+                moonlightSdkDecoderRelease(surface as u32)
+            } else {
+                moonlightSdkVideoRelease(surface as u32)
+            }
         })
     }
 
+    fn placement(&self, surface: usize) -> Option<Placement> {
+        self.placements.get(surface).copied().flatten()
+    }
+
     fn close(&mut self) -> Result<(), BackendError> {
+        if self.high_level() {
+            unsafe { moonlightSdkDecoderClose() };
+            log(&format!(
+                "sdk-decoder: closed busy_submits={}",
+                self.busy_submits
+            ));
+            self.config = None;
+            self.started = false;
+            self.ready = None;
+            return Ok(());
+        }
+        self.placements = [None; SURFACES];
         let poll_result = unsafe { moonlightSdkVideoPollResult() };
         let mut stage = 0;
         let result = unsafe { moonlightSdkVideoClose(&mut stage) };

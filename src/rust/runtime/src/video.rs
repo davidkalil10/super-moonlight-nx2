@@ -4,6 +4,7 @@
 extern crate alloc;
 
 use crate::{
+    perf::{self, Latency},
     render::{self, Renderer},
     render_platform as platform,
     stream_stats::{self, Stage},
@@ -12,7 +13,7 @@ use alloc::format;
 use core::cell::Cell;
 use moonlight_nx2_core::{
     codec::{Capabilities, Codec, Depth},
-    decoder::{self, Backend, Decoder, FrameInfo, SURFACES},
+    decoder::{self, Backend, Decoder, FrameInfo, Placed, SURFACES},
     frame::{Frame, Layout, Matrix, Plane},
     media::Header,
     recovery::{self, Decision, Recovery},
@@ -128,6 +129,44 @@ impl Timing {
 /// How long a finished frame waits for an upload slot. The slot of the frame before last is
 /// still read by the GPU for a moment after its present.
 const STAGING_WAIT_NS: u64 = 2_000_000;
+/// The share of a turn, in percent, a turn may spend waiting for its unit's frame. The rest
+/// is left for the upload, the present and input.
+const WAKE_SHARE: u64 = 55;
+const TURN_MIN_NS: u64 = 4_000_000;
+const TURN_MAX_NS: u64 = 34_000_000;
+
+/// When the current turn started and how long turns last, for the wait of `Latency::Wake`.
+#[derive(Default)]
+struct Turns {
+    started_ns: u64,
+    period_ns: u64,
+    waited: bool,
+}
+
+impl Turns {
+    fn start(&mut self, now_ns: u64) {
+        let elapsed = now_ns.saturating_sub(self.started_ns);
+        if self.started_ns != 0 && (TURN_MIN_NS..=TURN_MAX_NS).contains(&elapsed) {
+            self.period_ns = match self.period_ns {
+                0 => elapsed,
+                period => (period * 7 + elapsed) / 8,
+            };
+        }
+        self.started_ns = now_ns;
+        self.waited = false;
+    }
+
+    /// What is left of this turn's wait, None when the turn already waited or its length is
+    /// not known yet.
+    fn budget_ns(&mut self, now_ns: u64) -> Option<u64> {
+        if self.waited || self.period_ns == 0 {
+            return None;
+        }
+        self.waited = true;
+        let deadline = self.started_ns + self.period_ns * WAKE_SHARE / 100;
+        Some(deadline.saturating_sub(now_ns)).filter(|budget| *budget != 0)
+    }
+}
 
 pub struct Video<'a, B: Backend<N>, const N: usize = SURFACES> {
     decoder: Decoder<'a, B, N>,
@@ -143,6 +182,7 @@ pub struct Video<'a, B: Backend<N>, const N: usize = SURFACES> {
     pending_timing: Option<(u64, u64)>,
     timing: Timing,
     presentation: Option<Presentation>,
+    turns: Turns,
 }
 
 impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
@@ -188,6 +228,7 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
             pending_timing: None,
             timing: Timing::default(),
             presentation: None,
+            turns: Turns::default(),
         })
     }
 
@@ -353,6 +394,78 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
         }
     }
 
+    /// Shows a frame the decoder wrote into the renderer's slot of its surface. The surface
+    /// goes back to the decoder once the slot is no longer read, in `reclaim`.
+    fn publish_placed(
+        &mut self,
+        renderer: &mut Renderer,
+        info: &FrameInfo,
+        placed: Placed,
+    ) -> Result<bool, Error> {
+        let published = Layout::coded(
+            placed.placement.stride,
+            placed.placement.slice_height,
+            info.display.width(),
+            info.display.height(),
+            self.matrix,
+        )
+        .map_err(render::Error::from)
+        .and_then(|layout| renderer.publish(placed.surface, layout));
+        match published {
+            Ok(_) => Ok(true),
+            Err(render::Error::Busy) => {
+                self.drop_frame(info)?;
+                Ok(false)
+            }
+            Err(error) => Err(self.fail(Error::Renderer(error))),
+        }
+    }
+
+    fn drop_frame(&mut self, info: &FrameInfo) -> Result<(), Error> {
+        let released = match info.placed {
+            Some(placed) => self.decoder.release_surface(placed.surface),
+            None => self.decoder.release(info.token),
+        };
+        released.map_err(|error| self.fail(Error::Decoder(error)))
+    }
+
+    /// Hands surfaces decoded in place back to the decoder once their slot is neither shown
+    /// nor read.
+    fn reclaim(&mut self, renderer: &mut Renderer) -> Result<(), Error> {
+        for surface in 0..N {
+            if !self.decoder.holds_surface(surface) {
+                continue;
+            }
+            match renderer.slot_free(surface) {
+                Ok(true) => self
+                    .decoder
+                    .release_surface(surface)
+                    .map_err(|error| self.fail(Error::Decoder(error)))?,
+                Ok(false) => {}
+                Err(error) => return Err(self.fail(Error::Renderer(error))),
+            }
+        }
+        Ok(())
+    }
+
+    /// With `Latency::Wake`, waits up to the turn's share for the oldest unit's frame, so it
+    /// is shown on this turn rather than the next.
+    fn wake(&mut self) -> Result<(), Error> {
+        if perf::latency() == Latency::Off || self.decoder.pending_units() == 0 {
+            return Ok(());
+        }
+        let start_ns = platform::now_ns();
+        let Some(budget_ns) = self.turns.budget_ns(start_ns) else {
+            return Ok(());
+        };
+        let ready = self
+            .decoder
+            .wait(budget_ns)
+            .map_err(|error| self.fail(Error::Decoder(error)))?;
+        stream_stats::wake(platform::now_ns() - start_ns, budget_ns, ready);
+        Ok(())
+    }
+
     /// Submits a unit. When the decoder has no room for it, a finished frame is taken first and
     /// the unit is offered once more, so it goes in on the turn it arrived. Left waiting, it
     /// would go in next turn together with that turn's unit, their two frames would finish
@@ -366,6 +479,10 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
         bytes: &[u8],
         received_us: Option<u64>,
     ) -> Result<(), Error> {
+        if self.decoder.in_place() {
+            self.active()?;
+            self.reclaim(renderer)?;
+        }
         match self.submit_timed(header, bytes, received_us) {
             Err(Error::Decoder(decoder::Error::Again)) => {
                 self.poll_upload(renderer)?;
@@ -379,12 +496,26 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
         self.active()?;
         self.recovery.tick(platform::now_ns() / 1_000_000);
         self.forward_idr_request();
-        let poll_start_ns = platform::now_ns();
-        let (slot, frame) = match renderer.staging(STAGING_WAIT_NS) {
-            Ok(Some((slot, staging))) => (slot, self.decoder.poll_into(Some(staging))),
-            // A frame with no slot to go to would be read back and thrown away.
-            Ok(None) => return Ok(false),
-            Err(error) => return Err(self.fail(Error::Renderer(error))),
+        let (slot, frame, poll_start_ns) = if self.decoder.in_place() {
+            self.reclaim(renderer)?;
+            self.wake()?;
+            let poll_start_ns = platform::now_ns();
+            (None, self.decoder.poll_into(None), poll_start_ns)
+        } else {
+            match renderer.staging(STAGING_WAIT_NS) {
+                Ok(Some((slot, staging))) => {
+                    self.wake()?;
+                    let poll_start_ns = platform::now_ns();
+                    (
+                        Some(slot),
+                        self.decoder.poll_into(Some(staging)),
+                        poll_start_ns,
+                    )
+                }
+                // A frame with no slot to go to would be read back and thrown away.
+                Ok(None) => return Ok(false),
+                Err(error) => return Err(self.fail(Error::Renderer(error))),
+            }
         };
         stream_stats::stage(Stage::Poll, poll_start_ns, platform::now_ns());
         let frame = frame.map_err(|error| self.fail(Error::Decoder(error)))?;
@@ -415,15 +546,13 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
         }
 
         if !self.recovery.presentable(info.pts_us) {
-            self.decoder
-                .release(info.token)
-                .map_err(|error| self.fail(Error::Decoder(error)))?;
+            self.drop_frame(&info)?;
             return Ok(false);
         }
-        let uploaded = if info.staged {
-            self.publish_staged(renderer, slot, &info)
-        } else {
-            self.upload(renderer, &info)
+        let uploaded = match (info.placed, slot) {
+            (Some(placed), _) => self.publish_placed(renderer, &info, placed),
+            (None, Some(slot)) if info.staged => self.publish_staged(renderer, slot, &info),
+            _ => self.upload(renderer, &info),
         };
         stream_stats::stage(Stage::Upload, decoded_ns, platform::now_ns());
         if !uploaded? {
@@ -477,8 +606,13 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
     /// A second finished frame waits in the decoder for the next turn: a frame that is a turn
     /// late then costs a turn of latency, not a picture. Only `submit_draining` replaces a
     /// frame not shown yet, and only when units arrive faster than the decoder has room.
+    /// With `Latency::Newest`, a second finished frame replaces the one taken, so a decoder
+    /// two frames behind catches up instead of staying a turn late.
     pub fn present(&mut self, renderer: &mut Renderer, interactive: bool) -> Result<bool, Error> {
         if !self.pending {
+            self.poll_upload(renderer)?;
+        }
+        if self.pending && perf::latency() == Latency::Newest {
             self.poll_upload(renderer)?;
         }
         self.present_pending(renderer, interactive)
@@ -509,6 +643,7 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
         renderer: &'t mut Renderer,
         interactive: bool,
     ) -> Tick<'t, 'a, B, N> {
+        self.turns.start(platform::now_ns());
         Tick {
             video: self,
             renderer,

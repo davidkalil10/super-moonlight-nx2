@@ -443,6 +443,23 @@ impl Renderer {
         Ok(Some((slot, self.slot_bytes(slot))))
     }
 
+    /// Where each frame slot starts in the mapped storage, for a decoder writing frames in
+    /// place. The memory stays mapped until `close`.
+    pub fn frame_slots(&mut self) -> Result<[*mut u8; frame::VIDEO_SLOTS], Error> {
+        self.active()?;
+        let base = self.objects.storage.mapped;
+        Ok(core::array::from_fn(|slot| unsafe {
+            base.add(frame::FRAMES_OFFSET + slot * frame::FRAME_BYTES)
+        }))
+    }
+
+    /// Whether `slot` is neither shown nor read by a frame still in flight.
+    pub fn slot_free(&mut self, slot: usize) -> Result<bool, Error> {
+        self.active()?;
+        self.objects.collect(0)?;
+        Ok(self.objects.slot_free(slot))
+    }
+
     fn slot_bytes(&mut self, slot: usize) -> &mut [u8] {
         let offset = frame::FRAMES_OFFSET + slot * frame::FRAME_BYTES;
         &mut self.objects.storage.bytes_mut()[offset..offset + frame::FRAME_BYTES]
@@ -451,7 +468,7 @@ impl Renderer {
     /// Makes the frame in `slot` the one the next present shows.
     pub fn publish(&mut self, slot: usize, layout: frame::Layout) -> Result<usize, Error> {
         self.active()?;
-        if self.objects.free_slot() != Some(slot) {
+        if !self.objects.slot_free(slot) {
             return Err(Error::Busy);
         }
         self.objects.sequence = self.objects.sequence.wrapping_add(1).max(1);
@@ -470,7 +487,9 @@ impl Renderer {
         self.active()?;
         self.objects.count_busy_write();
         self.objects.wait_all()?;
-        self.objects.storage.flush(frame::VIDEO_BASE..UI_CONTROL_END);
+        self.objects
+            .storage
+            .flush(frame::VIDEO_BASE..UI_CONTROL_END);
         Ok(self.objects.storage.bytes_mut())
     }
 
@@ -753,7 +772,9 @@ impl Objects {
                 }
             }
             let chosen = chosen.ok_or(Error::Unsupported)?;
-            log(&format!("render: buffer memory type {chosen} bytes {bytes}"));
+            log(&format!(
+                "render: buffer memory type {chosen} bytes {bytes}"
+            ));
             buffer.memory = create!(
                 device.allocate_memory(
                     &vk::MemoryAllocateInfo::default()
@@ -1412,7 +1433,11 @@ impl Objects {
     }
 
     fn free_slot(&self) -> Option<usize> {
-        (0..2).find(|slot| Some(*slot) != self.current_slot && self.slot_readers[*slot] == 0)
+        (0..2).find(|slot| self.slot_free(*slot))
+    }
+
+    fn slot_free(&self, slot: usize) -> bool {
+        slot < 2 && Some(slot) != self.current_slot && self.slot_readers[slot] == 0
     }
 
     #[cfg(feature = "host-renderer")]

@@ -142,7 +142,8 @@ impl Connections for NativeConnections {
         if !self.network {
             self.network = unsafe { moonlightPlatformNetStart() };
         }
-        self.network.then(|| Box::new(NativeDial) as crate::upstream::Dialer<NetSocket>)
+        self.network
+            .then(|| Box::new(NativeDial) as crate::upstream::Dialer<NetSocket>)
     }
 }
 
@@ -339,6 +340,18 @@ fn execute(renderer: &mut Renderer, connections: &mut NativeConnections, launch:
                 break;
             }
         };
+        #[cfg(feature = "perf-chord")]
+        if let Some(chord) = input_gate.take_perf_edge() {
+            match chord {
+                0 => crate::perf::next_path(),
+                _ => crate::perf::next_latency(),
+            }
+            let line = crate::perf::text();
+            log(&line);
+            if let Ok(bytes) = renderer.storage_mut() {
+                let _ = app.client.toast(bytes, &line, now);
+            }
+        }
         #[cfg(feature = "ui-pattern")]
         {
             if input_gate.take_pattern_edge() {
@@ -390,16 +403,25 @@ fn execute(renderer: &mut Renderer, connections: &mut NativeConnections, launch:
         let now_ms = now / 1_000_000;
         for request in app.take_media() {
             match request {
-                MediaRequest::Open(descriptor) => match app.direct_media() {
-                    Some((negotiated, outbox)) => {
-                        let control = Control(Box::new(outbox));
-                        stream.open_direct(&mut app.client, &negotiated, control, now_ms);
+                MediaRequest::Open(descriptor) => {
+                    let slots = renderer.frame_slots().ok();
+                    match app.direct_media() {
+                        Some((negotiated, outbox)) => {
+                            let control = Control(Box::new(outbox));
+                            stream.open_direct(
+                                &mut app.client,
+                                &negotiated,
+                                control,
+                                slots,
+                                now_ms,
+                            );
+                        }
+                        None => {
+                            let peer = app.peer();
+                            stream.open(&mut app.client, *descriptor, peer, slots, now_ms);
+                        }
                     }
-                    None => {
-                        let peer = app.peer();
-                        stream.open(&mut app.client, *descriptor, peer, now_ms);
-                    }
-                },
+                }
                 MediaRequest::Close => stream.begin_close(&mut app.client, now_ms),
             }
         }
