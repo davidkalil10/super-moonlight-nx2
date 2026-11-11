@@ -31,7 +31,7 @@ void moonlightPlatformLog(const uint8_t *message, size_t bytes);
 
 static void note(const char *line) { moonlightPlatformLog((const uint8_t *)line, strlen(line)); }
 
-/* Images are numbered from 1 by slot, since the object hands slots and no image ids. */
+/* Images are numbered from 1 by surface, since the object hands slots and no image ids. */
 Result moonlightSdkDecoderOpen(uint32_t width, uint32_t height, uint32_t count, uint32_t *images)
 {
     if (sdk.open || count < 2 || count > VIDDEC_MAX_IMAGES)
@@ -41,8 +41,8 @@ Result moonlightSdkDecoderOpen(uint32_t width, uint32_t height, uint32_t count, 
     sdk.height = height;
     sdk.count = count;
     sdk.open = true;
-    for (uint32_t slot = 0; slot < count; slot++)
-        images[slot] = slot + 1;
+    for (uint32_t surface = 0; surface < count; surface++)
+        images[surface] = surface + 1;
     return 0;
 }
 
@@ -76,15 +76,19 @@ Result moonlightSdkDecoderSubmit(const void *data, size_t bytes, int64_t timesta
     return videoDecoderSubmit(&sdk.decoder, data, bytes, timestamp_ns, false, 0);
 }
 
-Result moonlightSdkDecoderWait(uint32_t slot, uint64_t timeout_ns, bool *ready)
+/*
+ * The object hands frames in decode order from whichever image it filled, so the next frame
+ * goes to the surface asked for, the oldest the core waits on, whatever its slot.
+ */
+Result moonlightSdkDecoderWait(uint32_t surface, uint64_t timeout_ns, bool *ready)
 {
     VideoFrame frame;
     Result result;
 
     *ready = false;
-    if (!sdk.created || slot >= sdk.count)
+    if (!sdk.created || surface >= sdk.count)
         return MAKERESULT(Module_Libnx, LibnxError_BadInput);
-    if (sdk.held[slot]) {
+    if (sdk.held[surface]) {
         *ready = true;
         return 0;
     }
@@ -93,27 +97,27 @@ Result moonlightSdkDecoderWait(uint32_t slot, uint64_t timeout_ns, bool *ready)
         return 0;
     if (R_FAILED(result))
         return result;
-    if (frame.slot >= sdk.count || sdk.held[frame.slot] || !frame.planes[0] || !frame.planes[1]) {
+    if (!frame.planes[0] || !frame.planes[1]) {
         videoDecoderReleaseFrame(&sdk.decoder, &frame);
         return MAKERESULT(Module_Libnx, LibnxError_ShouldNotHappen);
     }
-    sdk.frames[frame.slot] = frame;
-    sdk.held[frame.slot] = true;
-    *ready = frame.slot == slot;
-    if (!*ready && !sdk.order_reported) {
+    if (frame.slot != surface && !sdk.order_reported) {
         sdk.order_reported = true;
-        note("sdk-decoder: frame out of slot order");
+        note("sdk-decoder: frames come from other slots than the surfaces");
     }
+    sdk.frames[surface] = frame;
+    sdk.held[surface] = true;
+    *ready = true;
     return 0;
 }
 
-Result moonlightSdkDecoderOutput(uint32_t slot, MoonlightSdkDecoderOutput *out)
+Result moonlightSdkDecoderOutput(uint32_t surface, MoonlightSdkDecoderOutput *out)
 {
-    if (slot >= sdk.count || !sdk.held[slot])
+    if (surface >= sdk.count || !sdk.held[surface])
         return MAKERESULT(Module_Libnx, LibnxError_BadInput);
-    const VideoFrame *frame = &sdk.frames[slot];
+    const VideoFrame *frame = &sdk.frames[surface];
     *out = (MoonlightSdkDecoderOutput){
-        .image = slot + 1,
+        .image = surface + 1,
         .width = frame->width,
         .height = frame->height,
         .crop_width = frame->width,
@@ -124,12 +128,12 @@ Result moonlightSdkDecoderOutput(uint32_t slot, MoonlightSdkDecoderOutput *out)
     return 0;
 }
 
-Result moonlightSdkDecoderRead(uint32_t slot, uint8_t *luma, uint8_t *chroma, size_t pitch,
+Result moonlightSdkDecoderRead(uint32_t surface, uint8_t *luma, uint8_t *chroma, size_t pitch,
                                size_t rows, uint32_t *source_pitch)
 {
-    if (slot >= sdk.count || !sdk.held[slot])
+    if (surface >= sdk.count || !sdk.held[surface])
         return MAKERESULT(Module_Libnx, LibnxError_BadInput);
-    const VideoFrame *frame = &sdk.frames[slot];
+    const VideoFrame *frame = &sdk.frames[surface];
     *source_pitch = frame->pitches[0];
     if (frame->width > pitch || frame->height > rows || frame->pitches[0] < frame->width ||
         frame->pitches[1] < frame->width)
@@ -146,21 +150,21 @@ Result moonlightSdkDecoderRead(uint32_t slot, uint8_t *luma, uint8_t *chroma, si
     return 0;
 }
 
-Result moonlightSdkDecoderRelease(uint32_t slot)
+Result moonlightSdkDecoderRelease(uint32_t surface)
 {
-    if (slot >= sdk.count || !sdk.held[slot])
+    if (surface >= sdk.count || !sdk.held[surface])
         return MAKERESULT(Module_Libnx, LibnxError_BadInput);
-    videoDecoderReleaseFrame(&sdk.decoder, &sdk.frames[slot]);
-    sdk.held[slot] = false;
+    videoDecoderReleaseFrame(&sdk.decoder, &sdk.frames[surface]);
+    sdk.held[surface] = false;
     return 0;
 }
 
 void moonlightSdkDecoderClose(void)
 {
     if (sdk.created) {
-        for (uint32_t slot = 0; slot < sdk.count; slot++)
-            if (sdk.held[slot])
-                videoDecoderReleaseFrame(&sdk.decoder, &sdk.frames[slot]);
+        for (uint32_t surface = 0; surface < sdk.count; surface++)
+            if (sdk.held[surface])
+                videoDecoderReleaseFrame(&sdk.decoder, &sdk.frames[surface]);
         note("sdk-decoder: before close");
         videoDecoderClose(&sdk.decoder);
     }
