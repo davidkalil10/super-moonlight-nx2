@@ -33,9 +33,7 @@ pub struct InputGate {
 }
 
 #[cfg(feature = "ui-pattern")]
-const PATTERN_CHORD: u64 = (1 << 2) | (1 << 3) | (1 << 6) | (1 << 7);
-#[cfg(feature = "ui-pattern")]
-const FACE_BUTTONS: u64 = 0xf;
+const PATTERN_CHORD: u64 = (1 << 8) | (1 << 9);
 
 impl InputGate {
     pub fn filter(&mut self, bytes: &mut [u8]) -> Result<FrameInput, Error> {
@@ -59,11 +57,6 @@ impl InputGate {
             let held = input.raw_buttons & PATTERN_CHORD == PATTERN_CHORD;
             self.pattern_edge |= held && !self.pattern_held;
             self.pattern_held = held;
-            if held {
-                let masked = input.raw_buttons & !FACE_BUTTONS;
-                bytes[8..16].copy_from_slice(&masked.to_le_bytes());
-                return FrameInput::decode(bytes);
-            }
         }
         Ok(input)
     }

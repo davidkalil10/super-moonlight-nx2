@@ -39,7 +39,7 @@ def main():
     parser.add_argument("--tcp-video", action="store_true",
                         help="keep video on TCP instead of UDP")
     parser.add_argument("--ui-pattern", action="store_true",
-                        help="L+R+X+Y steps through two test pages that show how the console draws known art")
+                        help="ZL+ZR together step through two test pages that show how the console draws known art")
     parser.add_argument("--ui-uncached", action="store_true",
                         help="the pattern build with the UI buffers in non-cached host memory")
     parser.add_argument("--diagnostic", choices=SDK_DIAGNOSTICS,
