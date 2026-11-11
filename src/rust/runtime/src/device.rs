@@ -44,6 +44,11 @@ pub extern "C" fn main() -> i32 {
         return 1;
     }
     log("Moonlight NX2 Rust frontend; native video behind verified capabilities");
+    log("runtime: source revision follows");
+    log(match option_env!("MOONLIGHT_REVISION") {
+        Some(revision) => revision,
+        None => "unknown",
+    });
     let passed = crate::native_frontend::run();
     log(if passed {
         "runtime: result PASS"

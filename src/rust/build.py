@@ -144,6 +144,7 @@ def build(args):
     if args.diagnostic == "sdk-modes":
         info["trials"] = args.trials
         env["MOONLIGHT_SDK_MODES_TRIALS"] = args.trials
+    env["MOONLIGHT_REVISION"] = info["source_revision"]
     info["source_branch"] = args.branch
     if info["source_branch"] is None:
         try:
