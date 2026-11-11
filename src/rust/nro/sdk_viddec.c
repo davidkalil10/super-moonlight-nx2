@@ -10,6 +10,8 @@
 #define WORK_RESTORE_POLLS 1000
 #define ACQUISITIONS_NOTED 8
 
+#define SETTLE_NS 100000000ull
+
 enum {
     STAGE_ROOT = 1,
     STAGE_PREFERENCE,
@@ -584,6 +586,12 @@ Result moonlightSdkVideoClose(uint32_t *stage)
     *stage = 0;
     if (!video.root)
         return 0;
+    if (video.started && video.sync_open) {
+        /* A frame still decoding writes into its pool, which may be the renderer's slot. */
+        for (uint32_t slot = 0; slot < video.count; slot++)
+            if (video.acquired[slot])
+                gsvSyncWaitNative(&video.sync, &video.producers[slot], SETTLE_NS);
+    }
     if (video.started) {
         note("sdk-video: before stop");
         result = viddecDecoderStop(&video.decoder);

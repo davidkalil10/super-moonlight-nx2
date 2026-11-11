@@ -1,9 +1,9 @@
-//! The decode and latency choices a console test switches between at run time. The defaults
-//! are the stream as it has been; the perf-chord build steps them.
+//! The decode and latency choices a console test switches between at run time. The perf-chord
+//! build steps them.
 
 extern crate alloc;
 
-use core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use core::sync::atomic::{AtomicU8, Ordering};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Path {
@@ -11,7 +11,8 @@ pub enum Path {
     Copy,
     /// Our low-level session decoding straight into the renderer's frame slots.
     InPlace,
-    /// The SDK's `VideoDecoder` object, frames copied into the upload slot.
+    /// The SDK's `VideoDecoder` object, frames copied into the upload slot. Not working on
+    /// the console yet; kept for the comparison.
     Sdk,
 }
 
@@ -27,9 +28,8 @@ pub enum Latency {
 
 static PATH: AtomicU8 = AtomicU8::new(0);
 static LATENCY: AtomicU8 = AtomicU8::new(0);
-static CLOCKS: AtomicBool = AtomicBool::new(false);
 
-const PATHS: [Path; 3] = [Path::Copy, Path::InPlace, Path::Sdk];
+const PATHS: [Path; 3] = [Path::InPlace, Path::Copy, Path::Sdk];
 const LATENCIES: [Latency; 3] = [Latency::Off, Latency::Wake, Latency::Newest];
 
 pub fn path() -> Path {
@@ -38,10 +38,6 @@ pub fn path() -> Path {
 
 pub fn latency() -> Latency {
     LATENCIES[LATENCY.load(Ordering::Relaxed) as usize % LATENCIES.len()]
-}
-
-pub fn clocks() -> bool {
-    CLOCKS.load(Ordering::Relaxed)
 }
 
 /// The decode path of the next stream.
@@ -59,15 +55,6 @@ pub fn next_latency() {
     );
 }
 
-pub fn toggle_clocks() {
-    CLOCKS.fetch_xor(true, Ordering::Relaxed);
-}
-
 pub fn text() -> alloc::string::String {
-    alloc::format!(
-        "perf: path={:?} latency={:?} clocks={}",
-        path(),
-        latency(),
-        clocks()
-    )
+    alloc::format!("perf: path={:?} latency={:?}", path(), latency())
 }

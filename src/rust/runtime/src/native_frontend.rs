@@ -291,8 +291,7 @@ fn execute(renderer: &mut Renderer, connections: &mut NativeConnections, launch:
         if let Some(chord) = input_gate.take_perf_edge() {
             match chord {
                 0 => crate::perf::next_path(),
-                1 => crate::perf::next_latency(),
-                _ => crate::perf::toggle_clocks(),
+                _ => crate::perf::next_latency(),
             }
             let line = crate::perf::text();
             log(&line);
