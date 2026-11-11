@@ -152,6 +152,8 @@ enum Step {
     Launch { app: u32, resume: bool },
     Rtsp,
     Control,
+    /// Makes the identity a new pairing shows the host; it runs on its own pump.
+    Identity,
 }
 
 struct Active<S: Socket> {
@@ -170,6 +172,8 @@ struct Active<S: Socket> {
     launched: bool,
     /// The failure to report once that cancel is done.
     failed: Option<String>,
+    /// The identity a pairing presents until it is kept for the host.
+    identity: Option<Identity>,
 }
 
 enum Next {
@@ -422,9 +426,7 @@ impl<D: Dial> DirectLink<D> {
     pub fn new(dial: D, host: &Address, files: &mut impl Files) -> Option<Self> {
         let address = octets(host.as_str())?;
         let (keys, _) = Keys::load(files);
-        let identity = keys
-            .identity()
-            .and_then(|stored| Identity::from_der(&stored.key, &stored.cert, &stored.uniqueid).ok());
+        let identity = keys.identity(host).and_then(direct_keys::Stored::identity);
         let uuid = uuid(dial.random())?;
         Some(Self {
             dial,
@@ -515,6 +517,11 @@ impl<D: Dial> DirectLink<D> {
             }
             return;
         }
+        if active.step == Step::Identity {
+            let next = self.make_identity();
+            self.go(next, now_ms);
+            return;
+        }
         let Some(exchange) = active.exchange.as_mut() else {
             return;
         };
@@ -561,6 +568,7 @@ impl<D: Dial> DirectLink<D> {
             deadline_ms: 0,
             launched: false,
             failed: None,
+            identity: None,
         });
 
         let first = match job {
@@ -613,7 +621,7 @@ impl<D: Dial> DirectLink<D> {
             }
             Next::Call(step) => {
                 active.step = step;
-                if step == Step::Control {
+                if matches!(step, Step::Control | Step::Identity) {
                     return;
                 }
                 match self.call(step, now_ms) {
@@ -628,8 +636,14 @@ impl<D: Dial> DirectLink<D> {
         }
     }
 
+    /// The identity requests present: a pairing's new one, else the host's own.
+    fn identity(&self) -> Option<&Identity> {
+        let pairing = self.active.as_ref().and_then(|active| active.identity.as_ref());
+        pairing.or(self.identity.as_ref())
+    }
+
     fn query(&self) -> String {
-        let uniqueid = self.identity.as_ref().map_or(ANONYMOUS, Identity::uniqueid);
+        let uniqueid = self.identity().map_or(ANONYMOUS, Identity::uniqueid);
         format!("uniqueid={uniqueid}&uuid={}", self.uuid)
     }
 
@@ -662,10 +676,12 @@ impl<D: Dial> DirectLink<D> {
                 (true, format!("{path}?{query}&{rest}"))
             }
             Step::Rtsp => return self.call_rtsp(deadline_ms),
-            Step::Control => return Err(failure("invalid_state", "Control has no request")),
+            Step::Control | Step::Identity => {
+                return Err(failure("invalid_state", "This step has no request"));
+            }
             Step::Pair(stage) => {
                 let pairing = active.pairing.as_ref().expect("pairing");
-                let identity = self.identity.as_ref().expect("identity");
+                let identity = active.identity.as_ref().expect("identity");
                 let Some(request) = pairing.request(identity) else {
                     return Err(failure("invalid_state", "Pairing already finished"));
                 };
@@ -715,8 +731,8 @@ impl<D: Dial> DirectLink<D> {
     }
 
     fn pairing_config(&self) -> Option<Arc<rustls::ClientConfig>> {
-        let identity = self.identity.as_ref()?;
         let active = self.active.as_ref()?;
+        let identity = active.identity.as_ref()?;
         let pinned = active.pairing.as_ref()?.server_cert()?;
         tls::config(identity, pinned, self.dial.random()).ok()
     }
@@ -761,7 +777,7 @@ impl<D: Dial> DirectLink<D> {
                 active.info = Some(info);
                 match job {
                     Job::Pair { .. } if self.paired() => Next::Call(Step::SecureInfo),
-                    Job::Pair { .. } => self.start_pairing(files),
+                    Job::Pair { .. } => self.start_pairing(),
                     _ if self.paired() => Next::Call(Step::SecureInfo),
                     _ => failure("not_paired", NOT_PAIRED),
                 }
@@ -777,7 +793,7 @@ impl<D: Dial> DirectLink<D> {
                     }
                 }
                 Err(serverinfo::Error::Status(401)) if matches!(job, Job::Pair { .. }) => {
-                    self.start_pairing(files)
+                    self.start_pairing()
                 }
                 Err(serverinfo::Error::Status(401)) if job == Job::List => {
                     failure("backend_failed", LISTED)
@@ -833,7 +849,7 @@ impl<D: Dial> DirectLink<D> {
                 Err(_) => failure("backend_failed", "Sunshine did not start the app"),
             },
             Step::Rtsp => self.rtsp_step(&response, now_ms),
-            Step::Control => failure("invalid_state", "Control has no reply"),
+            Step::Control | Step::Identity => failure("invalid_state", "This step has no reply"),
         }
     }
 
@@ -962,32 +978,26 @@ impl<D: Dial> DirectLink<D> {
         Some(Next::Reply(Kind::Stream, handoff.unwrap_or_default()))
     }
 
-    fn start_pairing(&mut self, files: &mut impl Files) -> Next {
-        let random = self.dial.random();
-        if self.identity.is_none() {
-            let started = self.dial.now_ms();
-            let identity = Identity::generate(random);
-            let took = self.dial.now_ms().saturating_sub(started);
-            self.dial.log(&format!("direct: generated the console key ok={} ms={took}", identity.is_ok()));
-            let Ok(identity) = identity else {
-                return failure("backend_failed", NO_RANDOM);
-            };
-            let mut keys = core::mem::take(&mut self.keys);
-            let encoded = keys.set_identity(&identity);
-            let size = keys.format().map(|text| text.len());
-            let saved = encoded && keys.save(files);
-            self.keys = keys;
-            if !saved {
-                self.dial.log(&format!(
-                    "direct: key file {} not saved encoded={encoded} bytes={size:?}",
-                    direct_keys::FILE
-                ));
-                return failure("backend_failed", KEY_NOT_SAVED);
-            }
-            self.identity = Some(identity);
-            self.config = None;
-        }
+    /// Every pairing presents a new identity, made on the next pump so the pairing page
+    /// shows while the key is generated.
+    fn start_pairing(&mut self) -> Next {
+        Next::Call(Step::Identity)
+    }
 
+    fn make_identity(&mut self) -> Next {
+        let started = self.dial.now_ms();
+        let identity = Identity::generate(self.dial.random());
+        let took = self.dial.now_ms().saturating_sub(started);
+        self.dial.log(&format!("direct: generated a console key ok={} ms={took}", identity.is_ok()));
+        let Ok(identity) = identity else {
+            return failure("backend_failed", NO_RANDOM);
+        };
+        self.active.as_mut().expect("active").identity = Some(identity);
+        self.ask_pin()
+    }
+
+    fn ask_pin(&mut self) -> Next {
+        let random = self.dial.random();
         let Ok(pin) = pairing::new_pin(random) else {
             return failure("backend_failed", NO_RANDOM);
         };
@@ -1025,10 +1035,17 @@ impl<D: Dial> DirectLink<D> {
         }
 
         let cert = pairing.server_cert().map(<[u8]>::to_vec).unwrap_or_default();
-        if !self.keys.pin(&self.host, &cert) || !self.keys.save(files) {
-            self.keys.forget(&self.host);
+        let identity = active.identity.take().expect("identity");
+        let mut keys = core::mem::take(&mut self.keys);
+        let saved = keys.pin(&self.host, &identity, &cert) && keys.save(files);
+        if !saved {
+            let size = keys.format().map(|text| text.len());
+            self.dial.log(&format!("direct: key file {} not saved bytes={size:?}", direct_keys::FILE));
+            self.keys = Keys::load(files).0;
             return failure("backend_failed", KEY_NOT_SAVED);
         }
+        self.keys = keys;
+        self.identity = Some(identity);
         self.config = None;
         self.cover = None;
         result("pair", "{\"event\":\"paired\",\"already\":false}")
@@ -1039,6 +1056,7 @@ impl<D: Dial> DirectLink<D> {
         if known && !self.keys.save(files) {
             return failure("backend_failed", KEY_NOT_SAVED);
         }
+        self.identity = None;
         self.config = None;
         self.cover = None;
         let value = format!("{{\"event\":\"unpaired\",\"already\":{}}}", !known);
