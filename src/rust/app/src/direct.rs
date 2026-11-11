@@ -163,6 +163,10 @@ struct Active<S: Socket> {
     rtsp: Option<Handshake>,
     live: Option<Live>,
     deadline_ms: u64,
+    /// Sunshine started the app for this request, so a failure cancels it.
+    launched: bool,
+    /// The failure to report once that cancel is done.
+    failed: Option<String>,
 }
 
 enum Next {
@@ -533,6 +537,8 @@ impl<D: Dial> DirectLink<D> {
             rtsp: None,
             live: None,
             deadline_ms: 0,
+            launched: false,
+            failed: None,
         });
 
         let first = match job {
@@ -573,7 +579,14 @@ impl<D: Dial> DirectLink<D> {
         };
         let id = active.id;
         match next {
+            Next::Reply(Kind::Error, payload) if active.launched => {
+                active.launched = false;
+                active.failed = Some(payload);
+                self.dial.log("direct: launch failed, cancelling the Sunshine session");
+                self.go(Next::Call(Step::Cancel), now_ms);
+            }
             Next::Reply(kind, payload) => {
+                let payload = active.failed.take().unwrap_or(payload);
                 self.replies.push_back((kind, id, payload.into_bytes()));
                 self.active = None;
             }
@@ -699,6 +712,10 @@ impl<D: Dial> DirectLink<D> {
         if step == Step::Unpair {
             return self.unpaired(files);
         }
+        if let Some(failed) = active.failed.take() {
+            self.dial.log(&format!("direct: cancelled the Sunshine session ok={}", outcome.is_ok()));
+            return Next::Reply(Kind::Error, failed);
+        }
         let response = match outcome {
             Ok(response) => response,
             Err(error) => {
@@ -781,6 +798,7 @@ impl<D: Dial> DirectLink<D> {
             Step::Launch { resume, .. } => match launch::parse(body, resume) {
                 Ok(port) => {
                     let active = self.active.as_mut().expect("active");
+                    active.launched = !resume;
                     let (Some(start), Some(key)) = (active.start.as_ref(), active.key.clone()) else {
                         return failure("invalid_state", "No start was asked for");
                     };
