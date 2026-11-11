@@ -211,6 +211,8 @@ pub struct Frontend<F, S: Socket + 'static> {
     discovery: Option<Discovery>,
     covers: cover_fetch::Fetcher,
     idr: idr_request::Requester,
+    typing: moonlight_nx2_app::typing::Typing,
+    keyboard: crate::hid::software_keyboard::Platform,
     cover_host: Option<moonlight_nx2_ui::model::Host>,
     cover_cache: Option<crate::files::CoverDirectory>,
     /// The first frame runs discovery once, as the Civ7 service does on attach.
@@ -311,6 +313,8 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
             discovery: None,
             covers: cover_fetch::Fetcher::default(),
             idr: idr_request::Requester::default(),
+            typing: moonlight_nx2_app::typing::Typing::default(),
+            keyboard: crate::hid::software_keyboard::Platform,
             cover_host: None,
             cover_cache: None,
             discover_at_start: true,
@@ -427,9 +431,56 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
         self.cover_cache = Some(cache);
     }
 
+    /// The system keyboard is up or has just closed; its focus changes are not the user leaving.
+    pub fn keyboard_covers(&self, now_ms: u64) -> bool {
+        self.typing.covers(now_ms)
+    }
+
+    fn step_keyboard(&mut self, now_ms: u64) {
+        use moonlight_nx2_app::typing::Event;
+        match self.typing.step(&mut self.keyboard, now_ms) {
+            Some(Event::Confirmed) => {
+                crate::render_platform::log("keyboard: text confirmed");
+            }
+            Some(Event::Cancelled(result)) => crate::render_platform::log(&alloc::format!(
+                "keyboard: closed without text result=0x{result:x}"
+            )),
+            Some(Event::OpenFailed) | Some(Event::Opened) | None => {}
+        }
+    }
+
+    fn send_text(&mut self, now_ms: u64) {
+        let Some(control) = self.control.as_mut() else {
+            return;
+        };
+        match self.typing.poll(control) {
+            Some(Ok(queued)) => crate::render_platform::log(&alloc::format!(
+                "keyboard: host text queued={queued}"
+            )),
+            Some(Err(_)) => {}
+            None => {}
+        }
+        if self.typing.expired(now_ms) {
+            crate::render_platform::log("keyboard: no reply to the text");
+            self.typing.reset();
+        }
+        if !self.typing.has_pending() {
+            return;
+        }
+        if control.direct() {
+            self.typing.take_pending();
+            crate::render_platform::log("keyboard: direct link has no text route yet");
+        } else if self.client.bridge.model().screen() != Screen::Streaming {
+            self.typing.take_pending();
+        } else {
+            self.typing.send(control, now_ms);
+        }
+    }
+
     pub fn close_control(&mut self) -> bool {
         self.covers.reset();
         self.idr.reset();
+        self.typing.reset();
         self.cover_host = None;
         self.client.clear_covers();
         self.link_test = LinkTest::default();
@@ -1173,6 +1224,8 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
         self.poll_handshake(connections, now_ms);
         self.watch_presence(connections, now_ms);
         self.test_link(connections, now_ms);
+        self.step_keyboard(now_ms);
+        self.send_text(now_ms);
         let mut disconnected = false;
         if let Some(control) = self.control.as_mut() {
             match control.pump(&mut self.files, now_ms) {
@@ -1241,6 +1294,7 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
                         .covers
                         .waiting_id()
                         .or(self.idr.waiting_id())
+                        .or(self.typing.waiting_id())
                         .or(self.link_test.prober.waiting_id()),
                 };
                 self.client
@@ -1305,6 +1359,12 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
                     } else {
                         "The log could not be copied to the SD card"
                     });
+                }
+                Effect::Action(Action::ShowKeyboard) => {
+                    use moonlight_nx2_app::typing::Event;
+                    if self.typing.show(&mut self.keyboard) == Event::OpenFailed {
+                        self.message = Some("The keyboard could not open");
+                    }
                 }
                 Effect::Action(Action::PauseInput) => crate::hid::stop_rumble(),
                 Effect::Action(Action::ResumeInput) => {}

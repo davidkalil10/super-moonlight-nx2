@@ -46,6 +46,9 @@ use moonlight_nx2_core::control::{self, Frame, Kind};
 use std::sync::atomic::{Ordering, compiler_fence};
 use subtle::ConstantTimeEq;
 
+/// Longest typed text one request carries.
+pub const MAX_TEXT_BYTES: usize = 512;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Codec {
     H264,
@@ -100,6 +103,10 @@ pub enum Operation<'a> {
     },
     Stop,
     Idr,
+    /// Typed text for the PC, sent as UTF-8 key input.
+    Text {
+        text: &'a str,
+    },
     /// The console asks to be dropped from the trusted list.
     Revoke,
     /// Link measurement for the console: echo `sequence` with `bytes` of padding.
@@ -132,6 +139,9 @@ impl Operation<'_> {
                     && (1..=1_000_000).contains(&options.bitrate_kbps)
             }
             Self::Stop | Self::Idr | Self::Revoke => true,
+            Self::Text { text } => {
+                !text.is_empty() && text.len() <= MAX_TEXT_BYTES && !text.bytes().any(|b| b == 0)
+            }
             Self::Probe { bytes, .. } => bytes <= probe::MAX_BYTES,
         }
     }
@@ -297,11 +307,15 @@ impl<B: Backend> Session<B> {
             return Err(Error::Busy);
         }
         match (self.state, operation) {
-            (State::Ready, Operation::Stop | Operation::Idr)
+            (State::Ready, Operation::Stop | Operation::Idr | Operation::Text { .. })
             | (State::Streaming, Operation::Start { .. }) => {
                 return Err(Error::InvalidState);
             }
-            (State::Streaming, op) if op != Operation::Stop && op != Operation::Idr => {
+            (State::Streaming, op)
+                if op != Operation::Stop
+                    && op != Operation::Idr
+                    && !matches!(op, Operation::Text { .. }) =>
+            {
                 return Err(Error::InvalidState);
             }
             _ => {}

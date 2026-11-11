@@ -87,6 +87,7 @@ pub mod item {
     pub const RESUME_HOST: u32 = 21;
     pub const EXPORT_LOGS: u32 = 22;
     pub const CONFIRM_FORGET: u32 = 23;
+    pub const SHOW_KEYBOARD: u32 = 24;
     pub const CATEGORY: u32 = 50000;
     pub const HOST: u32 = 10000;
     pub const APP: u32 = 20000;
@@ -252,6 +253,7 @@ pub enum IntentKind {
     TestNetwork,
     SaveExtras,
     ExportLogs,
+    ShowKeyboard,
 }
 
 impl IntentKind {
@@ -278,6 +280,7 @@ impl IntentKind {
             "testNetwork",
             "saveExtras",
             "exportLogs",
+            "showKeyboard",
         ][self as usize]
     }
 }
@@ -1480,6 +1483,10 @@ impl Model {
             return;
         }
 
+        if op == Op::A && item == item::SHOW_KEYBOARD {
+            step.add(IntentKind::ShowKeyboard, None);
+            return;
+        }
         if op == Op::A && item == item::TOGGLE_STATS {
             if self.set_stats(self.stats().next()) {
                 step.changed = true;

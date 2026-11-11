@@ -37,6 +37,7 @@ pub enum OperationName {
     Quit,
     Stop,
     Idr,
+    Text,
     Revoke,
     Probe,
 }

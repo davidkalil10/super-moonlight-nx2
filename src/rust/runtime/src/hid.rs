@@ -386,6 +386,62 @@ mod device {
 #[cfg(target_os = "none")]
 pub use device::{Sampler, rumble, stop_rumble};
 
+/// The system software keyboard, which runs on its own thread in the platform layer.
+#[cfg(target_os = "none")]
+pub mod software_keyboard {
+    use alloc::string::String;
+    use moonlight_nx2_app::typing::{Keyboard, Poll};
+
+    unsafe extern "C" {
+        fn moonlightKeyboardOpen() -> bool;
+        fn moonlightKeyboardPoll(out: *mut u8, bytes: usize, result: *mut u32) -> u32;
+    }
+
+    const TEXT_BYTES: usize = 512;
+
+    pub struct Platform;
+
+    impl Keyboard for Platform {
+        fn open(&mut self) -> bool {
+            unsafe { moonlightKeyboardOpen() }
+        }
+
+        fn poll(&mut self) -> Poll {
+            let mut text = [0u8; TEXT_BYTES];
+            let mut result = 0;
+            match unsafe { moonlightKeyboardPoll(text.as_mut_ptr(), text.len(), &mut result) } {
+                0 => Poll::Idle,
+                1 => Poll::Up,
+                2 => {
+                    let length = text.iter().position(|&byte| byte == 0).unwrap_or(text.len());
+                    match core::str::from_utf8(&text[..length]) {
+                        Ok(text) => Poll::Typed(String::from(text)),
+                        Err(_) => Poll::Closed(result),
+                    }
+                }
+                _ => Poll::Closed(result),
+            }
+        }
+    }
+}
+
+#[cfg(not(target_os = "none"))]
+pub mod software_keyboard {
+    use moonlight_nx2_app::typing::{Keyboard, Poll};
+
+    pub struct Platform;
+
+    impl Keyboard for Platform {
+        fn open(&mut self) -> bool {
+            false
+        }
+
+        fn poll(&mut self) -> Poll {
+            Poll::Idle
+        }
+    }
+}
+
 /// The USB mouse and keyboard, for the direct input path.
 #[cfg(target_os = "none")]
 pub mod pointer {

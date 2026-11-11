@@ -152,6 +152,15 @@ impl DirectInput {
         self.stopped = true;
     }
 
+    /// Types text on the PC, one packet per character; false when it is empty or too long.
+    pub fn text(&mut self, text: &str) -> bool {
+        let sendable = crate::typing::sendable(text);
+        if sendable {
+            self.session.text(text);
+        }
+        sendable
+    }
+
     /// The USB mouse since the last sample; changes only.
     pub fn mouse(&mut self, sample: &MouseSample) {
         self.pointer.mouse(sample, &mut self.session);

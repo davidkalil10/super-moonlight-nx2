@@ -146,6 +146,8 @@ pub enum Action {
     TestNetwork,
     /// Copy the newest runtime log to a dated file in the SD card's logs folder.
     ExportLogs,
+    /// Open the system keyboard over the stream; what the user confirms is typed on the PC.
+    ShowKeyboard,
     SaveSettings,
     PauseInput,
     ResumeInput,
@@ -670,6 +672,10 @@ impl Service {
             IntentKind::WakeHost => self.act(Action::WakeHost(host)),
             IntentKind::TestNetwork => self.act(Action::TestNetwork),
             IntentKind::ExportLogs => self.act(Action::ExportLogs),
+            IntentKind::ShowKeyboard if self.phase == Phase::Streaming => {
+                self.act(Action::ShowKeyboard)
+            }
+            IntentKind::ShowKeyboard => {}
             IntentKind::SaveSettings => self.act(Action::SaveSettings),
             IntentKind::SaveExtras => {}
             IntentKind::PauseInput => {

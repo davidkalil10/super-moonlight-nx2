@@ -105,6 +105,7 @@ impl Helper {
             Operation::Start { .. }
             | Operation::Stop
             | Operation::Idr
+            | Operation::Text { .. }
             | Operation::Revoke
             | Operation::Probe { .. } => {
                 return Err(StartError::UnsupportedOperation);

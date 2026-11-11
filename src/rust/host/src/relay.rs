@@ -166,6 +166,9 @@ pub struct Relay {
     stats: crate::relay_stats::RelayStats,
 }
 
+/// Lines waiting for the worker beyond which typed text is refused.
+const MAX_PENDING_INPUT: usize = 64;
+
 impl Relay {
     pub(crate) fn request_idr(&mut self, now: Instant) -> bool {
         if self.stopping
@@ -180,6 +183,16 @@ impl Relay {
         }
         self.last_idr_requested = Some(now);
         self.idr_pending = true;
+        true
+    }
+
+    /// Queues typed text for the worker; false when the stream is ending or too much is waiting.
+    pub(crate) fn send_text(&mut self, text: &str) -> bool {
+        if self.stopping || self.finished || self.pending_input.len() >= MAX_PENDING_INPUT {
+            return false;
+        }
+        let line = serde_json::json!({"type": "text", "text": text});
+        self.pending_input.push_back(line.to_string().into_bytes());
         true
     }
 

@@ -38,6 +38,9 @@ enum Message {
         gyro: [f32; 3],
     },
     RequestIdr {},
+    Text {
+        text: String,
+    },
 }
 
 #[derive(Deserialize)]
@@ -178,6 +181,18 @@ impl DirectInput {
             }
             Message::RequestIdr {} => {
                 unsafe { native::LiRequestIdrFrame() };
+                Ok(Vec::new())
+            }
+            Message::Text { text } => {
+                if text.is_empty() || text.len() > moonlight_nx2_host::MAX_TEXT_BYTES {
+                    return Err(Error::Invalid);
+                }
+                let result = unsafe {
+                    native::LiSendUtf8TextEvent(text.as_ptr().cast(), text.len() as u32)
+                };
+                if result != 0 {
+                    return Err(Error::Backend);
+                }
                 Ok(Vec::new())
             }
             Message::Touch { mouse, events } => self.touch(mouse, events),
