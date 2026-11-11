@@ -75,7 +75,6 @@ pub mod item {
     pub const CANCEL: u32 = 8;
     pub const ADD_HOST: u32 = 9;
     pub const FIND_HOSTS: u32 = 10;
-    pub const UNPAIR: u32 = 11;
     pub const REMOVE_HOST: u32 = 12;
     pub const ERASE: u32 = 13;
     pub const CONNECT: u32 = 14;
@@ -399,6 +398,7 @@ pub struct Model {
     stream: StreamReadout,
     resume: Option<Resume>,
     resume_pending: bool,
+    forgetting: bool,
     played: [(Address, Name); PLAYED],
     played_count: usize,
     overrides: Vec<AppOverride>,
@@ -497,6 +497,7 @@ impl Model {
             stream: StreamReadout::default(),
             resume: None,
             resume_pending: false,
+            forgetting: false,
             played: [(Address::new(), Name::default()); PLAYED],
             played_count: 0,
             overrides: Vec::new(),
@@ -572,6 +573,11 @@ impl Model {
         }
         self.pin_left_s = left;
         self.screen == Screen::Pairing
+    }
+
+    /// Whether the unpair in progress is part of forgetting the PC.
+    pub fn forgetting(&self) -> bool {
+        self.forgetting
     }
 
     /// The code to type on the PC while this console pairs with its helper.
@@ -989,6 +995,7 @@ impl Model {
     fn back_to_hosts(&mut self, step: &mut Step) {
         self.screen = Screen::Hosts;
         self.host = None;
+        self.forgetting = false;
         self.resume_pending = false;
         step.changed = true;
     }
@@ -1170,11 +1177,6 @@ impl Model {
                 step.add(IntentKind::WakeHost, Some(host));
                 self.open_host(host, self.host_index, step);
             }
-            item::UNPAIR => {
-                self.screen = Screen::Unpairing;
-                step.changed = true;
-                step.add(IntentKind::UnpairHost, self.host);
-            }
             item::REMOVE_HOST => {
                 self.screen = Screen::ForgetConfirm;
                 step.changed = true;
@@ -1191,10 +1193,12 @@ impl Model {
 
     fn on_forget_confirm(&mut self, op: Op, item: u32, step: &mut Step) {
         match (op, item) {
-            (Op::A, item::CONFIRM_FORGET) => match self.host {
-                Some(host) => self.remove_host(host, step),
-                None => self.back_to_hosts(step),
-            },
+            (Op::A, item::CONFIRM_FORGET) => {
+                self.forgetting = true;
+                self.screen = Screen::Unpairing;
+                step.changed = true;
+                step.add(IntentKind::UnpairHost, self.host);
+            }
             (Op::B, _) | (Op::A, item::CANCEL) => {
                 self.screen = Screen::HostMenu;
                 step.changed = true;
@@ -1706,6 +1710,26 @@ impl Model {
             {
                 self.overlay = false;
                 self.list_again(step);
+            }
+            Event::Unpaired if screen == Screen::Unpairing && self.forgetting => {
+                self.forgetting = false;
+                match self.host {
+                    Some(host) => self.remove_host(host, step),
+                    None => self.back_to_hosts(step),
+                }
+            }
+            Event::Failed { .. } if screen == Screen::Unpairing && self.forgetting => {
+                self.forgetting = false;
+                match self.host {
+                    Some(host) => {
+                        self.remove_host(host, step);
+                        self.message = formatted(format_args!(
+                            "Removed {}; the PC could not be asked to unpair",
+                            host.name
+                        ));
+                    }
+                    None => self.back_to_hosts(step),
+                }
             }
             Event::Unpaired if screen == Screen::Unpairing => {
                 let name = self.host.map_or(Name::of("undefined"), |host| host.name);

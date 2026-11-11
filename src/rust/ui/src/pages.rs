@@ -599,9 +599,9 @@ impl Builder<'_> {
             model,
             &Chrome {
                 title: host_name(model).unwrap_or("PC"),
-                left: "Forget removes this PC and its helper key; unpair is for Sunshine",
+                left: "Forget this PC unpairs it and removes it from this console",
                 keys,
-                cursor_home: 4,
+                cursor_home: 3,
                 ..Chrome::default()
             },
         );
@@ -609,7 +609,6 @@ impl Builder<'_> {
         let wakeable = model.host().is_some_and(|host| host.mac.is_some());
         let choices = [
             (item::WAKE_HOST, "Wake PC", !wakeable),
-            (item::UNPAIR, "Unpair", false),
             (item::REMOVE_HOST, "Forget this PC", false),
             (item::RENAME_HOST, "Rename PC", false),
             (item::CANCEL, "Cancel", false),
@@ -1097,7 +1096,7 @@ impl Builder<'_> {
             x,
             y + 124,
             inner,
-            "This console drops its key and saved covers for the PC. Pair again to use it.",
+            "This unpairs the PC and removes it with its key and saved covers. Pairing again needs a new PIN.",
             BODY,
             pal.ink,
         );
@@ -1252,6 +1251,9 @@ impl Builder<'_> {
             Screen::AddHost => self.add_host_page(model),
             Screen::HostMenu => self.host_menu_page(model),
             Screen::RenameHost => self.rename_host_page(model),
+            Screen::Unpairing if model.forgetting() => {
+                self.status(model, "Forgetting", Some("Asking the PC to unpair this console\u{2026}"), &[], false);
+            }
             Screen::Unpairing => {
                 self.status(model, "Unpairing", Some("Asking the PC to forget this console\u{2026}"), &[], false);
             }
