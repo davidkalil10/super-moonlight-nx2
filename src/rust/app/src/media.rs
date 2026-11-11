@@ -129,6 +129,54 @@ pub trait VideoChannel {
     ) -> Result<bool, Failure>;
     fn video_drained(&self) -> bool;
     fn close_video(self) -> bool;
+    /// The stop was sent; a transport without an end of stream can call itself drained.
+    fn begin_video_drain(&mut self) {}
+}
+
+/// Common PCM boundary: the helper's TCP channel, or audio decoded on the console.
+pub trait PcmChannel {
+    fn pump_pcm(&mut self, now_ms: u64) -> Result<(), Failure>;
+    fn pcm_record(&self) -> Option<Record<'_>>;
+    fn consume_pcm(&mut self) -> Result<(), Failure>;
+    /// Sends the release acknowledgement; false while it has to wait.
+    fn acknowledge_pcm(&mut self, header: &[u8; HEADER_BYTES]) -> Result<bool, Failure>;
+    fn pcm_drained(&self) -> bool;
+    fn close_pcm(self) -> bool;
+    fn begin_pcm_drain(&mut self) {}
+}
+
+impl<S: Socket> PcmChannel for Channel<'_, S> {
+    fn pump_pcm(&mut self, now_ms: u64) -> Result<(), Failure> {
+        match self.pump(now_ms) {
+            Ok(()) | Err(Error::Again | Error::Ended) => Ok(()),
+            Err(error) => Err(Failure::Media(Stream::Pcm, error)),
+        }
+    }
+
+    fn pcm_record(&self) -> Option<Record<'_>> {
+        self.peek()
+    }
+
+    fn consume_pcm(&mut self) -> Result<(), Failure> {
+        self.consume()
+            .map_err(|error| Failure::Media(Stream::Pcm, error))
+    }
+
+    fn acknowledge_pcm(&mut self, header: &[u8; HEADER_BYTES]) -> Result<bool, Failure> {
+        match self.acknowledge(header, &[]) {
+            Ok(()) => Ok(true),
+            Err(Error::Again) => Ok(false),
+            Err(error) => Err(Failure::Media(Stream::Pcm, error)),
+        }
+    }
+
+    fn pcm_drained(&self) -> bool {
+        self.drained()
+    }
+
+    fn close_pcm(self) -> bool {
+        self.close().is_err()
+    }
 }
 
 impl<S: Socket> VideoChannel for Channel<'_, S> {
@@ -263,9 +311,15 @@ impl<D> core::fmt::Debug for Closed<D> {
     }
 }
 
-pub struct Media<'a, S: Socket, D: Device, V: VideoChannel = Channel<'a, S>> {
+pub struct Media<
+    'a,
+    S: Socket,
+    D: Device,
+    V: VideoChannel = Channel<'a, S>,
+    P: PcmChannel = Channel<'a, S>,
+> {
     video: V,
-    pcm: Option<Channel<'a, S>>,
+    pcm: Option<P>,
     audio: Option<Output<D>>,
     held_video: Option<HeldAck>,
     held_pcm: Option<[u8; HEADER_BYTES]>,
@@ -274,6 +328,7 @@ pub struct Media<'a, S: Socket, D: Device, V: VideoChannel = Channel<'a, S>> {
     retained: bool,
     drain_deadline_ms: Option<u64>,
     drained: bool,
+    socket: core::marker::PhantomData<&'a S>,
 }
 
 impl<'a, S: Socket, D: Device> Media<'a, S, D> {
@@ -514,6 +569,7 @@ impl<'a, S: Socket, D: Device, VC: VideoChannel> Media<'a, S, D, VC> {
             retained: false,
             drain_deadline_ms: None,
             drained: false,
+            socket: core::marker::PhantomData,
         };
 
         let Some(offer) = descriptor.audio else {
@@ -561,6 +617,54 @@ impl<'a, S: Socket, D: Device, VC: VideoChannel> Media<'a, S, D, VC> {
 
         Ok(media)
     }
+}
+
+impl<'a, S: Socket, D: Device, VC: VideoChannel, P: PcmChannel> Media<'a, S, D, VC, P> {
+    /// Media whose channels the caller opened; `audio` plays PCM records of `chunk_bytes`.
+    pub fn with_channels(
+        video: VC,
+        pcm: Option<P>,
+        audio: Option<(D, &'static mut Slots)>,
+        chunk_bytes: usize,
+    ) -> Result<Self, (Failure, Closed<D>)> {
+        let mut media = Self {
+            video,
+            pcm,
+            audio: None,
+            held_video: None,
+            held_pcm: None,
+            spare_audio: None,
+            input: [0; MAX_INPUT_BYTES],
+            retained: false,
+            drain_deadline_ms: None,
+            drained: false,
+            socket: core::marker::PhantomData,
+        };
+        let Some((device, slots)) = audio else {
+            return Ok(media);
+        };
+        if media.pcm.is_none() {
+            media.spare_audio = Some((device, slots));
+            return Ok(media);
+        }
+        let config = audio::Config {
+            chunk_bytes,
+            ..audio::Config::default()
+        };
+        match Output::open(config, device, slots) {
+            Ok(output) => media.audio = Some(output),
+            Err((error, retained)) => {
+                let returned = match retained {
+                    Retained::Returned(device, slots) => Some((device, slots)),
+                    Retained::Kept => None,
+                };
+                let mut closed = media.close_with(returned);
+                closed.retained |= closed.audio.is_none();
+                return Err((Failure::Audio(error), closed));
+            }
+        }
+        Ok(media)
+    }
 
     /// One transport quantum and retries of already held ACKs, without consumer/device work.
     /// Only `step` can consume new records or establish whole-media completion.
@@ -576,10 +680,7 @@ impl<'a, S: Socket, D: Device, VC: VideoChannel> Media<'a, S, D, VC> {
         self.flush_video_ack()?;
 
         if let Some(pcm) = &mut self.pcm {
-            match pcm.pump(now_ms) {
-                Ok(()) | Err(Error::Again | Error::Ended) => {}
-                Err(error) => return Err(Failure::Media(Stream::Pcm, error)),
-            }
+            pcm.pump_pcm(now_ms)?;
             retry_pcm_ack(pcm, &mut self.held_pcm)?;
         }
         Ok(())
@@ -608,7 +709,7 @@ impl<'a, S: Socket, D: Device, VC: VideoChannel> Media<'a, S, D, VC> {
         progress.ended =
             self.video.video_drained() && self.held_video.is_none() && !decoder.pending();
         progress.pcm_ended =
-            self.pcm.as_ref().is_some_and(|pcm| pcm.drained()) && self.held_pcm.is_none();
+            self.pcm.as_ref().is_some_and(|pcm| pcm.pcm_drained()) && self.held_pcm.is_none();
         progress.drained = progress.ended && (self.pcm.is_none() || progress.pcm_ended);
         self.drained = progress.drained;
 
@@ -631,6 +732,10 @@ impl<'a, S: Socket, D: Device, VC: VideoChannel> Media<'a, S, D, VC> {
     pub fn begin_drain(&mut self, now_ms: u64) {
         if self.drain_deadline_ms.is_none() {
             self.drain_deadline_ms = Some(now_ms.saturating_add(DRAIN_TIMEOUT_MS));
+            self.video.begin_video_drain();
+            if let Some(pcm) = &mut self.pcm {
+                pcm.begin_pcm_drain();
+            }
         }
     }
 
@@ -700,7 +805,7 @@ impl<'a, S: Socket, D: Device, VC: VideoChannel> Media<'a, S, D, VC> {
         };
 
         for _ in 0..PCM_RECORDS_PER_STEP {
-            let Some(record) = pcm.peek() else {
+            let Some(record) = pcm.pcm_record() else {
                 break;
             };
             match output.push(&record.raw_header, record.payload) {
@@ -708,8 +813,7 @@ impl<'a, S: Socket, D: Device, VC: VideoChannel> Media<'a, S, D, VC> {
                 Err(audio::Error::Again) => break,
                 Err(error) => return Err(Failure::Audio(error)),
             }
-            pcm.consume()
-                .map_err(|error| Failure::Media(Stream::Pcm, error))?;
+            pcm.consume_pcm()?;
             progress.pcm_records += 1;
             pump_pcm(pcm, now_ms)?;
         }
@@ -728,7 +832,7 @@ impl<'a, S: Socket, D: Device, VC: VideoChannel> Media<'a, S, D, VC> {
         let video_retained = self.video.close_video();
         let mut retained = self.retained || video_retained;
         if let Some(pcm) = self.pcm.take() {
-            retained |= pcm.close().is_err();
+            retained |= pcm.close_pcm();
         }
         let audio = match self.audio.take() {
             Some(output) => match output.close() {
@@ -756,16 +860,13 @@ impl<'a, S: Socket, D: Device, VC: VideoChannel> Media<'a, S, D, VC> {
 
 /// The channel holds one record: pumping after a record is taken reads the next one, so a step
 /// takes all that arrived, up to `PCM_RECORDS_PER_STEP`.
-fn pump_pcm<S: Socket>(pcm: &mut Channel<'_, S>, now_ms: u64) -> Result<(), Failure> {
-    match pcm.pump(now_ms) {
-        Ok(()) | Err(Error::Again | Error::Ended) => Ok(()),
-        Err(error) => Err(Failure::Media(Stream::Pcm, error)),
-    }
+fn pump_pcm<P: PcmChannel>(pcm: &mut P, now_ms: u64) -> Result<(), Failure> {
+    pcm.pump_pcm(now_ms)
 }
 
 /// Without an audio device, PCM is read and acknowledged unplayed so the PC never waits on it.
-fn drain_pcm<S: Socket>(
-    pcm: &mut Channel<'_, S>,
+fn drain_pcm<P: PcmChannel>(
+    pcm: &mut P,
     held: &mut Option<[u8; HEADER_BYTES]>,
     progress: &mut Progress,
     now_ms: u64,
@@ -775,29 +876,24 @@ fn drain_pcm<S: Socket>(
     }
 
     for _ in 0..PCM_RECORDS_PER_STEP {
-        let Some(record) = pcm.peek() else {
+        let Some(record) = pcm.pcm_record() else {
             break;
         };
         let header = record.raw_header;
-        pcm.consume()
-            .map_err(|error| Failure::Media(Stream::Pcm, error))?;
+        pcm.consume_pcm()?;
         progress.pcm_records += 1;
 
-        match pcm.acknowledge(&header, &[]) {
-            Ok(()) => {}
-            Err(Error::Again) => {
-                *held = Some(header);
-                break;
-            }
-            Err(error) => return Err(Failure::Media(Stream::Pcm, error)),
+        if !pcm.acknowledge_pcm(&header)? {
+            *held = Some(header);
+            break;
         }
         pump_pcm(pcm, now_ms)?;
     }
     Ok(())
 }
 
-fn acknowledge_pcm<S: Socket, D: Device>(
-    pcm: &mut Channel<'_, S>,
+fn acknowledge_pcm<P: PcmChannel, D: Device>(
+    pcm: &mut P,
     output: &mut Output<D>,
     held: &mut Option<[u8; HEADER_BYTES]>,
 ) -> Result<(), Failure> {
@@ -814,20 +910,18 @@ fn acknowledge_pcm<S: Socket, D: Device>(
     }
 }
 
-fn retry_pcm_ack<S: Socket>(
-    pcm: &mut Channel<'_, S>,
+fn retry_pcm_ack<P: PcmChannel>(
+    pcm: &mut P,
     held: &mut Option<[u8; HEADER_BYTES]>,
 ) -> Result<bool, Failure> {
     let Some(header) = held.take() else {
         return Ok(true);
     };
-    match pcm.acknowledge(&header, &[]) {
-        Ok(()) => Ok(true),
-        Err(Error::Again) => {
-            *held = Some(header);
-            Ok(false)
-        }
-        Err(error) => Err(Failure::Media(Stream::Pcm, error)),
+    if pcm.acknowledge_pcm(&header)? {
+        Ok(true)
+    } else {
+        *held = Some(header);
+        Ok(false)
     }
 }
 

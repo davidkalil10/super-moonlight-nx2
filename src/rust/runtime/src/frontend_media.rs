@@ -5,7 +5,7 @@ use crate::{
     render::Renderer,
 };
 use moonlight_nx2_app::{
-    media::{InputSource, VideoChannel},
+    media::{InputSource, PcmChannel, VideoChannel},
     policy::{Epoch, Observation},
 };
 use moonlight_nx2_core::decoder::Backend;
@@ -44,9 +44,10 @@ pub fn pump_network<
     S: Socket,
     D: Device,
     V: VideoChannel,
+    P: PcmChannel,
     const N: usize,
 >(
-    session: &mut Session<'_, B, S, D, V, N>,
+    session: &mut Session<'_, B, S, D, V, N, P>,
     client: &mut Client<F>,
     epoch: Epoch,
     now_ms: u64,
@@ -70,9 +71,10 @@ pub fn step<
     S: Socket,
     D: Device,
     V: VideoChannel,
+    P: PcmChannel,
     const N: usize,
 >(
-    session: &mut Session<'_, B, S, D, V, N>,
+    session: &mut Session<'_, B, S, D, V, N, P>,
     client: &mut Client<F>,
     renderer: &mut Renderer,
     input: &FrameInput,
@@ -118,9 +120,10 @@ pub fn close<
     S: Socket,
     D: Device,
     V: VideoChannel,
+    P: PcmChannel,
     const N: usize,
 >(
-    session: &mut Session<'_, B, S, D, V, N>,
+    session: &mut Session<'_, B, S, D, V, N, P>,
     client: &mut Client<F>,
     epoch: Epoch,
 ) -> Option<media_session::Closed<D>> {

@@ -4,13 +4,14 @@ use crate::{
     video::{self, Presentation, Video},
 };
 use moonlight_nx2_app::{
-    media::{self, InputSource, Media, Progress, VideoChannel},
+    media::{self, InputSource, Media, PcmChannel, Progress, VideoChannel},
     policy::Observation,
     service::RuntimeEvent,
 };
 use moonlight_nx2_core::decoder::{Backend, SURFACES};
 use moonlight_nx2_io::{
     audio::{self, Device},
+    media::Channel,
     socket::Socket,
 };
 
@@ -39,18 +40,19 @@ pub struct Session<
     D: Device,
     V: VideoChannel,
     const N: usize = SURFACES,
+    P: PcmChannel = Channel<'a, S>,
 > {
     video: Video<'a, B, N>,
-    media: Option<Media<'a, S, D, V>>,
+    media: Option<Media<'a, S, D, V, P>>,
     closing: bool,
     ended: bool,
     failure: Option<Error>,
 }
 
-impl<'a, B: Backend<N>, S: Socket, D: Device, V: VideoChannel, const N: usize>
-    Session<'a, B, S, D, V, N>
+impl<'a, B: Backend<N>, S: Socket, D: Device, V: VideoChannel, const N: usize, P: PcmChannel>
+    Session<'a, B, S, D, V, N, P>
 {
-    pub fn new(video: Video<'a, B, N>, media: Media<'a, S, D, V>) -> Self {
+    pub fn new(video: Video<'a, B, N>, media: Media<'a, S, D, V, P>) -> Self {
         Self {
             video,
             media: Some(media),
@@ -209,8 +211,8 @@ impl<'a, B: Backend<N>, S: Socket, D: Device, V: VideoChannel, const N: usize>
     }
 }
 
-impl<B: Backend<N>, S: Socket, D: Device, V: VideoChannel, const N: usize> Drop
-    for Session<'_, B, S, D, V, N>
+impl<B: Backend<N>, S: Socket, D: Device, V: VideoChannel, const N: usize, P: PcmChannel> Drop
+    for Session<'_, B, S, D, V, N, P>
 {
     fn drop(&mut self) {
         if self
