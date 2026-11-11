@@ -19,7 +19,6 @@ use moonlight_nx2_app::{
     pairings::Loaded,
     policy::{Context, DisplayCapabilities},
     presence_watch::{Seen, Watch},
-    reply::Descriptor,
     service::{Action, RuntimeEvent},
     wake,
     wake_connect::{Network, Progress, WakeConnect},
@@ -101,7 +100,7 @@ fn octets(address: &Address) -> Option<[u8; 4]> {
 }
 
 pub enum MediaRequest {
-    Open(Box<Descriptor>),
+    Open,
     Close,
 }
 
@@ -274,10 +273,6 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
     }
     pub fn screen(&self) -> Screen {
         self.client.bridge.model().screen()
-    }
-
-    pub fn peer(&self) -> Option<[u8; 4]> {
-        self.peer
     }
 
     /// The link to Sunshine is open.
@@ -685,9 +680,10 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
                         self.exit = true;
                     }
                 }
-                Effect::Action(Action::OpenMedia(descriptor)) => {
+                Effect::Action(Action::OpenMedia(mut descriptor)) => {
+                    descriptor.wipe();
                     self.stats.media_opened += 1;
-                    self.media.push(MediaRequest::Open(Box::new(descriptor)));
+                    self.media.push(MediaRequest::Open);
                 }
                 Effect::Action(Action::CloseMedia) => {
                     crate::hid::stop_rumble();

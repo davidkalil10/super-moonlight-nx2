@@ -305,25 +305,14 @@ fn execute(
         let now_ms = now / 1_000_000;
         for request in app.take_media() {
             match request {
-                MediaRequest::Open(descriptor) => {
-                    let slots = renderer.frame_slots().ok();
-                    match app.direct_media() {
-                        Some((negotiated, outbox)) => {
-                            let control = Control(outbox);
-                            stream.open_direct(
-                                &mut app.client,
-                                &negotiated,
-                                control,
-                                slots,
-                                now_ms,
-                            );
-                        }
-                        None => {
-                            let peer = app.peer();
-                            stream.open(&mut app.client, *descriptor, peer, slots, now_ms);
-                        }
+                MediaRequest::Open => match app.direct_media() {
+                    Some((negotiated, outbox)) => {
+                        let slots = renderer.frame_slots().ok();
+                        let control = Control(outbox);
+                        stream.open_direct(&mut app.client, &negotiated, control, slots, now_ms);
                     }
-                }
+                    None => stream.refuse(&mut app.client),
+                },
                 MediaRequest::Close => stream.begin_close(&mut app.client, now_ms),
             }
         }

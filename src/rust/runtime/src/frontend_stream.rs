@@ -19,11 +19,8 @@ use core::cell::Cell;
 use moonlight_nx2_app::{
     direct_media::{self, ControlEvents, DirectAudio, DirectVideo, InputSink},
     direct_stream::Outbox,
-    media::{Closed, Media, Memory, UdpMedia},
+    media::Closed,
     policy::{Epoch, Observation, Telemetry},
-    reply::Descriptor,
-    request::Transport,
-    stream::{AUDIO_CHUNK_BYTES, core_codec},
     sunshine::{
         control::{ControlSender, Delivery, SendError},
         stream::{Codec as SunshineCodec, Negotiated},
@@ -33,14 +30,9 @@ use moonlight_nx2_core::{
     codec::{self, Capabilities, Size},
     decoder,
     frame::Matrix,
-    media::MAX_OUTBOUND_BYTES,
     recovery,
 };
-use moonlight_nx2_io::{
-    audio::{self, SLOT_BYTES, SLOTS, Slots},
-    media::Channel,
-    udp::{self, Receiver},
-};
+use moonlight_nx2_io::audio::{self, SLOT_BYTES, SLOTS, Slots};
 use moonlight_nx2_ui::store::Files;
 
 type Decoder = crate::sdk_video::SdkVideo;
@@ -52,33 +44,6 @@ pub(crate) fn decoder_capabilities() -> Capabilities {
 
 const MEDIA_SILENCE_MS: u64 = 10_000;
 
-fn log_audio_offer(descriptor: &Descriptor, device: bool) {
-    let Some(offer) = &descriptor.audio else {
-        log("stream: audio not offered");
-        return;
-    };
-    let queue = audio::Config::default();
-    log(&format!(
-        "stream: audio offered rate={} channels={} chunk_bytes={} device={} queue device_ms={} target_ms={} burst_ms={}",
-        offer.rate,
-        offer.channels,
-        offer.chunk_bytes,
-        if device {
-            "free"
-        } else {
-            "retained, PCM unplayed"
-        },
-        queue.output_ms,
-        queue.target_ms,
-        queue.burst_ms
-    ));
-}
-
-type TcpSession =
-    Session<'static, Decoder, NetSocket, Audout, Channel<'static, NetSocket>, SURFACES>;
-type UdpSession =
-    Session<'static, Decoder, NetSocket, Audout, Receiver<'static, NetSocket, UdpSocket>, SURFACES>;
-
 type DirectSession = Session<
     'static,
     Decoder,
@@ -88,12 +53,6 @@ type DirectSession = Session<
     SURFACES,
     DirectAudio<UdpSocket, HwOpus>,
 >;
-
-enum Active {
-    Tcp(Box<TcpSession>),
-    Udp(Box<UdpSession>),
-    Direct(Box<DirectSession>),
-}
 
 /// The Sunshine control stream the direct launch owns; video asks it for keyframes and hands
 /// it the input record of each frame.
@@ -129,22 +88,14 @@ fn direct_codec(codec: SunshineCodec) -> codec::Codec {
     }
 }
 
+/// The decoder's output frames; direct media assembles video in its own receiver.
 struct Buffers {
-    video: Box<[u8]>,
-    video_outbound: Box<[u8]>,
-    pcm: Box<[u8]>,
-    pcm_outbound: Box<[u8]>,
     frames: [Box<[u8]>; decoder::FRAMES],
 }
 
 impl Buffers {
-    /// Direct media assembles frames in its own receiver and needs no `video` buffer.
-    fn new(coded: Size, video_bytes: usize) -> Box<Self> {
+    fn new(coded: Size) -> Box<Self> {
         Box::new(Self {
-            video: vec![0; video_bytes].into_boxed_slice(),
-            video_outbound: vec![0; MAX_OUTBOUND_BYTES].into_boxed_slice(),
-            pcm: vec![0; AUDIO_CHUNK_BYTES as usize].into_boxed_slice(),
-            pcm_outbound: vec![0; MAX_OUTBOUND_BYTES].into_boxed_slice(),
             frames: core::array::from_fn(|_| vec![0; coded.nv12_bytes()].into_boxed_slice()),
         })
     }
@@ -153,7 +104,7 @@ impl Buffers {
 /// One stream's channels, decoder and audio. The session borrows `buffers`, so it is closed
 /// before they are freed; buffers a retained session may still touch are never freed.
 struct Running {
-    session: Active,
+    session: Box<DirectSession>,
     buffers: *mut Buffers,
     epoch: Epoch,
     draining: bool,
@@ -163,19 +114,11 @@ struct Running {
 
 impl Running {
     fn counters(&self) -> (video::Stats, recovery::Counters) {
-        match &self.session {
-            Active::Tcp(session) => (session.video_stats(), session.video_recovery()),
-            Active::Udp(session) => (session.video_stats(), session.video_recovery()),
-            Active::Direct(session) => (session.video_stats(), session.video_recovery()),
-        }
+        (self.session.video_stats(), self.session.video_recovery())
     }
 
     fn audio_stats(&self) -> Option<audio::Stats> {
-        match &self.session {
-            Active::Tcp(session) => session.audio_stats(),
-            Active::Udp(session) => session.audio_stats(),
-            Active::Direct(session) => session.audio_stats(),
-        }
+        self.session.audio_stats()
     }
 
     /// What the console can measure for the bitrate and frame-rate policies: frames it lost,
@@ -215,119 +158,12 @@ impl Stream {
         }
     }
 
-    pub fn open<F: Files + Clone>(
-        &mut self,
-        client: &mut Client<F>,
-        mut descriptor: Descriptor,
-        peer: Option<[u8; 4]>,
-        slots: Option<[*mut u8; SURFACES]>,
-        now_ms: u64,
-    ) -> bool {
-        let Some(epoch) = client.session_epoch() else {
-            descriptor.wipe();
-            client.runtime(moonlight_nx2_app::service::RuntimeEvent::MediaFailed);
-            return false;
-        };
-        let requested = client.requested_options().map_or_else(
-            || format!("nothing"),
-            |options| {
-                format!(
-                    "{}x{}@{} {} {} kbps",
-                    options.width,
-                    options.height,
-                    options.fps,
-                    options.codec.name(),
-                    options.bitrate_kbps
-                )
-            },
-        );
-        log(&format!(
-            "stream: requested {requested}; negotiated {}x{}@{} {}",
-            descriptor.width,
-            descriptor.height,
-            descriptor.fps,
-            descriptor.codec.name()
-        ));
-        let opened = match peer {
-            Some(peer) if self.running.is_none() => {
-                self.start(&descriptor, peer, epoch, slots, now_ms)
-            }
-            _ => Err("no peer or a stream is already open"),
-        };
-        descriptor.wipe();
-        match opened {
-            Ok(running) => {
-                self.running = Some(running);
-                log("stream: media opened");
-                true
-            }
-            Err(reason) => {
-                log(&format!("stream: open refused: {reason}"));
-                client.observe(epoch, Observation::Failed);
-                false
-            }
-        }
-    }
-
-    fn start(
-        &mut self,
-        descriptor: &Descriptor,
-        peer: [u8; 4],
-        epoch: Epoch,
-        slots: Option<[*mut u8; SURFACES]>,
-        now_ms: u64,
-    ) -> Result<Running, &'static str> {
-        let (video, buffers) = self.open_video(
-            core_codec(descriptor.codec),
-            descriptor.width,
-            descriptor.height,
-            descriptor.fps,
-            udp::UNIT_SLOTS * udp::MAX_PAYLOAD,
-            slots,
-        )?;
-        let memory = unsafe { &mut *buffers };
-        let media = Memory {
-            video: &mut memory.video,
-            video_outbound: &mut memory.video_outbound,
-            pcm: &mut memory.pcm,
-            pcm_outbound: &mut memory.pcm_outbound,
-        };
-        let audio = self.audio.take();
-        log_audio_offer(descriptor, audio.is_some());
-        let mut connector = PeerConnector::new(peer);
-        let session = if descriptor.video.transport == Transport::UdpV1 {
-            UdpMedia::open_udp(&mut connector, descriptor, media, audio, now_ms)
-                .map(|media| Active::Udp(Box::new(Session::new(video, media))))
-        } else {
-            Media::open(&mut connector, descriptor, media, audio, now_ms)
-                .map(|media| Active::Tcp(Box::new(Session::new(video, media))))
-        };
-        match session {
-            Ok(session) => Ok(Running {
-                session,
-                buffers,
-                epoch,
-                draining: false,
-                last_record_ms: None,
-                silent: false,
-            }),
-            Err((failure, closed)) => {
-                log(&format!("stream: media open failed {failure:?}"));
-                if self.reclaim(closed) {
-                    drop(unsafe { Box::from_raw(buffers) });
-                }
-                Err("media")
-            }
-        }
-    }
-
     fn open_video(
         &mut self,
         codec: codec::Codec,
         width: u32,
         height: u32,
         fps: u32,
-        video_bytes: usize,
         slots: Option<[*mut u8; SURFACES]>,
     ) -> Result<(Video<'static, Decoder, SURFACES>, *mut Buffers), &'static str> {
         let display = Size::new(width, height).ok_or("invalid size")?;
@@ -348,7 +184,7 @@ impl Stream {
             crate::perf::path(),
             slots.map(|slots| (slots, moonlight_nx2_core::frame::FRAME_BYTES)),
         );
-        let buffers = Box::into_raw(Buffers::new(coded, video_bytes));
+        let buffers = Box::into_raw(Buffers::new(coded));
         let memory = unsafe { &mut *buffers };
         let [first, second] = &mut memory.frames;
         let video = Video::open(
@@ -367,6 +203,17 @@ impl Stream {
                 }
                 Err("decoder")
             }
+        }
+    }
+
+    /// Fails a media open that has no live Sunshine session to stream from.
+    pub fn refuse<F: Files + Clone>(&mut self, client: &mut Client<F>) {
+        log("stream: open refused: no live Sunshine session");
+        match client.session_epoch() {
+            Some(epoch) => {
+                client.observe(epoch, Observation::Failed);
+            }
+            None => client.runtime(moonlight_nx2_app::service::RuntimeEvent::MediaFailed),
         }
     }
 
@@ -426,7 +273,6 @@ impl Stream {
             u32::from(stream.width),
             u32::from(stream.height),
             u32::from(stream.fps),
-            0,
             slots,
         )?;
         let decoder = match HwOpus::open(&stream.audio) {
@@ -443,7 +289,7 @@ impl Stream {
         let events = ControlEvents::new(control);
         match direct_media::open(&mut connector, stream, events, decoder, audio, now_ms) {
             Ok(media) => Ok(Running {
-                session: Active::Direct(Box::new(Session::new(video, media))),
+                session: Box::new(Session::new(video, media)),
                 buffers,
                 epoch,
                 draining: false,
@@ -480,28 +326,15 @@ impl Stream {
             return;
         };
         running.draining = true;
-        match &mut running.session {
-            Active::Tcp(session) => session.begin_drain(now_ms),
-            Active::Udp(session) => session.begin_drain(now_ms),
-            Active::Direct(session) => session.begin_drain(now_ms),
-        }
+        running.session.begin_drain(now_ms);
     }
 
     pub fn pump<F: Files + Clone>(&mut self, client: &mut Client<F>, now_ms: u64) {
         let Some(running) = self.running.as_mut() else {
             return;
         };
-        let result = match &mut running.session {
-            Active::Tcp(session) => {
-                frontend_media::pump_network(session, client, running.epoch, now_ms)
-            }
-            Active::Udp(session) => {
-                frontend_media::pump_network(session, client, running.epoch, now_ms)
-            }
-            Active::Direct(session) => {
-                frontend_media::pump_network(session, client, running.epoch, now_ms)
-            }
-        };
+        let result =
+            frontend_media::pump_network(&mut running.session, client, running.epoch, now_ms);
         if result == Err(frontend_media::Error::Stale) {
             self.close(client);
         }
@@ -525,11 +358,7 @@ impl Stream {
             now_ms,
             interactive,
         };
-        let result = match &mut running.session {
-            Active::Tcp(session) => frontend_media::step(session, client, renderer, input, tick),
-            Active::Udp(session) => frontend_media::step(session, client, renderer, input, tick),
-            Active::Direct(session) => frontend_media::step(session, client, renderer, input, tick),
-        };
+        let result = frontend_media::step(&mut running.session, client, renderer, input, tick);
         let presented = result.is_ok();
         if let Ok(step) = &result
             && step.progress.video_records + step.progress.pcm_records > 0
@@ -609,11 +438,7 @@ impl Stream {
         let Some(mut running) = self.running.take() else {
             return;
         };
-        let closed = match &mut running.session {
-            Active::Tcp(session) => frontend_media::close(session, client, running.epoch),
-            Active::Udp(session) => frontend_media::close(session, client, running.epoch),
-            Active::Direct(session) => frontend_media::close(session, client, running.epoch),
-        };
+        let closed = frontend_media::close(&mut running.session, client, running.epoch);
         drop(running.session);
         let freed = closed.is_some_and(|closed| {
             if let Err(error) = closed.decoder {

@@ -2,7 +2,6 @@
 //! Behaviour follows src/native/media/channel.c.
 
 use crate::sdk;
-use moonlight_nx2_io::control;
 use moonlight_nx2_io::socket::{IoError, Socket};
 use moonlight_nx2_io::udp::Datagram;
 
@@ -285,19 +284,9 @@ impl Datagram for DiscoverySocket {
     }
 }
 
-/// Keeps control and media connections on the same configured IPv4 peer.
+/// Keeps the media connections on the PC's IPv4 address.
 pub struct PeerConnector {
     address: [u8; 4],
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ControlOpenError {
-    Socket(IoError),
-    Channel(control::Error),
-    Close {
-        channel: control::Error,
-        socket: IoError,
-    },
 }
 
 impl PeerConnector {
@@ -308,35 +297,6 @@ impl PeerConnector {
 
     pub fn open_datagram(&mut self, port: u16) -> Result<UdpSocket, IoError> {
         UdpSocket::connect(self.address, port)
-    }
-
-    /// Starts control authentication. The caller pumps the channel until `Link::ready`;
-    /// successful construction alone does not authenticate the peer.
-    pub fn open_control<'a>(
-        &mut self,
-        port: u16,
-        mut config: control::Config<'a>,
-        now_ms: u64,
-    ) -> Result<control::Channel<'a, NetSocket>, ControlOpenError> {
-        let socket = match NetSocket::connect(self.address, port) {
-            Ok(socket) => socket,
-            Err(error) => {
-                for byte in &mut config.token {
-                    unsafe { core::ptr::write_volatile(byte, 0) };
-                }
-                return Err(ControlOpenError::Socket(error));
-            }
-        };
-        match control::Channel::open(config, socket, now_ms) {
-            Ok(channel) => Ok(channel),
-            Err((error, mut socket)) => match socket.close() {
-                Ok(()) => Err(ControlOpenError::Channel(error)),
-                Err(close) => Err(ControlOpenError::Close {
-                    channel: error,
-                    socket: close,
-                }),
-            },
-        }
     }
 }
 
