@@ -44,7 +44,7 @@ def main():
     parser.add_argument("--ui-uncached", action="store_true",
                         help="the pattern build with the UI buffers in non-cached host memory")
     parser.add_argument("--perf-chord", action="store_true",
-                        help="the pattern build where L3+ZL steps the decode path (in place, copy, SDK object) and L3+ZR the latency mode")
+                        help="the pattern build where L3+ZL steps the decode path (in place, copy, SDK object), L3+ZR the latency mode and L3+R the CPU boost")
     parser.add_argument("--diagnostic", choices=SDK_DIAGNOSTICS,
                         help="build this decoder diagnostic instead of the app")
     parser.add_argument("--trials", choices=TRIALS, default=TRIALS[0],

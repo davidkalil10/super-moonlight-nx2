@@ -42,9 +42,13 @@ pub struct InputGate {
     perf_edges: [bool; PERF_CHORDS.len()],
 }
 
-/// L3+ZL steps the decode path, L3+ZR the latency mode.
+/// L3+ZL steps the decode path, L3+ZR the latency mode, L3+R toggles the CPU boost.
 #[cfg(feature = "perf-chord")]
-pub const PERF_CHORDS: [u64; 2] = [(1 << 4) | (1 << 8), (1 << 4) | (1 << 9)];
+pub const PERF_CHORDS: [u64; 3] = [
+    (1 << 4) | (1 << 8),
+    (1 << 4) | (1 << 9),
+    (1 << 4) | (1 << 7),
+];
 
 #[cfg(feature = "ui-pattern")]
 const PATTERN_CHORD: u64 = (1 << 4) | (1 << 5);

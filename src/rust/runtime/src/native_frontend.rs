@@ -246,7 +246,8 @@ fn execute(
         if let Some(chord) = input_gate.take_perf_edge() {
             match chord {
                 0 => crate::perf::next_path(),
-                _ => crate::perf::next_latency(),
+                1 => crate::perf::next_latency(),
+                _ => crate::perf::toggle_boost(),
             }
             let line = crate::perf::text();
             log(&line);

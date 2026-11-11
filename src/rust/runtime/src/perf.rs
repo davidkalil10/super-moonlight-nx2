@@ -3,7 +3,7 @@
 
 extern crate alloc;
 
-use core::sync::atomic::{AtomicU8, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Path {
@@ -28,6 +28,7 @@ pub enum Latency {
 
 static PATH: AtomicU8 = AtomicU8::new(0);
 static LATENCY: AtomicU8 = AtomicU8::new(0);
+static BOOST: AtomicBool = AtomicBool::new(false);
 
 const PATHS: [Path; 3] = [Path::InPlace, Path::Copy, Path::Sdk];
 const LATENCIES: [Latency; 3] = [Latency::Off, Latency::Wake, Latency::Newest];
@@ -55,6 +56,20 @@ pub fn next_latency() {
     );
 }
 
+/// Whether a stream asks for the CPU boost mode. `clocks` applies it while streaming.
+pub fn boost() -> bool {
+    BOOST.load(Ordering::Relaxed)
+}
+
+pub fn toggle_boost() {
+    BOOST.fetch_xor(true, Ordering::Relaxed);
+}
+
 pub fn text() -> alloc::string::String {
-    alloc::format!("perf: path={:?} latency={:?}", path(), latency())
+    alloc::format!(
+        "perf: path={:?} latency={:?} boost={}",
+        path(),
+        latency(),
+        if boost() { "on" } else { "off" }
+    )
 }

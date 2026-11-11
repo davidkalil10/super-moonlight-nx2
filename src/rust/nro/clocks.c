@@ -1,7 +1,8 @@
 /*
  * Clock readings while streaming. None of these services is proven inside the hijacked title:
- * every call returns its result for the runtime to log, a service that does not open is not
- * asked again before the next close, and nothing is changed.
+ * every call returns its result for the runtime to log, and a service that does not open is not
+ * asked again before the next close. The only change is the CPU boost mode, through the applet
+ * session the process already holds.
  */
 #include <stdbool.h>
 #include <stdint.h>
@@ -69,6 +70,11 @@ void moonlightClocksRead(MoonlightClockReading *out)
         if (R_SUCCEEDED(out->clkrst[clock]))
             out->clkrst[clock] = clkrstGetClockRate(&clocks.sessions[clock], &out->hz[clock]);
     }
+}
+
+Result moonlightClocksBoost(bool on)
+{
+    return appletSetCpuBoostMode(on ? ApmCpuBoostMode_FastLoad : ApmCpuBoostMode_Normal);
 }
 
 /* Closes every session moonlightClocksRead opened, so none outlives the stream. */
