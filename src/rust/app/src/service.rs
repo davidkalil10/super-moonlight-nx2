@@ -43,6 +43,7 @@ pub const LAUNCH_AFTER_STOP_TIMEOUT_MS: u64 = STOP_TIMEOUT_MS + MEDIA_CLOSE_TIME
 #[cfg(test)]
 mod wake_tests {
     use super::*;
+    use crate::request::Codec;
 
     #[test]
     fn wake_wait_extends_an_already_started_open_and_cancellation_closes_it() {

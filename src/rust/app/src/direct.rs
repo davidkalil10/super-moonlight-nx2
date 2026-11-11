@@ -93,6 +93,7 @@ impl<D: Dial + ?Sized> Dial for Box<D> {
 const REQUEST_MS: u64 = 15_000;
 const MAX_REPLY_BYTES: usize = 256 * 1024;
 const MAX_QUEUED: usize = 8;
+const REPLY_LOG_BYTES: usize = 160;
 const ANONYMOUS: &str = "0123456789ABCDEF";
 
 const NOT_PAIRED: &str = "Pair with this host first";
@@ -216,6 +217,18 @@ fn failure(code: &str, message: &str) -> Next {
         Kind::Error,
         format!("{{\"code\":{},\"message\":{}}}", quoted(code), quoted(message)),
     )
+}
+
+/// A stop is confirmed with an empty value, also when the stream had already ended.
+fn stopped() -> Next {
+    result("stop", "{}")
+}
+
+/// The status and the start of a reply body, for the log.
+fn reply_head(response: &http::Response) -> String {
+    let body = &response.body[..response.body.len().min(REPLY_LOG_BYTES)];
+    let text = String::from_utf8_lossy(body).replace(['\r', '\n'], " ");
+    format!("status={} bytes={} body={text}", response.status, response.body.len())
 }
 
 fn result(op: &str, value: &str) -> Next {
@@ -511,7 +524,13 @@ impl<D: Dial> DirectLink<D> {
         let exchange = active.exchange.take().expect("exchange");
         let _ = exchange.close();
         let step = active.step;
+        let seen = outcome.as_ref().ok().map(|response| reply_head(response));
         let next = self.advance(step, outcome, files, now_ms);
+        if let (Some(seen), Next::Reply(Kind::Error, _)) = (seen, &next)
+            && step != Step::Rtsp
+        {
+            self.dial.log(&format!("direct: {step:?} reply not accepted: {seen}"));
+        }
         self.go(next, now_ms);
     }
 
@@ -560,11 +579,10 @@ impl<D: Dial> DirectLink<D> {
             Job::Start if !self.paired() => failure("not_paired", NOT_PAIRED),
             Job::Start if self.live.is_some() => failure("invalid_state", "A stream is already running"),
             Job::Start => Next::Call(Step::SecureInfo),
-            Job::Stop if self.live.is_some() => {
+            Job::Stop => {
                 self.end_live(now_ms);
-                result("stop", "{\"event\":\"stopped\"}")
+                stopped()
             }
-            Job::Stop => failure("invalid_state", "No stream is running"),
             Job::Idr => match self.live.as_mut() {
                 Some(live) => {
                     let queued = live.request_idr(now_ms).is_ok();
@@ -1137,5 +1155,41 @@ impl<D: Dial> Link for DirectLink<D> {
 
     fn consume(&mut self) -> Result<(), LinkError> {
         self.replies.pop_front().map(|_| ()).ok_or(LinkError::Again)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::reply::{self, Reply};
+
+    fn decoded(next: &Next) -> Result<Reply<'_>, reply::Error> {
+        let Next::Reply(kind, payload) = next else {
+            panic!("not a reply");
+        };
+        reply::decode(*kind, 1, payload.as_bytes())
+    }
+
+    #[test]
+    fn a_stop_is_confirmed_in_the_shape_the_service_reads() {
+        assert!(matches!(decoded(&stopped()), Ok(Reply::Stopped)));
+    }
+
+    #[test]
+    fn sunshine_cancel_reply_moves_the_quit_on() {
+        let body = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<root status_code=\"200\"><cancel>1</cancel></root>";
+        assert!(!matches!(serverinfo::parse(body), Err(serverinfo::Error::Status(401))));
+    }
+
+    #[test]
+    fn logged_replies_are_one_short_line() {
+        let response = http::Response {
+            status: 200,
+            headers: Vec::new(),
+            body: alloc::vec![b'x'; 400],
+        };
+        let line = reply_head(&response);
+        assert!(line.starts_with("status=200 bytes=400 body=xxx"));
+        assert!(line.len() < 200 && !line.contains('\n'));
     }
 }
