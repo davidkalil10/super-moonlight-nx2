@@ -3,12 +3,10 @@
 extern crate alloc;
 
 use crate::{
-    client_session::Session,
-    control_link::Access,
     device::log,
     display::{FrameRates, Probe, WindowMode},
     files::Directory,
-    frontend::{AuthError, Connections, Frontend, MediaRequest},
+    frontend::{Connections, Frontend, MediaRequest},
     frontend_stream::{Control, Stream},
     hid::{InputGate, Sampler},
     net::NetSocket,
@@ -16,7 +14,6 @@ use crate::{
     sdk,
 };
 use alloc::{boxed::Box, format};
-use core::ffi::{CStr, c_char};
 use moonlight_nx2_app::{dock::Monitor, policy::DisplayCapabilities};
 use moonlight_nx2_core::codec::Capabilities;
 use moonlight_nx2_ui::{
@@ -30,57 +27,14 @@ unsafe extern "C" {
     fn moonlightPlatformRandom(out: *mut u8, bytes: usize);
     fn moonlightPlatformNetStop();
     fn moonlightPlatformStackAvailable() -> u64;
-    fn moonlightIoTakeSession(
-        path: *const c_char,
-        data: *mut u8,
-        capacity: usize,
-        bytes: *mut usize,
-    ) -> u32;
-}
-
-struct Secret([u8; 512]);
-impl Drop for Secret {
-    fn drop(&mut self) {
-        for byte in &mut self.0 {
-            unsafe { core::ptr::write_volatile(byte, 0) };
-        }
-    }
 }
 
 struct NativeConnections {
-    session_path: &'static CStr,
-    blocked: bool,
     network: bool,
 }
 
 impl Connections for NativeConnections {
     type Socket = NetSocket;
-    fn authorization(&mut self) -> Result<Session, AuthError> {
-        if self.blocked {
-            return Err(AuthError::Uncertain);
-        }
-        let mut secret = Secret([0; 512]);
-        let mut bytes = 0;
-        let status = unsafe {
-            moonlightIoTakeSession(
-                self.session_path.as_ptr(),
-                secret.0.as_mut_ptr(),
-                secret.0.len(),
-                &mut bytes,
-            )
-        };
-        match status {
-            0 if bytes < secret.0.len() => {
-                Session::parse(&secret.0[..bytes]).ok_or(AuthError::Invalid)
-            }
-            1 => Err(AuthError::Missing),
-            2 => Err(AuthError::Invalid),
-            _ => {
-                self.blocked = true;
-                Err(AuthError::Uncertain)
-            }
-        }
-    }
     fn connect(
         &mut self,
         address: [u8; 4],
@@ -93,10 +47,6 @@ impl Connections for NativeConnections {
             }
         }
         NetSocket::connect(address, port)
-    }
-    fn random(&mut self, bytes: &mut [u8]) -> bool {
-        unsafe { moonlightPlatformRandom(bytes.as_mut_ptr(), bytes.len()) };
-        true
     }
     fn wake(&mut self, mac: [u8; 6], address: Option<[u8; 4]>) {
         if !self.network {
@@ -122,10 +72,6 @@ impl Connections for NativeConnections {
             moonlight_nx2_ui::model::Mac(mac).text().as_str(),
             subnet.map(|subnet| subnet.1)
         ));
-    }
-    fn now_us(&mut self) -> u64 {
-        let now_ns = unsafe { sdk::moonlightNowNs() };
-        now_ns / 1000
     }
     fn discovery(
         &mut self,
@@ -219,17 +165,7 @@ pub fn run() -> bool {
         "frontend: namespace {}",
         directory.to_str().unwrap()
     ));
-    let mut connections = NativeConnections {
-        session_path: c"sdmc:/switch/moonlight-nx2/rust-client/auth-session",
-        blocked: false,
-        network: false,
-    };
-    let authorization = connections.authorization();
-    let authorization_error = authorization.as_ref().err().copied();
-    log(&format!(
-        "frontend: one-time authorization imported={}",
-        authorization.is_ok()
-    ));
+    let mut connections = NativeConnections { network: false };
     let (_, saved_settings) = Store::new(files.clone()).load(&mut Box::new(Json::new()));
     let low_latency = saved_settings.on(moonlight_nx2_ui::settings::Setting::LowLatency);
     let mut renderer = match Renderer::open(render_config(low_latency)) {
@@ -251,67 +187,33 @@ pub fn run() -> bool {
     if sdk::process_retired() {
         return false;
     }
-    let launch = Launch {
-        files,
-        authorization: authorization.ok(),
-        authorization_error,
-        verified,
-        start,
-    };
-    let result = execute(&mut renderer, &mut connections, launch);
+    let result = execute(&mut renderer, &mut connections, files, start);
     let closed = renderer.close();
     log(&format!("frontend: renderer close {closed:?}"));
     result && closed.is_ok()
 }
 
-struct Launch {
+fn execute(
+    renderer: &mut Renderer,
+    connections: &mut NativeConnections,
     files: Directory,
-    authorization: Option<Session>,
-    authorization_error: Option<AuthError>,
-    verified: bool,
     start: u64,
-}
-
-fn execute(renderer: &mut Renderer, connections: &mut NativeConnections, launch: Launch) -> bool {
-    let Launch {
-        files,
-        authorization,
-        authorization_error,
-        verified,
-        start,
-    } = launch;
+) -> bool {
     const ATLAS: &[u8] = include_bytes!("../../ui/fonts/glyphs.bin");
     let mut snapshot = renderer.display().ok();
     let docked = snapshot.is_some_and(|display| display.operation_mode == 1);
-    let mut app = match renderer.storage_mut().ok().and_then(|bytes| {
-        Frontend::<_, NetSocket>::new(
-            bytes,
-            ATLAS,
-            files.clone(),
-            authorization,
-            if verified {
-                Access::Streaming
-            } else {
-                Access::User
-            },
-            docked,
-        )
-        .ok()
-    }) {
-        Some(app) => app,
-        None => {
-            log("frontend: UI or local files unavailable");
-            return false;
-        }
-    };
+    let mut app =
+        match renderer.storage_mut().ok().and_then(|bytes| {
+            Frontend::<_, NetSocket>::new(bytes, ATLAS, files.clone(), docked).ok()
+        }) {
+            Some(app) => app,
+            None => {
+                log("frontend: UI or local files unavailable");
+                return false;
+            }
+        };
     if let Some(cache) = crate::files::CoverDirectory::open(c"sdmc:/switch/moonlight-nx2/covers") {
         app.set_cover_cache(cache);
-    }
-    if authorization_error == Some(AuthError::Invalid) {
-        app.notice("The PC connection file is invalid");
-    }
-    if authorization_error == Some(AuthError::Uncertain) {
-        app.notice("The PC connection file could not be consumed; restart before trying again");
     }
     let original = *app.client.bridge.model().settings();
     let mut sampler = match Sampler::open() {
@@ -541,9 +443,8 @@ fn execute(renderer: &mut Renderer, connections: &mut NativeConnections, launch:
             app.client.bridge.model().message() == Some("This console cannot play a stream yet");
         if now.saturating_sub(second) >= 1_000_000_000 {
             log(&format!(
-                "frontend: frames={} requests={} media_opened={}",
+                "frontend: frames={} media_opened={}",
                 app.stats().frames,
-                app.stats().requests,
                 app.stats().media_opened
             ));
             stream.report();
@@ -561,7 +462,7 @@ fn execute(renderer: &mut Renderer, connections: &mut NativeConnections, launch:
     log(&format!(
         "frontend: summary {stats:?} settings_changed={changed} settings_persisted={persisted} local_start_blocked={blocked_start} close={closed}"
     ));
-    !failed && closed && stats.frames > 0 && !stats.rejected
+    !failed && closed && stats.frames > 0
 }
 
 /// Docked, the window takes the size the console outputs (0x0), and follows it: a TV that goes

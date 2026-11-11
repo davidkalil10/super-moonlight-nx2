@@ -128,9 +128,7 @@ const KEY_LABELS: [&str; 12] = [
 
 fn error_next_step(message: Option<&str>, lost: bool) -> &'static str {
     let message = message.unwrap_or("");
-    if message.contains("Moonlight helper") {
-        "On the PC, start moonlight-nx2-pc serve, then open the PC again"
-    } else if message.contains("code") {
+    if message.contains("code") {
         "Open the PC again for a new code"
     } else if message.contains("Pairing") || message.contains("paired") {
         "Open Sunshine on the PC and pair this console, then try again"
@@ -807,34 +805,6 @@ impl Builder<'_> {
         }
     }
 
-    /// Pairing with the PC helper: the code this console made, to be typed on the PC.
-    fn helper_pairing_page(&mut self, model: &Model, code: &str) {
-        self.frame(
-            model,
-            &Chrome {
-                title: host_name(model).unwrap_or("Moonlight"),
-                keys: &[("B", "Cancel")],
-                flags: page::FLAG_HIDE_CURSOR,
-                ..Chrome::default()
-            },
-        );
-        let pal = self.pal;
-        let (x, y) = self.dialog_panel(PAIRING_HEIGHT);
-        let inner = DIALOG_WIDTH - 2 * DIALOG_PAD;
-        let host = host_name(model).unwrap_or("the PC");
-        self.put(x, y + 44, inner, &format!("Pair with {host}"), NAME, pal.ink, Align::Center);
-        let steps = format!("On {host}, type this code into the Moonlight helper.");
-        self.wrapped(x, y + 124, inner, &steps, BODY, pal.ink);
-        let (first, second) = code.split_at(code.len() / 2);
-        self.put(x, y + 190, inner, &format!("{first} {second}"), PIN, pal.accent, Align::Center);
-        if let Some(left) = model.helper_left_s() {
-            let countdown = format!("{}:{:02} left", left / 60, left % 60);
-            self.put(x, y + 358, inner, &countdown, HINT, pal.dim, Align::Center);
-        }
-        let command = format!("moonlight-nx2-pc pair {code}");
-        self.put(x, y + PAIRING_HEIGHT - 64, inner, &command, HINT, pal.dim, Align::Center);
-    }
-
     fn category_list(&mut self, model: &Model) {
         let pal = self.pal;
         let names = ["Picture", "Sound", "Controls", "Network", "This console"];
@@ -1257,9 +1227,6 @@ impl Builder<'_> {
             }
             Screen::Unpairing => {
                 self.status(model, "Unpairing", Some("Asking the PC to forget this console\u{2026}"), &[], false);
-            }
-            Screen::Connecting if model.helper_code().is_some() => {
-                self.helper_pairing_page(model, model.helper_code().unwrap_or(""));
             }
             Screen::Connecting => {
                 let wait = format!("Reaching {host} at {}", model.host().map_or("", |h| h.address.as_str()));

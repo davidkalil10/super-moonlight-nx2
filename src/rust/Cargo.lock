@@ -510,7 +510,6 @@ dependencies = [
  "moonlight-nx2-app",
  "moonlight-nx2-core",
  "moonlight-nx2-io",
- "moonlight-nx2-secure",
  "moonlight-nx2-ui",
 ]
 

@@ -378,8 +378,6 @@ pub struct Model {
     url: Option<Message>,
     pin_timeout_s: u32,
     pin_left_s: Option<u32>,
-    helper_code: Option<Text<8>>,
-    helper_left_s: Option<u32>,
     entry: Text<ENTRY_MAX>,
     rename: Text<63>,
     name_keys: usize,
@@ -477,8 +475,6 @@ impl Model {
             url: None,
             pin_timeout_s: 0,
             pin_left_s: None,
-            helper_code: None,
-            helper_left_s: None,
             entry: Text::new(),
             rename: Text::new(),
             name_keys: 0,
@@ -581,30 +577,6 @@ impl Model {
     /// Whether the unpair in progress is part of forgetting the PC.
     pub fn forgetting(&self) -> bool {
         self.forgetting
-    }
-
-    /// The code to type on the PC while this console pairs with its helper.
-    pub fn helper_code(&self) -> Option<&str> {
-        self.helper_code
-            .as_ref()
-            .map(Text::as_str)
-            .filter(|_| self.screen == Screen::Connecting)
-    }
-
-    /// Seconds the helper still waits for the code.
-    pub fn helper_left_s(&self) -> Option<u32> {
-        self.helper_left_s.filter(|_| self.helper_code.is_some())
-    }
-
-    /// Shows or clears the helper pairing code and its countdown; true when the page changed.
-    pub fn set_helper_code(&mut self, code: Option<&str>, left_s: Option<u32>) -> bool {
-        let code = code.map(Text::of);
-        if self.helper_code == code && self.helper_left_s == left_s {
-            return false;
-        }
-        self.helper_code = code;
-        self.helper_left_s = left_s;
-        self.screen == Screen::Connecting
     }
 
     /// The address typed so far on the add-host keypad.
@@ -1010,7 +982,6 @@ impl Model {
         self.host_page = index / HOSTS_PER_PAGE;
         self.pin = None;
         self.url = None;
-        self.helper_code = None;
         self.message = None;
         step.changed = true;
         step.add(IntentKind::List, self.host);

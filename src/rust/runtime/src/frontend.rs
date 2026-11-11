@@ -4,13 +4,9 @@ extern crate alloc;
 
 #[path = "cover_fetch.rs"]
 mod cover_fetch;
-#[path = "idr_request.rs"]
-mod idr_request;
 
 use crate::{
     client::{self, Client},
-    client_session::Session,
-    control_link::{Access, Control},
     render::Renderer,
     upstream::{Dialer, Upstream},
 };
@@ -20,9 +16,7 @@ use moonlight_nx2_app::{
     direct_keys::Keys as DirectKeys,
     driver::Effect,
     link::{Link, LinkError},
-    link_probe::Prober,
-    netprobe,
-    pairings::{Loaded, Pairing, Pairings},
+    pairings::Loaded,
     policy::{Context, DisplayCapabilities},
     presence_watch::{Seen, Watch},
     reply::Descriptor,
@@ -32,43 +26,21 @@ use moonlight_nx2_app::{
 };
 use moonlight_nx2_core::control::Frame as ControlFrame;
 use moonlight_nx2_io::{
-    control,
-    secure::SecureSocket,
     socket::{IoError, Socket},
     udp::Datagram,
 };
-use moonlight_nx2_secure::{self as secure, Mode, Random, Status};
 use moonlight_nx2_ui::{
     discover::{self, Answers},
-    json::{Json, Kind},
-    link_choice::LinkChoice,
     model::{Address, Message, Screen},
-    presence::Presence,
-    store::{Files, Store},
+    presence::{Presence, SUNSHINE_PORT},
+    store::Files,
 };
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum AuthError {
-    Missing,
-    Invalid,
-    Uncertain,
-}
 
 pub trait Connections {
     type Socket: Socket + 'static;
-    fn authorization(&mut self) -> Result<Session, AuthError>;
     fn connect(&mut self, address: [u8; 4], port: u16) -> Result<Self::Socket, IoError>;
-    /// Fills `bytes` from the system's random source; false where there is none, and then
-    /// no PC can be paired or opened with a stored key.
-    fn random(&mut self, _bytes: &mut [u8]) -> bool {
-        false
-    }
     /// Sends Wake-on-LAN towards `address` and the broadcast addresses, and logs the outcome.
     fn wake(&mut self, _mac: [u8; 6], _address: Option<[u8; 4]>) {}
-    /// A microsecond clock for the link measurement; 0 where there is none.
-    fn now_us(&mut self) -> u64 {
-        0
-    }
     /// An unconnected UDP socket for one mDNS query; none where the platform has no network.
     fn discovery(&mut self) -> Result<Box<dyn Datagram>, IoError> {
         Err(IoError::Failed)
@@ -100,26 +72,12 @@ impl<C: Connections> Network for Net<'_, C> {
     }
 }
 
-/// The link measurement of the open PC connection and what Auto made of it.
-#[derive(Default)]
-struct LinkTest {
-    prober: Prober,
-    wanted: bool,
-    measured: Option<netprobe::LinkQuality>,
-    chosen_for: Option<netprobe::Wanted>,
-    /// What the log already says about this measurement: each wanted shape and its result.
-    logged: Vec<(netprobe::Wanted, (u32, u32, u32, u32))>,
-}
-
-/// Part of each frame the link measurement may use.
-const PROBE_SLICE_US: u64 = 8_000;
-const PROBE_NEEDS_PC: &str = "Open a PC to test the network";
-const PROBE_RUNNING: &str = "Testing the network\u{2026}";
-const PROBE_UNSUPPORTED: &str = "This PC helper cannot test the network; Auto uses its defaults";
-const PROBE_FAILED: &str = "The network test did not finish; Auto uses its defaults";
-
 /// Datagrams read per frame, so a flood cannot stall the UI.
 const DISCOVERY_READS: usize = 16;
+
+const NO_NETWORK_TEST: &str = "Sunshine has no network test; Auto uses its defaults";
+const UNREACHABLE: &str = "The console could not reach the PC; check Wi-Fi";
+const LINK_LOST: &str = "Check Wi-Fi and Sunshine to reconnect";
 
 const FORGOTTEN_DIRECT: &str =
     "Forgotten here. Remove this console under Clients in Sunshine's web UI (port 47990) too";
@@ -129,53 +87,9 @@ pub struct Stats {
     pub frames: u64,
     pub opened: u64,
     pub authenticated: u64,
-    pub requests: u64,
     pub closed: u64,
-    pub rejected: bool,
     pub media_opened: u64,
 }
-
-/// How the helper connection being opened proves this console.
-enum Auth {
-    /// The staged one-shot session and its token.
-    Token(Session),
-    /// The key stored for a paired PC.
-    Key,
-    /// The same, after the helper refused it once.
-    KeyAgain,
-    /// No key yet: pair first, with a code the user types on the PC.
-    Setup,
-}
-
-struct Target {
-    address: [u8; 4],
-    port: u16,
-    pc: Address,
-    auth: Auth,
-}
-
-/// An MNS1 handshake in progress; `code` is set while pairing.
-struct Handshake<S: Socket> {
-    socket: SecureSocket<S>,
-    address: [u8; 4],
-    pc: Address,
-    code: Option<[u8; secure::CODE_DIGITS]>,
-    /// This key session already follows a refusal; the next one pairs again.
-    second: bool,
-    deadline_ms: u64,
-}
-
-const SESSION_LIMIT_MS: u64 = 10_000;
-/// Pause before a refused key is tried once more: the helper may still be storing it.
-const KEY_RETRY_MS: u64 = 500;
-const PAIRING_LIMIT_MS: u64 = 125_000;
-const HELPER_SILENT: &str = "No Moonlight helper answered on this PC";
-const CODE_REFUSED: &str = "The code typed on the PC did not match";
-const PAIRING_OFF: &str = "The PC is not pairing consoles right now; try again in ten minutes";
-const PAIRING_TIMED_OUT: &str = "No code was typed on the PC in time";
-const FIRST_RUN: &str = "Start moonlight-nx2-pc serve on the PC, then choose it here to pair";
-const HELPER_VERSION: &str = "The PC helper speaks another version; update both sides";
-const KEY_NOT_SAVED: &str = "The PC was paired but its key could not be saved";
 
 fn octets(address: &Address) -> Option<[u8; 4]> {
     let mut parts = address.as_str().split('.');
@@ -194,26 +108,20 @@ pub enum MediaRequest {
 pub struct Frontend<F, S: Socket + 'static> {
     pub client: Client<F>,
     control: Option<Upstream<S>>,
-    wake_connect: Option<(WakeConnect<S>, Target)>,
-    handshake: Option<Handshake<S>>,
-    key_retry: Option<(Target, u64)>,
-    pairings: Pairings,
+    wake_connect: Option<WakeConnect<S>>,
+    keys: DirectKeys,
     files: F,
     forced_wake: Option<Address>,
     presence: Watch<S>,
-    link_test: LinkTest,
     text: Option<Message>,
     peer: Option<[u8; 4]>,
     media: Vec<MediaRequest>,
-    authorization: Option<Session>,
     authenticated: bool,
-    access: Access,
     exit: bool,
     message: Option<&'static str>,
     stats: Stats,
     discovery: Option<Discovery>,
     covers: cover_fetch::Fetcher,
-    idr: idr_request::Requester,
     typing: moonlight_nx2_app::typing::Typing,
     keyboard: crate::hid::software_keyboard::Platform,
     cover_host: Option<moonlight_nx2_ui::model::Host>,
@@ -246,40 +154,12 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
         bytes: &mut [u8],
         atlas: &[u8],
         files: F,
-        authorization: Option<Session>,
-        access: Access,
         docked: bool,
     ) -> Result<Self, client::Error> {
-        let mut import_error = None;
-        if let Some(session) = authorization.as_ref() {
-            let mut store = Store::new(files.clone());
-            let mut json = Box::new(Json::new());
-            if let Ok(mut hosts) = store.load_hosts(&mut json) {
-                let mut read = files.clone();
-                let mut text = alloc::vec![0; moonlight_nx2_ui::hosts::MAX_BYTES + 1];
-                let readable = !read.exists("hosts.json")
-                    || read.read("hosts.json", &mut text).is_some_and(|length| {
-                        json.parse(&text[..length])
-                            .is_some_and(|root| matches!(root.kind(), Kind::Array | Kind::Object))
-                    });
-                if !readable {
-                    import_error =
-                        Some("Saved hosts could not be read; the connection was not added");
-                } else if !hosts
-                    .hosts()
-                    .iter()
-                    .any(|host| host.address == session.host.address)
-                    && hosts.remember(&session.host).is_ok()
-                    && !store.save_hosts(&mut hosts)
-                {
-                    return Err(client::Error::Storage);
-                }
-            }
-        }
-        let mut pairing_files = files.clone();
-        let (pairings, loaded) = Pairings::load(&mut pairing_files);
+        let mut key_files = files.clone();
+        let (keys, loaded) = DirectKeys::load(&mut key_files);
         if loaded == Loaded::Damaged {
-            crate::render_platform::log("pairing: the pairings file is unreadable; ignored");
+            crate::render_platform::log("direct: the Sunshine key book is unreadable; ignored");
         }
         let mut client = Client::new(bytes, atlas, files, 1)?;
         client.context_changed(Context {
@@ -287,35 +167,23 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
             decoder: Default::default(),
             display: DisplayCapabilities::default(),
         });
-        let message = import_error.or_else(|| {
-            (authorization.is_none()
-                && pairings.count() == 0
-                && client.bridge.model().message().is_none())
-            .then_some(FIRST_RUN)
-        });
         Ok(Self {
             client,
             control: None,
             wake_connect: None,
-            handshake: None,
-            key_retry: None,
-            pairings,
-            files: pairing_files,
+            keys,
+            files: key_files,
             forced_wake: None,
             presence: Watch::default(),
-            link_test: LinkTest::default(),
             text: None,
             peer: None,
             media: Vec::new(),
-            authorization,
             authenticated: false,
-            access,
             exit: false,
-            message,
+            message: None,
             stats: Stats::default(),
             discovery: None,
             covers: cover_fetch::Fetcher::default(),
-            idr: idr_request::Requester::default(),
             typing: moonlight_nx2_app::typing::Typing::default(),
             keyboard: crate::hid::software_keyboard::Platform,
             cover_host: None,
@@ -392,18 +260,13 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
             } else if found.is_empty() {
                 Some("No PCs found; check Sunshine or add a PC by IP")
             } else {
-                Some("Select a PC; import a PC connection before connecting")
+                Some("Select a PC to pair with it")
             };
         }
     }
 
     pub fn stats(&self) -> Stats {
-        let mut stats = self.stats;
-        if let Some(control) = &self.control {
-            stats.requests += control.stats().map_or(0, |stats| stats.requests);
-            stats.rejected |= control.rejected();
-        }
-        stats
+        self.stats
     }
 
     pub fn exiting(&self) -> bool {
@@ -417,7 +280,7 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
         self.peer
     }
 
-    /// The PC helper connection is open and authenticated.
+    /// The link to Sunshine is open.
     pub fn link_up(&self) -> bool {
         self.control.is_some() && self.authenticated
     }
@@ -463,58 +326,24 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
         }
     }
 
-    fn send_text(&mut self, now_ms: u64) {
-        let Some(control) = self.control.as_mut() else {
-            return;
-        };
-        match self.typing.poll(control) {
-            Some(Ok(queued)) => crate::render_platform::log(&alloc::format!(
-                "keyboard: host text queued={queued}"
-            )),
-            Some(Err(_)) => {}
-            None => {}
-        }
-        if self.typing.expired(now_ms) {
-            crate::render_platform::log("keyboard: no reply to the text");
-            self.typing.reset();
-        }
+    fn send_text(&mut self) {
         if !self.typing.has_pending() {
             return;
         }
-        if control.direct() {
-            let text = self.typing.take_pending();
-            let sent = match (text, control.live()) {
-                (Some(text), Some(live)) => live.text(&text),
-                _ => false,
-            };
-            crate::render_platform::log(&alloc::format!("keyboard: direct text sent={sent}"));
-        } else if self.client.bridge.model().screen() != Screen::Streaming {
-            self.typing.take_pending();
-        } else {
-            self.typing.send(control, now_ms);
-        }
+        let text = self.typing.take_pending();
+        let sent = match (text, self.control.as_mut().and_then(Upstream::live)) {
+            (Some(text), Some(live)) => live.text(&text),
+            _ => false,
+        };
+        crate::render_platform::log(&alloc::format!("keyboard: direct text sent={sent}"));
     }
 
     pub fn close_control(&mut self) -> bool {
         self.covers.reset();
-        self.idr.reset();
         self.typing.reset();
         self.cover_host = None;
         self.client.clear_covers();
-        self.link_test = LinkTest::default();
-        self.client.set_link(None, "");
-        self.key_retry = None;
-        if let Some(mut handshake) = self.handshake.take()
-            && handshake.socket.close().is_err()
-        {
-            crate::render_platform::retire_process();
-            return false;
-        }
-        if let Some((mut pending, target)) = self.wake_connect.take() {
-            // The token has not left the console yet, so the connection file is still good.
-            if let Auth::Token(authorization) = target.auth {
-                self.authorization = Some(authorization);
-            }
+        if let Some(mut pending) = self.wake_connect.take() {
             let host = pending.host().address;
             self.client.set_presence(&host, Presence::Unknown);
             self.client.set_status(None);
@@ -526,208 +355,46 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
         let Some(mut control) = self.control.take() else {
             return true;
         };
-        self.stats.rejected |= control.rejected();
+        control.close();
         self.authenticated = false;
-        if let Some(closed) = control.close() {
-            self.stats.requests += closed.stats.requests;
-            self.stats.closed += 1;
-            !closed.retained
-        } else {
-            false
-        }
-    }
-
-    /// Chooses how to reach the helper for the selected PC: its stored key, the staged
-    /// one-shot session, or a first pairing. A staged session never replaces a key.
-    fn target<C: Connections<Socket = S>>(&mut self, connections: &mut C) -> Option<Target> {
-        let pc = self.client.bridge.model().host().map(|host| host.address);
-        let secure = pc
-            .and_then(|pc| octets(&pc).map(|address| (pc, address)))
-            .filter(|_| connections.random(&mut [0; 1]));
-        let paired = secure.filter(|(pc, _)| self.pairings.find(pc).is_some());
-        let staged = self
-            .authorization
-            .take()
-            .map_or_else(|| connections.authorization(), Ok);
-        if let Some((pc, address)) = paired {
-            match staged {
-                Ok(session) if session.host.address == pc => crate::render_platform::log(
-                    "pairing: the staged PC connection was discarded; this PC is paired",
-                ),
-                Ok(session) => self.authorization = Some(session),
-                Err(_) => {}
-            }
-            return Some(Target {
-                address,
-                port: secure::PORT,
-                pc,
-                auth: Auth::Key,
-            });
-        }
-        match (staged, secure) {
-            (Ok(session), _) => Some(Target {
-                address: session.address,
-                port: session.port,
-                pc: session.host.address,
-                auth: Auth::Token(session),
-            }),
-            (Err(AuthError::Missing), Some((pc, address))) => Some(Target {
-                address,
-                port: secure::PORT,
-                pc,
-                auth: Auth::Setup,
-            }),
-            (Err(error), _) => {
-                self.message = Some(match error {
-                    AuthError::Missing => "Import a new PC connection before connecting",
-                    AuthError::Invalid => "The PC connection file is invalid",
-                    AuthError::Uncertain => {
-                        "The PC connection file could not be consumed; restart before trying again"
-                    }
-                });
-                None
-            }
-        }
+        self.stats.closed += 1;
+        self.keys = DirectKeys::load(&mut self.files).0;
+        true
     }
 
     fn open<C: Connections<Socket = S>>(&mut self, connections: &mut C, now_ms: u64) {
-        if self.control.is_some()
-            || self.wake_connect.is_some()
-            || self.handshake.is_some()
-            || self.key_retry.is_some()
-        {
+        if self.control.is_some() || self.wake_connect.is_some() {
             self.client.runtime(RuntimeEvent::LinkFailed);
             return;
         }
-        let pc = self.client.bridge.model().host().map(|host| host.address);
-        let helper_key = pc.is_some_and(|pc| self.pairings.find(&pc).is_some());
-        let settings = self.client.bridge.model().settings();
-        let helper_first = helper_key && settings.on(moonlight_nx2_ui::settings::Setting::PcHelper);
-        if !helper_first && self.open_direct(connections, true) {
-            return;
-        }
-        let Some(target) = self.target(connections) else {
-            self.client.runtime(RuntimeEvent::LinkFailed);
-            return;
-        };
         let host = self.client.bridge.model().host().copied();
-        if let Some((host, mac)) = host.and_then(|host| host.mac.map(|mac| (host, mac))) {
-            let force = self.forced_wake.take() == Some(host.address);
-            let helper = (target.address, target.port);
-            let pending =
-                WakeConnect::start(&mut Net(connections), helper, host, mac.0, force, now_ms);
-            if crate::render_platform::process_retired() {
-                self.exit = true;
-                self.client.runtime(RuntimeEvent::LinkFailed);
-                return;
-            }
-            self.client
-                .driver
-                .service_mut()
-                .set_link_timeout(now_ms, wake::LIMIT_MS + 30_000);
-            self.wake_connect = Some((pending, target));
+        let Some((host, address)) =
+            host.and_then(|host| octets(&host.address).map(|address| (host, address)))
+        else {
+            return self.link_failed(UNREACHABLE);
+        };
+        let force = self.forced_wake.take() == Some(host.address);
+        let Some(mac) = host.mac else {
+            return self.open_direct(connections);
+        };
+        let pending = WakeConnect::start(
+            &mut Net(connections),
+            (address, SUNSHINE_PORT),
+            host,
+            mac.0,
+            force,
+            now_ms,
+        );
+        if crate::render_platform::process_retired() {
+            self.exit = true;
+            self.client.runtime(RuntimeEvent::LinkFailed);
             return;
         }
-        self.forced_wake = None;
-        self.connect(connections, target, now_ms);
-    }
-
-    fn connect<C: Connections<Socket = S>>(
-        &mut self,
-        connections: &mut C,
-        target: Target,
-        now_ms: u64,
-    ) {
-        match connections.connect(target.address, target.port) {
-            Ok(socket) => self.attach(connections, socket, target, now_ms),
-            Err(_) if !matches!(target.auth, Auth::Token(_))
-                && self.open_direct(connections, false) => {}
-            Err(_) => {
-                self.client.runtime(RuntimeEvent::LinkFailed);
-                self.message = Some(match target.auth {
-                    Auth::Token(_) => {
-                        "Check Wi-Fi and Sunshine; import a new PC connection to retry"
-                    }
-                    _ => HELPER_SILENT,
-                });
-            }
-        }
-    }
-
-    /// Starts authentication on a socket whose connect is in progress.
-    fn attach<C: Connections<Socket = S>>(
-        &mut self,
-        connections: &mut C,
-        socket: S,
-        target: Target,
-        now_ms: u64,
-    ) {
-        let mut random = Random(|bytes: &mut [u8]| {
-            connections.random(bytes);
-        });
-        let (mode, code, limit_ms) = match target.auth {
-            Auth::Token(mut session) => {
-                let token = core::mem::replace(&mut session.token, [0; 64]);
-                return self.control_over(
-                    SecureSocket::plain(socket),
-                    token,
-                    session.address,
-                    now_ms,
-                );
-            }
-            Auth::Key | Auth::KeyAgain => (Mode::Session, None, SESSION_LIMIT_MS),
-            Auth::Setup => (
-                Mode::Pair,
-                Some(secure::new_code(&mut random)),
-                PAIRING_LIMIT_MS,
-            ),
-        };
-        let console = self.pairings.console(|bytes| random.0(bytes));
-        let key = self.pairings.find(&target.pc).map(|pairing| pairing.key);
-        let secret: &[u8] = match (&code, &key) {
-            (Some(code), _) => code,
-            (None, Some(key)) => key,
-            (None, None) => &[],
-        };
-        let socket = SecureSocket::secured(socket, mode, console, secret, &mut random);
-        if code.is_some() {
-            self.client
-                .driver
-                .service_mut()
-                .set_link_timeout(now_ms, PAIRING_LIMIT_MS + 5_000);
-            crate::render_platform::log("pairing: trying the PC helper with a pairing code");
-        }
-        self.handshake = Some(Handshake {
-            socket,
-            address: target.address,
-            pc: target.pc,
-            code,
-            second: matches!(target.auth, Auth::KeyAgain),
-            deadline_ms: now_ms.saturating_add(limit_ms),
-        });
-    }
-
-    fn control_over(
-        &mut self,
-        socket: SecureSocket<S>,
-        token: [u8; 64],
-        address: [u8; 4],
-        now_ms: u64,
-    ) {
-        match Control::open(socket, token, self.access, now_ms) {
-            Ok(control) => {
-                self.control = Some(Upstream::Helper(control));
-                self.peer = Some(address);
-                self.stats.opened += 1;
-            }
-            Err(error) => {
-                self.client.runtime(RuntimeEvent::LinkFailed);
-                self.message = Some(HELPER_SILENT);
-                if error.retained {
-                    self.exit = true;
-                }
-            }
-        }
+        self.client
+            .driver
+            .service_mut()
+            .set_link_timeout(now_ms, wake::LIMIT_MS + 30_000);
+        self.wake_connect = Some(pending);
     }
 
     fn link_failed(&mut self, message: &'static str) {
@@ -735,178 +402,27 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
         self.message = Some(message);
     }
 
-    /// Stores the key a finished pairing produced and opens a session with it.
-    fn paired<C: Connections<Socket = S>>(
-        &mut self,
-        connections: &mut C,
-        mut handshake: Handshake<S>,
-        now_ms: u64,
-    ) {
-        let pairing = handshake.socket.take_pairing();
-        if handshake.socket.close().is_err() {
-            crate::render_platform::retire_process();
-            self.exit = true;
-        }
-        let Some((helper, key)) = pairing else {
-            return self.link_failed(HELPER_SILENT);
+    /// Talks to Sunshine itself for the selected PC; pairing starts there when this console
+    /// holds no certificate for it yet.
+    fn open_direct<C: Connections<Socket = S>>(&mut self, connections: &mut C) {
+        let pc = self.client.bridge.model().host().map(|host| host.address);
+        let address = pc.as_ref().and_then(octets);
+        let link = connections
+            .dialer()
+            .zip(pc)
+            .and_then(|(dialer, pc)| DirectLink::new(dialer, &pc, &mut self.files));
+        let (Some(pc), Some(address), Some(link)) = (pc, address, link) else {
+            return self.link_failed(UNREACHABLE);
         };
-        self.pairings.add(Pairing {
-            address: handshake.pc,
-            helper,
-            key,
-        });
-        if !self.pairings.save(&mut self.files) {
-            self.pairings.forget(&handshake.pc);
-            return self.link_failed(KEY_NOT_SAVED);
-        }
-        crate::render_platform::log(&alloc::format!(
-            "pairing: paired with the helper at {}",
-            handshake.pc.as_str()
-        ));
-        self.text = Some(Message::of("Paired. Connecting\u{2026}"));
-        let target = Target {
-            address: handshake.address,
-            port: secure::PORT,
-            pc: handshake.pc,
-            auth: Auth::Key,
-        };
-        self.connect(connections, target, now_ms);
-    }
-
-    fn poll_handshake<C: Connections<Socket = S>>(&mut self, connections: &mut C, now_ms: u64) {
-        let cancelled = !matches!(
-            self.client.bridge.model().screen(),
-            Screen::Connecting | Screen::Unpairing
-        );
-        let Some(mut handshake) = self.handshake.take() else {
-            match self.key_retry.take() {
-                Some((target, at_ms)) if !cancelled && now_ms >= at_ms => {
-                    self.connect(connections, target, now_ms)
-                }
-                Some(retry) if !cancelled => self.key_retry = Some(retry),
-                _ => {}
-            }
-            return;
-        };
-        let pairing = handshake.code.is_some();
-        if let Some(code) = &handshake.code {
-            let left_s = handshake.deadline_ms.saturating_sub(now_ms).div_ceil(1000);
-            self.client
-                .bridge
-                .set_helper_code(core::str::from_utf8(code).ok(), Some(left_s as u32));
-        }
-        let progress = if cancelled {
-            Err(IoError::Failed)
-        } else {
-            handshake.socket.poll_connect()
-        };
-        let waiting = progress == Ok(false) && now_ms < handshake.deadline_ms;
-        if pairing && !waiting {
-            self.client.bridge.set_helper_code(None, None);
-        }
-        match progress {
-            Ok(false) if waiting => {
-                self.handshake = Some(handshake);
-                return;
-            }
-            Ok(true) if pairing => return self.paired(connections, handshake, now_ms),
-            Ok(true) => {
-                crate::render_platform::log("pairing: session opened with the stored key");
-                return self.control_over(
-                    handshake.socket,
-                    secure::SESSION_TOKEN,
-                    handshake.address,
-                    now_ms,
-                );
-            }
-            _ => {}
-        }
-        let failure = handshake.socket.failure();
-        if handshake.socket.close().is_err() {
-            crate::render_platform::retire_process();
-            self.exit = true;
-        }
-        if cancelled {
-            return;
-        }
-        crate::render_platform::log(&alloc::format!(
-            "pairing: handshake ended pairing={pairing} failure={failure:?} timed_out={}",
-            progress == Ok(false)
-        ));
-        let rejected = matches!(
-            failure,
-            Some(secure::Error::Confirm | secure::Error::Refused(Status::UnknownConsole))
-        );
-        let again = |auth| Target {
-            address: handshake.address,
-            port: secure::PORT,
-            pc: handshake.pc,
-            auth,
-        };
-        match failure {
-            _ if rejected && !pairing && !handshake.second => {
-                self.key_retry = Some((again(Auth::KeyAgain), now_ms.saturating_add(KEY_RETRY_MS)));
-            }
-            _ if rejected && !pairing && self.client.bridge.model().forgetting() => {
-                self.link_failed(HELPER_SILENT)
-            }
-            _ if rejected && !pairing => self.connect(connections, again(Auth::Setup), now_ms),
-            Some(secure::Error::Confirm) => self.link_failed(CODE_REFUSED),
-            Some(secure::Error::Refused(Status::PairingUnavailable)) => {
-                self.link_failed(PAIRING_OFF)
-            }
-            Some(secure::Error::Version | secure::Error::Refused(Status::Version)) => {
-                self.link_failed(HELPER_VERSION)
-            }
-            _ if pairing && progress == Ok(false) => self.link_failed(PAIRING_TIMED_OUT),
-            _ if self.open_direct(connections, false) => {}
-            _ => self.link_failed(HELPER_SILENT),
-        }
-    }
-
-    /// Talks to Sunshine itself for the selected PC, when no helper answers or the PC was
-    /// paired that way. `pinned` asks for a PC this console already paired with directly.
-    fn open_direct<C: Connections<Socket = S>>(&mut self, connections: &mut C, pinned: bool) -> bool {
-        let Some(pc) = self.client.bridge.model().host().map(|host| host.address) else {
-            return false;
-        };
-        let Some(address) = octets(&pc) else {
-            return false;
-        };
-        let Some(dialer) = connections.dialer() else {
-            return false;
-        };
-        let Some(link) = DirectLink::new(dialer, &pc, &mut self.files) else {
-            return false;
-        };
-        if pinned && !link.paired() {
-            return false;
-        }
         crate::render_platform::log(&alloc::format!(
             "direct: talking to Sunshine at {} paired={}",
             pc.as_str(),
             link.paired()
         ));
         self.message = None;
-        self.control = Some(Upstream::Direct(Box::new(link)));
+        self.control = Some(Upstream::new(link));
         self.peer = Some(address);
         self.stats.opened += 1;
-        true
-    }
-
-    /// Asks the helper of an open connection to drop this console; the helper then closes it.
-    fn revoke(&mut self, pc: &Address) {
-        let connected =
-            self.authenticated && octets(pc).is_some_and(|address| self.peer == Some(address));
-        let Some(control) = self.control.as_mut().filter(|control| connected && !control.direct())
-        else {
-            return;
-        };
-        let sent = control.request(br#"{"op":"revoke"}"#).is_ok();
-        crate::render_platform::log(&alloc::format!(
-            "pairing: asked {} to forget this console sent={sent}",
-            pc.as_str()
-        ));
     }
 
     /// Removes the stored keys of a PC the user removed. Sunshine keeps its side of a direct
@@ -925,44 +441,37 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
         {
             self.cover_host = None;
         }
-        self.revoke(&host.address);
         let pc = &host.address;
-        let open_direct = self.control.as_ref().is_some_and(Upstream::direct)
-            && octets(pc).is_some_and(|address| self.peer == Some(address));
-        let (mut direct, _) = DirectKeys::load(&mut self.files);
-        let pinned = direct.forget(pc);
+        let open =
+            self.control.is_some() && octets(pc).is_some_and(|address| self.peer == Some(address));
+        let mut keys = DirectKeys::load(&mut self.files).0;
+        let pinned = keys.forget(pc);
         if pinned {
-            let saved = direct.save(&mut self.files);
+            let saved = keys.save(&mut self.files);
             crate::render_platform::log(&alloc::format!(
                 "direct: forgot {} saved={saved}",
                 pc.as_str()
             ));
         }
-        if pinned || open_direct {
+        self.keys = keys;
+        if pinned || open {
             self.message = Some(FORGOTTEN_DIRECT);
         }
-        if !self.pairings.forget(pc) {
-            return;
-        }
-        // The second write replaces the backup the first one leaves, which still holds the key.
-        let saved = self.pairings.save(&mut self.files) && self.pairings.save(&mut self.files);
-        crate::render_platform::log(&alloc::format!(
-            "pairing: forgot {} saved={saved}",
-            pc.as_str()
-        ));
     }
 
     /// Whether the selected PC can be opened again without the user.
     pub fn paired_host(&self) -> bool {
-        self.client
-            .bridge
-            .model()
-            .host()
-            .is_some_and(|host| self.pairings.find(&host.address).is_some())
+        let Some(host) = self.client.bridge.model().host() else {
+            return false;
+        };
+        match &self.control {
+            Some(control) if octets(&host.address) == self.peer => control.paired(),
+            _ => self.keys.server(&host.address).is_some(),
+        }
     }
 
     fn poll_wake_connect<C: Connections<Socket = S>>(&mut self, connections: &mut C, now_ms: u64) {
-        let Some((mut pending, target)) = self.wake_connect.take() else {
+        let Some(mut pending) = self.wake_connect.take() else {
             return;
         };
         let host = *pending.host();
@@ -981,9 +490,15 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
                 self.client.set_presence(&host.address, Presence::Online);
                 self.client.set_status(None);
             }
-            Progress::Ready(socket) => {
+            Progress::Ready(mut socket) => {
                 self.client.set_presence(&host.address, Presence::Online);
-                self.attach(connections, socket, target, now_ms);
+                if socket.close().is_err() {
+                    crate::render_platform::retire_process();
+                    self.exit = true;
+                    self.client.runtime(RuntimeEvent::LinkFailed);
+                    return;
+                }
+                self.open_direct(connections);
                 return;
             }
             Progress::Failed(message) => {
@@ -995,9 +510,6 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
                 self.client.set_presence(&host.address, Presence::Offline);
                 self.client.runtime(RuntimeEvent::LinkFailed);
                 self.text = Some(message);
-                if let Auth::Token(authorization) = target.auth {
-                    self.authorization = Some(authorization);
-                }
                 return;
             }
             Progress::Retired => {
@@ -1012,13 +524,12 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
             self.client.runtime(RuntimeEvent::LinkFailed);
             return;
         }
-        self.wake_connect = Some((pending, target));
+        self.wake_connect = Some(pending);
     }
 
     /// Asks the saved PCs whether they answer while the hosts page is up and nothing is open.
     fn watch_presence<C: Connections<Socket = S>>(&mut self, connections: &mut C, now_ms: u64) {
-        let watching = self.access != Access::SingleList
-            && self.control.is_none()
+        let watching = self.control.is_none()
             && self.wake_connect.is_none()
             && self.client.bridge.model().screen() == Screen::Hosts;
         if !watching {
@@ -1062,10 +573,6 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
     /// that starts again takes the new shape with a bitrate chosen for it.
     pub fn context_changed(&mut self, context: Context) -> bool {
         let before = self.client.requested_options();
-        if let Some(quality) = self.link_test.measured {
-            let capabilities = crate::client::ui_capabilities(&context);
-            self.choose_link_in(quality, context.docked, &capabilities, false);
-        }
         let accepted = self.client.context_changed(context);
         let after = self.client.driver.service().relaunch_options();
         if let (Some(before), Some(after)) = (before, after) {
@@ -1084,162 +591,6 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
         accepted
     }
 
-    fn wanted_shape(&self) -> netprobe::Wanted {
-        let model = self.client.bridge.model();
-        self.wanted_in(model.docked(), model.capabilities())
-    }
-
-    /// The shape the settings and the focused app's own options ask for in a dock state.
-    fn wanted_in(
-        &self,
-        docked: bool,
-        capabilities: &moonlight_nx2_ui::settings::Capabilities,
-    ) -> netprobe::Wanted {
-        let options = self
-            .client
-            .bridge
-            .model()
-            .stream_settings()
-            .stream_options(docked, capabilities);
-        netprobe::Wanted {
-            width: options.width,
-            height: options.height,
-            fps: options.fps,
-            codec: moonlight_nx2_app::service::options_of(&options).codec,
-            size_auto: options.size_auto,
-        }
-    }
-
-    /// Picks Auto's shape from the measured link for the settings in use.
-    fn choose_link(&mut self, quality: netprobe::LinkQuality, announce: bool) {
-        let model = self.client.bridge.model();
-        let (docked, capabilities) = (model.docked(), *model.capabilities());
-        self.choose_link_in(quality, docked, &capabilities, announce);
-    }
-
-    /// The same for a dock state and capabilities the model may not have yet.
-    fn choose_link_in(
-        &mut self,
-        quality: netprobe::LinkQuality,
-        docked: bool,
-        capabilities: &moonlight_nx2_ui::settings::Capabilities,
-        announce: bool,
-    ) {
-        use moonlight_nx2_ui::settings::Size;
-        let wanted = self.wanted_in(docked, capabilities);
-        let codec = self
-            .client
-            .bridge
-            .model()
-            .stream_settings()
-            .in_use(docked, capabilities)
-            .codec();
-        let choice = netprobe::choose(quality, wanted, |_, height, fps| {
-            capabilities.mode(codec, Size::from_height(height), fps)
-        });
-        let note = netprobe::note(&choice);
-        let resolved = (
-            wanted,
-            (choice.width, choice.height, choice.fps, choice.bitrate_kbps),
-        );
-        if !self.link_test.logged.contains(&resolved) {
-            self.link_test.logged.push(resolved);
-            crate::render_platform::log(&alloc::format!(
-                "netprobe: {quality:?} wanted={}x{}@{} -> {}x{}@{} {} kbps {:?}",
-                wanted.width,
-                wanted.height,
-                wanted.fps,
-                choice.width,
-                choice.height,
-                choice.fps,
-                choice.bitrate_kbps,
-                choice.grade
-            ));
-        }
-        self.client.set_link(
-            Some(LinkChoice {
-                width: choice.width,
-                height: choice.height,
-                fps: choice.fps,
-                bitrate_kbps: choice.bitrate_kbps,
-                grade: match choice.grade {
-                    netprobe::Grade::Good => moonlight_nx2_ui::link_choice::Grade::Good,
-                    netprobe::Grade::Fair => moonlight_nx2_ui::link_choice::Grade::Fair,
-                    netprobe::Grade::Weak => moonlight_nx2_ui::link_choice::Grade::Weak,
-                },
-                rtt_us: choice.quality.rtt_us,
-                throughput_kbps: choice.quality.throughput_kbps,
-                wanted: (wanted.width, wanted.height, wanted.fps),
-            }),
-            note.as_str(),
-        );
-        self.link_test.chosen_for = Some(wanted);
-        if announce && self.client.bridge.model().screen() == Screen::Apps {
-            self.text = Some(Message::of(note.as_str()));
-        }
-    }
-
-    /// Measures the link once per PC connection, before the covers, and again when asked.
-    fn test_link<C: Connections<Socket = S>>(&mut self, connections: &mut C, now_ms: u64) {
-        let screen = self.client.bridge.model().screen();
-        let quiet = self.authenticated
-            && self.access != Access::SingleList
-            && self.client.driver.service().idle()
-            && self.covers.waiting_id().is_none()
-            && self.idr.waiting_id().is_none();
-        let Some(control) = self.control.as_mut().filter(|control| !control.direct()) else {
-            return;
-        };
-        let files = &mut self.files;
-        if self.link_test.wanted
-            && quiet
-            && matches!(screen, Screen::Apps | Screen::Settings)
-            && !self.link_test.prober.busy()
-        {
-            self.link_test.wanted = false;
-            self.link_test.prober.start(connections.now_us());
-        }
-        if self.link_test.prober.busy() && !quiet {
-            self.link_test.prober.cancel(connections.now_us());
-            self.link_test.wanted = true;
-        }
-        if !self.link_test.prober.busy() {
-            if let Some(quality) = self.link_test.measured
-                && self.link_test.chosen_for != Some(self.wanted_shape())
-            {
-                self.choose_link(quality, true);
-            }
-            return;
-        }
-        let outcome = self.link_test.prober.run(
-            control,
-            |control| matches!(control.pump(files, now_ms), Ok(()) | Err(control::Error::Again)),
-            || connections.now_us(),
-            PROBE_SLICE_US,
-        );
-        match outcome {
-            Some(netprobe::Outcome::Measured(quality)) => {
-                crate::render_platform::log(&alloc::format!(
-                    "netprobe: reply rates kbps {:?}",
-                    self.link_test.prober.rates()
-                ));
-                self.link_test.measured = Some(quality);
-                self.link_test.logged.clear();
-                self.choose_link(quality, true);
-            }
-            Some(outcome) => {
-                crate::render_platform::log(&alloc::format!("netprobe: {outcome:?}"));
-                let note = if outcome == netprobe::Outcome::Unsupported {
-                    PROBE_UNSUPPORTED
-                } else {
-                    PROBE_FAILED
-                };
-                self.client.set_link(None, note);
-            }
-            None => {}
-        }
-    }
-
     pub fn frame<C: Connections<Socket = S>>(
         &mut self,
         bytes: &mut [u8],
@@ -1249,21 +600,16 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
         let message = self.message.take();
         let text = self.text.take();
         self.poll_wake_connect(connections, now_ms);
-        self.poll_handshake(connections, now_ms);
         self.watch_presence(connections, now_ms);
-        self.test_link(connections, now_ms);
         self.step_keyboard(now_ms);
-        self.send_text(now_ms);
+        self.send_text();
         let mut disconnected = false;
         if let Some(control) = self.control.as_mut() {
-            match control.pump(&mut self.files, now_ms) {
-                Ok(()) | Err(control::Error::Again) => {}
-                Err(_) => disconnected = true,
-            }
+            control.pump(&mut self.files, now_ms);
+            disconnected |= control.failed();
             if control.ready() && !self.authenticated {
                 self.authenticated = true;
                 self.stats.authenticated += 1;
-                self.link_test.wanted = true;
                 self.client.runtime(RuntimeEvent::LinkOpened);
             }
             if let Some((app, png)) = self.covers.poll(control, now_ms)
@@ -1296,21 +642,13 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
             if self.covers.failed() || self.covers.expired(now_ms) {
                 disconnected = true;
             }
-            let direct = control.direct();
-            match self.idr.poll(control) {
-                Some(Ok(reply)) => crate::render_platform::log(&alloc::format!(
-                    "video-recovery: host idr {reply:?}"
-                )),
-                Some(Err(_)) => disconnected = true,
-                None => {}
-            }
-            let wanted = crate::stream_stats::take_idr_request();
-            let idle = self.covers.waiting_id().is_none();
-            if wanted && !direct && !(idle && self.idr.request(control, true, now_ms)) {
-                crate::stream_stats::request_idr();
-            }
-            if self.idr.expired(now_ms) {
-                disconnected = true;
+            if crate::stream_stats::take_idr_request()
+                && let Some(live) = control.live()
+            {
+                let queued = live.request_idr(now_ms).is_ok();
+                crate::render_platform::log(&alloc::format!(
+                    "video-recovery: direct idr queued={queued}"
+                ));
             }
         }
         let mut effects = Vec::new();
@@ -1318,12 +656,7 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
             Some(control) => {
                 let mut guard = cover_fetch::Guard {
                     link: control,
-                    waiting: self
-                        .covers
-                        .waiting_id()
-                        .or(self.idr.waiting_id())
-                        .or(self.typing.waiting_id())
-                        .or(self.link_test.prober.waiting_id()),
+                    waiting: self.covers.waiting_id(),
                 };
                 self.client
                     .frame(bytes, &mut guard, now_ms, &mut |effect| {
@@ -1373,14 +706,7 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
                 }
                 Effect::Action(Action::WakeHost(host)) => self.forced_wake = Some(host.address),
                 Effect::Action(Action::ForgetHost(host)) => self.forget(&host),
-                Effect::Action(Action::TestNetwork) => {
-                    let ready = self.control.is_some() && self.authenticated;
-                    self.link_test.wanted = ready;
-                    let note = if ready { PROBE_RUNNING } else { PROBE_NEEDS_PC };
-                    self.client.set_link(None, note);
-                    self.link_test.chosen_for = None;
-                    self.link_test.measured = None;
-                }
+                Effect::Action(Action::TestNetwork) => self.client.set_link(None, NO_NETWORK_TEST),
                 Effect::Action(Action::ExportLogs) => {
                     self.message = Some(if crate::files::export_log() {
                         "Log copied to switch/moonlight-nx2/logs on the SD card"
@@ -1415,12 +741,10 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
             }
             self.client.runtime(RuntimeEvent::LinkFailed);
             if !self.paired_host() {
-                self.message =
-                    Some("Check Wi-Fi and Sunshine; import a new PC connection to reconnect");
+                self.message = Some(LINK_LOST);
             }
         }
         if !disconnected
-            && self.access != Access::SingleList
             && self.authenticated
             && self.client.bridge.model().screen() == Screen::Apps
             && self.client.driver.service().idle()
@@ -1465,11 +789,7 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
                         }
                     }
                 }
-                if let Some(control) = self.control.as_mut()
-                    && self.idr.waiting_id().is_none()
-                    && !self.link_test.prober.busy()
-                    && !self.link_test.wanted
-                {
+                if let Some(control) = self.control.as_mut() {
                     self.covers.request(control, host.address.as_str(), now_ms);
                 }
             }

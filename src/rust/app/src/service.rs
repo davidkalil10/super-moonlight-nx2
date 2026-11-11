@@ -765,7 +765,7 @@ impl Service {
         if let Some(stale) = self.pending.take()
             && !stale.abandoned
         {
-            self.operation_failed(stale, "the connection to the PC helper was replaced", true);
+            self.operation_failed(stale, "the connection to the PC was replaced", true);
         }
         if self.phase == Phase::HostUncertain {
             self.phase = Phase::Idle;
@@ -779,7 +779,7 @@ impl Service {
             return;
         }
         self.link_opening = false;
-        self.fail_queue("the PC helper did not answer");
+        self.fail_queue("the PC did not answer");
     }
 
     /// Reports every queued request as failed; none is dropped silently.
@@ -887,7 +887,7 @@ impl Service {
     fn enqueue(&mut self, queued: Queued) -> bool {
         let back_apps = Some(matches!(queued.op, Op::Start | Op::Quit));
         if !self.link_up && !self.reconnect_for(&queued) {
-            self.fail(back_apps, format_args!("The PC helper is not connected"));
+            self.fail(back_apps, format_args!("The PC is not connected"));
             return false;
         }
 
@@ -1078,7 +1078,7 @@ impl Service {
             ),
             Phase::HostUncertain => self.fail(
                 Some(true),
-                format_args!("The PC may still be streaming; reconnect to the PC helper first"),
+                format_args!("The PC may still be streaming; reconnect to the PC first"),
             ),
             _ => self.fail(Some(true), format_args!("A stream is still closing")),
         }
@@ -1938,7 +1938,7 @@ impl Service {
             self.notify(Notice::ConnectionLost {
                 host: self.stream_host,
             });
-            self.fail_queue("the connection to the PC helper closed");
+            self.fail_queue("the connection to the PC closed");
             self.finish_stop();
             return;
         }
@@ -1946,9 +1946,9 @@ impl Service {
         if let Some(pending) = pending
             && !pending.abandoned
         {
-            self.operation_failed(pending, "the connection to the PC helper closed", true);
+            self.operation_failed(pending, "the connection to the PC closed", true);
         }
-        self.fail_queue("the connection to the PC helper closed");
+        self.fail_queue("the connection to the PC closed");
     }
 }
 

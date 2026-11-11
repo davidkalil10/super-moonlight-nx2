@@ -228,13 +228,6 @@ impl<F: Files> Bridge<F> {
         }
     }
 
-    /// The helper pairing code on the Connecting dialog, with the seconds left to type it.
-    pub fn set_helper_code(&mut self, code: Option<&str>, left_s: Option<u32>) {
-        if self.model.set_helper_code(code, left_s) {
-            self.revision += 1;
-        }
-    }
-
     pub fn set_status(&mut self, text: Option<&str>) {
         if self.model.set_status(text) {
             self.revision += 1;

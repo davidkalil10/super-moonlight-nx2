@@ -1,5 +1,5 @@
-//! Opens the helper connection for a PC that may be asleep: ask Sunshine's port, send
-//! Wake-on-LAN when it does not answer, wait for it as the r5-wol service did, then connect.
+//! Reaches a PC that may be asleep: ask Sunshine's port, send Wake-on-LAN when it does not
+//! answer, wait for it as the r5-wol service did, then connect to `service`.
 
 use crate::wake::{self, Wait};
 use moonlight_nx2_io::socket::{IoError, Socket};
@@ -8,10 +8,10 @@ use moonlight_nx2_ui::{
     presence::{self, ANSWER_TIMEOUT_MS, SUNSHINE_PORT},
 };
 
-const HELPER_LIMIT_MS: u64 = 20_000;
-const HELPER_ATTEMPT_MS: u64 = 2_000;
-const HELPER_RETRY_MS: u64 = 500;
-const HELPER_TIMEOUT: &str = "The PC helper did not answer; check that it is running";
+const SERVICE_LIMIT_MS: u64 = 20_000;
+const SERVICE_ATTEMPT_MS: u64 = 2_000;
+const SERVICE_RETRY_MS: u64 = 500;
+const SERVICE_TIMEOUT: &str = "Sunshine did not answer; check that it is running";
 
 /// The sockets and the Wake-on-LAN send the runtime provides.
 pub trait Network {
@@ -59,7 +59,7 @@ enum Phase<S> {
 }
 
 pub struct WakeConnect<S> {
-    helper: ([u8; 4], u16),
+    service: ([u8; 4], u16),
     host: Host,
     mac: [u8; 6],
     target: Option<[u8; 4]>,
@@ -99,11 +99,11 @@ fn answer<S: Socket>(question: &mut Option<Question<S>>, now_ms: u64) -> Answer 
 }
 
 impl<S: Socket> WakeConnect<S> {
-    /// `helper` is where the PC helper listens; `force` sends the packet at once, for the
-    /// user's Wake PC.
+    /// `service` is where the connection goes once the PC is up; `force` sends the packet at
+    /// once, for the user's Wake PC.
     pub fn start<C: Network<Socket = S>>(
         connections: &mut C,
-        helper: ([u8; 4], u16),
+        service: ([u8; 4], u16),
         host: Host,
         mac: [u8; 6],
         force: bool,
@@ -111,7 +111,7 @@ impl<S: Socket> WakeConnect<S> {
     ) -> Self {
         let target = presence::ipv4(host.address.as_str());
         let mut pending = Self {
-            helper,
+            service,
             host,
             mac,
             target,
@@ -141,7 +141,7 @@ impl<S: Socket> WakeConnect<S> {
     fn connect(&mut self, now_ms: u64) {
         self.phase = Phase::Connecting {
             socket: None,
-            deadline_ms: now_ms.saturating_add(HELPER_LIMIT_MS),
+            deadline_ms: now_ms.saturating_add(SERVICE_LIMIT_MS),
             attempt_deadline_ms: now_ms,
             next_attempt_ms: now_ms,
         };
@@ -200,13 +200,13 @@ impl<S: Socket> WakeConnect<S> {
                 if now_ms >= *deadline_ms {
                     return match socket.take().map(|mut socket| socket.close()) {
                         Some(Err(_)) => Progress::Retired,
-                        _ => Progress::Failed(Message::of(HELPER_TIMEOUT)),
+                        _ => Progress::Failed(Message::of(SERVICE_TIMEOUT)),
                     };
                 }
                 if socket.is_none() && now_ms >= *next_attempt_ms {
-                    *socket = connections.connect(self.helper.0, self.helper.1).ok();
-                    *attempt_deadline_ms = now_ms.saturating_add(HELPER_ATTEMPT_MS);
-                    *next_attempt_ms = now_ms.saturating_add(HELPER_RETRY_MS);
+                    *socket = connections.connect(self.service.0, self.service.1).ok();
+                    *attempt_deadline_ms = now_ms.saturating_add(SERVICE_ATTEMPT_MS);
+                    *next_attempt_ms = now_ms.saturating_add(SERVICE_RETRY_MS);
                 }
                 let Some(open) = socket.as_mut() else {
                     return Progress::Pending;

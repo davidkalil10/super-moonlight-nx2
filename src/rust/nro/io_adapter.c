@@ -1,13 +1,11 @@
-// ABI translation for runtime/src/{net,audio_device,native_frontend}.rs: BSD sockets, audout and
-// the one-time session file. No state beyond the audout buffer descriptors.
+// ABI translation for runtime/src/{net,audio_device}.rs: BSD sockets and audout. No state
+// beyond the audout buffer descriptors.
 #include <errno.h>
 #include <stdbool.h>
 #include <stdint.h>
-#include <stdio.h>
 #include <string.h>
 #include <unistd.h>
 
-#ifndef MOONLIGHT_IO_SESSION_HOST_TEST
 #include <arpa/inet.h>
 #include <fcntl.h>
 #include <netinet/in.h>
@@ -315,62 +313,4 @@ uint32_t moonlightIoAudioClose(uint32_t *raw)
     audio_open = false;
     memset(audio_buffers, 0, sizeof(audio_buffers));
     return AUDIO_OK;
-}
-#endif
-
-uint32_t moonlightIoTakeSession(const char *path, uint8_t *data, size_t capacity, size_t *bytes)
-{
-    *bytes = 0;
-    if (capacity > 0)
-        memset(data, 0, capacity);
-    FILE *file = fopen(path, "r+b");
-    if (!file)
-        return errno == ENOENT ? 1 : 3;
-
-    size_t count = fread(data, 1, capacity, file);
-    bool uncertain = ferror(file) != 0;
-    bool fits = false;
-    if (!uncertain) {
-        if (count < capacity) {
-            fits = feof(file) != 0;
-            uncertain = !fits;
-        } else {
-            int extra = fgetc(file);
-            if (ferror(file))
-                uncertain = true;
-            else if (extra == EOF) {
-                fits = feof(file) != 0;
-                uncertain = !fits;
-            }
-        }
-    }
-
-    clearerr(file);
-    static const uint8_t zeros[256];
-    if (fseek(file, 0, SEEK_SET) != 0) {
-        uncertain = true;
-    } else {
-        for (size_t left = count; left > 0;) {
-            size_t chunk = left < sizeof(zeros) ? left : sizeof(zeros);
-            if (fwrite(zeros, 1, chunk, file) != chunk || ferror(file)) {
-                uncertain = true;
-                break;
-            }
-            left -= chunk;
-        }
-    }
-    if (fflush(file) != 0 || ferror(file))
-        uncertain = true;
-    if (fclose(file) != 0)
-        uncertain = true;
-    if (unlink(path) != 0)
-        uncertain = true;
-
-    if (uncertain || !fits) {
-        if (capacity > 0)
-            memset(data, 0, capacity);
-        return uncertain ? 3 : 2;
-    }
-    *bytes = count;
-    return 0;
 }
