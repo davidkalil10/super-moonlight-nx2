@@ -398,7 +398,13 @@ impl Recorder {
         }
 
         let buttons = if pad.connected { pad.buttons } else { 0 };
-        if pad.connected && stop_held(u64::from(buttons)) {
+        let extra_stop = extra.is_some_and(|extra| {
+            extra
+                .pads
+                .iter()
+                .any(|pad| pad.connected && stop_held(u64::from(pad.buttons)))
+        });
+        if (pad.connected && stop_held(u64::from(buttons))) || extra_stop {
             self.stopped = true;
             return self.stop_record(pad.connected, out);
         }

@@ -4,7 +4,7 @@ extern crate alloc;
 
 use crate::render::Error;
 use moonlight_nx2_app::input::{EXTRA_PADS, Extra, Motion, PadState, Touches};
-use moonlight_nx2_app::pads::{self, PLAYERS, Routing, SOURCES, Slots, Source};
+use moonlight_nx2_app::pads::{PLAYERS, Routing, SOURCES, Slots, Source};
 
 pub const TOUCH_OFFSET: usize = 128;
 pub const TOUCH_BYTES: usize = 656;
@@ -62,10 +62,10 @@ impl InputGate {
         }
         #[cfg(feature = "ui-pattern")]
         {
-            let held = input.raw_buttons & PATTERN_CHORD == PATTERN_CHORD;
+            let held = input.held_anywhere(PATTERN_CHORD);
             self.pattern_edge |= held && !self.pattern_held;
             self.pattern_held = held;
-            let filter = input.raw_buttons & FILTER_CHORD == FILTER_CHORD;
+            let filter = input.held_anywhere(FILTER_CHORD);
             self.filter_edge |= filter && !self.filter_held;
             self.filter_held = filter;
         }
@@ -92,25 +92,34 @@ fn menu_held(buttons: u64) -> bool {
     buttons & MENU_CHORD == MENU_CHORD && buttons & STOP_CHORD != STOP_CHORD
 }
 
+/// Each player's hold is timed on its own, so any controller can open the menu.
 #[derive(Default)]
 pub struct MenuChord {
-    since: Option<u64>,
-    fired: bool,
+    since: [Option<u64>; PLAYERS],
+    fired: [bool; PLAYERS],
 }
 
 impl MenuChord {
     pub fn update(&mut self, input: &FrameInput, active: bool, now_ms: u64) -> bool {
-        if !active || !input.pad.connected || !menu_held(input.raw_buttons) {
-            self.since = None;
-            self.fired = false;
+        let mut fire = false;
+        for (player, buttons) in input.held_buttons().enumerate() {
+            fire |= self.update_player(player, active && menu_held(buttons), now_ms);
+        }
+        fire
+    }
+
+    fn update_player(&mut self, player: usize, held: bool, now_ms: u64) -> bool {
+        if !held {
+            self.since[player] = None;
+            self.fired[player] = false;
             return false;
         }
-        let since = self.since.get_or_insert(now_ms);
+        let since = self.since[player].get_or_insert(now_ms);
         if now_ms < *since {
             *since = now_ms;
         }
-        if !self.fired && now_ms - *since >= 1_000 {
-            self.fired = true;
+        if !self.fired[player] && now_ms - *since >= 1_000 {
+            self.fired[player] = true;
             return true;
         }
         false
@@ -129,10 +138,34 @@ impl UiSchedule {
         page_interactive: bool,
         menu_enabled: bool,
     ) -> bool {
-        let active = menu_enabled && input.pad.connected && menu_held(input.raw_buttons);
+        let active = menu_enabled && input.held_buttons().any(menu_held);
         let needed = page_interactive || active || self.chord_active;
         self.chord_active = active;
         needed
+    }
+}
+
+impl FrameInput {
+    /// Every player's raw buttons, primary first; a disconnected player holds nothing.
+    pub fn held_buttons(&self) -> impl Iterator<Item = u64> + '_ {
+        let primary = if self.pad.connected {
+            self.raw_buttons
+        } else {
+            0
+        };
+        let extra = self.extra.pads.iter().map(|pad| {
+            if pad.connected {
+                u64::from(pad.buttons)
+            } else {
+                0
+            }
+        });
+        core::iter::once(primary).chain(extra)
+    }
+
+    #[cfg(feature = "ui-pattern")]
+    fn held_anywhere(&self, chord: u64) -> bool {
+        self.held_buttons().any(|buttons| buttons & chord == chord)
     }
 }
 
@@ -234,12 +267,17 @@ pub fn route(
     Ok(slots)
 }
 
-fn change_line(change: pads::Change, mask: u16, motion: bool) -> alloc::string::String {
+#[cfg(target_os = "none")]
+fn change_line(
+    change: moonlight_nx2_app::pads::Change,
+    mask: u16,
+    motion: bool,
+) -> alloc::string::String {
     alloc::format!(
         "input: player {} {} from {} motion={motion} mask={mask:#x}",
         change.player + 1,
         if change.arrived { "arrived" } else { "removed" },
-        pads::source_name(change.source),
+        moonlight_nx2_app::pads::source_name(change.source),
     )
 }
 
@@ -430,6 +468,53 @@ mod menu_tests {
             assert!(!chord.update(&held(buttons), true, 0));
             assert!(!chord.update(&held(buttons), true, 5_000));
         }
+    }
+
+    fn held_by(player: usize, buttons: u32) -> FrameInput {
+        let mut sample = [0u8; EXTENDED_BYTES];
+        let base = EXTRA_OFFSET + (player - 1) * SLOT_BYTES;
+        sample[base..base + 4].copy_from_slice(&buttons.to_le_bytes());
+        sample[base + 24] = 1;
+        sample[32] = 1;
+        FrameInput::decode(&sample).unwrap()
+    }
+
+    #[test]
+    fn a_second_player_opens_the_menu_with_its_own_hold() {
+        let mut chord = MenuChord::default();
+        let second = held_by(1, MENU_CHORD as u32);
+        assert!(!chord.update(&second, true, 0));
+        assert!(chord.update(&second, true, 1_000));
+        assert!(!chord.update(&second, true, 2_000));
+        assert!(!chord.update(&held_by(1, STOP_CHORD as u32), true, 3_000));
+        assert!(!chord.update(&held_by(3, MENU_CHORD as u32), false, 4_000));
+    }
+
+    #[test]
+    fn players_holding_one_button_each_never_make_the_chord() {
+        let mut chord = MenuChord::default();
+        let mut split = held_by(1, 1 << 10);
+        split.raw_buttons = 1 << 11;
+        assert!(!chord.update(&split, true, 0));
+        assert!(!chord.update(&split, true, 5_000));
+    }
+
+    #[test]
+    fn a_player_letting_go_does_not_restart_another_players_hold() {
+        let mut chord = MenuChord::default();
+        let mut both = held_by(2, MENU_CHORD as u32);
+        both.raw_buttons = MENU_CHORD;
+        assert!(!chord.update(&both, true, 0));
+        assert!(!chord.update(&held_by(2, MENU_CHORD as u32), true, 500));
+        assert!(chord.update(&held_by(2, MENU_CHORD as u32), true, 1_000));
+    }
+
+    #[test]
+    fn the_ui_wakes_for_any_player_holding_the_chord() {
+        let mut schedule = UiSchedule::default();
+        assert!(schedule.needs_compute(&held_by(2, MENU_CHORD as u32), false, true));
+        assert!(schedule.needs_compute(&held_by(2, 0), false, true));
+        assert!(!schedule.needs_compute(&held_by(2, 0), false, true));
     }
 
     #[test]
