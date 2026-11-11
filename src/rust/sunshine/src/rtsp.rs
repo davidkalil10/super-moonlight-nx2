@@ -378,3 +378,91 @@ impl Handshake {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::http::Reader;
+
+    /// Sunshine 2026.914 (63d35f7) answering DESCRIBE over plain RTSP with AV1 and HEVC
+    /// encoders and refPicInvalidation: the head without a length, then the SDP, then the
+    /// close.
+    const DESCRIBE_2026: &[&[u8]] = &[
+        b"RTSP/1.0 200 OK\r\nCSeq: 2\r\n\r\n",
+        b"a=x-ss-general.featureFlags:3\n\
+          a=x-ss-general.encryptionSupported:7\n\
+          a=x-ss-general.encryptionRequested:1\n\
+          a=x-nv-video[0].refPicInvalidation:1\n\
+          sprop-parameter-sets=AAAAAU\n\
+          a=rtpmap:98 AV1/90000\n\
+          a=fmtp:97 surround-params=21101\n\
+          a=fmtp:97 surround-params=21101\n\
+          a=fmtp:97 surround-params=642012453\n\
+          a=fmtp:97 surround-params=660012345\n\
+          a=fmtp:97 surround-params=85301245367\n\
+          a=fmtp:97 surround-params=88001234567\n",
+    ];
+
+    fn handshake(codecs: &'static [Codec]) -> Handshake {
+        let request = Request {
+            width: 1920,
+            height: 1080,
+            fps: 120,
+            bitrate_kbps: 40_000,
+            packet_size: 1392,
+            codecs,
+            hdr: false,
+            audio_channels: 2,
+            controllers: 1,
+        };
+        let key = StreamKey {
+            key: [7; 16],
+            key_id: 1,
+        };
+        let mut handshake = Handshake::new([192, 168, 1, 4], 48010, request, key);
+        handshake.step = Step::Describe;
+        handshake
+    }
+
+    fn describe(handshake: &mut Handshake) -> Result<Step, Error> {
+        let mut reader = Reader::rtsp(256 * 1024);
+        for part in DESCRIBE_2026 {
+            reader.feed(part).unwrap();
+            assert!(reader.complete(false).is_none());
+        }
+        let response = reader.complete(true).unwrap().unwrap();
+        handshake.accept(&response)
+    }
+
+    #[test]
+    fn sunshine_2026_describe_is_accepted() {
+        let mut handshake = handshake(&[Codec::Av1, Codec::H264]);
+        assert_eq!(describe(&mut handshake), Ok(Step::SetupAudio));
+        assert_eq!(handshake.codec, Codec::Av1);
+        assert_eq!(handshake.encryption, encryption::CONTROL_V2 | encryption::AUDIO);
+        assert_eq!(handshake.host_features(), 3);
+        assert_eq!((handshake.audio.streams, handshake.audio.coupled_streams), (1, 1));
+        assert_eq!(handshake.audio.mapping[..2], [0, 1]);
+    }
+
+    #[test]
+    fn sunshine_2026_offer_lists_every_codec_and_surround_layout() {
+        let sdp = core::str::from_utf8(DESCRIBE_2026[1]).unwrap();
+        let offer = parse_offer(sdp);
+        assert!(offer.hevc && offer.av1);
+        assert_eq!((offer.encryption_supported, offer.encryption_requested), (7, 1));
+        assert_eq!(offer.surround.len(), 6);
+        assert_eq!(offer.surround[2], (6, 4, 2, [0, 1, 2, 4, 5, 3, 0, 0]));
+    }
+
+    #[test]
+    fn an_empty_describe_is_an_old_host() {
+        let mut handshake = handshake(&[Codec::H264]);
+        let response = Response {
+            status: 200,
+            headers: Vec::new(),
+            body: Vec::new(),
+        };
+        assert_eq!(handshake.accept(&response), Err(Error::OldHost));
+    }
+}

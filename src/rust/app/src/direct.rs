@@ -701,7 +701,13 @@ impl<D: Dial> DirectLink<D> {
         }
         let response = match outcome {
             Ok(response) => response,
-            Err(error) => return transport_failure(&error),
+            Err(error) => {
+                if step == Step::Rtsp {
+                    let rtsp = active.rtsp.as_ref().map(rtsp::Handshake::step);
+                    self.dial.log(&format!("direct: rtsp {rtsp:?} failed: {error:?}"));
+                }
+                return transport_failure(&error);
+            }
         };
         let body = core::str::from_utf8(&response.body).unwrap_or("");
 
@@ -833,13 +839,22 @@ impl<D: Dial> DirectLink<D> {
     fn rtsp_step(&mut self, response: &http::Response, now_ms: u64) -> Next {
         let active = self.active.as_mut().expect("active");
         let handshake = active.rtsp.as_mut().expect("rtsp");
-        match handshake.accept(response) {
-            Ok(rtsp::Step::Done) => {}
+        let step = handshake.step();
+        let error = match handshake.accept(response) {
+            Ok(rtsp::Step::Done) => None,
             Ok(_) => return Next::Call(Step::Rtsp),
-            Err(rtsp::Error::NoCodec) => return failure("unsupported", NO_CODEC),
-            Err(rtsp::Error::OldHost) => return failure("unsupported", OLD_CONTROL),
-            Err(_) => return failure("backend_failed", "Sunshine refused the stream setup"),
+            Err(error) => Some(error),
+        };
+        if let Some(error) = error {
+            self.log_rtsp_failure(step, error, response);
+            return match error {
+                rtsp::Error::NoCodec => failure("unsupported", NO_CODEC),
+                rtsp::Error::OldHost => failure("unsupported", OLD_CONTROL),
+                _ => failure("backend_failed", "Sunshine refused the stream setup"),
+            };
         }
+        let active = self.active.as_mut().expect("active");
+        let handshake = active.rtsp.as_mut().expect("rtsp");
         let Some(negotiated) = handshake.negotiated() else {
             return failure("backend_failed", "Sunshine refused the stream setup");
         };
@@ -861,6 +876,24 @@ impl<D: Dial> DirectLink<D> {
         active.live = Some(Live::new(app.unwrap_or(0), negotiated, control, input, socket, now_ms));
         active.deadline_ms = now_ms.saturating_add(CONTROL_MS);
         Next::Call(Step::Control)
+    }
+
+    /// Logs why an RTSP reply was refused, with the SDP lines DESCRIBE is judged on.
+    fn log_rtsp_failure(&mut self, step: rtsp::Step, error: rtsp::Error, response: &http::Response) {
+        let body = String::from_utf8_lossy(&response.body);
+        self.dial.log(&format!(
+            "direct: rtsp {step:?} refused: {error:?} status={} body_bytes={}",
+            response.status,
+            response.body.len()
+        ));
+        let offer = body.lines().map(str::trim).filter(|line| {
+            line.starts_with("a=x-ss-general")
+                || line.starts_with("sprop-parameter-sets")
+                || line.starts_with("a=rtpmap:98")
+        });
+        for line in offer {
+            self.dial.log(&format!("direct: rtsp sdp {line}"));
+        }
     }
 
     /// Waits for the control channel; `None` while it connects.

@@ -1,6 +1,6 @@
 //! One HTTP/1.1 GET and its response, read incrementally. Sunshine answers with a length or
-//! chunks; a response without either ends at the close. RTSP replies use the same reader,
-//! where a reply without a length has no body.
+//! chunks; a response without either ends at the close. RTSP replies use the same reader:
+//! Sunshine sends them without a length and closes the connection after each one.
 
 use alloc::{format, string::String, vec::Vec};
 
@@ -159,7 +159,7 @@ fn parse_head(bytes: &[u8], rtsp: bool) -> Result<Option<Head>, Error> {
         return Err(Error::Malformed);
     };
 
-    let mut framing = if rtsp { Framing::Length(0) } else { Framing::Close };
+    let mut framing = Framing::Close;
     for line in lines {
         let (name, value) = line.split_once(':').ok_or(Error::Malformed)?;
         let value = value.trim();
@@ -201,5 +201,30 @@ fn dechunk(mut body: &[u8]) -> Result<Option<Vec<u8>>, Error> {
         }
         out.extend_from_slice(&data[..size]);
         body = &data[size + 2..];
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rtsp_reply_without_a_length_ends_at_the_close() {
+        let mut reader = Reader::rtsp(1024);
+        reader.feed(b"RTSP/1.0 200 OK\r\nCSeq: 2\r\n\r\n").unwrap();
+        assert!(reader.complete(false).is_none());
+        reader.feed(b"a=x-ss-general.featureFlags:3\n").unwrap();
+        assert!(reader.complete(false).is_none());
+        let response = reader.complete(true).unwrap().unwrap();
+        assert_eq!(response.status, 200);
+        assert_eq!(response.header("CSeq"), Some("2"));
+        assert_eq!(response.body, b"a=x-ss-general.featureFlags:3\n");
+    }
+
+    #[test]
+    fn rtsp_reply_with_a_length_completes_before_the_close() {
+        let mut reader = Reader::rtsp(1024);
+        reader.feed(b"RTSP/1.0 200 OK\r\nContent-Length: 2\r\n\r\nok").unwrap();
+        assert_eq!(reader.complete(false).unwrap().unwrap().body, b"ok");
     }
 }
