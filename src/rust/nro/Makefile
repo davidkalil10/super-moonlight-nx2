@@ -25,7 +25,7 @@ LDFLAGS := $(ARCH) -specs=$(LIBNX)/switch.specs -Wl,-Map,$(OUTPUT).map -Wl,--wra
 MIMALLOC ?= 1
 NX_LIBRARY := $(if $(filter 0,$(MIMALLOC)),-lounce_core,-lnx)
 LIBS := -L$(DEVKITPRO)/portlibs/switch2/lib -L$(LIBNX)/lib -lvulkan $(NX_LIBRARY) -lm
-OBJECTS := $(BUILD_DIR)/platform.o $(BUILD_DIR)/io_adapter.o $(BUILD_DIR)/system.o $(BUILD_DIR)/sdk_viddec.o $(BUILD_DIR)/software_keyboard.o
+OBJECTS := $(BUILD_DIR)/platform.o $(BUILD_DIR)/io_adapter.o $(BUILD_DIR)/system.o $(BUILD_DIR)/sdk_viddec.o $(BUILD_DIR)/software_keyboard.o $(BUILD_DIR)/opus.o
 
 .PHONY: all
 all: $(OUTPUT).nro
@@ -45,6 +45,9 @@ $(BUILD_DIR)/sdk_viddec.o: $(SOURCE_DIR)/sdk_viddec.c
 $(BUILD_DIR)/software_keyboard.o: $(SOURCE_DIR)/software_keyboard.c
 	$(CC) $(CPPFLAGS) $(CFLAGS) -MMD -MP -c $< -o $@
 
+$(BUILD_DIR)/opus.o: $(SOURCE_DIR)/opus.c
+	$(CC) $(CPPFLAGS) $(CFLAGS) -MMD -MP -c $< -o $@
+
 $(OUTPUT).elf: $(OBJECTS) $(RUST_LIBRARY)
 	$(CC) $(LDFLAGS) $(OBJECTS) $(RUST_LIBRARY) $(LIBS) -o $@
 
@@ -59,6 +62,7 @@ $(OUTPUT).nro: $(OUTPUT).elf $(OUTPUT).nacp $(ICON_PATH)
 -include $(BUILD_DIR)/system.d
 -include $(BUILD_DIR)/sdk_viddec.d
 -include $(BUILD_DIR)/software_keyboard.d
+-include $(BUILD_DIR)/opus.d
 
 ifeq ($(BREADCRUMBS),1)
 OBJECTS += $(BUILD_DIR)/breadcrumb.o

@@ -1,7 +1,8 @@
 //! Application controller for the Rust NRO: UI intents, authenticated control-v1 requests,
 //! media preparation and the stream lifecycle. Portable and bounded; owns no SDK objects.
 //! It allocates nothing itself, except `direct`, which talks to Sunshine through alloc buffers,
-//! and `ui::hosts`, which uses alloc for the saved-host book.
+//! `direct_media`, which allocates its packet and frame buffers once per stream, and
+//! `ui::hosts`, which uses alloc for the saved-host book.
 //! Component docs and tests live in moonlight-nx2-dev/src/rust/app.
 
 #![no_std]
@@ -12,6 +13,7 @@ pub mod covers;
 pub mod direct;
 pub mod direct_keys;
 pub mod direct_input;
+pub mod direct_media;
 pub mod driver;
 pub mod hosts;
 pub mod input;

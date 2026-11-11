@@ -24,6 +24,8 @@ mod device;
 mod frontend_stream;
 #[cfg(all(target_os = "none", feature = "frontend"))]
 mod native_frontend;
+#[cfg(all(target_os = "none", feature = "frontend"))]
+mod opus;
 #[cfg(target_os = "none")]
 pub mod net;
 #[cfg(all(target_os = "none", feature = "diagnostic-sdk-decode"))]
