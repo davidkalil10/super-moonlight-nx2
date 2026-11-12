@@ -254,6 +254,15 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
     }
 
     fn fail(&mut self, error: Error) -> Error {
+        if self.failure.is_none() {
+            match self.decoder.rejected() {
+                Some(rejected) => platform::log(&format!(
+                    "video: failed {error:?} on {} of {:?}",
+                    rejected.reason, rejected.output
+                )),
+                None => platform::log(&format!("video: failed {error:?}")),
+            }
+        }
         if matches!(
             error,
             Error::Decoder(decoder::Error::Uncertain | decoder::Error::Retired)

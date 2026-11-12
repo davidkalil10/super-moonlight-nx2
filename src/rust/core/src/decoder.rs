@@ -112,6 +112,13 @@ pub trait Backend<const N: usize = SURFACES> {
     }
 }
 
+/// Output the decoder could not match to its surfaces or units.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Rejected {
+    pub reason: &'static str,
+    pub output: Output,
+}
+
 /// A decoded NV12 frame left in the backend's memory: `bytes` from the page-aligned `base`,
 /// both planes `pitch` bytes a row, the chroma plane half as many rows as the luma plane.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -212,6 +219,7 @@ pub struct Decoder<'a, B: Backend<N>, const N: usize = SURFACES> {
     queued: Queue<N>,
     placed: [bool; N],
     arrived: [Option<Output>; N],
+    rejected: Option<Rejected>,
     pending: [Option<Pending>; UNITS],
     generation: u64,
     failed: bool,
@@ -258,6 +266,7 @@ impl<'a, B: Backend<N>, const N: usize> Decoder<'a, B, N> {
             queued: Queue::full(),
             placed: [false; N],
             arrived: [None; N],
+            rejected: None,
             pending: [None; UNITS],
             generation: 0,
             failed: false,
@@ -353,17 +362,27 @@ impl<'a, B: Backend<N>, const N: usize> Decoder<'a, B, N> {
                 return Err(self.fail(BackendError::Refused));
             }
             let Some(index) = self.images.iter().position(|image| *image == output.image) else {
-                return Err(self.fail(BackendError::Malformed));
+                return Err(self.reject("unknown image", output));
             };
             if index == surface {
                 return Ok(output);
             }
             if self.arrived[index].is_some() {
-                return Err(self.fail(BackendError::Malformed));
+                return Err(self.reject("image twice", output));
             }
             self.arrived[index] = Some(output);
         }
         Err(self.fail(BackendError::Malformed))
+    }
+
+    fn reject(&mut self, reason: &'static str, output: Output) -> Error {
+        self.rejected = Some(Rejected { reason, output });
+        self.fail(BackendError::Malformed)
+    }
+
+    /// The output that failed the decoder, when it failed on output it could not match.
+    pub fn rejected(&self) -> Option<Rejected> {
+        self.rejected
     }
 
     fn next_token(&mut self, index: usize) -> FrameToken {
@@ -464,14 +483,14 @@ impl<'a, B: Backend<N>, const N: usize> Decoder<'a, B, N> {
             || (output.width == self.config.display.width()
                 && output.height == self.config.display.height());
         if !size_ok {
-            return Err(self.fail(BackendError::Malformed));
+            return Err(self.reject("size", output));
         }
         let Some(unit) = self
             .pending
             .iter()
             .position(|unit| unit.is_some_and(|unit| unit.pts_us * 1000 == output.timestamp_ns))
         else {
-            return Err(self.fail(BackendError::Malformed));
+            return Err(self.reject("timestamp", output));
         };
 
         let placed = self

@@ -386,7 +386,10 @@ impl Stream {
         let finished = match result {
             Ok(step) => running.draining && step.progress.drained,
             Err(frontend_media::Error::Media(media_session::Error::Media(_))) => running.draining,
-            Err(_) => true,
+            Err(error) => {
+                log(&format!("stream: step failed {error:?}"));
+                true
+            }
         };
         if finished {
             self.close(client, renderer);

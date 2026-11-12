@@ -120,6 +120,7 @@ pub fn step<
         client.observe(tick.epoch, observation);
     }
     if overflow {
+        crate::render_platform::log("stream: more observations in one step than kept; retiring");
         crate::render_platform::retire_process();
         client.observe(tick.epoch, Observation::Failed);
         return Err(Error::ObservationOverflow);

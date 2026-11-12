@@ -1,3 +1,5 @@
+extern crate alloc;
+
 use crate::{
     render::Renderer,
     render_platform as platform,
@@ -93,6 +95,7 @@ impl<'a, B: Backend<N>, S: Socket, D: Device, V: VideoChannel, const N: usize, P
         match media.pump_network(now_ms) {
             Ok(()) => Ok(()),
             Err(failure) => {
+                platform::log(&alloc::format!("media: failed {failure:?}"));
                 let error = Error::Media(failure);
                 self.failure = Some(error);
                 report(RuntimeEvent::MediaFailed);
@@ -130,6 +133,7 @@ impl<'a, B: Backend<N>, S: Socket, D: Device, V: VideoChannel, const N: usize, P
         {
             Ok(progress) => progress,
             Err(failure) => {
+                platform::log(&alloc::format!("media: failed {failure:?}"));
                 let error = Error::Media(failure);
                 self.failure = Some(error);
                 report(RuntimeEvent::MediaFailed);
