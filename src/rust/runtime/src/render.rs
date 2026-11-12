@@ -2113,6 +2113,7 @@ impl Objects {
         deadline_ns: u64,
         audio: &mut dyn Pump,
     ) -> Result<(u32, bool), vk::Result> {
+        let start_ns = sdk::now_ns();
         loop {
             let left_ns = deadline_ns.saturating_sub(sdk::now_ns());
             let acquired = unsafe {
@@ -2127,7 +2128,13 @@ impl Objects {
                 Err(vk::Result::TIMEOUT | vk::Result::NOT_READY) if left_ns > SLICE_NS => {
                     audio.pump(sdk::now_ns() / 1_000_000)
                 }
-                result => return result,
+                result => {
+                    if result.is_ok() {
+                        let now_ns = sdk::now_ns();
+                        stream_stats::acquired(now_ns, now_ns - start_ns);
+                    }
+                    return result;
+                }
             }
         }
     }

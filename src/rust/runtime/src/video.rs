@@ -683,6 +683,7 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
         };
 
         self.stats.decoded += 1;
+        stream_stats::frame_ready(platform::now_ns());
         let Some(index) = self
             .arrivals
             .iter()
@@ -815,7 +816,7 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
                 self.poll_upload_pumping(renderer, audio)?;
             } else {
                 self.stats.late += 1;
-                stream_stats::shown_late();
+                stream_stats::shown_late(platform::now_ns());
             }
         }
         self.present_pumping(renderer, interactive, audio)

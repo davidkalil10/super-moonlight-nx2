@@ -65,6 +65,7 @@ pub fn clear() {
     IDR_WANTED.store(false, Ordering::Release);
     take_input();
     take_stages();
+    LAST_LATE_NS.store(0, Ordering::Relaxed);
 }
 
 pub fn input_sampled(now_ns: u64) {
@@ -315,10 +316,30 @@ pub fn take_decoder_text() -> Option<String> {
 
 static SHOWN_LATE: AtomicU32 = AtomicU32::new(0);
 static DISCARDED: AtomicU32 = AtomicU32::new(0);
+static LAST_LATE_NS: AtomicU64 = AtomicU64::new(0);
+static LATE_GAP_SUM_MS: AtomicU64 = AtomicU64::new(0);
+static LATE_GAPS: AtomicU32 = AtomicU32::new(0);
+static LATE_GAP_MIN_MS: AtomicU64 = AtomicU64::new(u64::MAX);
+static LATE_GAP_MAX_MS: AtomicU64 = AtomicU64::new(0);
+static VBLANK_NS: AtomicU64 = AtomicU64::new(0);
+static READY_PHASES: [AtomicU32; 4] = [const { AtomicU32::new(0) }; 4];
+
+/// An acquire that had to wait returns at a refresh: the reference for frame phases.
+const VBLANK_WAIT_NS: u64 = 500_000;
 
 /// A finished frame left in the decoder for the next refresh, behind one waiting to be shown.
-pub fn shown_late() {
+/// The time since the last one tells a clock drift, evenly spaced, from arrival jitter.
+pub fn shown_late(now_ns: u64) {
     SHOWN_LATE.fetch_add(1, Ordering::Relaxed);
+    let last = LAST_LATE_NS.swap(now_ns, Ordering::Relaxed);
+    if last == 0 {
+        return;
+    }
+    let gap_ms = now_ns.saturating_sub(last) / 1_000_000;
+    LATE_GAP_SUM_MS.fetch_add(gap_ms, Ordering::Relaxed);
+    LATE_GAPS.fetch_add(1, Ordering::Relaxed);
+    LATE_GAP_MIN_MS.fetch_min(gap_ms, Ordering::Relaxed);
+    LATE_GAP_MAX_MS.fetch_max(gap_ms, Ordering::Relaxed);
 }
 
 /// A frame replaced by a newer one before it was shown.
@@ -326,12 +347,46 @@ pub fn discarded() {
     DISCARDED.fetch_add(1, Ordering::Relaxed);
 }
 
-/// Frames held back and frames replaced since the last call.
+/// An acquire returned after `waited_ns`.
+pub fn acquired(now_ns: u64, waited_ns: u64) {
+    if waited_ns >= VBLANK_WAIT_NS {
+        VBLANK_NS.store(now_ns, Ordering::Relaxed);
+    }
+}
+
+/// A frame came out of the decoder: counts the quarter of the refresh it finished in.
+pub fn frame_ready(now_ns: u64) {
+    let vblank = VBLANK_NS.load(Ordering::Relaxed);
+    let Some(frame_ns) = frame_ns() else {
+        return;
+    };
+    let since = now_ns.saturating_sub(vblank);
+    if vblank == 0 || since > 1_000_000_000 {
+        return;
+    }
+    let quarter = (since % frame_ns * 4 / frame_ns) as usize;
+    READY_PHASES[quarter.min(3)].fetch_add(1, Ordering::Relaxed);
+}
+
+/// Frames held back and replaced since the last call, the spacing of the held ones and the
+/// quarter of the refresh frames finished in, counted from the last refresh an acquire saw.
 pub fn take_pacing_text() -> String {
+    let gaps = LATE_GAPS.swap(0, Ordering::Relaxed);
+    let sum = LATE_GAP_SUM_MS.swap(0, Ordering::Relaxed);
+    let min = LATE_GAP_MIN_MS.swap(u64::MAX, Ordering::Relaxed);
+    let max = LATE_GAP_MAX_MS.swap(0, Ordering::Relaxed);
+    let phase = |quarter: usize| READY_PHASES[quarter].swap(0, Ordering::Relaxed);
     format!(
-        "pacing late={} discarded={}",
+        "pacing late={} discarded={} late_gap_ms mean/min/max={}/{}/{} ready_quarter={}/{}/{}/{}",
         SHOWN_LATE.swap(0, Ordering::Relaxed),
-        DISCARDED.swap(0, Ordering::Relaxed)
+        DISCARDED.swap(0, Ordering::Relaxed),
+        sum.checked_div(u64::from(gaps)).unwrap_or(0),
+        if gaps == 0 { 0 } else { min },
+        max,
+        phase(0),
+        phase(1),
+        phase(2),
+        phase(3)
     )
 }
 
