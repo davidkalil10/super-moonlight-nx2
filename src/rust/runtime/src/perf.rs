@@ -11,8 +11,7 @@ pub enum Path {
     Copy,
     /// Our low-level session decoding straight into the renderer's frame slots.
     InPlace,
-    /// The SDK's `VideoDecoder` object, frames copied into the upload slot. Not working on
-    /// the console yet; kept for the comparison.
+    /// The SDK's `VideoDecoder` object, frames copied into the upload slot.
     Sdk,
 }
 
@@ -26,8 +25,15 @@ pub enum Latency {
     Newest,
 }
 
-static PATH: AtomicU8 = AtomicU8::new(0);
-static LATENCY: AtomicU8 = AtomicU8::new(0);
+/// The perf-chord build starts on the SDK decoder with the turn waking for its frame, the
+/// choices under test; the others keep the shipped `InPlace` and `Off`.
+#[cfg(feature = "perf-chord")]
+const FIRST: (u8, u8) = (2, 1);
+#[cfg(not(feature = "perf-chord"))]
+const FIRST: (u8, u8) = (0, 0);
+
+static PATH: AtomicU8 = AtomicU8::new(FIRST.0);
+static LATENCY: AtomicU8 = AtomicU8::new(FIRST.1);
 static BOOST: AtomicBool = AtomicBool::new(false);
 
 const PATHS: [Path; 3] = [Path::InPlace, Path::Copy, Path::Sdk];
