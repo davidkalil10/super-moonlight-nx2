@@ -323,7 +323,7 @@ impl Step {
 /// How many PCs remember the app last started on them.
 const PLAYED: usize = MAX_HOSTS;
 /// Settings categories, in the order the page lists them.
-pub const CATEGORIES: u8 = 5;
+pub const CATEGORIES: u8 = 4;
 
 /// What the badge over the video shows: nothing, the stream mode, or the mode with the live
 /// frame counter.

@@ -104,15 +104,6 @@ pub enum UiShader {
     Text,
 }
 
-/// Both modes present FIFO, once per refresh. LowLatency also waits for the previous frame
-/// before acquiring the next image, so input and video are sampled one frame later.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub enum PresentMode {
-    #[default]
-    Fifo,
-    LowLatency,
-}
-
 #[derive(Clone, Copy)]
 pub struct Config {
     pub width: u32,
@@ -123,7 +114,6 @@ pub struct Config {
     pub ui_shader: UiShader,
     pub window_mode: crate::display::WindowMode,
     pub frame_rates: Option<crate::display::FrameRates>,
-    pub present: PresentMode,
 }
 
 impl Default for Config {
@@ -137,7 +127,6 @@ impl Default for Config {
             ui_shader: UiShader::Text,
             window_mode: crate::display::WindowMode::Fixed,
             frame_rates: None,
-            present: PresentMode::Fifo,
         }
     }
 }
@@ -384,10 +373,9 @@ impl Renderer {
             return Err(error);
         }
         log(&format!(
-            "render: ready ui_shader={:?} cache={:?} present={:?} mode={}",
+            "render: ready ui_shader={:?} cache={:?} mode={}",
             config.ui_shader,
             renderer.objects.info.cache,
-            config.present,
             renderer.objects.info.present_mode
         ));
         Ok(renderer)
@@ -2095,9 +2083,7 @@ impl Objects {
         }
         let flight = self.next_flight;
         self.wait_flight(flight, WAIT_NS)?;
-        if self.config.present == PresentMode::LowLatency {
-            self.wait_flight((flight + 1) % 2, WAIT_NS)?;
-        }
+        self.wait_flight((flight + 1) % 2, WAIT_NS)?;
         let result = unsafe {
             self.swapchain_api().acquire_next_image(
                 self.swapchain,

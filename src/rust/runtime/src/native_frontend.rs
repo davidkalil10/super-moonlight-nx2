@@ -166,9 +166,7 @@ pub fn run() -> bool {
         directory.to_str().unwrap()
     ));
     let mut connections = NativeConnections { network: false };
-    let (_, saved_settings) = Store::new(files.clone()).load(&mut Box::new(Json::new()));
-    let low_latency = saved_settings.on(moonlight_nx2_ui::settings::Setting::LowLatency);
-    let mut renderer = match Renderer::open(render_config(low_latency)) {
+    let mut renderer = match Renderer::open(render_config()) {
         Ok(renderer) => renderer,
         Err(error) => {
             log(&format!("frontend: renderer open failed {error:?}"));
@@ -564,22 +562,13 @@ impl Turns {
 /// to 120 Hz may do so at a smaller size than its 60 Hz mode, and a layer left at 4K is then
 /// shown unscaled. The window opens without a 120 Hz or VRR request, so the console picks its
 /// own output mode; the frontend asks for 120 Hz only where `dock::requests_120hz` says so.
-fn render_config(low_latency: bool) -> Config {
+fn render_config() -> Config {
     Config {
         window_mode: WindowMode::PerMode {
             docked_width: 0,
             docked_height: 0,
         },
-        present: present_mode(low_latency),
         ..Config::default()
-    }
-}
-
-fn present_mode(low_latency: bool) -> crate::render::PresentMode {
-    if low_latency {
-        crate::render::PresentMode::LowLatency
-    } else {
-        crate::render::PresentMode::Fifo
     }
 }
 

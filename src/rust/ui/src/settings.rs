@@ -29,7 +29,6 @@ pub enum Setting {
     StreamInfo,
     FrameCounter,
     TouchMouse,
-    LowLatency,
     Theme,
     RumbleOn,
     Rumble,
@@ -37,7 +36,7 @@ pub enum Setting {
 }
 
 impl Setting {
-    pub const COUNT: usize = 16;
+    pub const COUNT: usize = 15;
     pub const ALL: [Setting; Self::COUNT] = [
         Setting::Size,
         Setting::Fps,
@@ -50,7 +49,6 @@ impl Setting {
         Setting::StreamInfo,
         Setting::FrameCounter,
         Setting::TouchMouse,
-        Setting::LowLatency,
         Setting::Theme,
         Setting::RumbleOn,
         Setting::Rumble,
@@ -69,8 +67,8 @@ impl Setting {
         self.row().label
     }
 
-    /// The pane of the Settings page the row sits in: Picture, Sound, Controls, Network or
-    /// This console, in that order.
+    /// The pane of the Settings page the row sits in: Picture, Sound, Controls or This
+    /// console, in that order.
     pub fn category(self) -> u8 {
         match self {
             Self::Size | Self::Fps | Self::Bitrate | Self::Codec | Self::Optimise => 0,
@@ -80,8 +78,7 @@ impl Setting {
             | Self::RumbleOn
             | Self::Rumble
             | Self::ButtonLayout => 2,
-            Self::LowLatency => 3,
-            Self::QuitOnReturn | Self::StreamInfo | Self::FrameCounter | Self::Theme => 4,
+            Self::QuitOnReturn | Self::StreamInfo | Self::FrameCounter | Self::Theme => 3,
         }
     }
 
@@ -96,7 +93,6 @@ impl Setting {
             Self::HostAudio => "Also play the sound on the PC",
             Self::MenuChord => "Hold + and \u{2212} for a second to open the stream menu",
             Self::TouchMouse => "Touches move the PC mouse instead of sending touch",
-            Self::LowLatency => "Applies after restarting the app",
             Self::QuitOnReturn => "Disconnect also quits the app on the PC",
             Self::StreamInfo => "A small badge with the stream mode over the video",
             Self::FrameCounter => "Adds the frame rate and delays to the badge",
@@ -304,7 +300,6 @@ const ROWS: [Row; Setting::COUNT] = [
     row("streamInfo", "Stream info badge", RowKind::Toggle, 2, 0),
     row("frameCounter", "Frame counter", RowKind::Toggle, 2, 0),
     row("touchMouse", "Touch as mouse", RowKind::Toggle, 2, 0),
-    row("lowLatency", "Low latency (restart)", RowKind::Toggle, 2, 0),
     row("theme", "Theme", RowKind::Theme, 3, 0),
     row("rumbleOn", "Rumble", RowKind::Toggle, 2, 1),
     row("rumble", "Rumble strength", RowKind::Percent, 5, 4),
@@ -1151,56 +1146,19 @@ mod rate_tests {
 }
 
 #[cfg(test)]
-mod low_latency_tests {
+mod retired_row_tests {
     use super::*;
 
     #[test]
-    fn low_latency_is_off_by_default_and_round_trips() {
+    fn a_saved_low_latency_choice_is_ignored() {
         let mut json = Json::new();
-        let legacy = Settings::from_json(br#"{"version":7,"touchMouse":true}"#, &mut json);
-        assert!(!legacy.on(Setting::LowLatency));
-        assert!(legacy.on(Setting::TouchMouse));
-        let enabled = legacy
-            .adjust(Setting::LowLatency, 1, false, &Capabilities::default())
-            .unwrap();
-        assert!(enabled.on(Setting::LowLatency));
-        let loaded = Settings::from_json(enabled.to_json().as_str().as_bytes(), &mut json);
-        assert!(loaded.on(Setting::LowLatency));
+        let loaded = Settings::from_json(
+            br#"{"version":9,"touchMouse":true,"lowLatency":true,"theme":"dark"}"#,
+            &mut json,
+        );
         assert!(loaded.on(Setting::TouchMouse));
-    }
-    #[derive(Default)]
-    struct MemoryFiles {
-        slots: [Option<alloc::vec::Vec<u8>>; 2],
-    }
-
-    impl crate::store::Files for MemoryFiles {
-        fn read(&mut self, name: &str, output: &mut [u8]) -> Option<usize> {
-            let index = crate::store::SLOTS.iter().position(|slot| *slot == name)?;
-            let bytes = self.slots[index].as_ref()?;
-            output.get_mut(..bytes.len())?.copy_from_slice(bytes);
-            Some(bytes.len())
-        }
-
-        fn write(&mut self, name: &str, bytes: &[u8]) -> bool {
-            let Some(index) = crate::store::SLOTS.iter().position(|slot| *slot == name) else {
-                return false;
-            };
-            self.slots[index] = Some(bytes.into());
-            true
-        }
-    }
-
-    #[test]
-    fn low_latency_survives_settings_store_reload() {
-        let mut store = crate::store::Store::new(MemoryFiles::default());
-        let mut json = Json::new();
-        let enabled = Settings::default()
-            .adjust(Setting::LowLatency, 1, false, &Capabilities::default())
-            .unwrap();
-        assert!(store.save(&enabled, &mut json));
-        let (source, loaded) = store.load(&mut json);
-        assert_eq!(source, crate::store::Source::Loaded);
-        assert!(loaded.on(Setting::LowLatency));
+        assert_eq!(loaded.theme(), crate::theme::Preference::Dark);
+        assert!(!loaded.to_json().as_str().contains("lowLatency"));
     }
 }
 

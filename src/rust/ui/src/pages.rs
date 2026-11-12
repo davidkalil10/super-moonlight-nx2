@@ -47,7 +47,7 @@ const DIALOG_HEIGHT: u32 = 460;
 const DIALOG_BUTTON: u32 = 88;
 const PAIRING_HEIGHT: u32 = 520;
 const CATEGORY_WIDTH: u32 = 460;
-const CONSOLE_CATEGORY: u8 = 4;
+const CONSOLE_CATEGORY: u8 = 3;
 const CATEGORY_HEIGHT: u32 = 80;
 const PANE_GAP: u32 = 58;
 const PANE_X: u32 = SIDE + CATEGORY_WIDTH + PANE_GAP;
@@ -807,7 +807,7 @@ impl Builder<'_> {
 
     fn category_list(&mut self, model: &Model) {
         let pal = self.pal;
-        let names = ["Picture", "Sound", "Controls", "Network", "This console"];
+        let names = ["Picture", "Sound", "Controls", "This console"];
         for (i, name) in (0u32..).zip(names) {
             let y = BODY_Y + 16 + i * (CATEGORY_HEIGHT + 12);
             self.item(

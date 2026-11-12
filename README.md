@@ -74,7 +74,6 @@ Open **Settings** before launching a game. An app can keep its own picture optio
 | Stream info badge | A small badge with the stream mode over the video |
 | Frame counter | Adds the frame rate and delays to the badge |
 | Touch as mouse | Touches move the PC mouse instead of sending touch |
-| Low latency (restart) | Applies after restarting the app |
 | Theme | System, light or dark |
 | Rumble | On / Off |
 | Rumble strength | Strength of the controller vibration |
