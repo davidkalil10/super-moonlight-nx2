@@ -279,6 +279,7 @@ struct Objects {
     next_flight: usize,
     slot_readers: [usize; 2],
     current_slot: Option<usize>,
+    current_layout: Option<frame::Layout>,
     sequence: u32,
     rebuild: bool,
     retained: bool,
@@ -363,6 +364,7 @@ impl Renderer {
                 next_flight: 0,
                 slot_readers: [0; 2],
                 current_slot: None,
+                current_layout: None,
                 sequence: 0,
                 rebuild: false,
                 retained: false,
@@ -512,7 +514,16 @@ impl Renderer {
         let sequence = self.objects.sequence;
         layout.publish(self.objects.storage.bytes_mut(), slot, sequence)?;
         self.objects.current_slot = Some(slot);
+        self.objects.current_layout = Some(layout);
         Ok(slot)
+    }
+
+    /// The layout of the frame the next present shows, and how much detail its slot holds.
+    pub fn shown_detail(&mut self) -> Option<(frame::Layout, frame::Detail)> {
+        let slot = self.objects.current_slot?;
+        let layout = self.objects.current_layout?;
+        let detail = layout.detail(self.slot_bytes(slot))?;
+        Some((layout, detail))
     }
 
     pub fn present(&mut self, interactive: bool) -> Result<(), Error> {

@@ -47,6 +47,15 @@ pub struct Frame<'a> {
     pub timestamp_ns: u64,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct Detail {
+    pub across: u32,
+    pub down: u32,
+    pub luma: u32,
+    pub blue: u32,
+    pub red: u32,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Layout {
     pub width: u32,
@@ -215,6 +224,48 @@ impl Layout {
         self.stride as usize * self.slice_height as usize * 3 / 2
     }
 
+    /// The mean step between neighbouring pixels across and down the picture in `slot`, in
+    /// hundredths, over every eighth row, and its mean luma and chroma. A softer copy of the
+    /// same picture steps less.
+    pub fn detail(&self, slot: &[u8]) -> Option<Detail> {
+        let (width, height, stride) = (
+            self.width as usize,
+            self.height as usize,
+            self.stride as usize,
+        );
+        if width < 2 || height < 2 || slot.len() < self.bytes() {
+            return None;
+        }
+        let chroma = &slot[stride * self.slice_height as usize..];
+        let mut sums = [0u64; 5];
+        let mut rows = 0u64;
+        for y in (0..height - 1).step_by(8) {
+            let line = &slot[y * stride..y * stride + width];
+            let below = &slot[(y + 1) * stride..(y + 1) * stride + width];
+            let pairs = &chroma[y / 2 * stride..y / 2 * stride + width / 2 * 2];
+            for x in 0..width {
+                if x + 1 < width {
+                    sums[0] += u64::from(line[x].abs_diff(line[x + 1]));
+                }
+                sums[1] += u64::from(line[x].abs_diff(below[x]));
+                sums[2] += u64::from(line[x]);
+            }
+            for pair in pairs.chunks_exact(2) {
+                sums[3] += u64::from(pair[0]);
+                sums[4] += u64::from(pair[1]);
+            }
+            rows += 1;
+        }
+        let mean = |sum: u64, count: u64| (sum * 100 / count) as u32;
+        Some(Detail {
+            across: mean(sums[0], rows * (width as u64 - 1)),
+            down: mean(sums[1], rows * width as u64),
+            luma: mean(sums[2], rows * width as u64),
+            blue: mean(sums[3], rows * (width as u64 / 2).max(1)),
+            red: mean(sums[4], rows * (width as u64 / 2).max(1)),
+        })
+    }
+
     pub fn publish(&self, storage: &mut [u8], slot: usize, sequence: u32) -> Result<(), Error> {
         if slot >= VIDEO_SLOTS || storage.len() < VIDEO_BASE + VIDEO_SLOTS * VIDEO_SLOT_BYTES {
             return Err(Error::Invalid);
@@ -295,5 +346,29 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn a_blurred_picture_has_less_detail() {
+        let layout = Layout::coded(64, 16, 64, 16, Matrix::Bt709).unwrap();
+        let mut sharp = [128u8; 64 * 16 * 3 / 2];
+        for (index, byte) in sharp[..64 * 16].iter_mut().enumerate() {
+            *byte = if (index % 64 + index / 64) % 2 == 0 {
+                0
+            } else {
+                200
+            };
+        }
+        let mut soft = sharp;
+        for byte in &mut soft[..64 * 16] {
+            *byte = *byte / 4 + 75;
+        }
+        let sharp = layout.detail(&sharp).unwrap();
+        let soft = layout.detail(&soft).unwrap();
+        assert_eq!(
+            (sharp.across, sharp.down, sharp.blue, sharp.red),
+            (20000, 20000, 12800, 12800)
+        );
+        assert!(soft.across < sharp.across && soft.down < sharp.down);
     }
 }

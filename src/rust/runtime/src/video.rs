@@ -129,6 +129,8 @@ impl Timing {
 /// How long a finished frame waits for an upload slot. The slot of the frame before last is
 /// still read by the GPU for a moment after its present.
 const STAGING_WAIT_NS: u64 = 2_000_000;
+/// The frame whose picture is measured once a stream, a second in at 120 frames a second.
+const DETAIL_FRAME: u64 = 120;
 /// The share of a turn, in percent, a turn may spend waiting for its unit's frame. The rest
 /// is left for the upload, the present and input.
 const WAKE_SHARE: u64 = 55;
@@ -445,6 +447,12 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
         hosted: Hosted,
     ) -> Result<bool, Error> {
         let image = hosted.image;
+        if self.stats.decoded == 1 {
+            platform::log(&format!(
+                "video: host frame pitch={} rows={} luma_offset={} chroma_offset={} bytes={}",
+                image.pitch, image.rows, image.luma_offset, image.chroma_offset, image.bytes
+            ));
+        }
         let layout = Layout::coded(
             image.pitch,
             image.rows,
@@ -659,6 +667,12 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
             self.drop_frame(&info)?;
             return Ok(false);
         }
+        let source = match (info.placed, info.hosted, slot) {
+            (Some(_), _, _) => "placed",
+            (None, Some(_), _) => "hosted",
+            (None, None, Some(_)) if info.staged => "staged",
+            _ => "copied",
+        };
         let uploaded = match (info.placed, info.hosted, slot) {
             (Some(placed), _, _) => self.publish_placed(renderer, &info, placed),
             (None, Some(hosted), _) => self.publish_hosted(renderer, &info, hosted),
@@ -671,6 +685,11 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
             return Ok(false);
         }
         self.stats.uploaded += 1;
+        if self.stats.uploaded == DETAIL_FRAME && self.host_import != Some(true) {
+            if let Some((layout, detail)) = renderer.shown_detail() {
+                platform::log(&format!("video: shown {source} {layout:?} {detail:?}"));
+            }
+        }
         if self.pending {
             self.stats.caught_up += 1;
         }
