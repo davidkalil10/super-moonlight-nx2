@@ -688,6 +688,10 @@ impl Backend for SdkVideo {
 
     /// The SDK decoder's images, or the heap pool `Path::InPlace` falls back to when the
     /// renderer's slots are refused. `Path::Copy` keeps the CPU copy to compare against.
+    fn closes_after_malformed(&self) -> bool {
+        self.high_level()
+    }
+
     fn host_images(&self) -> bool {
         self.high_level() || (self.path == Path::InPlace && self.placements[0].is_none())
     }

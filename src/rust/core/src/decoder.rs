@@ -110,6 +110,12 @@ pub trait Backend<const N: usize = SURFACES> {
         let _ = surface;
         None
     }
+
+    /// Whether the backend still closes cleanly after output the decoder could not match to
+    /// a unit, as when it owns all of its memory, so such output fails only this session.
+    fn closes_after_malformed(&self) -> bool {
+        false
+    }
 }
 
 /// Output the decoder could not match to its surfaces or units.
@@ -297,6 +303,9 @@ impl<'a, B: Backend<N>, const N: usize> Decoder<'a, B, N> {
 
     fn fail(&mut self, error: BackendError) -> Error {
         self.failed = true;
+        if error == BackendError::Malformed && self.backend.closes_after_malformed() {
+            return Error::Refused;
+        }
         if error.uncertain() {
             self.uncertain = true;
             self.retired.set(true);
