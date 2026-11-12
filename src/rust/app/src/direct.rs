@@ -1,5 +1,5 @@
-//! The control-v1 link answered on the console itself: list, pair, unpair, quit and covers go
-//! straight to Sunshine, and start launches the app and runs its RTSP and control handshakes.
+//! The control-v1 link answered on the console itself: list, pair, quit and covers go straight
+//! to Sunshine, unpair only forgets the host's key on the console, and start launches the app and runs its RTSP and control handshakes.
 //! Once control is up the start answers with a stream frame and the runtime opens media from
 //! the live session.
 //! Design: moonlight-nx2-dev/src/rust/sunshine/README.md.
@@ -147,7 +147,6 @@ enum Step {
     SecureInfo,
     AppList,
     Asset,
-    Unpair,
     Cancel,
     Pair(Stage),
     Launch { app: u32, resume: bool },
@@ -506,7 +505,7 @@ impl<D: Dial> DirectLink<D> {
         }
         self.pump_live(now_ms);
         if self.active.is_none() {
-            self.begin(now_ms);
+            self.begin(files, now_ms);
         }
         let Some(active) = self.active.as_mut() else {
             return;
@@ -542,7 +541,7 @@ impl<D: Dial> DirectLink<D> {
         self.go(next, now_ms);
     }
 
-    fn begin(&mut self, now_ms: u64) {
+    fn begin(&mut self, files: &mut impl Files, now_ms: u64) {
         let Some((id, job)) = self.queue.pop_front() else {
             return;
         };
@@ -579,7 +578,7 @@ impl<D: Dial> DirectLink<D> {
                 Next::Call(Step::Cancel)
             }
             Job::Quit => Next::Call(Step::PlainInfo),
-            Job::Unpair => Next::Call(Step::Unpair),
+            Job::Unpair => self.unpaired(files),
             Job::Cover { app, offset } => match &self.cover {
                 Some((cached, png)) if *cached == app => self.cover_chunk(app, png, offset),
                 _ if !self.paired() => failure("not_paired", NOT_PAIRED),
@@ -665,7 +664,6 @@ impl<D: Dial> DirectLink<D> {
                     format!("/appasset?{query}&appid={app}&AssetType=2&AssetIdx=0"),
                 )
             }
-            Step::Unpair => (false, format!("/unpair?{query}")),
             Step::Cancel => (true, format!("/cancel?{query}")),
             Step::Launch { app, resume } => {
                 let (Some(start), Some(key)) = (active.start.as_ref(), active.key.as_ref()) else {
@@ -747,9 +745,6 @@ impl<D: Dial> DirectLink<D> {
     ) -> Next {
         let active = self.active.as_mut().expect("active");
         let job = active.job;
-        if step == Step::Unpair {
-            return self.unpaired(files);
-        }
         if let Some(failed) = active.failed.take() {
             self.dial.log(&format!("direct: cancelled the Sunshine session ok={}", outcome.is_ok()));
             return Next::Reply(Kind::Error, failed);
@@ -835,7 +830,6 @@ impl<D: Dial> DirectLink<D> {
                 _ => Next::Call(Step::SecureInfo),
             },
             Step::Pair(_) => self.paired_step(body, files),
-            Step::Unpair => self.unpaired(files),
             Step::Launch { resume, .. } => match launch::parse(body, resume) {
                 Ok(port) => {
                     let active = self.active.as_mut().expect("active");
