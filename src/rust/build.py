@@ -39,8 +39,8 @@ PRODUCTION = {
     "production": "frontend",
     "production-tcp": "frontend,video-tcp",
     "production-120-decode": "frontend,sdk-video-120-decode",
-    "production-pattern": "frontend,ui-pattern",
-    "production-uncached": "frontend,ui-pattern,ui-uncached",
+    "production-pattern": "frontend,ui-pattern,ui-page-check",
+    "production-uncached": "frontend,ui-pattern,ui-page-check,ui-uncached",
     "production-perf": "frontend,ui-pattern,perf-chord",
 }
 # Diagnostics of the SDK video decoder: the frontend with reference clips replayed first.

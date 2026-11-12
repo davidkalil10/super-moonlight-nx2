@@ -127,9 +127,9 @@ pub struct Client<F> {
     pub bridge: Box<Bridge<F>>,
     #[cfg(feature = "ui-pattern")]
     filter_step: usize,
-    #[cfg(feature = "ui-pattern")]
+    #[cfg(feature = "ui-page-check")]
     page_checks: u32,
-    #[cfg(feature = "ui-pattern")]
+    #[cfg(feature = "ui-page-check")]
     page_check_bad: u32,
     composer: Composer,
     hosts: Store<F>,
@@ -289,9 +289,9 @@ impl<F: Files + Clone> Client<F> {
             bridge,
             #[cfg(feature = "ui-pattern")]
             filter_step: 2,
-            #[cfg(feature = "ui-pattern")]
+            #[cfg(feature = "ui-page-check")]
             page_checks: 0,
-            #[cfg(feature = "ui-pattern")]
+            #[cfg(feature = "ui-page-check")]
             page_check_bad: 0,
             composer: Composer::new(Glyphs::new(atlas).ok_or(Error::Atlas)?, 0),
             hosts,
@@ -422,7 +422,7 @@ impl<F: Files + Clone> Client<F> {
             self.refresh_stream_stats();
         }
         let storage = storage(bytes)?;
-        #[cfg(feature = "ui-pattern")]
+        #[cfg(feature = "ui-page-check")]
         {
             self.bridge.enable_check(storage);
             if let Some(agrees) = self.bridge.check_page(storage) {
