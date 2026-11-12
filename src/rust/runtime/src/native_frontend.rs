@@ -230,8 +230,10 @@ fn execute(
     let mut system = crate::system::System::start(unsafe { sdk::moonlightNowNs() } / 1_000_000);
     let mut second = start;
     let (mut publishes, mut busy_publishes) = ([0u32; 2], [0u32; 2]);
+    let mut turns = Turns::default();
     while unsafe { sdk::appletMainLoop() } && !app.exiting() && !sdk::process_retired() {
         let now = unsafe { sdk::moonlightNowNs() };
+        turns.begin(now);
         let input = match sampler
             .read(renderer, app.screen() != Screen::Streaming)
             .and_then(|_| input_gate.filter(renderer.input_mut()?))
@@ -278,6 +280,7 @@ fn execute(
         if input.raw_buttons & (1 << 10) != 0 && app.screen() != Screen::Streaming {
             app.client.event(&Event::AppGone);
         }
+        turns.lap(Phase::Input);
         let frame = match renderer
             .storage_mut()
             .ok()
@@ -303,6 +306,7 @@ fn execute(
                 publishes[1]
             ));
         }
+        turns.lap(Phase::Frame);
         let now_ms = now / 1_000_000;
         for request in app.take_media() {
             match request {
@@ -323,15 +327,20 @@ fn execute(
         system.tick(&mut app, renderer, now_ms);
         app.client
             .update_native_stats(crate::stream_stats::latest());
+        turns.lap(Phase::Stream);
         if !system.in_focus() {
             unsafe { sdk::svcSleepThread(16_000_000) };
-        } else if !presented
-            && let Err(error) = renderer.present(compute)
-            && error != crate::render::Error::Busy
-        {
-            failed = true;
-            break;
+        } else if !presented {
+            match renderer.present(compute) {
+                Ok(()) => turns.ui_presents += 1,
+                Err(crate::render::Error::Busy) => {}
+                Err(_) => {
+                    failed = true;
+                    break;
+                }
+            }
         }
+        turns.lap(Phase::Present);
         let screen = app.screen();
         if now.saturating_sub(polled) >= 250_000_000 {
             polled = now;
@@ -418,11 +427,13 @@ fn execute(
                 ));
                 last_mode = Some(mode);
             }
+            let (ui, longest_ms, phase) = turns.take();
             log(&format!(
-                "display: presents={rate}/s {}x{}@{hz} docked={}",
+                "display: presents={rate}/s {}x{}@{hz} docked={} ui={ui} longest_ms={longest_ms} in={}",
                 info.width,
                 info.height,
-                dock.current()
+                dock.current(),
+                phase.name()
             ));
         }
         if last_screen != Some(screen) {
@@ -453,6 +464,8 @@ fn execute(
             }
             second = now;
         }
+        turns.lap(Phase::Other);
+        turns.end();
     }
     stream.close(&mut app.client, renderer);
     system.stop();
@@ -466,6 +479,80 @@ fn execute(
         "frontend: summary {stats:?} settings_changed={changed} settings_persisted={persisted} local_start_blocked={blocked_start} close={closed}"
     ));
     !failed && closed && stats.frames > 0
+}
+
+#[derive(Clone, Copy, Default)]
+enum Phase {
+    #[default]
+    Input,
+    Frame,
+    Stream,
+    Present,
+    Other,
+}
+
+impl Phase {
+    const ALL: [Phase; 5] = [
+        Phase::Input,
+        Phase::Frame,
+        Phase::Stream,
+        Phase::Present,
+        Phase::Other,
+    ];
+
+    fn name(self) -> &'static str {
+        match self {
+            Self::Input => "input",
+            Self::Frame => "frame",
+            Self::Stream => "stream",
+            Self::Present => "present",
+            Self::Other => "other",
+        }
+    }
+}
+
+/// The longest frame loop turn since the last report, the phase that took most of it, and the
+/// presents the loop made itself rather than the stream. A stream's own present and its wait
+/// for the refresh count in `Stream`, a UI screen's in `Present`.
+#[derive(Default)]
+struct Turns {
+    start: u64,
+    mark: u64,
+    phases: [u64; 5],
+    longest: (u64, Phase),
+    ui_presents: u32,
+}
+
+impl Turns {
+    fn begin(&mut self, now: u64) {
+        self.start = now;
+        self.mark = now;
+        self.phases = [0; 5];
+    }
+
+    fn lap(&mut self, phase: Phase) {
+        let now = unsafe { sdk::moonlightNowNs() };
+        self.phases[phase as usize] += now.saturating_sub(self.mark);
+        self.mark = now;
+    }
+
+    fn end(&mut self) {
+        let total = self.mark.saturating_sub(self.start);
+        if total > self.longest.0 {
+            let slowest = Phase::ALL
+                .into_iter()
+                .max_by_key(|phase| self.phases[*phase as usize])
+                .unwrap_or_default();
+            self.longest = (total, slowest);
+        }
+    }
+
+    fn take(&mut self) -> (u32, u64, Phase) {
+        let report = (self.ui_presents, self.longest.0 / 1_000_000, self.longest.1);
+        self.longest = (0, Phase::default());
+        self.ui_presents = 0;
+        report
+    }
 }
 
 /// Docked, the window takes the size the console outputs (0x0), and follows it: a TV that goes
