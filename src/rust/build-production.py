@@ -13,9 +13,9 @@ from build import BUILDS, SDK_DIAGNOSTICS, TRIALS, digest, git, utc_stamp, write
 APP = Path(__file__).resolve().parents[2]
 REMOTE_BUILDS = Path("/Users/azkali/claude-builds/moonlight")
 FOUNDATION = REMOTE_BUILDS / "20261109T060400Z-ae67243-rust-foundation"
-SDK = REMOTE_BUILDS / "20261111-sdk/sdk"
-SDK_ARCHIVE = "ounce-sdk-20261111.tar.xz"
-SDK_SHA256 = "40db6b5aed4e3bf9cd8e464bd09ac1bb2d0d8eedf992cbceadd40828f2021610"
+SDK = REMOTE_BUILDS / "20261112c-sdk/sdk"
+SDK_ARCHIVE = "ounce-sdk-20261112c.tar.xz"
+SDK_SHA256 = "84da7a42deaa2233965d8e73077837773433c6d22a112395d311a7c5348ba3fc"
 BUILDER_IMAGE = "sha256:1fc388c3a0d34bd2045a6dadcb1020e069d5f876a187fd705de14b4440c00282"
 
 
