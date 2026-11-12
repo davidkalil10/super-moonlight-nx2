@@ -17,6 +17,17 @@ pub const UNITS: usize = 2;
 pub const INPUT_MAX: usize = 1024 * 1024;
 static NEXT_OWNER: AtomicU64 = AtomicU64::new(1);
 
+/// Rows or columns a decoder may pad its pictures with beyond the stream's size.
+const PADDING: u32 = 16;
+
+/// Whether a decoded picture holds the stream: the coded size, or the display size padded by
+/// up to `PADDING`, as the SDK decoder gives 1920x1082 for a 1920x1080 stream.
+fn fits(output: Output, coded: Size, display: Size) -> bool {
+    let padded = |size: u32, wanted: u32| (wanted..=wanted + PADDING).contains(&size);
+    (output.width == coded.width() && output.height == coded.height())
+        || (padded(output.width, display.width()) && padded(output.height, display.height()))
+}
+
 fn allocate_owner() -> Option<u64> {
     let mut owner = NEXT_OWNER.load(Ordering::Relaxed);
     loop {
@@ -487,11 +498,7 @@ impl<'a, B: Backend<N>, const N: usize> Decoder<'a, B, N> {
             return Ok(None);
         }
         let output = self.metadata(surface)?;
-        let size_ok = (output.width == self.config.coded.width()
-            && output.height == self.config.coded.height())
-            || (output.width == self.config.display.width()
-                && output.height == self.config.display.height());
-        if !size_ok {
+        if !fits(output, self.config.coded, self.config.display) {
             return Err(self.reject("size", output));
         }
         let Some(unit) = self
@@ -618,6 +625,42 @@ impl<B: Backend<N>, const N: usize> Drop for Decoder<'_, B, N> {
     fn drop(&mut self) {
         if !self.closed && !self.close_attempted {
             let _ = self.close();
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn output(width: u32, height: u32) -> Output {
+        Output {
+            image: 1,
+            width,
+            height,
+            display_width: width,
+            display_height: height,
+            color: 1,
+            timestamp_ns: 0,
+            end_of_stream: false,
+        }
+    }
+
+    #[test]
+    fn padded_pictures_fit_the_stream() {
+        let coded = Size::new(1920, 1088).unwrap();
+        let display = Size::new(1920, 1080).unwrap();
+        for (width, height) in [(1920, 1080), (1920, 1082), (1920, 1088), (1936, 1096)] {
+            assert!(
+                fits(output(width, height), coded, display),
+                "{width}x{height}"
+            );
+        }
+        for (width, height) in [(1920, 1078), (1904, 1080), (1920, 1098), (3840, 2160)] {
+            assert!(
+                !fits(output(width, height), coded, display),
+                "{width}x{height}"
+            );
         }
     }
 }
