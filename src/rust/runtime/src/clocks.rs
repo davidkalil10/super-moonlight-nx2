@@ -8,6 +8,10 @@ use crate::device::log;
 use alloc::format;
 
 const READ_MS: u64 = 1000;
+/// The module ids searched once a stream when the decoder's clock does not open by its id.
+const SCAN_FIRST: u32 = 0x4000_0001;
+const SCAN_COUNT: u32 = 0x80;
+const SCAN_MAX: usize = 64;
 /// How long after a clock change the clocks are read, so the line shows the new rates.
 const SETTLE_MS: u64 = 250;
 
@@ -20,12 +24,14 @@ struct Reading {
     apm: u32,
     clkrst: [u32; 5],
     ids: [u32; 5],
+    pcv: u32,
 }
 
 const NVDEC: usize = 3;
 
 unsafe extern "C" {
     fn moonlightClocksRead(out: *mut Reading);
+    fn moonlightClocksScan(first: u32, count: u32, ids: *mut u32, hz: *mut u32, max: u32) -> u32;
     fn moonlightClocksDecoderRates(
         rates: *mut u32,
         max: i32,
@@ -80,9 +86,14 @@ impl Clocks {
             reading.clkrst
         ));
         if first {
-            log(&format!("clocks: module ids={:x?}", reading.ids));
+            log(&format!(
+                "clocks: module ids={:x?} pcv=0x{:x}",
+                reading.ids, reading.pcv
+            ));
             if reading.clkrst[NVDEC] == 0 {
                 log_decoder_rates();
+            } else {
+                log_scan();
             }
         }
     }
@@ -128,6 +139,27 @@ fn log_decoder_rates() {
     log(&format!(
         "clocks: nvdec rates result=0x{result:x} type={kind} MHz={mhz:?}"
     ));
+}
+
+/// Every module clkrst opens near the first console's ids, with its rate, for finding the
+/// decoder's and the image compositor's clocks on this one.
+fn log_scan() {
+    let mut ids = [0u32; SCAN_MAX];
+    let mut hz = [0u32; SCAN_MAX];
+    let found = unsafe {
+        moonlightClocksScan(
+            SCAN_FIRST,
+            SCAN_COUNT,
+            ids.as_mut_ptr(),
+            hz.as_mut_ptr(),
+            SCAN_MAX as u32,
+        )
+    } as usize;
+    let mut line = alloc::string::String::from("clocks: modules");
+    for (id, hz) in ids.iter().zip(hz.iter()).take(found.min(SCAN_MAX)) {
+        line.push_str(&format!(" {id:x}={}", hz / 1_000_000));
+    }
+    log(&line);
 }
 
 impl Drop for Clocks {
