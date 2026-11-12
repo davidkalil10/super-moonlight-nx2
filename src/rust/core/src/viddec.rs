@@ -33,6 +33,12 @@ pub struct Session {
 const FRAME_RATE_MAX: u32 = 60;
 const FRAME_RATE_MAX_2160P: u32 = 30;
 
+/// The rate to ask for first where the service may take more than `Session::frame_rate`,
+/// with that rate to fall back to.
+pub fn frame_rate_to_try(display: Size, fps: u32) -> u32 {
+    fps.min(FRAME_RATE_MAX).max(frame_rate(display, fps))
+}
+
 fn frame_rate(display: Size, fps: u32) -> u32 {
     if display.width() > 2560 || display.height() > 1440 {
         fps.min(FRAME_RATE_MAX_2160P)
