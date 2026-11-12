@@ -317,7 +317,7 @@ fn execute(
                 MediaRequest::Close => stream.begin_close(&mut app.client, now_ms),
             }
         }
-        stream.pump(&mut app.client, now_ms);
+        stream.pump(&mut app.client, renderer, now_ms);
         let compute = app.client.needs_ui_compute(&input, &frame);
         let presented = stream.step(&mut app.client, renderer, &input, now_ms, compute);
         system.tick(&mut app, renderer, now_ms);
@@ -454,7 +454,7 @@ fn execute(
             second = now;
         }
     }
-    stream.close(&mut app.client);
+    stream.close(&mut app.client, renderer);
     system.stop();
     let changed = *app.client.bridge.model().settings() != original;
     let final_settings = *app.client.bridge.model().settings();

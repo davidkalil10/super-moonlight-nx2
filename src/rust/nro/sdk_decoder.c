@@ -128,6 +128,39 @@ Result moonlightSdkDecoderOutput(uint32_t surface, MoonlightSdkDecoderOutput *ou
     return 0;
 }
 
+typedef struct {
+    uint8_t *base;
+    uint64_t bytes;
+    uint64_t luma_offset;
+    uint64_t chroma_offset;
+    uint32_t pitch;
+    uint32_t rows;
+} MoonlightSdkDecoderHost;
+
+/* Where a held pitch-linear frame sits in its image's backing, for a reader of that memory. */
+Result moonlightSdkDecoderHost(uint32_t surface, MoonlightSdkDecoderHost *out)
+{
+    if (surface >= sdk.count || !sdk.held[surface])
+        return MAKERESULT(Module_Libnx, LibnxError_BadInput);
+    const VideoFrame *frame = &sdk.frames[surface];
+    if (frame->slot >= sdk.decoder.image_count || !frame->planes[0] || !frame->planes[1] ||
+        frame->pitches[0] != frame->pitches[1])
+        return MAKERESULT(Module_Libnx, LibnxError_NotFound);
+    const VideoDecoderImage *image = &sdk.decoder.images[frame->slot];
+    uint8_t *base = image->backing;
+    if (frame->planes[0] < base || frame->planes[1] < base)
+        return MAKERESULT(Module_Libnx, LibnxError_ShouldNotHappen);
+    *out = (MoonlightSdkDecoderHost){
+        .base = base,
+        .bytes = image->backing_size,
+        .luma_offset = (uint64_t)(frame->planes[0] - base),
+        .chroma_offset = (uint64_t)(frame->planes[1] - base),
+        .pitch = frame->pitches[0],
+        .rows = frame->height,
+    };
+    return 0;
+}
+
 Result moonlightSdkDecoderRead(uint32_t surface, uint8_t *luma, uint8_t *chroma, size_t pitch,
                                size_t rows, uint32_t *source_pitch)
 {

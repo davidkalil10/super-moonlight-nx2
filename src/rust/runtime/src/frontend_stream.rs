@@ -325,14 +325,19 @@ impl Stream {
         running.session.begin_drain(now_ms);
     }
 
-    pub fn pump<F: Files + Clone>(&mut self, client: &mut Client<F>, now_ms: u64) {
+    pub fn pump<F: Files + Clone>(
+        &mut self,
+        client: &mut Client<F>,
+        renderer: &mut Renderer,
+        now_ms: u64,
+    ) {
         let Some(running) = self.running.as_mut() else {
             return;
         };
         let result =
             frontend_media::pump_network(&mut running.session, client, running.epoch, now_ms);
         if result == Err(frontend_media::Error::Stale) {
-            self.close(client);
+            self.close(client, renderer);
         }
     }
 
@@ -384,7 +389,7 @@ impl Stream {
             Err(_) => true,
         };
         if finished {
-            self.close(client);
+            self.close(client, renderer);
         }
         presented
     }
@@ -433,11 +438,16 @@ impl Stream {
         ));
     }
 
-    pub fn close<F: Files + Clone>(&mut self, client: &mut Client<F>) {
+    /// Closes the stream. The renderer lets go of the decoder's memory first, since closing
+    /// the decoder frees it.
+    pub fn close<F: Files + Clone>(&mut self, client: &mut Client<F>, renderer: &mut Renderer) {
         self.report();
         let Some(mut running) = self.running.take() else {
             return;
         };
+        if let Err(error) = renderer.forget_imports() {
+            log(&format!("stream: renderer kept its imports {error:?}"));
+        }
         let closed = frontend_media::close(&mut running.session, client, running.epoch);
         drop(running.session);
         let freed = closed.is_some_and(|closed| {

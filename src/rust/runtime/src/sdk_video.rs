@@ -15,7 +15,7 @@ use alloc::format;
 use moonlight_nx2_core::{
     annexb,
     codec::{Capabilities, Codec, Depth, Evidence, Mode, Size},
-    decoder::{Backend, BackendError, Config, INPUT_MAX, Placement, SURFACES, UNITS},
+    decoder::{Backend, BackendError, Config, HostImage, INPUT_MAX, Placement, SURFACES, UNITS},
     viddec,
     video_wire::Output,
 };
@@ -74,6 +74,30 @@ struct Layout {
     offset: [u32; 2],
 }
 
+/// A held frame in its SDK image's backing, as `moonlightSdkDecoderHost` gives it.
+#[repr(C)]
+struct Host {
+    base: *mut u8,
+    bytes: u64,
+    luma_offset: u64,
+    chroma_offset: u64,
+    pitch: u32,
+    rows: u32,
+}
+
+impl Default for Host {
+    fn default() -> Self {
+        Self {
+            base: core::ptr::null_mut(),
+            bytes: 0,
+            luma_offset: 0,
+            chroma_offset: 0,
+            pitch: 0,
+            rows: 0,
+        }
+    }
+}
+
 impl Layout {
     /// Both planes a whole number of rows apart from the start of the slot, as the renderer
     /// reads a frame.
@@ -125,6 +149,7 @@ unsafe extern "C" {
         source_pitch: *mut u32,
     ) -> u32;
     fn moonlightSdkDecoderRelease(slot: u32) -> u32;
+    fn moonlightSdkDecoderHost(slot: u32, out: *mut Host) -> u32;
     fn moonlightSdkDecoderClose();
     fn moonlightSdkVideoStart(
         codec: u32,
@@ -658,6 +683,28 @@ impl Backend for SdkVideo {
 
     fn placement(&self, surface: usize) -> Option<Placement> {
         self.placements.get(surface).copied().flatten()
+    }
+
+    fn host_images(&self) -> bool {
+        self.high_level()
+    }
+
+    fn host_image(&self, surface: usize) -> Option<HostImage> {
+        if !self.high_level() {
+            return None;
+        }
+        let mut host = Host::default();
+        if unsafe { moonlightSdkDecoderHost(surface as u32, &mut host) } != 0 {
+            return None;
+        }
+        Some(HostImage {
+            base: host.base,
+            bytes: usize::try_from(host.bytes).ok()?,
+            luma_offset: usize::try_from(host.luma_offset).ok()?,
+            chroma_offset: usize::try_from(host.chroma_offset).ok()?,
+            pitch: host.pitch,
+            rows: host.rows,
+        })
     }
 
     fn close(&mut self) -> Result<(), BackendError> {

@@ -11,7 +11,8 @@ pub enum Path {
     Copy,
     /// Our low-level session decoding straight into the renderer's frame slots.
     InPlace,
-    /// The SDK's `VideoDecoder` object, frames copied into the upload slot.
+    /// The SDK's `VideoDecoder` object, frames copied by the GPU out of its images when the
+    /// renderer can import them, else into the upload slot.
     Sdk,
 }
 

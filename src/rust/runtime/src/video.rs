@@ -13,7 +13,7 @@ use alloc::format;
 use core::cell::Cell;
 use moonlight_nx2_core::{
     codec::{Capabilities, Codec, Depth},
-    decoder::{self, Backend, Decoder, FrameInfo, Placed, SURFACES},
+    decoder::{self, Backend, Decoder, FrameInfo, Hosted, Placed, SURFACES},
     frame::{Frame, Layout, Matrix, Plane},
     media::Header,
     recovery::{self, Decision, Recovery},
@@ -183,6 +183,10 @@ pub struct Video<'a, B: Backend<N>, const N: usize = SURFACES> {
     timing: Timing,
     presentation: Option<Presentation>,
     turns: Turns,
+    /// The renderer's import each surface held in the backend's memory is copied from.
+    imports: [Option<usize>; N],
+    /// Whether frames in the backend's memory are imported, once the first one shows it.
+    host_import: Option<bool>,
 }
 
 impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
@@ -229,6 +233,8 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
             timing: Timing::default(),
             presentation: None,
             turns: Turns::default(),
+            imports: [None; N],
+            host_import: None,
         })
     }
 
@@ -421,26 +427,121 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
         }
     }
 
+    /// Shows a frame left in the backend's memory: copied by the GPU from its import, or by
+    /// the CPU into a slot when the renderer cannot import it.
+    fn publish_hosted(
+        &mut self,
+        renderer: &mut Renderer,
+        info: &FrameInfo,
+        hosted: Hosted,
+    ) -> Result<bool, Error> {
+        let image = hosted.image;
+        let layout = Layout::coded(
+            image.pitch,
+            image.rows,
+            info.display.width(),
+            info.display.height(),
+            self.matrix,
+        )
+        .map_err(render::Error::from);
+        if self.host_import != Some(false) {
+            let imported = layout.and_then(|layout| {
+                let import = renderer.import_host(image.base, image.bytes)?;
+                let host = render::HostFrame {
+                    luma_offset: image.luma_offset,
+                    chroma_offset: image.chroma_offset,
+                    pitch: image.pitch,
+                    rows: image.rows,
+                };
+                renderer.publish_import(import, host, layout).map(|_| import)
+            });
+            match imported {
+                Ok(import) => {
+                    if self.host_import.is_none() {
+                        platform::log("sdk-decoder: output=host-import");
+                    }
+                    self.host_import = Some(true);
+                    self.imports[hosted.surface] = Some(import);
+                    return Ok(true);
+                }
+                Err(render::Error::Busy) => {
+                    self.drop_frame(info)?;
+                    return Ok(false);
+                }
+                Err(error) => {
+                    platform::log(&format!("sdk-decoder: output=readback import {error:?}"));
+                    self.host_import = Some(false);
+                }
+            }
+        }
+        let luma_bytes = image.pitch as usize * image.rows as usize;
+        let (luma, chroma) = unsafe {
+            (
+                core::slice::from_raw_parts(image.base.add(image.luma_offset), luma_bytes),
+                core::slice::from_raw_parts(image.base.add(image.chroma_offset), luma_bytes / 2),
+            )
+        };
+        let frame = Frame {
+            luma: Plane {
+                bytes: luma,
+                stride: image.pitch,
+            },
+            chroma: Plane {
+                bytes: chroma,
+                stride: image.pitch,
+            },
+            coded_width: info.display.width(),
+            coded_height: image.rows,
+            crop_left: 0,
+            crop_top: 0,
+            display_width: info.display.width(),
+            display_height: info.display.height(),
+            matrix: self.matrix,
+            full_range: false,
+            timestamp_ns: info.timestamp_ns,
+        };
+        let read_start_ns = platform::now_ns();
+        let uploaded = renderer.upload(&frame);
+        stream_stats::stage(Stage::Readback, read_start_ns, platform::now_ns());
+        self.decoder
+            .release_surface(hosted.surface)
+            .map_err(|error| self.fail(Error::Decoder(error)))?;
+        match uploaded {
+            Ok(_) => Ok(true),
+            Err(render::Error::Busy) => Ok(false),
+            Err(error) => Err(self.fail(Error::Renderer(error))),
+        }
+    }
+
     fn drop_frame(&mut self, info: &FrameInfo) -> Result<(), Error> {
-        let released = match info.placed {
-            Some(placed) => self.decoder.release_surface(placed.surface),
-            None => self.decoder.release(info.token),
+        let released = match (info.placed, info.hosted) {
+            (Some(Placed { surface, .. }), _) | (None, Some(Hosted { surface, .. })) => {
+                self.decoder.release_surface(surface)
+            }
+            (None, None) => self.decoder.release(info.token),
         };
         released.map_err(|error| self.fail(Error::Decoder(error)))
     }
 
-    /// Hands surfaces decoded in place back to the decoder once their slot is neither shown
-    /// nor read.
+    /// Hands surfaces back to the decoder once nothing reads them: a surface decoded in place
+    /// when its slot is neither shown nor read, one in the backend's memory when the GPU copy
+    /// from it has run.
     fn reclaim(&mut self, renderer: &mut Renderer) -> Result<(), Error> {
         for surface in 0..N {
             if !self.decoder.holds_surface(surface) {
                 continue;
             }
-            match renderer.slot_free(surface) {
-                Ok(true) => self
-                    .decoder
-                    .release_surface(surface)
-                    .map_err(|error| self.fail(Error::Decoder(error)))?,
+            let free = match self.imports[surface] {
+                Some(import) => renderer.import_busy(import).map(|busy| !busy),
+                None => renderer.slot_free(surface),
+            };
+            match free {
+                Ok(true) => {
+                    self.imports[surface] = None;
+                    self.decoder
+                        .release_surface(surface)
+                        .map_err(|error| self.fail(Error::Decoder(error)))?
+                }
                 Ok(false) => {}
                 Err(error) => return Err(self.fail(Error::Renderer(error))),
             }
@@ -479,7 +580,7 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
         bytes: &[u8],
         received_us: Option<u64>,
     ) -> Result<(), Error> {
-        if self.decoder.in_place() {
+        if self.decoder.holds_frames() {
             self.active()?;
             self.reclaim(renderer)?;
         }
@@ -496,7 +597,7 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
         self.active()?;
         self.recovery.tick(platform::now_ns() / 1_000_000);
         self.forward_idr_request();
-        let (slot, frame, poll_start_ns) = if self.decoder.in_place() {
+        let (slot, frame, poll_start_ns) = if self.decoder.holds_frames() {
             self.reclaim(renderer)?;
             self.wake()?;
             let poll_start_ns = platform::now_ns();
@@ -549,9 +650,10 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
             self.drop_frame(&info)?;
             return Ok(false);
         }
-        let uploaded = match (info.placed, slot) {
-            (Some(placed), _) => self.publish_placed(renderer, &info, placed),
-            (None, Some(slot)) if info.staged => self.publish_staged(renderer, slot, &info),
+        let uploaded = match (info.placed, info.hosted, slot) {
+            (Some(placed), _, _) => self.publish_placed(renderer, &info, placed),
+            (None, Some(hosted), _) => self.publish_hosted(renderer, &info, hosted),
+            (None, None, Some(slot)) if info.staged => self.publish_staged(renderer, slot, &info),
             _ => self.upload(renderer, &info),
         };
         stream_stats::stage(Stage::Upload, decoded_ns, platform::now_ns());
