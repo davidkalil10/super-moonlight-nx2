@@ -3,6 +3,8 @@ pub const HEIGHT: u32 = 1080;
 pub const INPUT_BYTES: usize = 4096;
 pub const STORAGE_BYTES: usize = 48_418_816;
 pub const FRAME_BYTES: usize = 12_533_760;
+/// Slot memory is uncached: reading every eighth row of a 1080p frame held a turn 25 ms.
+const DETAIL_ROWS: usize = 64;
 pub const FRAMES_OFFSET: usize = 2_424_832;
 pub const VIDEO_SLOTS: usize = 2;
 pub const UI_OFFSET: usize = 40_030_208;
@@ -225,8 +227,8 @@ impl Layout {
     }
 
     /// The mean step between neighbouring pixels across and down the picture in `slot`, in
-    /// hundredths, over every eighth row, and its mean luma and chroma. A softer copy of the
-    /// same picture steps less.
+    /// hundredths, over every `DETAIL_ROWS`th row, and its mean luma and chroma. A softer copy
+    /// of the same picture steps less.
     pub fn detail(&self, slot: &[u8]) -> Option<Detail> {
         let (width, height, stride) = (
             self.width as usize,
@@ -239,7 +241,7 @@ impl Layout {
         let chroma = &slot[stride * self.slice_height as usize..];
         let mut sums = [0u64; 5];
         let mut rows = 0u64;
-        for y in (0..height - 1).step_by(8) {
+        for y in (0..height - 1).step_by(DETAIL_ROWS) {
             let line = &slot[y * stride..y * stride + width];
             let below = &slot[(y + 1) * stride..(y + 1) * stride + width];
             let pairs = &chroma[y / 2 * stride..y / 2 * stride + width / 2 * 2];

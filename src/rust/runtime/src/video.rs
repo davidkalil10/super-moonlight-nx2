@@ -685,7 +685,10 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
             return Ok(false);
         }
         self.stats.uploaded += 1;
-        if self.stats.uploaded == DETAIL_FRAME && self.host_import != Some(true) {
+        if cfg!(feature = "perf-chord")
+            && self.stats.uploaded == DETAIL_FRAME
+            && self.host_import != Some(true)
+        {
             if let Some((layout, detail)) = renderer.shown_detail() {
                 platform::log(&format!("video: shown {source} {layout:?} {detail:?}"));
             }
