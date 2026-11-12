@@ -104,6 +104,8 @@ pub enum UiShader {
     Text,
 }
 
+/// Both modes present FIFO, once per refresh. LowLatency also waits for the previous frame
+/// before acquiring the next image, so input and video are sampled one frame later.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum PresentMode {
     #[default]
@@ -1532,13 +1534,9 @@ impl Objects {
             if self.extent.width == 0 || self.extent.height == 0 {
                 return Err(Error::Busy);
             }
-            let mode = self.present_mode()?;
-            let minimum = if mode == vk::PresentModeKHR::MAILBOX {
-                3
-            } else {
-                2
-            };
-            let images = caps.min_image_count.max(minimum);
+            let mode = vk::PresentModeKHR::FIFO;
+            self.info.present_mode = mode.as_raw();
+            let images = caps.min_image_count.max(2);
             let images = if caps.max_image_count == 0 {
                 images
             } else {
@@ -1645,24 +1643,6 @@ impl Objects {
             self.storage_path
         ));
         Ok(())
-    }
-
-    fn present_mode(&mut self) -> Result<vk::PresentModeKHR, Error> {
-        let mode = match self.config.present {
-            PresentMode::Fifo => vk::PresentModeKHR::FIFO,
-            PresentMode::LowLatency => {
-                let modes = unsafe {
-                    self.surface_api()
-                        .get_physical_device_surface_present_modes(self.physical, self.surface)?
-                };
-                [vk::PresentModeKHR::MAILBOX, vk::PresentModeKHR::IMMEDIATE]
-                    .into_iter()
-                    .find(|mode| modes.contains(mode))
-                    .unwrap_or(vk::PresentModeKHR::FIFO)
-            }
-        };
-        self.info.present_mode = mode.as_raw();
-        Ok(mode)
     }
 
     fn free_slot(&self) -> Option<usize> {
@@ -2104,7 +2084,7 @@ impl Objects {
         }
         let flight = self.next_flight;
         self.wait_flight(flight, WAIT_NS)?;
-        if self.info.present_mode != vk::PresentModeKHR::FIFO.as_raw() {
+        if self.config.present == PresentMode::LowLatency {
             self.wait_flight((flight + 1) % 2, WAIT_NS)?;
         }
         let result = unsafe {
