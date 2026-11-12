@@ -1,8 +1,8 @@
 /*
  * Clock readings while streaming. None of these services is proven inside the hijacked title:
  * every call returns its result for the runtime to log, and a service that does not open is not
- * asked again before the next close. The only change is the CPU boost mode, through the applet
- * session the process already holds.
+ * asked again before the next close. The only change is the decoder's clock, which the perf
+ * build can raise to its highest rate and give back.
  */
 #include <stdbool.h>
 #include <stdint.h>
@@ -35,6 +35,7 @@ static struct {
     PcvModuleId ids[CLOCKS];
     ClkrstSession sessions[CLOCKS];
     Result session_opened[CLOCKS];
+    uint32_t decoder_default_hz;
 } clocks;
 
 static Result open_apm(void)
@@ -143,9 +144,45 @@ Result moonlightClocksDecoderRates(uint32_t *rates, int32_t max, int32_t *count,
     return result;
 }
 
-Result moonlightClocksBoost(bool on)
+/*
+ * Raises the decoder's clock to the highest rate it lists, or sets back the rate it had
+ * before. Writes the rate asked for to `hz`.
+ */
+Result moonlightClocksDecoderMax(bool on, uint32_t *hz)
 {
-    return appletSetCpuBoostMode(on ? ApmCpuBoostMode_FastLoad : ApmCpuBoostMode_Normal);
+    ClkrstSession *session = &clocks.sessions[CLOCK_NVDEC];
+    uint32_t rates[32];
+    int32_t count = 0;
+    PcvClockRatesListType list = PcvClockRatesListType_Invalid;
+    Result result = open_clkrst();
+
+    *hz = 0;
+    if (R_SUCCEEDED(result))
+        result = clocks.session_opened[CLOCK_NVDEC];
+    if (R_FAILED(result))
+        return result;
+    if (!on) {
+        if (clocks.decoder_default_hz == 0)
+            return 0;
+        *hz = clocks.decoder_default_hz;
+        result = clkrstSetClockRate(session, *hz);
+        clocks.decoder_default_hz = 0;
+        return result;
+    }
+    result = clkrstGetPossibleClockRates(session, rates, 32, &list, &count);
+    if (R_FAILED(result))
+        return result;
+    for (int32_t rate = 0; rate < count && rate < 32; rate++)
+        if (rates[rate] > *hz)
+            *hz = rates[rate];
+    if (*hz == 0)
+        return MAKERESULT(Module_Libnx, LibnxError_NotFound);
+    if (clocks.decoder_default_hz == 0) {
+        result = clkrstGetClockRate(session, &clocks.decoder_default_hz);
+        if (R_FAILED(result))
+            return result;
+    }
+    return clkrstSetClockRate(session, *hz);
 }
 
 /* Closes every session moonlightClocksRead opened, so none outlives the stream. */

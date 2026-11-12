@@ -39,7 +39,7 @@ const LATENCIES: [Latency; 1] = [Latency::Newest];
 
 static PATH: AtomicU8 = AtomicU8::new(0);
 static LATENCY: AtomicU8 = AtomicU8::new(0);
-static BOOST: AtomicBool = AtomicBool::new(false);
+static DECODER_MAX: AtomicBool = AtomicBool::new(false);
 
 pub fn path() -> Path {
     PATHS[PATH.load(Ordering::Relaxed) as usize % PATHS.len()]
@@ -64,30 +64,35 @@ pub fn next_latency() {
     );
 }
 
-/// Whether a stream asks for the CPU boost mode. `clocks` applies it while streaming.
-pub fn boost() -> bool {
-    BOOST.load(Ordering::Relaxed)
+/// Whether a stream raises the decoder's clock to its highest rate. `clocks` applies it while
+/// streaming. It replaced the CPU boost, which takes the GPU down to 306 MHz docked.
+pub fn decoder_max() -> bool {
+    DECODER_MAX.load(Ordering::Relaxed)
 }
 
-pub fn toggle_boost() {
-    BOOST.fetch_xor(true, Ordering::Relaxed);
+pub fn toggle_decoder_max() {
+    DECODER_MAX.fetch_xor(true, Ordering::Relaxed);
 }
 
-/// What a chord set: the path waits for the next stream, latency and boost apply at once.
+pub fn decoder_clock() -> &'static str {
+    if decoder_max() { "max" } else { "default" }
+}
+
+/// What a chord set: the path waits for the next stream, latency and the clock apply at once.
 pub fn chord_text() -> alloc::string::String {
     alloc::format!(
-        "perf: path={:?} from next stream, latency={:?} boost={} now",
+        "perf: path={:?} from next stream, latency={:?} nvdec={} now",
         path(),
         latency(),
-        if boost() { "on" } else { "off" }
+        decoder_clock()
     )
 }
 
 pub fn text() -> alloc::string::String {
     alloc::format!(
-        "perf: path={:?} latency={:?} boost={}",
+        "perf: path={:?} latency={:?} nvdec={}",
         path(),
         latency(),
-        if boost() { "on" } else { "off" }
+        decoder_clock()
     )
 }

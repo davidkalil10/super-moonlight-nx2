@@ -186,7 +186,7 @@ impl System {
         self.reconnect(app, in_focus, now_ms);
         self.keep_awake(suspend::keeps_awake(app.screen()) && in_focus);
         self.clocks
-            .tick(app.screen() == Screen::Streaming, crate::perf::boost(), now_ms);
+            .tick(app.screen() == Screen::Streaming, crate::perf::decoder_max(), now_ms);
         if now_ms >= self.next_read_ms {
             self.next_read_ms = now_ms.saturating_add(READ_MS);
             self.read(app, renderer, now_ms);

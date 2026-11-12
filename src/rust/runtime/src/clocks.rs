@@ -1,5 +1,5 @@
-//! Clock readings every second of a stream, through `nro/clocks.c`, and the CPU boost
-//! mode the perf build can ask for. The sessions are closed and the boost is given back when
+//! Clock readings every second of a stream, through `nro/clocks.c`, and the decoder's highest
+//! clock the perf build can ask for. The sessions are closed and the clock is given back when
 //! the stream ends, when it is switched off and when the app stops.
 
 extern crate alloc;
@@ -12,7 +12,7 @@ const READ_MS: u64 = 1000;
 const SCAN_FIRST: u32 = 0x4000_0001;
 const SCAN_COUNT: u32 = 0x80;
 const SCAN_MAX: usize = 64;
-/// How long after a boost change the clocks are read, so the line shows the new rates.
+/// How long after a clock change the clocks are read, so the line shows the new rates.
 const SETTLE_MS: u64 = 250;
 
 #[repr(C)]
@@ -39,34 +39,37 @@ unsafe extern "C" {
         kind: *mut u32,
     ) -> u32;
     fn moonlightClocksClose();
-    fn moonlightClocksBoost(on: bool) -> u32;
+    fn moonlightClocksDecoderMax(on: bool, hz: *mut u32) -> u32;
 }
 
 #[derive(Default)]
 pub struct Clocks {
     next_read_ms: u64,
     open: bool,
-    /// The boost last asked for, so a refused request is not repeated every frame.
+    /// The decoder clock last asked for, so a refused request is not repeated every frame.
     asked: bool,
-    boosted: bool,
+    raised: bool,
+    /// Whether this stream logged the module ids and the decoder's rates.
+    described: bool,
 }
 
 impl Clocks {
-    pub fn tick(&mut self, streaming: bool, boost: bool, now_ms: u64) {
+    pub fn tick(&mut self, streaming: bool, decoder_max: bool, now_ms: u64) {
         if !streaming {
             self.close();
             return;
         }
-        if boost != self.asked {
-            self.asked = boost;
-            self.set_boost(boost);
+        if decoder_max != self.asked {
+            self.asked = decoder_max;
+            self.set_decoder_max(decoder_max);
             self.next_read_ms = now_ms + SETTLE_MS;
         }
         if now_ms < self.next_read_ms {
             return;
         }
         self.next_read_ms = now_ms + READ_MS;
-        let first = !core::mem::replace(&mut self.open, true);
+        self.open = true;
+        let first = !core::mem::replace(&mut self.described, true);
         let mut reading = Reading::default();
         unsafe { moonlightClocksRead(&mut reading) };
         let mhz = |hz: u32| hz / 1_000_000;
@@ -95,25 +98,29 @@ impl Clocks {
         }
     }
 
-    /// Gives the boost back and closes the sessions. Safe to call more than once.
+    /// Gives the clock back and closes the sessions. Safe to call more than once.
     pub fn stop(&mut self) {
         self.close();
     }
 
-    fn set_boost(&mut self, on: bool) {
-        let result = unsafe { moonlightClocksBoost(on) };
-        self.boosted = on && result == 0;
+    fn set_decoder_max(&mut self, on: bool) {
+        let mut hz = 0;
+        let result = unsafe { moonlightClocksDecoderMax(on, &mut hz) };
+        self.open = true;
+        self.raised = on && result == 0;
         log(&format!(
-            "clocks: boost={} result=0x{result:x}",
-            if on { "on" } else { "off" }
+            "clocks: nvdec={} asked={} MHz result=0x{result:x}",
+            if on { "max" } else { "default" },
+            hz / 1_000_000
         ));
     }
 
     fn close(&mut self) {
-        if self.boosted {
-            self.set_boost(false);
+        if self.raised {
+            self.set_decoder_max(false);
         }
         self.asked = false;
+        self.described = false;
         if core::mem::take(&mut self.open) {
             unsafe { moonlightClocksClose() };
             self.next_read_ms = 0;
