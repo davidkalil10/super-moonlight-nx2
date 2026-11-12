@@ -380,6 +380,7 @@ fn execute(
                 pending |= probe.set_requested(wanted);
             }
         }
+        turns.lap(Phase::Display);
         if let Ok(info) = renderer.info()
             && let Some(rate) = probe.second(now, info.presented)
         {
@@ -489,15 +490,17 @@ enum Phase {
     Frame,
     Stream,
     Present,
+    Display,
     Other,
 }
 
 impl Phase {
-    const ALL: [Phase; 5] = [
+    const ALL: [Phase; 6] = [
         Phase::Input,
         Phase::Frame,
         Phase::Stream,
         Phase::Present,
+        Phase::Display,
         Phase::Other,
     ];
 
@@ -507,6 +510,7 @@ impl Phase {
             Self::Frame => "frame",
             Self::Stream => "stream",
             Self::Present => "present",
+            Self::Display => "display",
             Self::Other => "other",
         }
     }
@@ -519,7 +523,7 @@ impl Phase {
 struct Turns {
     start: u64,
     mark: u64,
-    phases: [u64; 5],
+    phases: [u64; 6],
     longest: (u64, Phase),
     ui_presents: u32,
 }
@@ -528,7 +532,7 @@ impl Turns {
     fn begin(&mut self, now: u64) {
         self.start = now;
         self.mark = now;
-        self.phases = [0; 5];
+        self.phases = [0; 6];
     }
 
     fn lap(&mut self, phase: Phase) {
