@@ -133,6 +133,7 @@ impl Timing {
 /// still read by the GPU for a moment after its present.
 const STAGING_WAIT_NS: u64 = 2_000_000;
 /// The frame whose picture is measured once a stream, a second in at 120 frames a second.
+#[cfg(feature = "frame-detail")]
 const DETAIL_FRAME: u64 = 120;
 /// The share of a turn, in percent, a turn may spend waiting for its unit's frame. The rest
 /// is left for the upload, the present and input.
@@ -715,6 +716,7 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
             self.drop_frame(&info)?;
             return Ok(false);
         }
+        #[cfg(feature = "frame-detail")]
         let source = match (info.placed, info.hosted, slot) {
             (Some(_), _, _) => "placed",
             (None, Some(_), _) => "hosted",
@@ -734,10 +736,8 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
             return Ok(false);
         }
         self.stats.uploaded += 1;
-        if cfg!(feature = "perf-log")
-            && self.stats.uploaded == DETAIL_FRAME
-            && self.host_import != Some(true)
-        {
+        #[cfg(feature = "frame-detail")]
+        if self.stats.uploaded == DETAIL_FRAME && self.host_import != Some(true) {
             if let Some((layout, detail)) = renderer.shown_detail() {
                 platform::log(&format!("video: shown {source} {layout:?} {detail:?}"));
             }

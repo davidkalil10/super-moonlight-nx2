@@ -18,7 +18,8 @@ ui-pattern = ["frontend"]
 # Holds the GPU about half a second for each page it checks.
 ui-page-check = ["ui-pattern"]
 ui-uncached = ["ui-pattern"]
-perf-log = ["ui-pattern"]
+# Reads one shown frame back from uncached memory, 25 to 100 ms, to log its detail.
+frame-detail = ["frontend"]
 host-renderer = []
 
 [dependencies]
