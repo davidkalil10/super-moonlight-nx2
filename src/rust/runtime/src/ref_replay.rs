@@ -414,7 +414,7 @@ fn feed_paced<B: Backend<N>, const N: usize>(
                 sequence: index as u32,
                 pts_us,
             };
-            match video.submit_draining(renderer, &header, unit, None) {
+            match video.submit_draining(renderer, &header, unit, None, &mut ()) {
                 Ok(()) => units.next(),
                 Err(video::Error::Decoder(decoder::Error::Again)) => {
                     busy += 1;
@@ -488,7 +488,7 @@ fn step<B: Backend<N>, const N: usize>(
     if sdk::process_retired() || !unsafe { sdk::appletMainLoop() } {
         return Err(video::Error::Closed);
     }
-    video.present(renderer, false).map(|_| ())
+    video.present(renderer, false, &mut ()).map(|_| ())
 }
 
 /// One embedded clip: the `.mlrc` header and its access units (see refclip.py).

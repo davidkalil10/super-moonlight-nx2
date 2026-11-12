@@ -11,6 +11,7 @@ use crate::{
 };
 use alloc::format;
 use core::cell::Cell;
+use moonlight_nx2_app::media::Pump;
 use moonlight_nx2_core::{
     codec::{Capabilities, Codec, Depth},
     decoder::{self, Backend, Decoder, FrameInfo, Hosted, Placed, SURFACES},
@@ -136,6 +137,12 @@ const DETAIL_FRAME: u64 = 120;
 const WAKE_SHARE: u64 = 55;
 const TURN_MIN_NS: u64 = 4_000_000;
 const TURN_MAX_NS: u64 = 34_000_000;
+/// The longest a wait for the decoder goes without pumping audio.
+const SLICE_NS: u64 = 1_000_000;
+
+fn pump(audio: &mut dyn Pump) {
+    audio.pump(platform::now_ns() / 1_000_000);
+}
 
 /// When the current turn started and how long turns last, for the wait of `Latency::Wake`.
 #[derive(Default)]
@@ -568,8 +575,8 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
     }
 
     /// With `Latency::Wake`, waits up to the turn's share for the oldest unit's frame, so it
-    /// is shown on this turn rather than the next.
-    fn wake(&mut self) -> Result<(), Error> {
+    /// is shown on this turn rather than the next. Audio is pumped between slices of the wait.
+    fn wake(&mut self, audio: &mut dyn Pump) -> Result<(), Error> {
         if perf::latency() == Latency::Off || self.decoder.pending_units() == 0 {
             return Ok(());
         }
@@ -577,10 +584,18 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
         let Some(budget_ns) = self.turns.budget_ns(start_ns) else {
             return Ok(());
         };
-        let ready = self
-            .decoder
-            .wait(budget_ns)
-            .map_err(|error| self.fail(Error::Decoder(error)))?;
+        let deadline_ns = start_ns + budget_ns;
+        let ready = loop {
+            let left_ns = deadline_ns.saturating_sub(platform::now_ns());
+            let ready = self
+                .decoder
+                .wait(left_ns.clamp(1, SLICE_NS))
+                .map_err(|error| self.fail(Error::Decoder(error)))?;
+            if ready || left_ns <= SLICE_NS {
+                break ready;
+            }
+            pump(audio);
+        };
         stream_stats::wake(platform::now_ns() - start_ns, budget_ns, ready);
         Ok(())
     }
@@ -597,6 +612,7 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
         header: &Header,
         bytes: &[u8],
         received_us: Option<u64>,
+        audio: &mut dyn Pump,
     ) -> Result<(), Error> {
         if self.decoder.holds_frames() {
             self.active()?;
@@ -604,7 +620,7 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
         }
         match self.submit_timed(header, bytes, received_us) {
             Err(Error::Decoder(decoder::Error::Again)) => {
-                self.poll_upload(renderer)?;
+                self.poll_upload_pumping(renderer, audio)?;
                 self.submit_timed(header, bytes, received_us)
             }
             result => result,
@@ -612,18 +628,26 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
     }
 
     pub fn poll_upload(&mut self, renderer: &mut Renderer) -> Result<bool, Error> {
+        self.poll_upload_pumping(renderer, &mut ())
+    }
+
+    fn poll_upload_pumping(
+        &mut self,
+        renderer: &mut Renderer,
+        audio: &mut dyn Pump,
+    ) -> Result<bool, Error> {
         self.active()?;
         self.recovery.tick(platform::now_ns() / 1_000_000);
         self.forward_idr_request();
         let (slot, frame, poll_start_ns) = if self.decoder.holds_frames() {
             self.reclaim(renderer)?;
-            self.wake()?;
+            self.wake(audio)?;
             let poll_start_ns = platform::now_ns();
             (None, self.decoder.poll_into(None), poll_start_ns)
         } else {
             match renderer.staging(STAGING_WAIT_NS) {
                 Ok(Some((slot, staging))) => {
-                    self.wake()?;
+                    self.wake(audio)?;
                     let poll_start_ns = platform::now_ns();
                     (
                         Some(slot),
@@ -681,6 +705,7 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
             _ => self.upload(renderer, &info),
         };
         stream_stats::stage(Stage::Upload, decoded_ns, platform::now_ns());
+        pump(audio);
         if !uploaded? {
             self.stats.dropped += 1;
             return Ok(false);
@@ -708,9 +733,20 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
         renderer: &mut Renderer,
         interactive: bool,
     ) -> Result<bool, Error> {
+        self.present_pumping(renderer, interactive, &mut ())
+    }
+
+    /// Presents what is pending, pumping audio before the present and while it waits.
+    fn present_pumping(
+        &mut self,
+        renderer: &mut Renderer,
+        interactive: bool,
+        audio: &mut dyn Pump,
+    ) -> Result<bool, Error> {
         self.active()?;
+        pump(audio);
         let present_start_ns = platform::now_ns();
-        let shown = renderer.present(interactive);
+        let shown = renderer.present_pumping(interactive, audio);
         stream_stats::stage(Stage::Present, present_start_ns, platform::now_ns());
         match shown {
             Ok(()) => {
@@ -741,15 +777,20 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
     /// decode: a frame that is a turn late then costs a turn of latency, not a picture. Only a
     /// decoder that is full has fallen behind the display: `submit_draining` then replaces a
     /// frame not shown yet and, with `Latency::Newest`, so does a second frame taken here.
-    pub fn present(&mut self, renderer: &mut Renderer, interactive: bool) -> Result<bool, Error> {
+    pub fn present(
+        &mut self,
+        renderer: &mut Renderer,
+        interactive: bool,
+        audio: &mut dyn Pump,
+    ) -> Result<bool, Error> {
         let behind = self.decoder.pending_units() >= self.decoder.units();
         if !self.pending {
-            self.poll_upload(renderer)?;
+            self.poll_upload_pumping(renderer, audio)?;
         }
         if self.pending && behind && perf::latency() == Latency::Newest {
-            self.poll_upload(renderer)?;
+            self.poll_upload_pumping(renderer, audio)?;
         }
-        self.present_pending(renderer, interactive)
+        self.present_pumping(renderer, interactive, audio)
     }
 
     pub fn close(&mut self) -> Result<(), Error> {
@@ -822,9 +863,19 @@ impl<B: Backend<N>, const N: usize> Tick<'_, '_, B, N> {
         bytes: &[u8],
         received_us: Option<u64>,
     ) -> moonlight_nx2_app::media::Submit {
+        self.submit_pumping(header, bytes, received_us, &mut ())
+    }
+
+    fn submit_pumping(
+        &mut self,
+        header: &Header,
+        bytes: &[u8],
+        received_us: Option<u64>,
+        audio: &mut dyn Pump,
+    ) -> moonlight_nx2_app::media::Submit {
         match self
             .video
-            .submit_draining(self.renderer, header, bytes, received_us)
+            .submit_draining(self.renderer, header, bytes, received_us, audio)
         {
             Ok(()) => moonlight_nx2_app::media::Submit::Accepted,
             Err(Error::Decoder(decoder::Error::Again)) => moonlight_nx2_app::media::Submit::Busy,
@@ -833,7 +884,19 @@ impl<B: Backend<N>, const N: usize> Tick<'_, '_, B, N> {
     }
 
     pub fn presented(&mut self) -> Result<bool, Error> {
-        self.video.present(self.renderer, self.interactive)
+        self.video.present(self.renderer, self.interactive, &mut ())
+    }
+
+    fn poll_pumping(&mut self, audio: &mut dyn Pump) -> moonlight_nx2_app::media::Poll {
+        let polled = match self.present {
+            false => self.video.poll_upload_pumping(self.renderer, audio),
+            true => self.video.present(self.renderer, self.interactive, audio),
+        };
+        match (polled, self.present) {
+            (Ok(true), true) => moonlight_nx2_app::media::Poll::Presented,
+            (Ok(_), _) => moonlight_nx2_app::media::Poll::Idle,
+            (Err(_), _) => moonlight_nx2_app::media::Poll::Failed,
+        }
     }
 }
 
@@ -855,17 +918,21 @@ impl<B: Backend<N>, const N: usize> moonlight_nx2_app::media::Decoder for Tick<'
         Tick::submit_timed(self, header, payload, received_us)
     }
 
+    fn submit_pumping(
+        &mut self,
+        header: &Header,
+        payload: &[u8],
+        received_us: Option<u64>,
+        audio: &mut dyn Pump,
+    ) -> moonlight_nx2_app::media::Submit {
+        Tick::submit_pumping(self, header, payload, received_us, audio)
+    }
+
     fn poll(&mut self) -> moonlight_nx2_app::media::Poll {
-        if !self.present {
-            return match self.video.poll_upload(self.renderer) {
-                Ok(_) => moonlight_nx2_app::media::Poll::Idle,
-                Err(_) => moonlight_nx2_app::media::Poll::Failed,
-            };
-        }
-        match self.presented() {
-            Ok(true) => moonlight_nx2_app::media::Poll::Presented,
-            Ok(false) => moonlight_nx2_app::media::Poll::Idle,
-            Err(_) => moonlight_nx2_app::media::Poll::Failed,
-        }
+        Tick::poll_pumping(self, &mut ())
+    }
+
+    fn poll_pumping(&mut self, audio: &mut dyn Pump) -> moonlight_nx2_app::media::Poll {
+        Tick::poll_pumping(self, audio)
     }
 }

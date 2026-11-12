@@ -12,6 +12,7 @@ use core::{
     mem::ManuallyDrop,
     sync::atomic::{AtomicBool, Ordering},
 };
+use moonlight_nx2_app::media::Pump;
 use moonlight_nx2_core::{
     cache,
     frame::{self, Frame},
@@ -50,6 +51,8 @@ fn allocator() -> Option<&'static vk::AllocationCallbacks> {
 }
 
 const WAIT_NS: u64 = 2_000_000_000;
+/// The longest a wait of a present goes without pumping audio.
+const SLICE_NS: u64 = 1_000_000;
 static ACTIVE: AtomicBool = AtomicBool::new(false);
 #[cfg(feature = "host-renderer")]
 static FORCE_WAIT_TIMEOUT: AtomicBool = AtomicBool::new(false);
@@ -515,8 +518,17 @@ impl Renderer {
     }
 
     pub fn present(&mut self, interactive: bool) -> Result<(), Error> {
+        self.present_pumping(interactive, &mut ())
+    }
+
+    /// Presents, pumping `audio` while the present waits for the GPU and the display.
+    pub fn present_pumping(
+        &mut self,
+        interactive: bool,
+        audio: &mut dyn Pump,
+    ) -> Result<(), Error> {
         self.active()?;
-        self.objects.present(interactive)
+        self.objects.present(interactive, audio)
     }
 
     /// Whether memory the decoder owns can be imported as a copy source.
@@ -2072,7 +2084,51 @@ impl Objects {
         }
     }
 
-    fn present(&mut self, interactive: bool) -> Result<(), Error> {
+    /// `wait_flight` in slices of `SLICE_NS`, pumping audio between them.
+    fn wait_flight_pumping(
+        &mut self,
+        index: usize,
+        limit_ns: u64,
+        audio: &mut dyn Pump,
+    ) -> Result<(), Error> {
+        let deadline_ns = sdk::now_ns().saturating_add(limit_ns);
+        loop {
+            let left_ns = deadline_ns.saturating_sub(sdk::now_ns());
+            match self.wait_flight(index, left_ns.clamp(1, SLICE_NS)) {
+                Err(Error::Busy) if left_ns > SLICE_NS => audio.pump(sdk::now_ns() / 1_000_000),
+                result => return result,
+            }
+        }
+    }
+
+    /// The next swapchain image, waited for in slices of `SLICE_NS` with audio pumped between.
+    fn acquire_pumping(
+        &mut self,
+        flight: usize,
+        limit_ns: u64,
+        audio: &mut dyn Pump,
+    ) -> Result<(u32, bool), vk::Result> {
+        let deadline_ns = sdk::now_ns().saturating_add(limit_ns);
+        loop {
+            let left_ns = deadline_ns.saturating_sub(sdk::now_ns());
+            let acquired = unsafe {
+                self.swapchain_api().acquire_next_image(
+                    self.swapchain,
+                    left_ns.clamp(1, SLICE_NS),
+                    self.flights[flight].acquired,
+                    vk::Fence::null(),
+                )
+            };
+            match acquired {
+                Err(vk::Result::TIMEOUT | vk::Result::NOT_READY) if left_ns > SLICE_NS => {
+                    audio.pump(sdk::now_ns() / 1_000_000)
+                }
+                result => return result,
+            }
+        }
+    }
+
+    fn present(&mut self, interactive: bool, audio: &mut dyn Pump) -> Result<(), Error> {
         self.flush_ui_writes();
         if self.rebuild {
             self.wait_all()?;
@@ -2082,16 +2138,9 @@ impl Objects {
             self.info.rebuilds += 1;
         }
         let flight = self.next_flight;
-        self.wait_flight(flight, WAIT_NS)?;
-        self.wait_flight((flight + 1) % 2, WAIT_NS)?;
-        let result = unsafe {
-            self.swapchain_api().acquire_next_image(
-                self.swapchain,
-                WAIT_NS,
-                self.flights[flight].acquired,
-                vk::Fence::null(),
-            )
-        };
+        self.wait_flight_pumping(flight, WAIT_NS, audio)?;
+        self.wait_flight_pumping((flight + 1) % 2, WAIT_NS, audio)?;
+        let result = self.acquire_pumping(flight, WAIT_NS, audio);
         let (image, suboptimal) = match result {
             Ok(result) => result,
             Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => {

@@ -52,6 +52,17 @@ pub enum Poll {
     Failed,
 }
 
+/// Keeps audio playing while a decoder or renderer call waits. Calls closer together than a
+/// millisecond do nothing; a failure is kept for the step to report.
+pub trait Pump {
+    fn pump(&mut self, now_ms: u64);
+}
+
+/// No audio to keep playing.
+impl Pump for () {
+    fn pump(&mut self, _now_ms: u64) {}
+}
+
 /// The video decoder boundary (Worker1). The payload is borrowed only for the call.
 pub trait Decoder {
     fn submit(&mut self, header: &Header, payload: &[u8]) -> Submit;
@@ -67,6 +78,22 @@ pub trait Decoder {
     }
     /// Called at the end of every step, with or without a new access unit, and after EOF.
     fn poll(&mut self) -> Poll;
+    /// `submit_timed` for a decoder that pumps `audio` while it waits.
+    fn submit_pumping(
+        &mut self,
+        header: &Header,
+        payload: &[u8],
+        received_us: Option<u64>,
+        audio: &mut dyn Pump,
+    ) -> Submit {
+        let _ = audio;
+        self.submit_timed(header, payload, received_us)
+    }
+    /// `poll` for a decoder that pumps `audio` while it waits.
+    fn poll_pumping(&mut self, audio: &mut dyn Pump) -> Poll {
+        let _ = audio;
+        self.poll()
+    }
     /// True while an accepted unit or uploaded frame still awaits presentation; video EOF is
     /// not reported as ended until this is false.
     fn pending(&mut self) -> bool {
@@ -323,6 +350,8 @@ pub struct Media<
     audio: Option<Output<D>>,
     held_video: Option<HeldAck>,
     held_pcm: Option<[u8; HEADER_BYTES]>,
+    /// The latest time PCM was pumped, which later steps never go back from.
+    pumped_ms: Option<u64>,
     spare_audio: Option<(D, &'static mut Slots)>,
     input: [u8; MAX_INPUT_BYTES],
     retained: bool,
@@ -569,6 +598,7 @@ impl<'a, S: Socket, D: Device, VC: VideoChannel> Media<'a, S, D, VC> {
             retained: false,
             drain_deadline_ms: None,
             drained: false,
+            pumped_ms: None,
             socket: core::marker::PhantomData,
         };
 
@@ -638,6 +668,7 @@ impl<'a, S: Socket, D: Device, VC: VideoChannel, P: PcmChannel> Media<'a, S, D, 
             retained: false,
             drain_deadline_ms: None,
             drained: false,
+            pumped_ms: None,
             socket: core::marker::PhantomData,
         };
         let Some((device, slots)) = audio else {
@@ -669,6 +700,7 @@ impl<'a, S: Socket, D: Device, VC: VideoChannel, P: PcmChannel> Media<'a, S, D, 
     /// One transport quantum and retries of already held ACKs, without consumer/device work.
     /// Only `step` can consume new records or establish whole-media completion.
     pub fn pump_network(&mut self, now_ms: u64) -> Result<(), Failure> {
+        let now_ms = self.pumped_ms.map_or(now_ms, |pumped| pumped.max(now_ms));
         let expired = self
             .drain_deadline_ms
             .is_some_and(|deadline| now_ms >= deadline);
@@ -696,12 +728,17 @@ impl<'a, S: Socket, D: Device, VC: VideoChannel, P: PcmChannel> Media<'a, S, D, 
         input: &mut I,
         now_ms: u64,
     ) -> Result<Progress, Failure> {
+        let now_ms = self.pumped_ms.map_or(now_ms, |pumped| pumped.max(now_ms));
         let mut progress = Progress::default();
 
         self.step_video(decoder, input, now_ms, &mut progress)?;
+        let now_ms = self.pumped_ms.map_or(now_ms, |pumped| pumped.max(now_ms));
         self.step_pcm(now_ms, &mut progress)?;
 
-        match decoder.poll() {
+        let mut audio = self.audio_pump();
+        let polled = decoder.poll_pumping(&mut audio);
+        audio.finish(&mut progress)?;
+        match polled {
             Poll::Idle => {}
             Poll::Presented => progress.presented = true,
             Poll::Failed => return Err(Failure::Decoder),
@@ -757,7 +794,18 @@ impl<'a, S: Socket, D: Device, VC: VideoChannel, P: PcmChannel> Media<'a, S, D, 
                 return Ok(());
             };
             let header = record.raw_header;
-            match decoder.submit_timed(&record.header, record.payload, received_us) {
+            let mut audio = AudioPump {
+                pcm: &mut self.pcm,
+                output: &mut self.audio,
+                held: &mut self.held_pcm,
+                pumped_ms: &mut self.pumped_ms,
+                records: 0,
+                failure: None,
+            };
+            let submitted =
+                decoder.submit_pumping(&record.header, record.payload, received_us, &mut audio);
+            audio.finish(progress)?;
+            match submitted {
                 Submit::Accepted => {}
                 Submit::Busy => return Ok(()),
                 Submit::Failed => return Err(Failure::Decoder),
@@ -794,32 +842,28 @@ impl<'a, S: Socket, D: Device, VC: VideoChannel, P: PcmChannel> Media<'a, S, D, 
     }
 
     fn step_pcm(&mut self, now_ms: u64, progress: &mut Progress) -> Result<(), Failure> {
+        self.pumped_ms = Some(now_ms);
         let Some(pcm) = self.pcm.as_mut() else {
             return Ok(());
         };
+        step_pcm(
+            pcm,
+            self.audio.as_mut(),
+            &mut self.held_pcm,
+            now_ms,
+            &mut progress.pcm_records,
+        )
+    }
 
-        pump_pcm(pcm, now_ms)?;
-
-        let Some(output) = self.audio.as_mut() else {
-            return drain_pcm(pcm, &mut self.held_pcm, progress, now_ms);
-        };
-
-        for _ in 0..PCM_RECORDS_PER_STEP {
-            let Some(record) = pcm.pcm_record() else {
-                break;
-            };
-            match output.push(&record.raw_header, record.payload) {
-                Ok(()) => {}
-                Err(audio::Error::Again) => break,
-                Err(error) => return Err(Failure::Audio(error)),
-            }
-            pcm.consume_pcm()?;
-            progress.pcm_records += 1;
-            pump_pcm(pcm, now_ms)?;
+    fn audio_pump(&mut self) -> AudioPump<'_, P, D> {
+        AudioPump {
+            pcm: &mut self.pcm,
+            output: &mut self.audio,
+            held: &mut self.held_pcm,
+            pumped_ms: &mut self.pumped_ms,
+            records: 0,
+            failure: None,
         }
-
-        output.pump(now_ms).map_err(Failure::Audio)?;
-        acknowledge_pcm(pcm, output, &mut self.held_pcm)
     }
 
     /// Closes every channel and the audio output. Never hides an uncertain release.
@@ -858,6 +902,75 @@ impl<'a, S: Socket, D: Device, VC: VideoChannel, P: PcmChannel> Media<'a, S, D, 
     }
 }
 
+/// The PCM of a step, or of a pump while the decoder or renderer waits.
+struct AudioPump<'m, P: PcmChannel, D: Device> {
+    pcm: &'m mut Option<P>,
+    output: &'m mut Option<Output<D>>,
+    held: &'m mut Option<[u8; HEADER_BYTES]>,
+    pumped_ms: &'m mut Option<u64>,
+    records: u32,
+    failure: Option<Failure>,
+}
+
+impl<P: PcmChannel, D: Device> AudioPump<'_, P, D> {
+    fn finish(self, progress: &mut Progress) -> Result<(), Failure> {
+        progress.pcm_records += self.records;
+        self.failure.map_or(Ok(()), Err)
+    }
+}
+
+impl<P: PcmChannel, D: Device> Pump for AudioPump<'_, P, D> {
+    fn pump(&mut self, now_ms: u64) {
+        if self.failure.is_some() || self.pumped_ms.is_some_and(|pumped| now_ms <= pumped) {
+            return;
+        }
+        *self.pumped_ms = Some(now_ms);
+        let Some(pcm) = self.pcm.as_mut() else {
+            return;
+        };
+        let stepped = step_pcm(
+            pcm,
+            self.output.as_mut(),
+            self.held,
+            now_ms,
+            &mut self.records,
+        );
+        self.failure = stepped.err();
+    }
+}
+
+/// Reads what PCM arrived, up to `PCM_RECORDS_PER_STEP` records, plays it and acknowledges it.
+fn step_pcm<P: PcmChannel, D: Device>(
+    pcm: &mut P,
+    output: Option<&mut Output<D>>,
+    held: &mut Option<[u8; HEADER_BYTES]>,
+    now_ms: u64,
+    records: &mut u32,
+) -> Result<(), Failure> {
+    pump_pcm(pcm, now_ms)?;
+
+    let Some(output) = output else {
+        return drain_pcm(pcm, held, records, now_ms);
+    };
+
+    for _ in 0..PCM_RECORDS_PER_STEP {
+        let Some(record) = pcm.pcm_record() else {
+            break;
+        };
+        match output.push(&record.raw_header, record.payload) {
+            Ok(()) => {}
+            Err(audio::Error::Again) => break,
+            Err(error) => return Err(Failure::Audio(error)),
+        }
+        pcm.consume_pcm()?;
+        *records += 1;
+        pump_pcm(pcm, now_ms)?;
+    }
+
+    output.pump(now_ms).map_err(Failure::Audio)?;
+    acknowledge_pcm(pcm, output, held)
+}
+
 /// The channel holds one record: pumping after a record is taken reads the next one, so a step
 /// takes all that arrived, up to `PCM_RECORDS_PER_STEP`.
 fn pump_pcm<P: PcmChannel>(pcm: &mut P, now_ms: u64) -> Result<(), Failure> {
@@ -868,7 +981,7 @@ fn pump_pcm<P: PcmChannel>(pcm: &mut P, now_ms: u64) -> Result<(), Failure> {
 fn drain_pcm<P: PcmChannel>(
     pcm: &mut P,
     held: &mut Option<[u8; HEADER_BYTES]>,
-    progress: &mut Progress,
+    records: &mut u32,
     now_ms: u64,
 ) -> Result<(), Failure> {
     if !retry_pcm_ack(pcm, held)? {
@@ -881,7 +994,7 @@ fn drain_pcm<P: PcmChannel>(
         };
         let header = record.raw_header;
         pcm.consume_pcm()?;
-        progress.pcm_records += 1;
+        *records += 1;
 
         if !pcm.acknowledge_pcm(&header)? {
             *held = Some(header);
