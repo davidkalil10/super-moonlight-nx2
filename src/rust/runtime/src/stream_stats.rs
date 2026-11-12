@@ -313,6 +313,28 @@ pub fn take_decoder_text() -> Option<String> {
     })
 }
 
+static SHOWN_LATE: AtomicU32 = AtomicU32::new(0);
+static DISCARDED: AtomicU32 = AtomicU32::new(0);
+
+/// A finished frame left in the decoder for the next refresh, behind one waiting to be shown.
+pub fn shown_late() {
+    SHOWN_LATE.fetch_add(1, Ordering::Relaxed);
+}
+
+/// A frame replaced by a newer one before it was shown.
+pub fn discarded() {
+    DISCARDED.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Frames held back and frames replaced since the last call.
+pub fn take_pacing_text() -> String {
+    format!(
+        "pacing late={} discarded={}",
+        SHOWN_LATE.swap(0, Ordering::Relaxed),
+        DISCARDED.swap(0, Ordering::Relaxed)
+    )
+}
+
 /// A blocking call of the stream that took longer than a frame.
 #[derive(Clone, Copy, Debug)]
 pub enum Site {

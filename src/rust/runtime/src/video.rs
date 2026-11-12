@@ -46,6 +46,9 @@ pub struct Stats {
     /// Uploaded frames a newer one replaced before the display turned: a backlog worked off,
     /// not a loss.
     pub caught_up: u64,
+    /// Turns that left a finished frame in a full decoder for the next refresh instead of
+    /// replacing the one waiting to be shown.
+    pub late: u64,
     pub presented: u64,
 }
 
@@ -139,6 +142,9 @@ const TURN_MIN_NS: u64 = 4_000_000;
 const TURN_MAX_NS: u64 = 34_000_000;
 /// The longest a wait for the decoder goes without pumping audio.
 const SLICE_NS: u64 = 1_000_000;
+/// Refreshes in a row a full decoder may hold a frame back before one is replaced: a burst
+/// of two frames costs a refresh of latency, a backlog that stays is worked off.
+const CATCH_UP_TURNS: u32 = 2;
 
 fn pump(audio: &mut dyn Pump) {
     audio.pump(platform::now_ns() / 1_000_000);
@@ -189,6 +195,8 @@ pub struct Video<'a, B: Backend<N>, const N: usize = SURFACES> {
     arrivals: [Option<Arrival>; decoder::UNITS],
     pending_arrival: Option<u64>,
     pending_timing: Option<(u64, u64)>,
+    /// Presents in a row that found a frame waiting and the decoder full.
+    late_turns: u32,
     timing: Timing,
     presentation: Option<Presentation>,
     turns: Turns,
@@ -239,6 +247,7 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
             arrivals: [None; decoder::UNITS],
             pending_arrival: None,
             pending_timing: None,
+            late_turns: 0,
             timing: Timing::default(),
             presentation: None,
             turns: Turns::default(),
@@ -619,12 +628,19 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
             self.reclaim(renderer)?;
         }
         match self.submit_timed(header, bytes, received_us) {
+            Err(Error::Decoder(decoder::Error::Again)) if self.pending && !self.catching_up() => {
+                Err(Error::Decoder(decoder::Error::Again))
+            }
             Err(Error::Decoder(decoder::Error::Again)) => {
                 self.poll_upload_pumping(renderer, audio)?;
                 self.submit_timed(header, bytes, received_us)
             }
             result => result,
         }
+    }
+
+    fn catching_up(&self) -> bool {
+        self.late_turns >= CATCH_UP_TURNS
     }
 
     pub fn poll_upload(&mut self, renderer: &mut Renderer) -> Result<bool, Error> {
@@ -721,6 +737,7 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
         }
         if self.pending {
             self.stats.caught_up += 1;
+            stream_stats::discarded();
         }
         self.pending = true;
         self.pending_arrival = arrival;
@@ -773,22 +790,33 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
 
     /// Takes one finished frame, unless the step already took one to make room for a unit,
     /// and presents once, so a turn lasts one display refresh and frames are shown in order.
-    /// A second finished frame waits in the decoder for the next turn while the units after it
-    /// decode: a frame that is a turn late then costs a turn of latency, not a picture. Only a
-    /// decoder that is full has fallen behind the display: `submit_draining` then replaces a
-    /// frame not shown yet and, with `Latency::Newest`, so does a second frame taken here.
+    /// Every frame is shown: one waiting with the decoder full holds the next in the decoder
+    /// and the unit after it in the network, a refresh late. Only when the decoder stays full
+    /// for `CATCH_UP_TURNS` refreshes has latency built up: `submit_draining` then replaces
+    /// the waiting frame and, with `Latency::Newest`, so does a second frame taken here.
     pub fn present(
         &mut self,
         renderer: &mut Renderer,
         interactive: bool,
         audio: &mut dyn Pump,
     ) -> Result<bool, Error> {
-        let behind = self.decoder.pending_units() >= self.decoder.units();
+        let full = self.decoder.pending_units() >= self.decoder.units();
+        let waiting = self.pending;
         if !self.pending {
             self.poll_upload_pumping(renderer, audio)?;
         }
-        if self.pending && behind && perf::latency() == Latency::Newest {
-            self.poll_upload_pumping(renderer, audio)?;
+        if waiting && full {
+            self.late_turns += 1;
+        } else {
+            self.late_turns = 0;
+        }
+        if waiting && full {
+            if self.catching_up() && perf::latency() == Latency::Newest {
+                self.poll_upload_pumping(renderer, audio)?;
+            } else {
+                self.stats.late += 1;
+                stream_stats::shown_late();
+            }
         }
         self.present_pumping(renderer, interactive, audio)
     }

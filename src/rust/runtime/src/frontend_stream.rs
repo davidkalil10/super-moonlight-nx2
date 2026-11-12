@@ -403,11 +403,12 @@ impl Stream {
         };
         let (stats, recovery) = running.counters();
         log(&format!(
-            "stream: video units={} bytes={} presented={} dropped={} caught_up={} skipped={} idr_requests={}",
+            "stream: video units={} bytes={} presented={} dropped={} late={} caught_up={} skipped={} idr_requests={}",
             stats.accepted_units,
             stats.accepted_bytes,
             stats.presented,
             stats.dropped,
+            stats.late,
             stats.caught_up,
             recovery.frames_skipped,
             recovery.idr_requests
@@ -422,6 +423,10 @@ impl Stream {
         if let Some(decoder) = crate::stream_stats::take_decoder_text() {
             log(&format!("stream: {decoder}"));
         }
+        log(&format!(
+            "stream: {}",
+            crate::stream_stats::take_pacing_text()
+        ));
         if let Some(overruns) = crate::stream_stats::take_overruns_text() {
             log(&format!("stream: {overruns}"));
         }
