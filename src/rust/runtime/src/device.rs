@@ -9,6 +9,7 @@ use core::{
 unsafe extern "C" {
     fn moonlightPlatformStart() -> bool;
     fn moonlightPlatformLog(message: *const u8, bytes: usize);
+    fn moonlightPlatformLogLongestWriteUs() -> u64;
     fn moonlightPlatformFinish() -> bool;
     fn moonlightPlatformAbort() -> !;
     fn moonlightAllocate(bytes: usize, alignment: usize) -> *mut c_void;
@@ -36,6 +37,11 @@ fn panic(_info: &PanicInfo<'_>) -> ! {
 
 pub(super) fn log(message: &str) {
     unsafe { moonlightPlatformLog(message.as_ptr(), message.len()) };
+}
+
+/// The longest write of queued log lines to the card since the last call.
+pub(super) fn log_longest_write_us() -> u64 {
+    unsafe { moonlightPlatformLogLongestWriteUs() }
 }
 
 #[unsafe(export_name = "moonlightRustMain")]

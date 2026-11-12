@@ -429,11 +429,12 @@ fn execute(
             }
             let (ui, longest_ms, phase) = turns.take();
             log(&format!(
-                "display: presents={rate}/s {}x{}@{hz} docked={} ui={ui} longest_ms={longest_ms} in={}",
+                "display: presents={rate}/s {}x{}@{hz} docked={} ui={ui} longest_ms={longest_ms} in={} log_write_ms={}",
                 info.width,
                 info.height,
                 dock.current(),
-                phase.name()
+                phase.name(),
+                crate::device::log_longest_write_us() / 1000
             ));
         }
         if last_screen != Some(screen) {

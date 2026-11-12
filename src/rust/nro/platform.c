@@ -25,6 +25,28 @@
 #define SOURCE_BYTES (2 * SLOT_BYTES)
 
 static FILE *report;
+
+/* Log lines wait here for the writer thread, so a slow SD card write never holds the frame
+   loop. Without the thread they are written in place, as before. */
+#define LOG_QUEUE_BYTES (256 * 1024)
+#define LOG_STACK_BYTES 0x8000
+#define LOG_PRIORITY 0x3B
+static struct {
+    Mutex lock;
+    CondVar queued;
+    CondVar written;
+    Thread thread;
+    bool running;
+    bool stopping;
+    uint64_t head;
+    uint64_t tail;
+    uint64_t dropped;
+    uint64_t longest_write_ns;
+    char bytes[LOG_QUEUE_BYTES];
+} logs;
+static char log_stack[LOG_STACK_BYTES] __attribute__((aligned(0x1000)));
+static void log_start(void);
+static void log_settle(uint64_t timeout_ns);
 static PadState pads[SOURCES];
 
 /* Six-axis handles per source, made for the style the controller had when first read. */
@@ -317,6 +339,7 @@ bool moonlightPlatformExportLog(void)
 {
     char source[PATH_BYTES];
     char target[PATH_BYTES];
+    log_settle(500000000);
     if (!newest_log(source, sizeof(source)) || !moonlightPlatformDirectoryCreate(EXPORT_DIRECTORY))
         return false;
     time_t now = time(NULL);
@@ -420,33 +443,158 @@ bool moonlightPlatformStart(void)
     if (fd < 0)
         return false;
     report = fdopen(fd, "w");
-    if (!report)
+    if (!report) {
         close(fd);
-    return report != NULL;
+        return false;
+    }
+    log_start();
+    return true;
+}
+
+static void log_write(const char *bytes, size_t count)
+{
+    uint64_t start = armTicksToNs(armGetSystemTick());
+    fwrite(bytes, 1, count, report);
+    fflush(report);
+    uint64_t took = armTicksToNs(armGetSystemTick()) - start;
+    mutexLock(&logs.lock);
+    if (took > logs.longest_write_ns)
+        logs.longest_write_ns = took;
+    mutexUnlock(&logs.lock);
+}
+
+/* Writes the queue from `tail` in pieces that do not wrap; the lock is held on entry and on
+   return, and let go during each write. */
+static void log_drain(void)
+{
+    while (logs.tail != logs.head) {
+        size_t offset = logs.tail % LOG_QUEUE_BYTES;
+        size_t count = logs.head - logs.tail;
+        if (count > LOG_QUEUE_BYTES - offset)
+            count = LOG_QUEUE_BYTES - offset;
+        uint64_t dropped = logs.dropped;
+        logs.dropped = 0;
+        mutexUnlock(&logs.lock);
+        log_write(logs.bytes + offset, count);
+        if (dropped) {
+            char line[64];
+            int length = snprintf(line, sizeof(line), "log: %" PRIu64 " bytes dropped\n", dropped);
+            log_write(line, (size_t)length);
+        }
+        mutexLock(&logs.lock);
+        logs.tail += count;
+        condvarWakeAll(&logs.written);
+    }
+}
+
+static void log_writer(void *argument)
+{
+    (void)argument;
+    mutexLock(&logs.lock);
+    while (!logs.stopping || logs.tail != logs.head) {
+        if (logs.tail == logs.head) {
+            condvarWait(&logs.queued, &logs.lock);
+            continue;
+        }
+        log_drain();
+    }
+    mutexUnlock(&logs.lock);
+}
+
+static void log_start(void)
+{
+    mutexInit(&logs.lock);
+    condvarInit(&logs.queued);
+    condvarInit(&logs.written);
+    logs.running = R_SUCCEEDED(threadCreate(&logs.thread, log_writer, NULL, log_stack,
+                                            LOG_STACK_BYTES, LOG_PRIORITY, -2)) &&
+                   R_SUCCEEDED(threadStart(&logs.thread));
+}
+
+/* Waits up to `timeout_ns` for the queue to reach the card. */
+static void log_settle(uint64_t timeout_ns)
+{
+    if (!logs.running)
+        return;
+    uint64_t deadline = armTicksToNs(armGetSystemTick()) + timeout_ns;
+    mutexLock(&logs.lock);
+    while (logs.tail != logs.head) {
+        uint64_t now = armTicksToNs(armGetSystemTick());
+        if (now >= deadline)
+            break;
+        condvarWaitTimeout(&logs.written, &logs.lock, deadline - now);
+    }
+    mutexUnlock(&logs.lock);
 }
 
 void moonlightPlatformLog(const uint8_t *message, size_t bytes)
 {
     if (!report)
         return;
-    fwrite(message, 1, bytes, report);
-    fputc('\n', report);
-    fflush(report);
+    if (!logs.running) {
+        fwrite(message, 1, bytes, report);
+        fputc('\n', report);
+        fflush(report);
+        return;
+    }
+    mutexLock(&logs.lock);
+    if (logs.head - logs.tail + bytes + 1 > LOG_QUEUE_BYTES) {
+        logs.dropped += bytes + 1;
+    } else {
+        for (size_t i = 0; i <= bytes; i++)
+            logs.bytes[(logs.head + i) % LOG_QUEUE_BYTES] = i < bytes ? (char)message[i] : '\n';
+        logs.head += bytes + 1;
+        condvarWakeOne(&logs.queued);
+    }
+    mutexUnlock(&logs.lock);
+}
+
+/* The longest single write to the card since the last call, in microseconds. */
+uint64_t moonlightPlatformLogLongestWriteUs(void)
+{
+    mutexLock(&logs.lock);
+    uint64_t longest = logs.longest_write_ns;
+    logs.longest_write_ns = 0;
+    mutexUnlock(&logs.lock);
+    return longest / 1000;
 }
 
 bool moonlightPlatformFinish(void)
 {
     if (!report)
         return false;
+    if (logs.running) {
+        mutexLock(&logs.lock);
+        logs.stopping = true;
+        condvarWakeOne(&logs.queued);
+        mutexUnlock(&logs.lock);
+        threadWaitForExit(&logs.thread);
+        threadClose(&logs.thread);
+        logs.running = false;
+    }
     FILE *closing = report;
     report = NULL;
     return fclose(closing) == 0;
 }
 
+/* A panic may come while the writer holds the lock, so the queue is written as it stands. */
 _Noreturn void moonlightPlatformAbort(void)
 {
-    static const uint8_t message[] = "runtime: Rust panic, exiting process";
-    moonlightPlatformLog(message, sizeof(message) - 1);
+    static const char message[] = "runtime: Rust panic, exiting process\n";
+    if (report) {
+        logs.running = false;
+        uint64_t tail = logs.tail;
+        while (tail != logs.head) {
+            size_t offset = tail % LOG_QUEUE_BYTES;
+            size_t count = logs.head - tail;
+            if (count > LOG_QUEUE_BYTES - offset)
+                count = LOG_QUEUE_BYTES - offset;
+            fwrite(logs.bytes + offset, 1, count, report);
+            tail += count;
+        }
+        fwrite(message, 1, sizeof(message) - 1, report);
+        fflush(report);
+    }
     svcExitProcess();
 }
 
