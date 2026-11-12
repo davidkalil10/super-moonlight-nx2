@@ -72,6 +72,16 @@ pub fn toggle_boost() {
     BOOST.fetch_xor(true, Ordering::Relaxed);
 }
 
+/// What a chord set: the path waits for the next stream, latency and boost apply at once.
+pub fn chord_text() -> alloc::string::String {
+    alloc::format!(
+        "perf: path={:?} from next stream, latency={:?} boost={} now",
+        path(),
+        latency(),
+        if boost() { "on" } else { "off" }
+    )
+}
+
 pub fn text() -> alloc::string::String {
     alloc::format!(
         "perf: path={:?} latency={:?} boost={}",

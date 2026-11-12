@@ -251,7 +251,7 @@ fn execute(
                 1 => crate::perf::next_latency(),
                 _ => crate::perf::toggle_boost(),
             }
-            let line = crate::perf::text();
+            let line = crate::perf::chord_text();
             log(&line);
             if let Ok(bytes) = renderer.storage_mut() {
                 let _ = app.client.toast(bytes, &line, now);
