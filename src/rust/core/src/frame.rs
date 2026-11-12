@@ -123,28 +123,58 @@ impl Frame<'_> {
         })
     }
 
+    /// Copies the shown picture into a slot and clears only the padding around it, so a
+    /// 1080p frame costs one pass over its bytes.
     pub fn copy_to(&self, slot: &mut [u8]) -> Result<Layout, Error> {
         let layout = self.plan()?;
         if slot.len() < layout.bytes() {
             return Err(Error::Invalid);
         }
-        slot[..layout.bytes()].fill(0);
-        for row in 0..layout.height as usize {
-            let source = (self.crop_top as usize + row) * self.luma.stride as usize
-                + self.crop_left as usize;
-            let target = row * layout.stride as usize;
-            slot[target..target + layout.width as usize]
-                .copy_from_slice(&self.luma.bytes[source..source + layout.width as usize]);
-        }
-        let start = layout.stride as usize * layout.slice_height as usize;
-        for row in 0..layout.height.div_ceil(2) as usize {
-            let source = (self.crop_top as usize / 2 + row) * self.chroma.stride as usize
-                + self.crop_left as usize;
-            let target = start + row * layout.stride as usize;
-            slot[target..target + layout.chroma_bytes as usize]
-                .copy_from_slice(&self.chroma.bytes[source..source + layout.chroma_bytes as usize]);
-        }
+        let stride = layout.stride as usize;
+        let (luma, chroma) =
+            slot[..layout.bytes()].split_at_mut(stride * layout.slice_height as usize);
+        let luma_source = &self.luma.bytes[self.crop_top as usize * self.luma.stride as usize..];
+        copy_plane(
+            luma_source,
+            self.luma.stride as usize,
+            self.crop_left as usize,
+            layout.height as usize,
+            layout.width as usize,
+            luma,
+            stride,
+        );
+        let chroma_source =
+            &self.chroma.bytes[self.crop_top as usize / 2 * self.chroma.stride as usize..];
+        copy_plane(
+            chroma_source,
+            self.chroma.stride as usize,
+            self.crop_left as usize,
+            layout.height.div_ceil(2) as usize,
+            layout.chroma_bytes as usize,
+            chroma,
+            stride,
+        );
         Ok(layout)
+    }
+}
+
+fn copy_plane(
+    source: &[u8],
+    source_stride: usize,
+    left: usize,
+    rows: usize,
+    width: usize,
+    target: &mut [u8],
+    stride: usize,
+) {
+    for (row, line) in target.chunks_exact_mut(stride).enumerate() {
+        if row >= rows {
+            line.fill(0);
+            continue;
+        }
+        let start = row * source_stride + left;
+        line[..width].copy_from_slice(&source[start..start + width]);
+        line[width..].fill(0);
     }
 }
 
@@ -212,5 +242,58 @@ mod tests {
     #[test]
     fn the_handheld_window_is_the_1080p_panel_the_ui_draws_for() {
         assert_eq!((WIDTH, HEIGHT), (1920, 1080));
+    }
+
+    #[test]
+    fn a_copy_crops_the_picture_and_clears_the_padding() {
+        let luma: [u8; 160] = core::array::from_fn(|byte| byte as u8);
+        let chroma: [u8; 80] = core::array::from_fn(|byte| 200 - byte as u8);
+        let frame = Frame {
+            luma: Plane {
+                bytes: &luma,
+                stride: 16,
+            },
+            chroma: Plane {
+                bytes: &chroma,
+                stride: 16,
+            },
+            coded_width: 12,
+            coded_height: 10,
+            crop_left: 2,
+            crop_top: 2,
+            display_width: 6,
+            display_height: 5,
+            matrix: Matrix::Bt709,
+            full_range: false,
+            timestamp_ns: 0,
+        };
+        let mut slot = [0xaa; 1024];
+        let layout = frame.copy_to(&mut slot).unwrap();
+        let stride = layout.stride as usize;
+        let chroma_start = stride * layout.slice_height as usize;
+        for row in 0..layout.slice_height as usize {
+            for column in 0..stride {
+                let expected = if row < 5 && column < 6 {
+                    luma[(row + 2) * 16 + column + 2]
+                } else {
+                    0
+                };
+                assert_eq!(slot[row * stride + column], expected, "luma {row},{column}");
+            }
+        }
+        for row in 0..layout.chroma_rows as usize {
+            for column in 0..stride {
+                let expected = if row < 3 && column < 6 {
+                    chroma[(row + 1) * 16 + column + 2]
+                } else {
+                    0
+                };
+                assert_eq!(
+                    slot[chroma_start + row * stride + column],
+                    expected,
+                    "chroma {row},{column}"
+                );
+            }
+        }
     }
 }
