@@ -47,6 +47,9 @@ const MODES: [(u32, u32, u32, bool, bool); 3] = [
         SDK_H264_2160P_VERIFIED,
     ),
 ];
+/// The SDK object's images: one shown and one waiting to be, while two more decode. With
+/// the two surfaces alone a held frame kept the next unit from decoding until it was shown.
+const SDK_BUFFERS: u32 = SURFACES as u32 + 2;
 const SUBMIT_BUSY: u32 = (3603 << 9) | 111;
 const TIMED_OUT: u32 = 0xea01;
 const STAGE_POOL_CLOSE: u32 = 13;
@@ -129,7 +132,13 @@ unsafe extern "C" {
     fn moonlightSdkVideoWait(slot: u32, timeout_ns: u64, ready: *mut bool) -> u32;
     fn moonlightSdkVideoLayout(slot: u32, layout: *mut Layout) -> u32;
     fn moonlightSdkVideoInPlace() -> bool;
-    fn moonlightSdkDecoderOpen(width: u32, height: u32, count: u32, images: *mut u32) -> u32;
+    fn moonlightSdkDecoderOpen(
+        width: u32,
+        height: u32,
+        count: u32,
+        buffers: u32,
+        images: *mut u32,
+    ) -> u32;
     fn moonlightSdkDecoderStart(
         codec: u32,
         fps: u32,
@@ -468,10 +477,14 @@ impl Backend for SdkVideo {
                     config.display.width(),
                     config.display.height(),
                     SURFACES as u32,
+                    SDK_BUFFERS,
                     images.as_mut_ptr(),
                 )
             };
-            log(&format!("sdk-decoder: open result=0x{result:x}"));
+            log(&format!(
+                "sdk-decoder: open result=0x{result:x} buffers={SDK_BUFFERS} units={}",
+                self.units()
+            ));
             check("open", result)?;
             self.config = Some(config);
             return Ok(images);
@@ -682,6 +695,10 @@ impl Backend for SdkVideo {
                 moonlightSdkVideoRelease(surface as u32)
             }
         })
+    }
+
+    fn units(&self) -> usize {
+        if self.high_level() { UNITS } else { 2 }
     }
 
     fn placement(&self, surface: usize) -> Option<Placement> {

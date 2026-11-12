@@ -22,6 +22,7 @@ static struct {
     uint32_t width;
     uint32_t height;
     uint32_t count;
+    uint32_t buffers;
     bool open;
     bool created;
     bool order_reported;
@@ -31,15 +32,21 @@ void moonlightPlatformLog(const uint8_t *message, size_t bytes);
 
 static void note(const char *line) { moonlightPlatformLog((const uint8_t *)line, strlen(line)); }
 
-/* Images are numbered from 1 by surface, since the object hands slots and no image ids. */
-Result moonlightSdkDecoderOpen(uint32_t width, uint32_t height, uint32_t count, uint32_t *images)
+/*
+ * Images are numbered from 1 by surface, since the object hands slots and no image ids. The
+ * object gets `buffers` images, more than the surfaces, so units decode while frames are held.
+ */
+Result moonlightSdkDecoderOpen(uint32_t width, uint32_t height, uint32_t count, uint32_t buffers,
+                               uint32_t *images)
 {
-    if (sdk.open || count < 2 || count > VIDDEC_MAX_IMAGES)
+    if (sdk.open || count < 2 || count > VIDDEC_MAX_IMAGES || buffers < count ||
+        buffers > VIDDEC_MAX_IMAGES)
         return MAKERESULT(Module_Libnx, LibnxError_BadInput);
     memset(&sdk, 0, sizeof(sdk));
     sdk.width = width;
     sdk.height = height;
     sdk.count = count;
+    sdk.buffers = buffers;
     sdk.open = true;
     for (uint32_t surface = 0; surface < count; surface++)
         images[surface] = surface + 1;
@@ -53,7 +60,7 @@ Result moonlightSdkDecoderStart(uint32_t codec, uint32_t fps, const void *codec_
         .codec = codec,
         .width = sdk.width,
         .height = sdk.height,
-        .image_count = sdk.count,
+        .image_count = sdk.buffers,
         .frame_rate = fps,
         .tiling = ViddecTilingMode_PitchLinear,
         .color_policy = sdk.width >= 1920 || sdk.height >= 1080 ? 3 : 1,

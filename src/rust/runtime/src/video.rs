@@ -327,6 +327,7 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
                 });
                 self.stats.accepted_units += 1;
                 self.stats.accepted_bytes += bytes.len() as u64;
+                stream_stats::in_flight(self.decoder.pending_units());
                 Ok(())
             }
             Err(decoder::Error::Again) => Err(Error::Decoder(decoder::Error::Again)),
@@ -736,16 +737,16 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
 
     /// Takes one finished frame, unless the step already took one to make room for a unit,
     /// and presents once, so a turn lasts one display refresh and frames are shown in order.
-    /// A second finished frame waits in the decoder for the next turn: a frame that is a turn
-    /// late then costs a turn of latency, not a picture. Only `submit_draining` replaces a
-    /// frame not shown yet, and only when units arrive faster than the decoder has room.
-    /// With `Latency::Newest`, a second finished frame replaces the one taken, so a decoder
-    /// two frames behind catches up instead of staying a turn late.
+    /// A second finished frame waits in the decoder for the next turn while the units after it
+    /// decode: a frame that is a turn late then costs a turn of latency, not a picture. Only a
+    /// decoder that is full has fallen behind the display: `submit_draining` then replaces a
+    /// frame not shown yet and, with `Latency::Newest`, so does a second frame taken here.
     pub fn present(&mut self, renderer: &mut Renderer, interactive: bool) -> Result<bool, Error> {
+        let behind = self.decoder.pending_units() >= self.decoder.units();
         if !self.pending {
             self.poll_upload(renderer)?;
         }
-        if self.pending && perf::latency() == Latency::Newest {
+        if self.pending && behind && perf::latency() == Latency::Newest {
             self.poll_upload(renderer)?;
         }
         self.present_pending(renderer, interactive)

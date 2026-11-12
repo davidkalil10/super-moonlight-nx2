@@ -13,7 +13,8 @@ use core::{
 
 pub const SURFACES: usize = 2;
 pub const FRAMES: usize = 2;
-pub const UNITS: usize = 2;
+/// The most units a backend takes before the oldest one's frame is taken; see `Backend::units`.
+pub const UNITS: usize = 3;
 pub const INPUT_MAX: usize = 1024 * 1024;
 static NEXT_OWNER: AtomicU64 = AtomicU64::new(1);
 
@@ -95,6 +96,13 @@ pub trait Backend<const N: usize = SURFACES> {
     fn release(&mut self, surface: usize) -> Result<(), BackendError>;
     fn close(&mut self) -> Result<(), BackendError>;
     fn now_ms(&self) -> u64;
+
+    /// How many units the backend takes before the oldest one's frame is taken, at most
+    /// `UNITS`. Two keeps one decoding while the other's frame waits; a backend with images to
+    /// spare takes a third, so two decode while a finished frame waits for the display.
+    fn units(&self) -> usize {
+        2
+    }
 
     /// Waits up to `timeout_ns` for the surface's frame. The default only checks.
     fn wait(&mut self, surface: usize, timeout_ns: u64) -> Result<bool, BackendError> {
@@ -354,6 +362,9 @@ impl<'a, B: Backend<N>, const N: usize> Decoder<'a, B, N> {
         {
             return Err(Error::Invalid);
         }
+        if self.pending_units() >= self.units() {
+            return Err(Error::Again);
+        }
         let Some(index) = self.pending.iter().position(Option::is_none) else {
             return Err(Error::Again);
         };
@@ -612,6 +623,11 @@ impl<'a, B: Backend<N>, const N: usize> Decoder<'a, B, N> {
         self.retired.set(true);
     }
 
+    /// How many units the decoder takes before the oldest one's frame is taken.
+    pub fn units(&self) -> usize {
+        self.backend.units().clamp(1, UNITS)
+    }
+
     pub fn pending_units(&self) -> usize {
         if self.closed {
             0
@@ -661,6 +677,60 @@ mod tests {
                 !fits(output(width, height), coded, display),
                 "{width}x{height}"
             );
+        }
+    }
+
+    struct Queued(usize);
+
+    impl Backend for Queued {
+        fn open(&mut self, _config: Config) -> Result<[u32; SURFACES], BackendError> {
+            Ok([1, 2])
+        }
+        fn submit(&mut self, _bytes: &[u8], _pts_us: u64) -> Result<(), BackendError> {
+            Ok(())
+        }
+        fn ready(&mut self, _surface: usize) -> Result<bool, BackendError> {
+            Ok(false)
+        }
+        fn output(&mut self) -> Result<Output, BackendError> {
+            Err(BackendError::Invalid)
+        }
+        fn readback(&mut self, _surface: usize, _out: &mut [u8]) -> Result<(), BackendError> {
+            Ok(())
+        }
+        fn release(&mut self, _surface: usize) -> Result<(), BackendError> {
+            Ok(())
+        }
+        fn close(&mut self) -> Result<(), BackendError> {
+            Ok(())
+        }
+        fn now_ms(&self) -> u64 {
+            0
+        }
+        fn units(&self) -> usize {
+            self.0
+        }
+    }
+
+    #[test]
+    fn a_backend_with_spare_images_takes_a_third_unit() {
+        let size = Size::new(16, 16).unwrap();
+        let config = Config {
+            codec: Codec::Av1,
+            coded: size,
+            display: size,
+            timeout_ms: 0,
+        };
+        for (units, taken) in [(2, 2), (3, 3), (9, UNITS)] {
+            let retired = Cell::new(false);
+            let (mut a, mut b) = ([0; 384], [0; 384]);
+            let mut decoder =
+                Decoder::open(Queued(units), config, &retired, [&mut a, &mut b]).unwrap();
+            for pts_us in 1..=taken as u64 {
+                decoder.submit(&[1], pts_us).unwrap();
+            }
+            assert_eq!(decoder.submit(&[1], 99), Err(Error::Again), "{units}");
+            assert_eq!(decoder.pending_units(), taken);
         }
     }
 }

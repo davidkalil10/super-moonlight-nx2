@@ -232,6 +232,9 @@ static DECODER_FRAMES: AtomicU32 = AtomicU32::new(0);
 static DECODER_ERRORS: AtomicU32 = AtomicU32::new(0);
 static DECODE_SUM_US: AtomicU64 = AtomicU64::new(0);
 static DECODE_MAX_US: AtomicU32 = AtomicU32::new(0);
+static IN_FLIGHT_SUM: AtomicU32 = AtomicU32::new(0);
+static IN_FLIGHT_COUNT: AtomicU32 = AtomicU32::new(0);
+static IN_FLIGHT_MAX: AtomicU32 = AtomicU32::new(0);
 
 #[derive(Clone, Copy)]
 pub enum DecoderEvent {
@@ -262,6 +265,14 @@ pub fn decoded(decode_ns: u64) {
     DECODE_MAX_US.fetch_max(decode_us, Ordering::Relaxed);
 }
 
+/// How many units the decoder holds right after one went in, the new one included.
+pub fn in_flight(units: usize) {
+    let units = u32::try_from(units).unwrap_or(u32::MAX);
+    IN_FLIGHT_SUM.fetch_add(units, Ordering::Relaxed);
+    IN_FLIGHT_COUNT.fetch_add(1, Ordering::Relaxed);
+    IN_FLIGHT_MAX.fetch_max(units, Ordering::Relaxed);
+}
+
 /// The decoder counters since the last call as a log line, None when nothing was submitted.
 pub fn take_decoder_text() -> Option<String> {
     let submits = DECODER_SUBMITS.swap(0, Ordering::Relaxed);
@@ -270,6 +281,10 @@ pub fn take_decoder_text() -> Option<String> {
     let errors = DECODER_ERRORS.swap(0, Ordering::Relaxed);
     let sum = DECODE_SUM_US.swap(0, Ordering::Relaxed);
     let max = DECODE_MAX_US.swap(0, Ordering::Relaxed);
+    let depth_sum = IN_FLIGHT_SUM.swap(0, Ordering::Relaxed);
+    let depth_count = IN_FLIGHT_COUNT.swap(0, Ordering::Relaxed);
+    let depth_max = IN_FLIGHT_MAX.swap(0, Ordering::Relaxed);
+    let depth_x10 = (depth_sum * 10).checked_div(depth_count).unwrap_or(0);
     let path = match DECODER_PATH.load(Ordering::Relaxed) {
         path if path == Path::Copy as u32 => Path::Copy,
         path if path == Path::InPlace as u32 => Path::InPlace,
@@ -277,8 +292,10 @@ pub fn take_decoder_text() -> Option<String> {
     };
     (submits + busy + frames + errors != 0).then(|| {
         format!(
-            "decoder path={path:?} submits={submits} busy={busy} frames={frames} errors={errors} decode mean/max us={}/{max}",
-            sum.checked_div(u64::from(frames)).unwrap_or(0)
+            "decoder path={path:?} submits={submits} busy={busy} frames={frames} errors={errors} decode mean/max us={}/{max} in_flight mean/max={}.{}/{depth_max}",
+            sum.checked_div(u64::from(frames)).unwrap_or(0),
+            depth_x10 / 10,
+            depth_x10 % 10
         )
     })
 }
