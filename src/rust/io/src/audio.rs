@@ -79,6 +79,11 @@ impl Default for Config {
     }
 }
 
+pub const EMPTY_BUCKETS: usize = 4;
+const EMPTY_BUCKET_MS: [u64; EMPTY_BUCKETS - 1] = [2, 5, 10];
+/// An empty device for this long misses at least one whole frame of the output's mix.
+pub const AUDIBLE_EMPTY_MS: u64 = 5;
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct Stats {
     pub received: u64,
@@ -94,9 +99,20 @@ pub struct Stats {
     /// Lowest and highest depth at a pump over the last full second.
     pub second_low_depth_ms: u32,
     pub second_high_depth_ms: u32,
+    /// Times a pump found every appended buffer released, however briefly. The device's
+    /// buffer count is not asked: at 20 ms it read zero about once a chunk while the stream
+    /// was heard playing.
     pub polled_starvations: u64,
     pub starved_ms_at_least: u64,
     pub starved_ms_at_most: u64,
+    /// The empty spells by how long the device stayed empty, at least: under 2 ms, 2 to 5,
+    /// 5 to 10 and 10 ms or more. The output mixes ahead of the speaker, so a spell shorter
+    /// than its 5 ms frame may not be heard.
+    pub empty_spells: [u64; EMPTY_BUCKETS],
+    /// Spells of at least `AUDIBLE_EMPTY_MS`, and how long they lasted.
+    pub audible_gaps: u64,
+    pub audible_gap_ms: u64,
+    pub longest_empty_ms: u64,
     pub longest_pump_gap_ms: u64,
     pub pump_gaps_over_output: u64,
 }
@@ -357,12 +373,7 @@ impl<D: Device> Output<D> {
         if !self.started || self.starved_since.is_some() {
             return Ok(());
         }
-        if self.queue.output_count() > 1 {
-            self.last_playing = now_ms;
-            return Ok(());
-        }
-        let count = self.device.queued().map_err(|error| self.fail(error))?;
-        if count > 0 {
+        if self.queue.output_count() > 0 {
             self.last_playing = now_ms;
             return Ok(());
         }
@@ -373,8 +384,19 @@ impl<D: Device> Output<D> {
 
     fn end_starvation(&mut self, now_ms: u64) {
         if let Some(since) = self.starved_since.take() {
-            self.stats.starved_ms_at_least += now_ms - since;
+            let empty_ms = now_ms - since;
+            self.stats.starved_ms_at_least += empty_ms;
             self.stats.starved_ms_at_most += now_ms - self.last_playing;
+            let bucket = EMPTY_BUCKET_MS
+                .iter()
+                .take_while(|&&limit| empty_ms >= limit)
+                .count();
+            self.stats.empty_spells[bucket] += 1;
+            self.stats.longest_empty_ms = self.stats.longest_empty_ms.max(empty_ms);
+            if empty_ms >= AUDIBLE_EMPTY_MS {
+                self.stats.audible_gaps += 1;
+                self.stats.audible_gap_ms += empty_ms;
+            }
         }
     }
 

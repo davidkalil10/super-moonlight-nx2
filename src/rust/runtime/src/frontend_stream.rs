@@ -429,15 +429,22 @@ impl Stream {
             return;
         };
         log(&format!(
-            "stream: audio received={} queued={} played={} dropped={} overflow={} cuts={} underruns={} starved_ms={} depth_ms={}..{} pump_gap_ms={}",
+            "stream: audio received={} queued={} played={} dropped={} overflow={} cuts={} underruns={} gap_ms={} longest_empty_ms={} empties={} empty_ms={} empties<2/<5/<10/more_ms={}/{}/{}/{} depth_ms={}..{} pump_gap_ms={}",
             audio.received,
             audio.appended,
             audio.released,
             audio.dropped,
             audio.overflow_drops,
             audio.cuts,
+            audio.audible_gaps,
+            audio.audible_gap_ms,
+            audio.longest_empty_ms,
             audio.polled_starvations,
-            audio.starved_ms_at_most,
+            audio.starved_ms_at_least,
+            audio.empty_spells[0],
+            audio.empty_spells[1],
+            audio.empty_spells[2],
+            audio.empty_spells[3],
             audio.second_low_depth_ms,
             audio.second_high_depth_ms,
             audio.longest_pump_gap_ms
