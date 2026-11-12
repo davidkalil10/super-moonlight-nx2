@@ -51,7 +51,8 @@ pub enum Error {
 
 /// `output_ms` is what the device holds after a pump, and playback starts once it holds that
 /// much. It has to outlast the caller's pump period: the stream pumps inside its waits, a
-/// millisecond or two apart, so 20 ms holds as on Civ7.
+/// millisecond or two apart. 20 ms, as on Civ7, still ran dry for 5 to 24 ms over a hundred
+/// times in 13 minutes on the console, so 30 ms is held.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Config {
     pub sample_rate: u32,
@@ -70,10 +71,10 @@ impl Default for Config {
             sample_rate: 48_000,
             channels: 2,
             chunk_bytes: 1920,
-            target_ms: 20,
-            burst_ms: 70,
+            target_ms: 30,
+            burst_ms: 80,
             window_ms: 500,
-            output_ms: 20,
+            output_ms: 30,
             fade_frames: 72,
         }
     }
