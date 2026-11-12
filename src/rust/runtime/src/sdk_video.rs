@@ -347,6 +347,15 @@ impl SdkVideo {
         reported * 1000
     }
 
+    /// AV1 takes nothing from the stream to start, so its decoder is created at open, before
+    /// the first unit and before audio plays. H.264 waits for the parameter sets of its first.
+    fn start_early(&mut self) -> Result<(), BackendError> {
+        match self.config {
+            Some(config) if config.codec == Codec::Av1 => self.start(&[]),
+            _ => Ok(()),
+        }
+    }
+
     fn start(&mut self, access_unit: &[u8]) -> Result<(), BackendError> {
         let config = self.config.ok_or(BackendError::Invalid)?;
         let session = viddec::session(config.codec, config.display, self.fps)
@@ -487,6 +496,7 @@ impl Backend for SdkVideo {
             ));
             check("open", result)?;
             self.config = Some(config);
+            self.start_early()?;
             return Ok(images);
         }
         let mut stage = 0;
@@ -540,6 +550,7 @@ impl Backend for SdkVideo {
             }
         }
         self.config = Some(config);
+        self.start_early()?;
         Ok(images)
     }
 
