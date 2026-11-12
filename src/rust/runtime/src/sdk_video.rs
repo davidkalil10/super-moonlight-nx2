@@ -15,7 +15,7 @@ use alloc::format;
 use moonlight_nx2_core::{
     annexb,
     codec::{Capabilities, Codec, Depth, Evidence, Mode, Size},
-    decoder::{Backend, BackendError, Config, Placement, SURFACES, UNITS},
+    decoder::{Backend, BackendError, Config, INPUT_MAX, Placement, SURFACES, UNITS},
     viddec,
     video_wire::Output,
 };
@@ -352,11 +352,11 @@ impl SdkVideo {
                     session.frame_rate,
                     codec_config.as_ptr(),
                     bytes,
-                    0,
+                    INPUT_MAX as u64,
                 )
             };
             log(&format!(
-                "sdk-decoder: start codec={:?} result=0x{result:x} codec_config_bytes={bytes} fps={} stream_fps={}",
+                "sdk-decoder: start codec={:?} result=0x{result:x} codec_config_bytes={bytes} fps={} stream_fps={} max_input={INPUT_MAX}",
                 config.codec, session.frame_rate, self.fps
             ));
             check("start", result)?;
