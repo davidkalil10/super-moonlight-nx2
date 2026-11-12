@@ -26,18 +26,13 @@ pub struct Session {
 }
 
 /// The service refused 1440p configured at 120 (0x17a26f) on both codecs, and 2160p at 60
-/// (0x17bc6f) where it took 30, on AV1 with frames out and sums matching (2026-11-10). So a
+/// (0x17bc6f) where it took 30, on AV1 with frames out and sums matching (2026-11-10). The
+/// high level decoder refused 2160p at 60 with the same code on 2026-11-12. So a
 /// session is configured with the highest rate known to be taken. Whether the decoder then
 /// keeps up with a faster stream is not measured: 120 fps and 2160p stay out of the verified
 /// modes.
 const FRAME_RATE_MAX: u32 = 60;
 const FRAME_RATE_MAX_2160P: u32 = 30;
-
-/// The rate to ask for first where the service may take more than `Session::frame_rate`,
-/// with that rate to fall back to.
-pub fn frame_rate_to_try(display: Size, fps: u32) -> u32 {
-    fps.min(FRAME_RATE_MAX).max(frame_rate(display, fps))
-}
 
 fn frame_rate(display: Size, fps: u32) -> u32 {
     if display.width() > 2560 || display.height() > 1440 {

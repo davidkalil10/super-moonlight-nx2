@@ -392,36 +392,19 @@ impl SdkVideo {
         let start_ns = unsafe { sdk::moonlightNowNs() };
         let took_ms = || (unsafe { sdk::moonlightNowNs() } - start_ns) / 1_000_000;
         if self.high_level() {
-            let create = |frame_rate: u32| {
-                let result = unsafe {
-                    moonlightSdkDecoderStart(
-                        session.codec,
-                        frame_rate,
-                        codec_config.as_ptr(),
-                        bytes,
-                        INPUT_MAX as u64,
-                    )
-                };
-                log(&format!(
-                    "sdk-decoder: start codec={:?} result=0x{result:x} codec_config_bytes={bytes} fps={frame_rate} stream_fps={} max_input={INPUT_MAX} took_ms={}",
-                    config.codec, self.fps, took_ms()
-                ));
-                result
+            let result = unsafe {
+                moonlightSdkDecoderStart(
+                    session.codec,
+                    session.frame_rate,
+                    codec_config.as_ptr(),
+                    bytes,
+                    INPUT_MAX as u64,
+                )
             };
-            let wanted = viddec::frame_rate_to_try(config.display, self.fps);
-            #[cfg(feature = "diagnostic-sdk-modes")]
-            let wanted = match self.tuning.frame_rate {
-                0 => wanted,
-                _ => session.frame_rate,
-            };
-            let mut result = create(wanted);
-            if result != 0 && wanted != session.frame_rate {
-                log(&format!(
-                    "sdk-decoder: fps={wanted} refused 0x{result:x}; falling back to fps={}",
-                    session.frame_rate
-                ));
-                result = create(session.frame_rate);
-            }
+            log(&format!(
+                "sdk-decoder: start codec={:?} result=0x{result:x} codec_config_bytes={bytes} fps={} stream_fps={} max_input={INPUT_MAX} took_ms={}",
+                config.codec, session.frame_rate, self.fps, took_ms()
+            ));
             check("start", result)?;
             self.started = true;
             return Ok(());
