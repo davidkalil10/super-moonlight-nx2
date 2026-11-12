@@ -50,8 +50,8 @@ pub enum Error {
 }
 
 /// `output_ms` is what the device holds after a pump, and playback starts once it holds that
-/// much. It has to outlast the caller's pump period: a 60 Hz loop that misses a frame pumps
-/// 33 ms apart.
+/// much. It has to outlast the caller's pump period: the stream pumps inside its waits, a
+/// millisecond or two apart, so 20 ms holds as on Civ7.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Config {
     pub sample_rate: u32,
@@ -70,10 +70,10 @@ impl Default for Config {
             sample_rate: 48_000,
             channels: 2,
             chunk_bytes: 1920,
-            target_ms: 50,
-            burst_ms: 100,
+            target_ms: 20,
+            burst_ms: 70,
             window_ms: 500,
-            output_ms: 50,
+            output_ms: 20,
             fade_frames: 72,
         }
     }
