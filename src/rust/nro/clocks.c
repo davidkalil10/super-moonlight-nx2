@@ -19,20 +19,18 @@ typedef struct {
     Result apm;
     Result clkrst[CLOCKS];
     uint32_t ids[CLOCKS];
-    Result pcv;
 } MoonlightClockReading;
 
-/* The module ids of the first console; pcv names the ones of this one where it answers. */
-static const PcvModuleId fallback_ids[CLOCKS] = {PcvModuleId_CpuBus, PcvModuleId_GPU,
-                                                 PcvModuleId_EMC, PcvModuleId_NVDEC,
-                                                 PcvModuleId_VIC};
-static const PcvModule modules[CLOCKS] = {PcvModule_CpuBus, PcvModule_GPU, PcvModule_EMC,
-                                          PcvModule_NVDEC, PcvModule_VIC};
+/*
+ * The module ids of the first console. pcv is not asked for this one's: sm holds a request for
+ * a service that is not registered, and the stream hung at the first read when it did.
+ */
+static const PcvModuleId ids[CLOCKS] = {PcvModuleId_CpuBus, PcvModuleId_GPU, PcvModuleId_EMC,
+                                        PcvModuleId_NVDEC, PcvModuleId_VIC};
 
 static struct {
     bool apm_tried, clkrst_tried;
-    Result apm_opened, clkrst_opened, pcv;
-    PcvModuleId ids[CLOCKS];
+    Result apm_opened, clkrst_opened;
     ClkrstSession sessions[CLOCKS];
     Result session_opened[CLOCKS];
     uint32_t decoder_default_hz;
@@ -47,33 +45,15 @@ static Result open_apm(void)
     return clocks.apm_opened;
 }
 
-static void resolve_ids(void)
-{
-    memcpy(clocks.ids, fallback_ids, sizeof(clocks.ids));
-    clocks.pcv = pcvInitialize();
-    if (R_FAILED(clocks.pcv))
-        return;
-    for (int clock = 0; clock < CLOCKS; clock++) {
-        PcvModuleId id = 0;
-        Result result = pcvGetModuleId(&id, modules[clock]);
-        if (R_SUCCEEDED(result))
-            clocks.ids[clock] = id;
-        else
-            clocks.pcv = result;
-    }
-    pcvExit();
-}
-
 static Result open_clkrst(void)
 {
     if (!clocks.clkrst_tried) {
         clocks.clkrst_tried = true;
-        resolve_ids();
         clocks.clkrst_opened = clkrstInitialize();
         for (int clock = 0; clock < CLOCKS; clock++)
             clocks.session_opened[clock] =
                 R_SUCCEEDED(clocks.clkrst_opened)
-                    ? clkrstOpenSession(&clocks.sessions[clock], clocks.ids[clock], 3)
+                    ? clkrstOpenSession(&clocks.sessions[clock], ids[clock], 3)
                     : clocks.clkrst_opened;
     }
     return clocks.clkrst_opened;
@@ -91,39 +71,12 @@ void moonlightClocksRead(MoonlightClockReading *out)
     if (R_SUCCEEDED(out->apm))
         out->apm = apmGetPerformanceConfiguration(mode, &out->configuration);
     open_clkrst();
-    out->pcv = clocks.pcv;
     for (int clock = 0; clock < CLOCKS; clock++) {
-        out->ids[clock] = clocks.ids[clock];
+        out->ids[clock] = ids[clock];
         out->clkrst[clock] = clocks.session_opened[clock];
         if (R_SUCCEEDED(out->clkrst[clock]))
             out->clkrst[clock] = clkrstGetClockRate(&clocks.sessions[clock], &out->hz[clock]);
     }
-}
-
-/*
- * Writes each module id in [first, first + count) that clkrst opens and its rate, up to
- * `max` of them, for finding the decoder's module on this console.
- */
-uint32_t moonlightClocksScan(uint32_t first, uint32_t count, uint32_t *ids, uint32_t *hz,
-                             uint32_t max)
-{
-    uint32_t found = 0;
-
-    if (R_FAILED(open_clkrst()))
-        return 0;
-    for (uint32_t id = first; id < first + count && found < max; id++) {
-        ClkrstSession session;
-        uint32_t rate = 0;
-        if (R_FAILED(clkrstOpenSession(&session, (PcvModuleId)id, 3)))
-            continue;
-        if (R_SUCCEEDED(clkrstGetClockRate(&session, &rate))) {
-            ids[found] = id;
-            hz[found] = rate;
-            found++;
-        }
-        clkrstCloseSession(&session);
-    }
-    return found;
 }
 
 /* The rates the decoder's clock can take, for the log. */
