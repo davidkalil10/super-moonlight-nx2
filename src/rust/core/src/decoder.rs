@@ -98,6 +98,36 @@ pub trait Backend<const N: usize = SURFACES> {
         let _ = surface;
         None
     }
+
+    /// Whether frames can stay in the backend's own memory, read from there by the caller.
+    fn host_images(&self) -> bool {
+        false
+    }
+
+    /// Where the ready frame of `surface` sits in the backend's memory. Such a frame is not
+    /// read back and stays with the caller until `Decoder::release_surface`.
+    fn host_image(&self, surface: usize) -> Option<HostImage> {
+        let _ = surface;
+        None
+    }
+}
+
+/// A decoded NV12 frame left in the backend's memory: `bytes` from the page-aligned `base`,
+/// both planes `pitch` bytes a row, the chroma plane half as many rows as the luma plane.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct HostImage {
+    pub base: *mut u8,
+    pub bytes: usize,
+    pub luma_offset: usize,
+    pub chroma_offset: usize,
+    pub pitch: u32,
+    pub rows: u32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Hosted {
+    pub surface: usize,
+    pub image: HostImage,
 }
 
 /// The geometry of a frame decoded in place: both planes start a row apart by `stride`, the
@@ -133,6 +163,8 @@ pub struct FrameInfo {
     pub staged: bool,
     /// The frame stays in the decoder's surface, which is the presenter's slot of that index.
     pub placed: Option<Placed>,
+    /// The frame stays in the backend's memory until its surface is released.
+    pub hosted: Option<Hosted>,
 }
 
 #[derive(Clone, Copy)]
@@ -368,6 +400,12 @@ impl<'a, B: Backend<N>, const N: usize> Decoder<'a, B, N> {
         self.backend.placement(0).is_some()
     }
 
+    /// Whether frames may stay with the caller until `release_surface`: in place or in the
+    /// backend's memory.
+    pub fn holds_frames(&self) -> bool {
+        self.in_place() || self.backend.host_images()
+    }
+
     pub fn holds_surface(&self, surface: usize) -> bool {
         !self.closed && self.placed.get(surface) == Some(&true)
     }
@@ -440,9 +478,14 @@ impl<'a, B: Backend<N>, const N: usize> Decoder<'a, B, N> {
             .backend
             .placement(surface)
             .map(|placement| Placed { surface, placement });
-        let staged = staging.is_some() && placed.is_none();
+        let hosted = placed
+            .is_none()
+            .then(|| self.backend.host_image(surface))
+            .flatten()
+            .map(|image| Hosted { surface, image });
+        let staged = staging.is_some() && placed.is_none() && hosted.is_none();
         let token = self.next_token(frame);
-        if placed.is_some() {
+        if placed.is_some() || hosted.is_some() {
             self.queued.pop();
             self.placed[surface] = true;
         } else {
@@ -476,6 +519,7 @@ impl<'a, B: Backend<N>, const N: usize> Decoder<'a, B, N> {
             display: self.config.display,
             staged,
             placed,
+            hosted,
         }))
     }
 
