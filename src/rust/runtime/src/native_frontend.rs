@@ -248,7 +248,7 @@ fn execute(
             match chord {
                 0 => crate::perf::next_path(),
                 1 => crate::perf::next_latency(),
-                _ => crate::perf::toggle_decoder_max(),
+                _ => crate::perf::toggle_boost(),
             }
             let line = crate::perf::chord_text();
             log(&line);

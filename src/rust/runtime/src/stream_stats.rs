@@ -306,11 +306,10 @@ pub fn take_decoder_text() -> Option<String> {
     };
     (submits + busy + frames + errors != 0).then(|| {
         format!(
-            "decoder path={path:?} submits={submits} busy={busy} frames={frames} errors={errors} decode mean/max us={}/{max} in_flight mean/max={}.{}/{depth_max} nvdec={}",
+            "decoder path={path:?} submits={submits} busy={busy} frames={frames} errors={errors} decode mean/max us={}/{max} in_flight mean/max={}.{}/{depth_max}",
             sum.checked_div(u64::from(frames)).unwrap_or(0),
             depth_x10 / 10,
-            depth_x10 % 10,
-            crate::perf::decoder_clock()
+            depth_x10 % 10
         )
     })
 }
