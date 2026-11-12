@@ -43,8 +43,8 @@ def main():
                         help="Both stick clicks step two test pages; ZL+ZR steps the scaling filter: exact, bilinear, Lanczos")
     parser.add_argument("--ui-uncached", action="store_true",
                         help="the pattern build with the UI buffers in non-cached host memory")
-    parser.add_argument("--perf-chord", action="store_true",
-                        help="the pattern build where L3+ZL steps the decode path (in place, copy, SDK object), L3+ZR the latency mode and L3+R the CPU boost")
+    parser.add_argument("--perf", action="store_true",
+                        help="the pattern build that also logs where each shown frame sits")
     parser.add_argument("--release", metavar="VERSION",
                         help="the production build for testers, shown in hbmenu as VERSION (e.g. 0.1.0-rc6)")
     parser.add_argument("--diagnostic", choices=SDK_DIAGNOSTICS,
@@ -52,9 +52,9 @@ def main():
     parser.add_argument("--trials", choices=TRIALS, default=TRIALS[0],
                         help="the sessions an sdk-modes diagnostic runs")
     args = parser.parse_args()
-    if args.perf_chord and (args.ui_pattern or args.decode120 or args.tcp_video or args.diagnostic):
-        parser.error("--perf-chord goes alone")
-    if args.release and (args.perf_chord or args.ui_pattern or args.decode120 or args.tcp_video
+    if args.perf and (args.ui_pattern or args.decode120 or args.tcp_video or args.diagnostic):
+        parser.error("--perf goes alone")
+    if args.release and (args.perf or args.ui_pattern or args.decode120 or args.tcp_video
                          or args.diagnostic):
         parser.error("--release goes alone")
     if args.release and not re.fullmatch(r"\d+\.\d+\.\d+(-[a-z0-9.]+)?", args.release):
@@ -76,7 +76,7 @@ def main():
         diagnostic += "-tcp"
     if args.ui_pattern:
         diagnostic += "-uncached" if args.ui_uncached else "-pattern"
-    if args.perf_chord:
+    if args.perf:
         diagnostic += "-perf"
     name = diagnostic
     if args.release:

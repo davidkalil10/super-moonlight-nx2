@@ -52,7 +52,6 @@ pub mod hid;
 #[cfg(any(target_os = "none", feature = "host-renderer"))]
 pub mod media_session;
 #[cfg(any(target_os = "none", feature = "host-renderer"))]
-pub mod perf;
 #[cfg(any(target_os = "none", feature = "host-renderer"))]
 mod policy_badge;
 #[cfg(any(target_os = "none", feature = "host-renderer"))]

@@ -474,16 +474,6 @@ impl Renderer {
         Ok(Some((slot, self.slot_bytes(slot))))
     }
 
-    /// Where each frame slot starts in the mapped storage, for a decoder writing frames in
-    /// place. The memory stays mapped until `close`.
-    pub fn frame_slots(&mut self) -> Result<[*mut u8; frame::VIDEO_SLOTS], Error> {
-        self.active()?;
-        let base = self.objects.storage.mapped;
-        Ok(core::array::from_fn(|slot| unsafe {
-            base.add(frame::FRAMES_OFFSET + slot * frame::FRAME_BYTES)
-        }))
-    }
-
     /// Whether `slot` is neither shown nor read by a frame still in flight.
     pub fn slot_free(&mut self, slot: usize) -> Result<bool, Error> {
         self.active()?;

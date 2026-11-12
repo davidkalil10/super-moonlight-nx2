@@ -158,7 +158,6 @@ impl Stream {
         width: u32,
         height: u32,
         fps: u32,
-        slots: Option<[*mut u8; SURFACES]>,
     ) -> Result<(Video<'static, Decoder, SURFACES>, *mut Buffers), &'static str> {
         let display = Size::new(width, height).ok_or("invalid size")?;
         let coded = Size::new(width.next_multiple_of(16), height.next_multiple_of(16))
@@ -173,11 +172,7 @@ impl Stream {
             fps,
             matrix: Matrix::Bt709,
         };
-        log(&crate::perf::text());
-        let backend = Decoder::new(fps).with_path(
-            crate::perf::path(),
-            slots.map(|slots| (slots, moonlight_nx2_core::frame::FRAME_BYTES)),
-        );
+        let backend = Decoder::new(fps);
         let buffers = Box::into_raw(Buffers::new(coded));
         let memory = unsafe { &mut *buffers };
         let [first, second] = &mut memory.frames;
@@ -218,7 +213,6 @@ impl Stream {
         client: &mut Client<F>,
         stream: &Negotiated,
         control: Control,
-        slots: Option<[*mut u8; SURFACES]>,
         now_ms: u64,
     ) -> bool {
         let Some(epoch) = client.session_epoch() else {
@@ -237,7 +231,7 @@ impl Stream {
             stream.audio.packet_duration_ms
         ));
         let opened = match self.running {
-            None => self.start_direct(stream, control, epoch, slots, now_ms),
+            None => self.start_direct(stream, control, epoch, now_ms),
             Some(_) => Err("a stream is already open"),
         };
         match opened {
@@ -259,7 +253,6 @@ impl Stream {
         stream: &Negotiated,
         control: Control,
         epoch: Epoch,
-        slots: Option<[*mut u8; SURFACES]>,
         now_ms: u64,
     ) -> Result<Running, &'static str> {
         let (video, buffers) = self.open_video(
@@ -267,7 +260,6 @@ impl Stream {
             u32::from(stream.width),
             u32::from(stream.height),
             u32::from(stream.fps),
-            slots,
         )?;
         let decoder = match HwOpus::open(&stream.audio) {
             Ok(decoder) => Some(decoder),

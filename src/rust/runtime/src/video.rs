@@ -4,7 +4,6 @@
 extern crate alloc;
 
 use crate::{
-    perf::{self, Latency},
     render::{self, Renderer},
     render_platform as platform,
     stream_stats::{self, Stage},
@@ -155,7 +154,7 @@ fn pump(audio: &mut dyn Pump) {
     audio.pump(platform::now_ns() / 1_000_000);
 }
 
-/// When the current turn started and how long turns last, for the wait of `Latency::Wake`.
+/// When the current turn started and how long turns last, for the wait in `wake`.
 #[derive(Default)]
 struct Turns {
     started_ns: u64,
@@ -590,13 +589,10 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
         Ok(())
     }
 
-    /// With `Latency::Wake`, waits up to the turn's share for the oldest unit's frame, so it
-    /// is shown on this turn rather than the next. Audio is pumped between slices of the wait.
+    /// Waits up to the turn's share for the oldest unit's frame, so it is shown on this turn
+    /// rather than the next. Audio is pumped between slices of the wait.
     fn wake(&mut self, audio: &mut dyn Pump) -> Result<(), Error> {
-        if perf::latency() == Latency::Off
-            || stream_stats::vrr()
-            || self.decoder.pending_units() == 0
-        {
+        if stream_stats::vrr() || self.decoder.pending_units() == 0 {
             return Ok(());
         }
         let start_ns = platform::now_ns();
@@ -738,7 +734,7 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
             return Ok(false);
         }
         self.stats.uploaded += 1;
-        if cfg!(feature = "perf-chord")
+        if cfg!(feature = "perf-log")
             && self.stats.uploaded == DETAIL_FRAME
             && self.host_import != Some(true)
         {
@@ -805,7 +801,7 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
     /// Every frame is shown: one waiting with the decoder full holds the next in the decoder
     /// and the unit after it in the network, a refresh late. Only when the decoder stays full
     /// for `CATCH_UP_TURNS` refreshes has latency built up: `submit_draining` then replaces
-    /// the waiting frame and, with `Latency::Newest`, so does a second frame taken here.
+    /// the waiting frame, and so does a second frame taken here.
     /// With VRR the display refreshes on a present, so a frame is presented once it is ready
     /// and a turn without one presents nothing, up to `HOLD_NS`: a late frame then delays one
     /// refresh instead of repeating the previous picture for a whole one.
@@ -830,7 +826,7 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
             self.late_turns = 0;
         }
         if waiting && full {
-            if self.catching_up() && perf::latency() == Latency::Newest {
+            if self.catching_up() {
                 self.poll_upload_pumping(renderer, audio)?;
             } else {
                 self.stats.late += 1;

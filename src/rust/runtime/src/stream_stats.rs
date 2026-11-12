@@ -5,7 +5,6 @@ extern crate alloc;
 
 use alloc::{format, string::String};
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
-use crate::perf::Path;
 use moonlight_nx2_core::stats::StreamStats;
 
 const FIELDS: usize = 12;
@@ -239,7 +238,7 @@ pub fn take_idr_request() -> bool {
     IDR_WANTED.swap(false, Ordering::AcqRel)
 }
 
-static DECODER_PATH: AtomicU32 = AtomicU32::new(0);
+static DECODER_SDK: AtomicBool = AtomicBool::new(false);
 static DECODER_SUBMITS: AtomicU32 = AtomicU32::new(0);
 static DECODER_BUSY: AtomicU32 = AtomicU32::new(0);
 static DECODER_FRAMES: AtomicU32 = AtomicU32::new(0);
@@ -257,9 +256,10 @@ pub enum DecoderEvent {
     Error,
 }
 
-/// The decode path the counters below belong to, set when a decoder opens.
-pub fn decoder_path(path: Path) {
-    DECODER_PATH.store(path as u32, Ordering::Relaxed);
+/// Whether the counters below belong to the SDK decoder object or to our low-level session,
+/// set when a decoder opens.
+pub fn decoder_path(sdk_object: bool) {
+    DECODER_SDK.store(sdk_object, Ordering::Relaxed);
 }
 
 pub fn decoder(event: DecoderEvent) {
@@ -299,14 +299,14 @@ pub fn take_decoder_text() -> Option<String> {
     let depth_count = IN_FLIGHT_COUNT.swap(0, Ordering::Relaxed);
     let depth_max = IN_FLIGHT_MAX.swap(0, Ordering::Relaxed);
     let depth_x10 = (depth_sum * 10).checked_div(depth_count).unwrap_or(0);
-    let path = match DECODER_PATH.load(Ordering::Relaxed) {
-        path if path == Path::Copy as u32 => Path::Copy,
-        path if path == Path::InPlace as u32 => Path::InPlace,
-        _ => Path::Sdk,
+    let path = if DECODER_SDK.load(Ordering::Relaxed) {
+        "Sdk"
+    } else {
+        "Copy"
     };
     (submits + busy + frames + errors != 0).then(|| {
         format!(
-            "decoder path={path:?} submits={submits} busy={busy} frames={frames} errors={errors} decode mean/max us={}/{max} in_flight mean/max={}.{}/{depth_max}",
+            "decoder path={path} submits={submits} busy={busy} frames={frames} errors={errors} decode mean/max us={}/{max} in_flight mean/max={}.{}/{depth_max}",
             sum.checked_div(u64::from(frames)).unwrap_or(0),
             depth_x10 / 10,
             depth_x10 % 10

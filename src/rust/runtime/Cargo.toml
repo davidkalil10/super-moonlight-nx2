@@ -18,7 +18,7 @@ ui-pattern = ["frontend"]
 # Holds the GPU about half a second for each page it checks.
 ui-page-check = ["ui-pattern"]
 ui-uncached = ["ui-pattern"]
-perf-chord = ["ui-pattern"]
+perf-log = ["ui-pattern"]
 host-renderer = []
 
 [dependencies]

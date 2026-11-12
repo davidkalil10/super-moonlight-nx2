@@ -282,7 +282,7 @@ pub fn run(renderer: &mut Renderer) -> bool {
     let clips = &CLIPS;
     let mut passed = true;
     for &(name, bytes) in clips {
-        let backend = SdkVideo::new(CLIP_FPS);
+        let backend = SdkVideo::low_level(CLIP_FPS);
         passed &= session(renderer, name, bytes, backend, Feed::Held);
         if stopped() {
             return false;

@@ -243,19 +243,6 @@ fn execute(
                 break;
             }
         };
-        #[cfg(feature = "perf-chord")]
-        if let Some(chord) = input_gate.take_perf_edge() {
-            match chord {
-                0 => crate::perf::next_path(),
-                1 => crate::perf::next_latency(),
-                _ => crate::perf::toggle_boost(),
-            }
-            let line = crate::perf::chord_text();
-            log(&line);
-            if let Ok(bytes) = renderer.storage_mut() {
-                let _ = app.client.toast(bytes, &line, now);
-            }
-        }
         #[cfg(feature = "ui-pattern")]
         {
             if input_gate.take_pattern_edge() {
@@ -311,9 +298,8 @@ fn execute(
             match request {
                 MediaRequest::Open => match app.direct_media() {
                     Some((negotiated, outbox)) => {
-                        let slots = renderer.frame_slots().ok();
                         let control = Control(outbox);
-                        stream.open_direct(&mut app.client, &negotiated, control, slots, now_ms);
+                        stream.open_direct(&mut app.client, &negotiated, control, now_ms);
                     }
                     None => stream.refuse(&mut app.client),
                 },

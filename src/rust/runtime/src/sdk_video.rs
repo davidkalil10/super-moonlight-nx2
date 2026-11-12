@@ -7,7 +7,6 @@ extern crate alloc;
 
 use crate::{
     device::log,
-    perf::Path,
     sdk,
     stream_stats::{self, DecoderEvent, Stage},
 };
@@ -15,7 +14,7 @@ use alloc::format;
 use moonlight_nx2_core::{
     annexb,
     codec::{Capabilities, Codec, Depth, Evidence, Mode, Size},
-    decoder::{Backend, BackendError, Config, HostImage, INPUT_MAX, Placement, SURFACES, UNITS},
+    decoder::{Backend, BackendError, Config, HostImage, INPUT_MAX, SURFACES, UNITS},
     viddec,
     video_wire::Output,
 };
@@ -101,22 +100,6 @@ impl Default for Host {
     }
 }
 
-impl Layout {
-    /// Both planes a whole number of rows apart from the start of the slot, as the renderer
-    /// reads a frame.
-    fn placement(&self) -> Option<Placement> {
-        let stride = u32::try_from(self.pitch[0]).ok()?;
-        let fits = stride != 0
-            && self.pitch[1] == self.pitch[0]
-            && self.offset[0] == 0
-            && self.offset[1] % stride == 0;
-        fits.then(|| Placement {
-            stride,
-            slice_height: self.offset[1] / stride,
-        })
-    }
-}
-
 unsafe extern "C" {
     fn moonlightSdkVideoOpen(
         width: u32,
@@ -130,8 +113,6 @@ unsafe extern "C" {
         place_result: *mut u32,
     ) -> u32;
     fn moonlightSdkVideoWait(slot: u32, timeout_ns: u64, ready: *mut bool) -> u32;
-    fn moonlightSdkVideoLayout(slot: u32, layout: *mut Layout) -> u32;
-    fn moonlightSdkVideoInPlace() -> bool;
     fn moonlightSdkDecoderOpen(
         width: u32,
         height: u32,
@@ -248,9 +229,9 @@ pub fn note_output_formats(size: Size) {
 
 pub struct SdkVideo {
     fps: u32,
-    path: Path,
-    slots: Option<([*mut u8; SURFACES], usize)>,
-    placements: [Option<Placement>; SURFACES],
+    /// The SDK's `VideoDecoder` object, which streams use. Our low-level session, frames
+    /// copied out, stays for the reference replays.
+    sdk_object: bool,
     #[cfg(feature = "diagnostic-sdk-modes")]
     tuning: Tuning,
     config: Option<Config>,
@@ -270,7 +251,7 @@ impl SdkVideo {
     pub fn tuned(fps: u32, tuning: Tuning) -> Self {
         Self {
             tuning,
-            ..Self::new(fps)
+            ..Self::low_level(fps)
         }
     }
 
@@ -285,10 +266,15 @@ impl SdkVideo {
 
     pub fn new(fps: u32) -> Self {
         Self {
+            sdk_object: true,
+            ..Self::low_level(fps)
+        }
+    }
+
+    pub fn low_level(fps: u32) -> Self {
+        Self {
             fps,
-            path: Path::Copy,
-            slots: None,
-            placements: [None; SURFACES],
+            sdk_object: false,
             #[cfg(feature = "diagnostic-sdk-modes")]
             tuning: Tuning::NONE,
             config: None,
@@ -303,15 +289,8 @@ impl SdkVideo {
         }
     }
 
-    /// Decodes through `path`; `slots` are the presenter's frame slots for `Path::InPlace`.
-    pub fn with_path(mut self, path: Path, slots: Option<([*mut u8; SURFACES], usize)>) -> Self {
-        self.path = path;
-        self.slots = slots.filter(|_| path == Path::InPlace);
-        self
-    }
-
     fn high_level(&self) -> bool {
-        self.path == Path::Sdk
+        self.sdk_object
     }
 
     fn submitted_at(&mut self, now_ns: u64) {
@@ -478,7 +457,7 @@ impl Backend for SdkVideo {
             );
         }
         let mut images = [0; SURFACES];
-        stream_stats::decoder_path(self.path);
+        stream_stats::decoder_path(self.sdk_object);
         self.in_flight_count = 0;
         if self.high_level() {
             let result = unsafe {
@@ -502,17 +481,13 @@ impl Backend for SdkVideo {
         let mut stage = 0;
         let mut sync_result = 0;
         let mut place_result = 0;
-        let (slots, slot_bytes) = match &self.slots {
-            Some((slots, bytes)) => (slots.as_ptr(), *bytes),
-            None => (core::ptr::null(), 0),
-        };
         let result = unsafe {
             moonlightSdkVideoOpen(
                 config.display.width(),
                 config.display.height(),
                 SURFACES as u32,
-                slots,
-                slot_bytes,
+                core::ptr::null(),
+                0,
                 images.as_mut_ptr(),
                 &mut stage,
                 &mut sync_result,
@@ -531,23 +506,6 @@ impl Backend for SdkVideo {
         }
         if sync_result != 0 {
             log("sdk-video: no sync session; frames are taken when their properties arrive");
-        }
-        self.placements = [None; SURFACES];
-        if unsafe { moonlightSdkVideoInPlace() } {
-            for (surface, placement) in self.placements.iter_mut().enumerate() {
-                let mut layout = Layout::default();
-                let result = unsafe { moonlightSdkVideoLayout(surface as u32, &mut layout) };
-                *placement = (result == 0).then(|| layout.placement()).flatten();
-                log(&format!(
-                    "sdk-video: in place surface={surface} result=0x{result:x} {layout:?} placement={placement:?}"
-                ));
-            }
-            if self.placements.iter().any(Option::is_none) {
-                self.placements = [None; SURFACES];
-                log("sdk-video: in place layout refused; closing");
-                let _ = self.close();
-                return Err(BackendError::Refused);
-            }
         }
         self.config = Some(config);
         self.start_early()?;
@@ -712,18 +670,12 @@ impl Backend for SdkVideo {
         if self.high_level() { UNITS } else { 2 }
     }
 
-    fn placement(&self, surface: usize) -> Option<Placement> {
-        self.placements.get(surface).copied().flatten()
-    }
-
-    /// The SDK decoder's images, or the heap pool `Path::InPlace` falls back to when the
-    /// renderer's slots are refused. `Path::Copy` keeps the CPU copy to compare against.
     fn closes_after_malformed(&self) -> bool {
         self.high_level()
     }
 
     fn host_images(&self) -> bool {
-        self.high_level() || (self.path == Path::InPlace && self.placements[0].is_none())
+        self.high_level()
     }
 
     fn host_image(&self, surface: usize) -> Option<HostImage> {
@@ -763,7 +715,6 @@ impl Backend for SdkVideo {
             self.ready = None;
             return Ok(());
         }
-        self.placements = [None; SURFACES];
         let poll_result = unsafe { moonlightSdkVideoPollResult() };
         let mut stage = 0;
         let result = unsafe { moonlightSdkVideoClose(&mut stage) };

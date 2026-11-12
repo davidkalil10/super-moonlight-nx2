@@ -17,7 +17,7 @@ python3 src/rust/build-production.py
 
 The NRO and its receipts land in `/media/storage2/builds/moonlight/<build-id>/`.
 `--release 0.1.0-rc6` names a tester build with that version, which hbmenu shows.
-`--decode120`, `--tcp-video` and `--perf-chord` are test builds.
+`--decode120`, `--tcp-video` and `--perf` are test builds.
 
 ## Run
 
