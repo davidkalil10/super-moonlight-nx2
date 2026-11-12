@@ -145,6 +145,11 @@ const SLICE_NS: u64 = 1_000_000;
 /// Refreshes in a row a full decoder may hold a frame back before one is replaced: a burst
 /// of two frames costs a refresh of latency, a backlog that stays is worked off.
 const CATCH_UP_TURNS: u32 = 2;
+/// With VRR, how long a turn without a finished frame waits for one before the loop goes
+/// round again.
+const ARRIVAL_WAIT_NS: u64 = 2_000_000;
+/// With VRR, the longest the picture goes without a present while no frame comes.
+const HOLD_NS: u64 = 34_000_000;
 
 fn pump(audio: &mut dyn Pump) {
     audio.pump(platform::now_ns() / 1_000_000);
@@ -197,6 +202,7 @@ pub struct Video<'a, B: Backend<N>, const N: usize = SURFACES> {
     pending_timing: Option<(u64, u64)>,
     /// Presents in a row that found a frame waiting and the decoder full.
     late_turns: u32,
+    last_present_ns: u64,
     timing: Timing,
     presentation: Option<Presentation>,
     turns: Turns,
@@ -248,6 +254,7 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
             pending_arrival: None,
             pending_timing: None,
             late_turns: 0,
+            last_present_ns: 0,
             timing: Timing::default(),
             presentation: None,
             turns: Turns::default(),
@@ -586,7 +593,10 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
     /// With `Latency::Wake`, waits up to the turn's share for the oldest unit's frame, so it
     /// is shown on this turn rather than the next. Audio is pumped between slices of the wait.
     fn wake(&mut self, audio: &mut dyn Pump) -> Result<(), Error> {
-        if perf::latency() == Latency::Off || self.decoder.pending_units() == 0 {
+        if perf::latency() == Latency::Off
+            || stream_stats::vrr()
+            || self.decoder.pending_units() == 0
+        {
             return Ok(());
         }
         let start_ns = platform::now_ns();
@@ -768,6 +778,7 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
         stream_stats::stage(Stage::Present, present_start_ns, platform::now_ns());
         match shown {
             Ok(()) => {
+                self.last_present_ns = platform::now_ns();
                 let presented = self.pending;
                 self.pending = false;
                 self.stats.presented += u64::from(presented);
@@ -795,15 +806,22 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
     /// and the unit after it in the network, a refresh late. Only when the decoder stays full
     /// for `CATCH_UP_TURNS` refreshes has latency built up: `submit_draining` then replaces
     /// the waiting frame and, with `Latency::Newest`, so does a second frame taken here.
+    /// With VRR the display refreshes on a present, so a frame is presented once it is ready
+    /// and a turn without one presents nothing, up to `HOLD_NS`: a late frame then delays one
+    /// refresh instead of repeating the previous picture for a whole one.
     pub fn present(
         &mut self,
         renderer: &mut Renderer,
         interactive: bool,
         audio: &mut dyn Pump,
     ) -> Result<bool, Error> {
+        let vrr = stream_stats::vrr();
         let full = self.decoder.pending_units() >= self.decoder.units();
         let waiting = self.pending;
         if !self.pending {
+            if vrr {
+                self.await_frame(audio)?;
+            }
             self.poll_upload_pumping(renderer, audio)?;
         }
         if waiting && full {
@@ -819,7 +837,40 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
                 stream_stats::shown_late(platform::now_ns());
             }
         }
+        if vrr && !self.pending && !self.hold_ended(interactive) {
+            return Ok(false);
+        }
         self.present_pumping(renderer, interactive, audio)
+    }
+
+    /// Whether a present without a new frame is due: the UI redraws at most once a refresh,
+    /// the picture at least every `HOLD_NS`.
+    fn hold_ended(&self, interactive: bool) -> bool {
+        let since = platform::now_ns().saturating_sub(self.last_present_ns);
+        let refresh = stream_stats::frame_ns().unwrap_or(HOLD_NS);
+        since >= HOLD_NS || (interactive && since >= refresh)
+    }
+
+    /// Waits up to `ARRIVAL_WAIT_NS` for the decoder to finish a frame, pumping audio, or
+    /// sleeps that long in slices while it holds no unit.
+    fn await_frame(&mut self, audio: &mut dyn Pump) -> Result<(), Error> {
+        let deadline_ns = platform::now_ns() + ARRIVAL_WAIT_NS;
+        loop {
+            let left_ns = deadline_ns.saturating_sub(platform::now_ns());
+            let slice_ns = left_ns.clamp(1, SLICE_NS);
+            let ready = if self.decoder.pending_units() == 0 {
+                platform::sleep_ns(slice_ns);
+                false
+            } else {
+                self.decoder
+                    .wait(slice_ns)
+                    .map_err(|error| self.fail(Error::Decoder(error)))?
+            };
+            if ready || left_ns <= SLICE_NS {
+                return Ok(());
+            }
+            pump(audio);
+        }
     }
 
     pub fn close(&mut self) -> Result<(), Error> {

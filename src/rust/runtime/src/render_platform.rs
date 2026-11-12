@@ -29,6 +29,15 @@ pub fn now_ns() -> u64 {
     }
 }
 
+pub fn sleep_ns(ns: u64) {
+    #[cfg(target_os = "none")]
+    unsafe {
+        crate::sdk::svcSleepThread(i64::try_from(ns).unwrap_or(i64::MAX));
+    }
+    #[cfg(not(target_os = "none"))]
+    std::thread::sleep(std::time::Duration::from_nanos(ns));
+}
+
 pub fn extensions() -> [*const c_char; 2] {
     [ash::khr::surface::NAME.as_ptr(), {
         #[cfg(target_os = "none")]

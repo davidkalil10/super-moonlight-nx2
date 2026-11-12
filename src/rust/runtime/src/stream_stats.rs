@@ -323,9 +323,19 @@ static LATE_GAP_MIN_MS: AtomicU64 = AtomicU64::new(u64::MAX);
 static LATE_GAP_MAX_MS: AtomicU64 = AtomicU64::new(0);
 static VBLANK_NS: AtomicU64 = AtomicU64::new(0);
 static READY_PHASES: [AtomicU32; 4] = [const { AtomicU32::new(0) }; 4];
+static VRR: AtomicBool = AtomicBool::new(false);
 
 /// An acquire that had to wait returns at a refresh: the reference for frame phases.
 const VBLANK_WAIT_NS: u64 = 500_000;
+
+/// Whether the display refreshes when a frame is presented, set on every display poll.
+pub fn set_vrr(vrr: bool) {
+    VRR.store(vrr, Ordering::Relaxed);
+}
+
+pub fn vrr() -> bool {
+    VRR.load(Ordering::Relaxed)
+}
 
 /// A finished frame left in the decoder for the next refresh, behind one waiting to be shown.
 /// The time since the last one tells a clock drift, evenly spaced, from arrival jitter.
@@ -377,7 +387,8 @@ pub fn take_pacing_text() -> String {
     let max = LATE_GAP_MAX_MS.swap(0, Ordering::Relaxed);
     let phase = |quarter: usize| READY_PHASES[quarter].swap(0, Ordering::Relaxed);
     format!(
-        "pacing late={} discarded={} late_gap_ms mean/min/max={}/{}/{} ready_quarter={}/{}/{}/{}",
+        "pacing vrr={} late={} discarded={} late_gap_ms mean/min/max={}/{}/{} ready_quarter={}/{}/{}/{}",
+        vrr(),
         SHOWN_LATE.swap(0, Ordering::Relaxed),
         DISCARDED.swap(0, Ordering::Relaxed),
         sum.checked_div(u64::from(gaps)).unwrap_or(0),

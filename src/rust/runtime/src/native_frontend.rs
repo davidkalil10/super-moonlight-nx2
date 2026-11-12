@@ -346,6 +346,7 @@ fn execute(
             if let Ok(display) = renderer.display() {
                 snapshot = Some(display);
                 crate::stream_stats::set_refresh_hz(display.nominal_hz);
+                crate::stream_stats::set_vrr(display.vrr && display.operation_mode == 0);
                 if let Some(docked) = dock.sample(display.operation_mode(), now_ms) {
                     log(&format!("display: dock change docked={docked}"));
                     probe.set_docked(docked);
