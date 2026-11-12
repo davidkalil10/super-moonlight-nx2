@@ -552,6 +552,49 @@ Result moonlightSdkVideoRead(uint32_t slot, uint8_t *luma, uint8_t *chroma, size
                                luma, pitch, chroma, pitch);
 }
 
+typedef struct {
+    uint8_t *base;
+    uint64_t bytes;
+    uint64_t luma_offset;
+    uint64_t chroma_offset;
+    uint32_t pitch;
+    uint32_t rows;
+} MoonlightSdkVideoHost;
+
+/* Where an acquired pitch-linear image sits in a heap pool's backing, for a reader of that
+ * memory. The planes are flushed from the data cache, as viddecCopyImageNv12 does. */
+Result moonlightSdkVideoHost(uint32_t slot, MoonlightSdkVideoHost *out)
+{
+    GsvCpuImageDescriptor descriptor = {0};
+    MoonlightSdkVideoLayout layout;
+
+    if (slot >= video.count || !video.acquired[slot] || video.in_place || !video.pools_open)
+        return MAKERESULT(Module_Libnx, LibnxError_BadInput);
+    Result result = describe(slot, &descriptor, &layout);
+    if (R_FAILED(result))
+        return result;
+    const ViddecImagePool *pool = pool_of(slot);
+    const GsvCpuImagePlane *planes = descriptor.planes;
+    bool pitch_linear = descriptor.type == GsvCpuImageType_Nv12PitchLinear ||
+                        descriptor.type == GsvCpuImageType_Nv12PitchLinearAlt;
+    if (!pitch_linear || planes[0].pitch != planes[1].pitch || planes[0].pitch > UINT32_MAX ||
+        (uint64_t)planes[0].offset + planes[0].span > pool->backing_size ||
+        (uint64_t)planes[1].offset + planes[1].span > pool->backing_size)
+        return MAKERESULT(Module_Libnx, LibnxError_NotFound);
+    uint8_t *base = pool->backing;
+    armDCacheFlush(base + planes[0].offset, planes[0].span);
+    armDCacheFlush(base + planes[1].offset, planes[1].span);
+    *out = (MoonlightSdkVideoHost){
+        .base = base,
+        .bytes = pool->backing_size,
+        .luma_offset = planes[0].offset,
+        .chroma_offset = planes[1].offset,
+        .pitch = (uint32_t)planes[0].pitch,
+        .rows = layout.height,
+    };
+    return 0;
+}
+
 Result moonlightSdkVideoRelease(uint32_t slot)
 {
     static const GsvNativeSync unused;

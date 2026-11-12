@@ -150,6 +150,7 @@ unsafe extern "C" {
     ) -> u32;
     fn moonlightSdkDecoderRelease(slot: u32) -> u32;
     fn moonlightSdkDecoderHost(slot: u32, out: *mut Host) -> u32;
+    fn moonlightSdkVideoHost(slot: u32, out: *mut Host) -> u32;
     fn moonlightSdkDecoderClose();
     fn moonlightSdkVideoStart(
         codec: u32,
@@ -685,16 +686,25 @@ impl Backend for SdkVideo {
         self.placements.get(surface).copied().flatten()
     }
 
+    /// The SDK decoder's images, or the heap pool `Path::InPlace` falls back to when the
+    /// renderer's slots are refused. `Path::Copy` keeps the CPU copy to compare against.
     fn host_images(&self) -> bool {
-        self.high_level()
+        self.high_level() || (self.path == Path::InPlace && self.placements[0].is_none())
     }
 
     fn host_image(&self, surface: usize) -> Option<HostImage> {
-        if !self.high_level() {
+        if !self.host_images() {
             return None;
         }
         let mut host = Host::default();
-        if unsafe { moonlightSdkDecoderHost(surface as u32, &mut host) } != 0 {
+        let result = unsafe {
+            if self.high_level() {
+                moonlightSdkDecoderHost(surface as u32, &mut host)
+            } else {
+                moonlightSdkVideoHost(surface as u32, &mut host)
+            }
+        };
+        if result != 0 {
             return None;
         }
         Some(HostImage {
