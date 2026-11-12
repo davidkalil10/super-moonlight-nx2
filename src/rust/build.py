@@ -225,7 +225,7 @@ def build(args):
                      "NACP_VERSION=" + args.nacp_version]]
         if args.diagnostic in SDK_DIAGNOSTICS:
             commands[0].append("BREADCRUMBS=1")
-        artifact = directory / "moonlight-nx2-rust.nro"
+        artifact = directory / "moonlight-nx2.nro"
 
     directory.mkdir(parents=True, exist_ok=False)
     try:

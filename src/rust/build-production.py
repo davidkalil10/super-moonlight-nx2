@@ -148,7 +148,7 @@ def main():
     ]))
 
     subprocess.run(["rsync", "-a", f"m4:{remote_root}/", str(local_root) + "/"], check=True)
-    artifact = local_root / "nro/moonlight-nx2-rust.nro"
+    artifact = local_root / "nro/moonlight-nx2.nro"
     if not artifact.is_file() or artifact.stat().st_size < 20:
         raise RuntimeError(f"m4 did not return the {name} NRO")
     receipt = json.loads((local_root / "nro/BUILD-INFO.json").read_text())
@@ -159,7 +159,7 @@ def main():
         "revision": revision,
         "git_describe": description,
         "nacp_version": version,
-        "artifact": "nro/moonlight-nx2-rust.nro",
+        "artifact": "nro/moonlight-nx2.nro",
         "bytes": artifact.stat().st_size,
         "sha256": digest(artifact),
         "build_info": "nro/BUILD-INFO.json",

@@ -21,7 +21,7 @@ The NRO and its receipts land in `/media/storage2/builds/moonlight/<build-id>/`.
 
 ## Run
 
-Copy `moonlight-nx2-rust.nro` to `switch/` on the SD card and start it from the homebrew
+Copy `moonlight-nx2.nro` to `switch/` on the SD card and start it from the homebrew
 menu. **Find PCs** looks for Sunshine on the local network, and **Add a PC** takes an
 address.
 

@@ -14,7 +14,7 @@ endif
 
 include $(DEVKITPRO)/libounce/switch2_rules
 
-OUTPUT := $(BUILD_DIR)/moonlight-nx2-rust
+OUTPUT := $(BUILD_DIR)/moonlight-nx2
 NACP_TITLE ?= Moonlight NX2
 NACP_VERSION ?= 0.1.0
 ICON_PATH ?= $(SOURCE_DIR)/icon.jpg
