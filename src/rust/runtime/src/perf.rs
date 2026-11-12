@@ -26,19 +26,20 @@ pub enum Latency {
     Newest,
 }
 
-/// The perf-chord build starts on the SDK decoder with the turn waking for its frame, the
-/// choices under test; the others keep the shipped `InPlace` and `Off`.
+/// Every build starts on the SDK decoder taking the newest frame, the console A/B's winner.
+/// Only the perf-chord build can step to the others.
 #[cfg(feature = "perf-chord")]
-const FIRST: (u8, u8) = (2, 1);
+const PATHS: [Path; 3] = [Path::Sdk, Path::InPlace, Path::Copy];
 #[cfg(not(feature = "perf-chord"))]
-const FIRST: (u8, u8) = (0, 0);
+const PATHS: [Path; 1] = [Path::Sdk];
+#[cfg(feature = "perf-chord")]
+const LATENCIES: [Latency; 3] = [Latency::Newest, Latency::Off, Latency::Wake];
+#[cfg(not(feature = "perf-chord"))]
+const LATENCIES: [Latency; 1] = [Latency::Newest];
 
-static PATH: AtomicU8 = AtomicU8::new(FIRST.0);
-static LATENCY: AtomicU8 = AtomicU8::new(FIRST.1);
+static PATH: AtomicU8 = AtomicU8::new(0);
+static LATENCY: AtomicU8 = AtomicU8::new(0);
 static BOOST: AtomicBool = AtomicBool::new(false);
-
-const PATHS: [Path; 3] = [Path::InPlace, Path::Copy, Path::Sdk];
-const LATENCIES: [Latency; 3] = [Latency::Off, Latency::Wake, Latency::Newest];
 
 pub fn path() -> Path {
     PATHS[PATH.load(Ordering::Relaxed) as usize % PATHS.len()]
