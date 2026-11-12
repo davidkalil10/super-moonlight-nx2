@@ -2,9 +2,9 @@
 
 Stream PC games from Sunshine to Nintendo Switch 2, with controller, touch and stereo audio.
 
-The console side is a homebrew NRO written in Rust (`src/rust`). It decodes AV1 or H.264
-with the console's video decoder and talks to a small helper on the PC, which sits beside
-Sunshine and speaks the Moonlight protocol for it.
+The app is a homebrew NRO written in Rust (`src/rust`). It talks to Sunshine itself over
+the Moonlight protocol and decodes AV1 or H.264 with the console's video decoder. Nothing
+else runs on the PC.
 
 ## Build
 
@@ -16,43 +16,39 @@ python3 src/rust/build-production.py
 ```
 
 The NRO and its receipts land in `/media/storage2/builds/moonlight/<build-id>/`.
-`--decode120` builds the variant that measures the decoder at 120 fps on a 60 Hz display, and
-`--tcp-video` keeps video on TCP instead of UDP. Those two are test builds.
-
-The PC bundle is built on x86_64 Linux with Git and Podman:
-
-```sh
-python3 src/rust/build-pc-bundle.py
-```
-
-It compiles the helper and the Sunshine worker in a pinned image and packs them with the
-launcher, the licences and a manifest into `moonlight-nx2-pc-<revision>-x86_64.tar.gz`.
+`--release 0.1.0-rc6` names a tester build with that version, which hbmenu shows.
+`--decode120`, `--tcp-video` and `--perf-chord` are test builds.
 
 ## Run
 
-On the PC, with Sunshine installed, unpack the bundle and run:
-
-```sh
-./moonlight-nx2-pc setup
-./moonlight-nx2-pc serve
-```
-
 Copy `moonlight-nx2-rust.nro` to `switch/` on the SD card and start it from the homebrew
-menu. Choose the PC. The first time the console shows an eight-digit code; type it on the PC:
+menu. **Find PCs** looks for Sunshine on the local network, and **Add a PC** takes an
+address.
 
-```sh
-./moonlight-nx2-pc pair 12345678
-```
+Pick the PC. The console shows a 4-digit PIN: open Sunshine's web UI on the PC, go to its
+PIN page and enter it. The apps appear once Sunshine accepts it.
 
-Then pair with Sunshine once, with the PIN the console shows, and pick a game. The bundle's
-[README](src/rust/host/bundle/README.md) covers the service, the firewall port and display
-matching.
+Each PC gets its own console identity, so several PCs pair side by side. **Forget this PC**
+drops that PC's key and covers on the console. Its old entry stays in Sunshine's Clients list
+and can be removed there. Pairing again needs a new PIN and makes a fresh identity, so it
+never collides with the old entry.
+
+## Sunshine
+
+- **Codec**: AV1 needs a GPU that encodes it. If Sunshine cannot, pick H.264 in Settings.
+- **Touch**: enable **Native Pen/Touch Support** under Input
+  ([`native_pen_touch`](https://docs.lizardbyte.dev/projects/sunshine/latest/md_docs_2configuration.html#native_pen_touch)).
+  On Linux Sunshine also needs access to uinput, for touch and for the controllers.
+- **Controllers**: leave the gamepad type on automatic to get motion (see below).
 
 ## Stream controls
 
 - **Hold Plus+Minus for a second**: open the stream menu, unless **Hold + and - for menu**
-  is off. Plus and Minus still reach the PC while held.
+  is off. Plus and Minus still reach the PC while held. Any player can open it.
 - **L+R+Minus+Plus**: stop the stream at once and return to the apps. It always works.
+
+The stream menu has **Disconnect**, which leaves the game running on the PC, **Quit app on
+PC**, and **Show keyboard**, which types on the PC.
 
 ## Controllers
 
@@ -68,28 +64,33 @@ Open **Settings** before launching a game. An app can keep its own picture optio
 | Option | Choices |
 | --- | --- |
 | Resolution | Automatic, 720p, 1080p; 1440p and 4K when docked |
-| Frame rate | 60 fps; 120 fps up to 1440p while the display runs at 120 Hz, as the handheld screen does |
+| Frame rate | 120 fps (default) while the display runs at 120 Hz, as the handheld screen does, or 60 fps |
 | Bitrate | Auto from the network test, or 5–40 Mbps |
 | Codec | AV1, with H.264 as the fallback |
-| Optimise game settings | The PC display follows the stream's size and rate |
 | Play audio on the PC | On / Off |
+| Optimise game settings | The PC display follows the stream's size and rate |
+| Quit host app on return | Disconnect also quits the app on the PC |
 | Hold + and - for menu | On / Off |
+| Stream info badge | A small badge with the stream mode over the video |
+| Frame counter | Adds the frame rate and delays to the badge |
 | Touch as mouse | Touches move the PC mouse instead of sending touch |
-| Low latency | Applies after restarting the app |
-| Quit host app on return | On / Off |
-| Show stats on screen | Off, Compact (the stream mode) or Full (with frame rate and delays) |
+| Low latency (restart) | Applies after restarting the app |
 | Theme | System, light or dark |
 | Rumble | On / Off |
 | Rumble strength | Strength of the controller vibration |
+| Button layout | Xbox (by position) or Nintendo (by label) |
 
 4K streams at 60 fps and needs AV1.
 
 ## Touch
 
-Touch works in handheld mode. It needs **Native Pen/Touch Support** enabled under Input in
-Sunshine ([`native_pen_touch`](https://docs.lizardbyte.dev/projects/sunshine/latest/md_docs_2configuration.html#native_pen_touch)),
-and on Linux Sunshine needs access to uinput. If the PC takes no touch, the stream says so
-once on the badge.
+Touch works in handheld mode, with the Sunshine settings above. If the PC takes no touch,
+the stream says so once on the badge.
+
+## Logs
+
+Each launch writes `switch/moonlight-nx2/rust/runtime-<tick>.log` on the SD card. The third
+line names the commit it was built from. Send the whole file with a bug report.
 
 ## Development
 
@@ -105,8 +106,8 @@ python3 src/rust/build-shaders.py --directory /media/storage2/builds/moonlight/<
 The fonts and the glyph atlas made from them are in `src/rust/ui/fonts`. With Pillow
 installed, `python3 src/rust/ui/fonts/glyphs.py atlas` rewrites `glyphs.bin`.
 
-`src/rust/host/upstream` pins the Moonlight sources the Sunshine worker is built from:
-`fetch.sh` checks them out and `CMakeLists.txt` builds their library.
+`src/rust/host` and `build-pc-bundle.py` are the former PC helper. The app no longer uses
+them; they stay only for the interop tests in `moonlight-nx2-dev`.
 
 Tests, lab tools and design notes live in the separate `moonlight-nx2-dev` repository. It
 also keeps the C sources its parity tests compare the Rust UI and wire code with, and the

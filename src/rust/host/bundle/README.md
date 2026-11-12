@@ -1,5 +1,8 @@
 # Moonlight for Switch 2: PC bundle
 
+The app no longer uses this helper; it pairs and streams with Sunshine directly. The bundle
+stays for the interop tests in `moonlight-nx2-dev`.
+
 The PC side of moonlight-nx2: `moonlight-nx2-host` talks to the console,
 `moonlight-nx2-upstream-worker` talks to Sunshine, and `moonlight-nx2-pc` sets both up and
 runs them. x86_64 Linux. `manifest.json` lists every file with its SHA-256, the source
