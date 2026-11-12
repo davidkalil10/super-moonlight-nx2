@@ -5,7 +5,7 @@ use crate::{
     render_platform::{self as sdk, flush_cpu_cache, log},
 };
 use alloc::{boxed::Box, format, vec::Vec};
-use ash::{Entry, vk};
+use ash::{Entry, vk, vk::TaggedStructure};
 use core::{
     ffi::{CStr, c_char},
     marker::PhantomData,
@@ -203,6 +203,33 @@ struct Flight {
     acquired: vk::Semaphore,
     slot: Option<usize>,
     pending: bool,
+    /// The host imports this submit copies from.
+    imports: [Option<usize>; 2],
+}
+
+/// Memory the decoder owns, imported with VK_EXT_external_memory_host as a copy source.
+struct HostImport {
+    buffer: vk::Buffer,
+    memory: vk::DeviceMemory,
+    base: usize,
+    bytes: usize,
+}
+
+/// Where a frame sits in imported memory: both planes `pitch` bytes a row, the chroma plane
+/// half as many rows as the luma plane.
+#[derive(Clone, Copy, Debug)]
+pub struct HostFrame {
+    pub luma_offset: usize,
+    pub chroma_offset: usize,
+    pub pitch: u32,
+    pub rows: u32,
+}
+
+/// A copy from an import into a frame slot, recorded by the next present.
+#[derive(Clone, Copy)]
+struct SlotCopy {
+    import: usize,
+    regions: [vk::BufferCopy; 2],
 }
 
 #[derive(Default)]
@@ -229,6 +256,10 @@ struct Objects {
     readback: Buffer,
     texel_views: [vk::BufferView; 2],
     storage_path: bool,
+    host_api: Option<ash::ext::external_memory_host::Device>,
+    host_alignment: u64,
+    imports: Vec<HostImport>,
+    copies: [Option<SlotCopy>; 2],
     set_layout: vk::DescriptorSetLayout,
     pool: vk::DescriptorPool,
     set: vk::DescriptorSet,
@@ -309,6 +340,10 @@ impl Renderer {
                 readback: Buffer::default(),
                 texel_views: [vk::BufferView::null(); 2],
                 storage_path: true,
+                host_api: None,
+                host_alignment: 0,
+                imports: Vec::new(),
+                copies: [None; 2],
                 set_layout: vk::DescriptorSetLayout::null(),
                 pool: vk::DescriptorPool::null(),
                 set: vk::DescriptorSet::null(),
@@ -483,6 +518,79 @@ impl Renderer {
         self.objects.present(interactive)
     }
 
+    /// Whether memory the decoder owns can be imported as a copy source.
+    pub fn host_import(&self) -> bool {
+        self.objects.host_api.is_some()
+    }
+
+    /// Imports `bytes` of page-aligned memory at `base`, or finds its earlier import. The
+    /// memory must stay allocated until `forget_imports`.
+    pub fn import_host(&mut self, base: *mut u8, bytes: usize) -> Result<usize, Error> {
+        self.active()?;
+        self.objects.import_host(base, bytes)
+    }
+
+    /// Shows a frame copied by the GPU from an import into a free slot, ahead of the next
+    /// present's drawing. The import stays read until `import_busy` says otherwise.
+    pub fn publish_import(
+        &mut self,
+        import: usize,
+        host: HostFrame,
+        layout: frame::Layout,
+    ) -> Result<usize, Error> {
+        self.active()?;
+        let source = self.objects.imports.get(import).ok_or(Error::Unsupported)?;
+        let luma = host.pitch as usize * host.rows as usize;
+        let chroma = luma / 2;
+        if host.luma_offset + luma > source.bytes
+            || host.chroma_offset + chroma > source.bytes
+            || luma + chroma > frame::FRAME_BYTES
+        {
+            return Err(Error::Unsupported);
+        }
+        let slot = self.acquire_slot()?;
+        let target = (frame::FRAMES_OFFSET + slot * frame::FRAME_BYTES) as u64;
+        let regions = [
+            vk::BufferCopy {
+                src_offset: host.luma_offset as u64,
+                dst_offset: target,
+                size: luma as u64,
+            },
+            vk::BufferCopy {
+                src_offset: host.chroma_offset as u64,
+                dst_offset: target + luma as u64,
+                size: chroma as u64,
+            },
+        ];
+        let published = self.publish(slot, layout)?;
+        self.objects.copies[slot] = Some(SlotCopy { import, regions });
+        Ok(published)
+    }
+
+    /// Whether a copy from `import` is still to be recorded or still running.
+    pub fn import_busy(&mut self, import: usize) -> Result<bool, Error> {
+        self.active()?;
+        self.objects.collect(0)?;
+        let objects = &self.objects;
+        Ok(objects.copies.iter().flatten().any(|copy| copy.import == import)
+            || objects
+                .flights
+                .iter()
+                .any(|flight| flight.pending && flight.imports.contains(&Some(import))))
+    }
+
+    /// Drops every import once no submit reads it, before the decoder frees the memory.
+    pub fn forget_imports(&mut self) -> Result<(), Error> {
+        if self.objects.imports.is_empty() {
+            return Ok(());
+        }
+        self.active()?;
+        self.objects.copies = [None; 2];
+        self.objects.wait_all()?;
+        self.objects.destroy_imports();
+        Ok(())
+    }
+
     pub fn storage_mut(&mut self) -> Result<&mut [u8], Error> {
         self.active()?;
         self.objects.count_busy_write();
@@ -626,7 +734,7 @@ impl Objects {
             let extensions = sdk::extensions();
             let app = vk::ApplicationInfo::default()
                 .application_name(c"Moonlight NX2 Rust")
-                .api_version(vk::API_VERSION_1_0);
+                .api_version(vk::API_VERSION_1_1);
             let info = vk::InstanceCreateInfo::default()
                 .application_info(&app)
                 .enabled_extension_names(&extensions);
@@ -672,7 +780,11 @@ impl Objects {
             let queues = [vk::DeviceQueueCreateInfo::default()
                 .queue_family_index(self.family)
                 .queue_priorities(&priorities)];
-            let extensions = [ash::khr::swapchain::NAME.as_ptr()];
+            let host_import = self.host_import_alignment();
+            let mut extensions = Vec::from([ash::khr::swapchain::NAME.as_ptr()]);
+            if host_import.is_some() {
+                extensions.push(ash::ext::external_memory_host::NAME.as_ptr());
+            }
             self.device = Some(create!(
                 self.instance().create_device(
                     self.physical,
@@ -686,6 +798,17 @@ impl Objects {
             self.swapchain_api = Some(ash::khr::swapchain::Device::load(
                 self.instance(),
                 self.device(),
+            ));
+            if let Some(alignment) = host_import {
+                self.host_alignment = alignment;
+                self.host_api = Some(ash::ext::external_memory_host::Device::load(
+                    self.instance(),
+                    self.device(),
+                ));
+            }
+            log(&format!(
+                "render: host import alignment={}",
+                host_import.unwrap_or(0)
             ));
             let limits = self
                 .instance()
@@ -721,6 +844,116 @@ impl Objects {
         Ok(())
     }
 
+    /// The import alignment, when the device takes host memory and reports it.
+    fn host_import_alignment(&self) -> Option<u64> {
+        let instance = self.instance();
+        let properties = unsafe { instance.get_physical_device_properties(self.physical) };
+        if properties.api_version < vk::API_VERSION_1_1 {
+            return None;
+        }
+        let supported = unsafe { instance.enumerate_device_extension_properties(self.physical) }
+            .ok()?
+            .iter()
+            .any(|extension| {
+                extension.extension_name_as_c_str() == Ok(ash::ext::external_memory_host::NAME)
+            });
+        if !supported {
+            return None;
+        }
+        let mut host = vk::PhysicalDeviceExternalMemoryHostPropertiesEXT::default();
+        let mut properties = vk::PhysicalDeviceProperties2::default().push(&mut host);
+        unsafe { instance.get_physical_device_properties2(self.physical, &mut properties) };
+        let alignment = host.min_imported_host_pointer_alignment;
+        (alignment != 0 && alignment.is_power_of_two()).then_some(alignment)
+    }
+
+    fn import_host(&mut self, base: *mut u8, bytes: usize) -> Result<usize, Error> {
+        if let Some(index) = self
+            .imports
+            .iter()
+            .position(|import| import.base == base as usize && import.bytes == bytes)
+        {
+            return Ok(index);
+        }
+        let api = self.host_api.clone().ok_or(Error::Unsupported)?;
+        let alignment = self.host_alignment as usize;
+        if base.is_null() || base as usize % alignment != 0 || bytes == 0 || bytes % alignment != 0
+        {
+            return Err(Error::Unsupported);
+        }
+        let device = self.device().clone();
+        let handle = vk::ExternalMemoryHandleTypeFlags::HOST_ALLOCATION_EXT;
+        unsafe {
+            let mut pointer = vk::MemoryHostPointerPropertiesEXT::default();
+            let result = (api.fp().get_memory_host_pointer_properties_ext)(
+                device.handle(),
+                handle,
+                base.cast(),
+                &mut pointer,
+            );
+            if result != vk::Result::SUCCESS {
+                log(&format!("render: host pointer properties {result:?}"));
+                return Err(Error::Unsupported);
+            }
+            let mut external = vk::ExternalMemoryBufferCreateInfo::default().handle_types(handle);
+            let buffer = device.create_buffer(
+                &vk::BufferCreateInfo::default()
+                    .size(bytes as u64)
+                    .usage(vk::BufferUsageFlags::TRANSFER_SRC)
+                    .push(&mut external),
+                allocator(),
+            )?;
+            let requirements = device.get_buffer_memory_requirements(buffer);
+            let types = requirements.memory_type_bits & pointer.memory_type_bits;
+            if types == 0 || requirements.size > bytes as u64 {
+                log(&format!(
+                    "render: host import refused types={:#x}/{:#x} size={}/{bytes}",
+                    requirements.memory_type_bits, pointer.memory_type_bits, requirements.size
+                ));
+                device.destroy_buffer(buffer, allocator());
+                return Err(Error::Unsupported);
+            }
+            let mut import = vk::ImportMemoryHostPointerInfoEXT::default()
+                .handle_type(handle)
+                .host_pointer(base.cast());
+            let memory = match device.allocate_memory(
+                &vk::MemoryAllocateInfo::default()
+                    .allocation_size(bytes as u64)
+                    .memory_type_index(types.trailing_zeros())
+                    .push(&mut import),
+                allocator(),
+            ) {
+                Ok(memory) => memory,
+                Err(error) => {
+                    device.destroy_buffer(buffer, allocator());
+                    return Err(error.into());
+                }
+            };
+            if let Err(error) = device.bind_buffer_memory(buffer, memory, 0) {
+                device.destroy_buffer(buffer, allocator());
+                device.free_memory(memory, allocator());
+                return Err(error.into());
+            }
+            self.imports.push(HostImport {
+                buffer,
+                memory,
+                base: base as usize,
+                bytes,
+            });
+        }
+        Ok(self.imports.len() - 1)
+    }
+
+    fn destroy_imports(&mut self) {
+        let device = self.device().clone();
+        for import in self.imports.drain(..) {
+            unsafe {
+                device.destroy_buffer(import.buffer, allocator());
+                device.free_memory(import.memory, allocator());
+            }
+        }
+    }
+
     fn create_buffer(&mut self, device: &ash::Device, storage: bool) -> Result<(), Error> {
         let (buffer, bytes) = if storage {
             (&mut self.storage, frame::STORAGE_BYTES)
@@ -730,7 +963,7 @@ impl Objects {
         unsafe {
             let usage = vk::BufferUsageFlags::STORAGE_BUFFER
                 | if storage {
-                    vk::BufferUsageFlags::UNIFORM_TEXEL_BUFFER
+                    vk::BufferUsageFlags::UNIFORM_TEXEL_BUFFER | vk::BufferUsageFlags::TRANSFER_DST
                 } else {
                     vk::BufferUsageFlags::empty()
                 };
@@ -1611,6 +1844,7 @@ impl Objects {
         }
         self.flights[index].slot = None;
         self.flights[index].pending = false;
+        self.flights[index].imports = [None; 2];
         Ok(())
     }
 
@@ -1655,6 +1889,31 @@ impl Objects {
         };
     }
 
+    fn record_copies(&self, command: vk::CommandBuffer) {
+        if self.copies.iter().all(Option::is_none) {
+            return;
+        }
+        for copy in self.copies.iter().flatten() {
+            unsafe {
+                self.device().cmd_copy_buffer(
+                    command,
+                    self.imports[copy.import].buffer,
+                    self.storage.buffer,
+                    &copy.regions,
+                )
+            };
+        }
+        self.barrier(
+            command,
+            vk::PipelineStageFlags::TRANSFER,
+            vk::AccessFlags::TRANSFER_WRITE,
+            vk::PipelineStageFlags::COMPUTE_SHADER
+                | vk::PipelineStageFlags::VERTEX_SHADER
+                | vk::PipelineStageFlags::FRAGMENT_SHADER,
+            vk::AccessFlags::SHADER_READ,
+        );
+    }
+
     fn record(
         &self,
         command: vk::CommandBuffer,
@@ -1686,6 +1945,7 @@ impl Objects {
                     | vk::PipelineStageFlags::FRAGMENT_SHADER,
                 vk::AccessFlags::SHADER_READ | vk::AccessFlags::SHADER_WRITE,
             );
+            self.record_copies(command);
             if interactive {
                 let graphics =
                     vk::PipelineStageFlags::VERTEX_SHADER | vk::PipelineStageFlags::FRAGMENT_SHADER;
@@ -1892,6 +2152,8 @@ impl Objects {
         }
         self.flights[flight].pending = true;
         self.flights[flight].slot = self.current_slot;
+        self.flights[flight].imports = self.copies.map(|copy| copy.map(|copy| copy.import));
+        self.copies = [None; 2];
         if let Some(slot) = self.current_slot {
             self.slot_readers[slot] += 1;
         }
@@ -1931,6 +2193,7 @@ impl Objects {
                 return Err(self.retain());
             }
             self.destroy_targets();
+            self.destroy_imports();
             self.close_cache();
             let device = self.device().clone();
             unsafe {
