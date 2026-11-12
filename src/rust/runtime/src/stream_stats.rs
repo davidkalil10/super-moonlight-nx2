@@ -134,7 +134,20 @@ static STAGE_TOTALS: [StageTotal; STAGES] = [const {
 }; STAGES];
 
 pub fn stage(stage: Stage, started_ns: u64, ended_ns: u64) {
-    let elapsed_us = u32::try_from(ended_ns.saturating_sub(started_ns) / 1000).unwrap_or(u32::MAX);
+    let elapsed_ns = ended_ns.saturating_sub(started_ns);
+    let site = match stage {
+        Stage::Submit => Some(Site::Submit),
+        Stage::Poll => Some(Site::Poll),
+        Stage::Readback => Some(Site::Readback),
+        Stage::Upload => Some(Site::Upload),
+        Stage::Output | Stage::Present => None,
+    };
+    if let Some(site) = site
+        && elapsed_ns > frame_ns().unwrap_or(FRAME_DEFAULT_NS)
+    {
+        overrun(site, elapsed_ns);
+    }
+    let elapsed_us = u32::try_from(elapsed_ns / 1000).unwrap_or(u32::MAX);
     let total = &STAGE_TOTALS[stage as usize];
     total
         .sum_us
@@ -298,4 +311,56 @@ pub fn take_decoder_text() -> Option<String> {
             depth_x10 % 10
         )
     })
+}
+
+/// A blocking call of the stream that took longer than a frame.
+#[derive(Clone, Copy, Debug)]
+pub enum Site {
+    Submit,
+    Poll,
+    Readback,
+    Upload,
+    /// The present's wait for a flight of the GPU.
+    Flight,
+    /// The present's wait for a swapchain image.
+    Acquire,
+}
+
+const SITES: usize = 6;
+const SITE_NAMES: [&str; SITES] = ["submit", "poll", "readback", "upload", "flight", "acquire"];
+/// The frame overruns are measured against before the display's rate is known.
+const FRAME_DEFAULT_NS: u64 = 16_666_667;
+
+static FRAME_NS: AtomicU64 = AtomicU64::new(0);
+static OVERRUNS: [AtomicU32; SITES] = [const { AtomicU32::new(0) }; SITES];
+static OVERRUN_MAX_US: [AtomicU32; SITES] = [const { AtomicU32::new(0) }; SITES];
+
+/// The display's refresh, which bounds the stream's waits. 0 leaves it unknown.
+pub fn set_refresh_hz(hz: u32) {
+    let frame_ns = 1_000_000_000u64.checked_div(u64::from(hz)).unwrap_or(0);
+    FRAME_NS.store(frame_ns, Ordering::Relaxed);
+}
+
+/// One refresh of the display, None until the display reported its rate.
+pub fn frame_ns() -> Option<u64> {
+    Some(FRAME_NS.load(Ordering::Relaxed)).filter(|frame_ns| *frame_ns != 0)
+}
+
+pub fn overrun(site: Site, took_ns: u64) {
+    let took_us = u32::try_from(took_ns / 1000).unwrap_or(u32::MAX);
+    OVERRUNS[site as usize].fetch_add(1, Ordering::Relaxed);
+    OVERRUN_MAX_US[site as usize].fetch_max(took_us, Ordering::Relaxed);
+}
+
+/// The overruns since the last call by site, as count/longest ms, None when there were none.
+pub fn take_overruns_text() -> Option<String> {
+    let mut text = String::new();
+    for (site, name) in SITE_NAMES.iter().enumerate() {
+        let count = OVERRUNS[site].swap(0, Ordering::Relaxed);
+        let max_us = OVERRUN_MAX_US[site].swap(0, Ordering::Relaxed);
+        if count != 0 {
+            text.push_str(&format!(" {name}={count}/{}", max_us.div_ceil(1000)));
+        }
+    }
+    (!text.is_empty()).then(|| format!("overruns count/max_ms{text}"))
 }

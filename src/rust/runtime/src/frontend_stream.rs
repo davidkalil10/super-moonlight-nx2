@@ -422,6 +422,9 @@ impl Stream {
         if let Some(decoder) = crate::stream_stats::take_decoder_text() {
             log(&format!("stream: {decoder}"));
         }
+        if let Some(overruns) = crate::stream_stats::take_overruns_text() {
+            log(&format!("stream: {overruns}"));
+        }
         let Some(audio) = running.audio_stats() else {
             return;
         };

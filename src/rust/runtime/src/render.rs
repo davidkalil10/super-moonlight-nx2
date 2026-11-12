@@ -3,6 +3,7 @@ extern crate alloc;
 use crate::{
     cache_file,
     render_platform::{self as sdk, flush_cpu_cache, log},
+    stream_stats::{self, Site},
 };
 use alloc::{boxed::Box, format, vec::Vec};
 use ash::{Entry, vk, vk::TaggedStructure};
@@ -518,17 +519,21 @@ impl Renderer {
     }
 
     pub fn present(&mut self, interactive: bool) -> Result<(), Error> {
-        self.present_pumping(interactive, &mut ())
+        self.active()?;
+        self.objects.present(interactive, &mut (), WAIT_NS)
     }
 
-    /// Presents, pumping `audio` while the present waits for the GPU and the display.
+    /// Presents, pumping `audio` while the present waits for the GPU and the display. The
+    /// waits last a refresh at most: past it the present is `Busy`, noted as an overrun, and
+    /// the stream's turn goes on.
     pub fn present_pumping(
         &mut self,
         interactive: bool,
         audio: &mut dyn Pump,
     ) -> Result<(), Error> {
         self.active()?;
-        self.objects.present(interactive, audio)
+        let bound_ns = stream_stats::frame_ns().unwrap_or(WAIT_NS);
+        self.objects.present(interactive, audio, bound_ns)
     }
 
     /// Whether memory the decoder owns can be imported as a copy source.
@@ -2084,14 +2089,13 @@ impl Objects {
         }
     }
 
-    /// `wait_flight` in slices of `SLICE_NS`, pumping audio between them.
+    /// `wait_flight` until `deadline_ns`, in slices of `SLICE_NS` with audio pumped between.
     fn wait_flight_pumping(
         &mut self,
         index: usize,
-        limit_ns: u64,
+        deadline_ns: u64,
         audio: &mut dyn Pump,
     ) -> Result<(), Error> {
-        let deadline_ns = sdk::now_ns().saturating_add(limit_ns);
         loop {
             let left_ns = deadline_ns.saturating_sub(sdk::now_ns());
             match self.wait_flight(index, left_ns.clamp(1, SLICE_NS)) {
@@ -2101,14 +2105,14 @@ impl Objects {
         }
     }
 
-    /// The next swapchain image, waited for in slices of `SLICE_NS` with audio pumped between.
+    /// The next swapchain image, waited for until `deadline_ns` in slices of `SLICE_NS` with
+    /// audio pumped between.
     fn acquire_pumping(
         &mut self,
         flight: usize,
-        limit_ns: u64,
+        deadline_ns: u64,
         audio: &mut dyn Pump,
     ) -> Result<(u32, bool), vk::Result> {
-        let deadline_ns = sdk::now_ns().saturating_add(limit_ns);
         loop {
             let left_ns = deadline_ns.saturating_sub(sdk::now_ns());
             let acquired = unsafe {
@@ -2128,7 +2132,13 @@ impl Objects {
         }
     }
 
-    fn present(&mut self, interactive: bool, audio: &mut dyn Pump) -> Result<(), Error> {
+    /// The present's waits share `bound_ns`; one that runs out of it is noted as an overrun.
+    fn present(
+        &mut self,
+        interactive: bool,
+        audio: &mut dyn Pump,
+        bound_ns: u64,
+    ) -> Result<(), Error> {
         self.flush_ui_writes();
         if self.rebuild {
             self.wait_all()?;
@@ -2138,9 +2148,22 @@ impl Objects {
             self.info.rebuilds += 1;
         }
         let flight = self.next_flight;
-        self.wait_flight_pumping(flight, WAIT_NS, audio)?;
-        self.wait_flight_pumping((flight + 1) % 2, WAIT_NS, audio)?;
-        let result = self.acquire_pumping(flight, WAIT_NS, audio);
+        let start_ns = sdk::now_ns();
+        let deadline_ns = start_ns.saturating_add(bound_ns);
+        let overran = |error| {
+            if error == Error::Busy {
+                stream_stats::overrun(Site::Flight, sdk::now_ns() - start_ns);
+            }
+            error
+        };
+        self.wait_flight_pumping(flight, deadline_ns, audio)
+            .map_err(overran)?;
+        self.wait_flight_pumping((flight + 1) % 2, deadline_ns, audio)
+            .map_err(overran)?;
+        let result = self.acquire_pumping(flight, deadline_ns, audio);
+        if matches!(result, Err(vk::Result::TIMEOUT | vk::Result::NOT_READY)) {
+            stream_stats::overrun(Site::Acquire, sdk::now_ns() - start_ns);
+        }
         let (image, suboptimal) = match result {
             Ok(result) => result,
             Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => {
