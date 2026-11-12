@@ -252,6 +252,11 @@ impl Probe {
         true
     }
 
+    /// The highest rate shown so far in the current operation mode.
+    pub fn verified_fps(&self) -> u32 {
+        self.best[usize::from(self.docked)].2
+    }
+
     pub fn capabilities(&self) -> moonlight_nx2_app::policy::DisplayCapabilities {
         self.verified[usize::from(self.docked)]
     }

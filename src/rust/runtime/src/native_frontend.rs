@@ -223,6 +223,7 @@ fn execute(
     let mut dock = Monitor::new(docked);
     let mut probe = Probe::new(docked, unsafe { sdk::moonlightNowNs() }, 0);
     let (mut polled, mut last_mode, mut pending) = (start, None, false);
+    let mut dock_deadline = None;
     display_context(&mut app, docked, probe.capabilities());
     let mut stream = Stream::new(stream_capabilities());
     let mut system = crate::system::System::start(unsafe { sdk::moonlightNowNs() } / 1_000_000);
@@ -348,7 +349,21 @@ fn execute(
                 if let Some(docked) = dock.sample(display.operation_mode(), now_ms) {
                     log(&format!("display: dock change docked={docked}"));
                     probe.set_docked(docked);
-                    display_context(&mut app, docked, probe.capabilities());
+                    let settings = app.client.bridge.model().stream_settings();
+                    let size = settings.size();
+                    let faster = moonlight_nx2_app::dock::requests_120hz(
+                        docked,
+                        (!settings.size_auto()).then(|| (size.width(), size.height())),
+                        settings.fps(),
+                        probe.output(),
+                    ) && probe.verified_fps() < 120;
+                    if faster {
+                        log("display: context waits for 120 Hz to be shown");
+                        dock_deadline = Some(now.saturating_add(DOCK_VERIFY_NS));
+                    } else {
+                        dock_deadline = None;
+                        display_context(&mut app, docked, probe.capabilities());
+                    }
                     pending = false;
                 }
                 let output = probe.output();
@@ -389,6 +404,7 @@ fn execute(
                     "display: 120 Hz lost docked={}; modes capped at 60",
                     dock.current()
                 ));
+                dock_deadline = None;
                 display_context(&mut app, dock.current(), probe.capabilities());
                 pending = false;
             }
@@ -396,7 +412,15 @@ fn execute(
                 (display.interval_numerator, display.interval_denominator) == (1, 120)
             });
             pending |= probe.verify(info.width, info.height, hz, every_refresh);
-            if pending && screen != Screen::Streaming {
+            let waited = dock_deadline.is_some_and(|deadline| pending || now >= deadline);
+            if waited || (pending && screen != Screen::Streaming && dock_deadline.is_none()) {
+                if waited {
+                    log(&format!(
+                        "display: context after dock change at {} fps",
+                        probe.verified_fps()
+                    ));
+                }
+                dock_deadline = None;
                 display_context(&mut app, dock.current(), probe.capabilities());
                 pending = false;
             }
@@ -572,6 +596,10 @@ fn render_config() -> Config {
         ..Config::default()
     }
 }
+
+/// How long a dock change waits for the new display to show 120 Hz before its context is
+/// handed over at 60, so a stream restarts once and at the rate the display takes.
+const DOCK_VERIFY_NS: u64 = 3_000_000_000;
 
 /// Hands the operation mode and the display modes verified for it to the client; a live stream
 /// restarts in the new context.
