@@ -45,6 +45,8 @@ def main():
                         help="the pattern build with the UI buffers in non-cached host memory")
     parser.add_argument("--perf-chord", action="store_true",
                         help="the pattern build where L3+ZL steps the decode path (in place, copy, SDK object), L3+ZR the latency mode and L3+R the CPU boost")
+    parser.add_argument("--release", metavar="VERSION",
+                        help="the production build for testers, shown in hbmenu as VERSION (e.g. 0.1.0-rc6)")
     parser.add_argument("--diagnostic", choices=SDK_DIAGNOSTICS,
                         help="build this decoder diagnostic instead of the app")
     parser.add_argument("--trials", choices=TRIALS, default=TRIALS[0],
@@ -52,6 +54,13 @@ def main():
     args = parser.parse_args()
     if args.perf_chord and (args.ui_pattern or args.decode120 or args.tcp_video or args.diagnostic):
         parser.error("--perf-chord goes alone")
+    if args.release and (args.perf_chord or args.ui_pattern or args.decode120 or args.tcp_video
+                         or args.diagnostic):
+        parser.error("--release goes alone")
+    if args.release and not re.fullmatch(r"\d+\.\d+\.\d+(-[a-z0-9.]+)?", args.release):
+        parser.error("--release takes a version like 0.1.0 or 0.1.0-rc6")
+    if args.release and len(args.release) > 15:
+        parser.error("--release is at most 15 characters, the NACP limit")
     if args.ui_uncached and not args.ui_pattern:
         parser.error("--ui-uncached goes with --ui-pattern")
     if args.ui_pattern and (args.decode120 or args.tcp_video or args.diagnostic):
@@ -70,12 +79,14 @@ def main():
     if args.perf_chord:
         diagnostic += "-perf"
     name = diagnostic
+    if args.release:
+        name = "release"
     if diagnostic == "sdk-modes" and args.trials != TRIALS[0]:
         name += f"-{args.trials}"
     revision = git("rev-parse", "HEAD")
     description = git("describe", "--tags", "--always", revision)
     branch = git("branch", "--show-current") or "detached"
-    version = nacp_version(description, revision)
+    version = args.release or nacp_version(description, revision)
     build_id = f"{utc_stamp()}-{revision[:7]}-{name}"
     remote_sdk = shlex.quote(str(SDK / SDK_ARCHIVE))
     remote_sdk_sha = m4(f"shasum -a 256 {remote_sdk}", capture_output=True, text=True).stdout.split()[0]
