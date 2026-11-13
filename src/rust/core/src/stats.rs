@@ -20,7 +20,9 @@ pub struct StreamStats {
     pub received: u32,
     /// Mean from a frame's last packet being read until its unit went to the decoder.
     pub receive_mean_us: u32,
-    /// Mean from a unit's submission until the decoder handed its frame back.
+    /// Mean a unit waited in the decoder behind the frame ahead of it.
+    pub decoder_wait_mean_us: u32,
+    /// Mean from the decoder taking a unit up until it handed its frame back.
     pub decoder_mean_us: u32,
     /// Mean from a decoded frame until its present returned.
     pub display_mean_us: u32,
@@ -32,22 +34,26 @@ pub struct Stages {
     pub frames: u32,
     pub received: u32,
     receive_ns: u64,
+    wait_ns: u64,
     decode_ns: u64,
     display_ns: u64,
 }
 
 impl Stages {
-    /// One presented frame. `received_ns` is None when its arrival is unknown; an arrival
-    /// after the submission is left out rather than counted as no wait.
+    /// One presented frame, taken up by the decoder at `started_ns` (see `DecoderQueue`).
+    /// `received_ns` is None when its arrival is unknown; an arrival after the submission is
+    /// left out rather than counted as no wait.
     pub fn record(
         &mut self,
         received_ns: Option<u64>,
         submitted_ns: u64,
+        started_ns: u64,
         decoded_ns: u64,
         presented_ns: u64,
     ) {
         self.frames = self.frames.saturating_add(1);
-        self.decode_ns += decoded_ns.saturating_sub(submitted_ns);
+        self.wait_ns += started_ns.saturating_sub(submitted_ns);
+        self.decode_ns += decoded_ns.saturating_sub(started_ns);
         self.display_ns += presented_ns.saturating_sub(decoded_ns);
         if let Some(waited_ns) = received_ns.and_then(|received| submitted_ns.checked_sub(received))
         {
@@ -60,12 +66,33 @@ impl Stages {
         mean_us(self.receive_ns, self.received)
     }
 
+    pub fn wait_mean_us(&self) -> Option<u32> {
+        mean_us(self.wait_ns, self.frames)
+    }
+
     pub fn decode_mean_us(&self) -> Option<u32> {
         mean_us(self.decode_ns, self.frames)
     }
 
     pub fn display_mean_us(&self) -> Option<u32> {
         mean_us(self.display_ns, self.frames)
+    }
+}
+
+/// When a decoder that finishes frames in submission order took each one up: at its
+/// submission, or when the frame ahead came out if that was later. Before that the unit
+/// waited in the decoder's queue; after it the decoder was working on it.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct DecoderQueue {
+    last_output_ns: u64,
+}
+
+impl DecoderQueue {
+    /// The start of the frame that came out at `output_ns`, never past its output.
+    pub fn start(&mut self, submitted_ns: u64, output_ns: u64) -> u64 {
+        let started_ns = submitted_ns.max(self.last_output_ns).min(output_ns);
+        self.last_output_ns = self.last_output_ns.max(output_ns);
+        started_ns
     }
 }
 

@@ -17,7 +17,7 @@ use moonlight_nx2_core::{
     frame::{Frame, Layout, Matrix, Plane},
     media::Header,
     recovery::{self, Decision, Recovery},
-    stats::{Stages, StreamStats},
+    stats::{DecoderQueue, Stages, StreamStats},
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -64,6 +64,15 @@ struct Arrival {
     submitted_ns: u64,
 }
 
+/// When a frame's unit went to the decoder, when the decoder took it up and when its frame
+/// was taken.
+#[derive(Clone, Copy)]
+struct DecoderTiming {
+    submitted: u64,
+    started: u64,
+    decoded: u64,
+}
+
 #[derive(Default)]
 struct Timing {
     window_ns: u64,
@@ -78,9 +87,15 @@ struct Timing {
 }
 
 impl Timing {
-    fn record(&mut self, received_us: Option<u64>, submitted: u64, decoded: u64, returned: u64) {
+    fn record(&mut self, received_us: Option<u64>, decoder: DecoderTiming, returned: u64) {
+        let DecoderTiming {
+            submitted,
+            started,
+            decoded,
+        } = decoder;
         let received = received_us.map(|received_us| received_us.saturating_mul(1000));
-        self.stages.record(received, submitted, decoded, returned);
+        self.stages
+            .record(received, submitted, started, decoded, returned);
         let decode_us = decoded.saturating_sub(submitted) / 1000;
         let latency_us = returned.saturating_sub(submitted) / 1000;
         self.frames += 1;
@@ -121,6 +136,7 @@ impl Timing {
             host_mean_us: crate::stream_stats::take_host_mean_us(),
             received: self.stages.received,
             receive_mean_us: self.stages.receive_mean_us().unwrap_or(0),
+            decoder_wait_mean_us: self.stages.wait_mean_us().unwrap_or(0),
             decoder_mean_us: self.stages.decode_mean_us().unwrap_or(0),
             display_mean_us: self.stages.display_mean_us().unwrap_or(0),
         });
@@ -207,7 +223,8 @@ pub struct Video<'a, B: Backend<N>, const N: usize = SURFACES> {
     stats: Stats,
     arrivals: [Option<Arrival>; decoder::UNITS],
     pending_arrival: Option<u64>,
-    pending_timing: Option<(u64, u64)>,
+    pending_timing: Option<DecoderTiming>,
+    queue: DecoderQueue,
     /// Presents in a row that found a frame waiting and the decoder full.
     late_turns: u32,
     last_present_ns: u64,
@@ -261,6 +278,7 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
             arrivals: [None; decoder::UNITS],
             pending_arrival: None,
             pending_timing: None,
+            queue: DecoderQueue::default(),
             late_turns: 0,
             last_present_ns: 0,
             timing: Timing::default(),
@@ -713,6 +731,7 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
         let arrival = self.arrivals[index].unwrap().received_us;
         let submitted_ns = self.arrivals[index].unwrap().submitted_ns;
         let decoded_ns = platform::now_ns();
+        let started_ns = self.queue.start(submitted_ns, decoded_ns);
         stream_stats::stage(Stage::Output, submitted_ns, poll_start_ns);
         self.stats.dropped += index as u64;
         if index != 0 {
@@ -760,7 +779,11 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
         }
         self.pending = true;
         self.pending_arrival = arrival;
-        self.pending_timing = Some((submitted_ns, decoded_ns));
+        self.pending_timing = Some(DecoderTiming {
+            submitted: submitted_ns,
+            started: started_ns,
+            decoded: decoded_ns,
+        });
         Ok(true)
     }
 
@@ -792,9 +815,8 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
                 self.stats.presented += u64::from(presented);
                 if presented {
                     let received_us = self.pending_arrival.take();
-                    if let Some((submitted, decoded)) = self.pending_timing.take() {
-                        self.timing
-                            .record(received_us, submitted, decoded, platform::now_ns());
+                    if let Some(decoder) = self.pending_timing.take() {
+                        self.timing.record(received_us, decoder, platform::now_ns());
                     }
                     self.presentation = Some(Presentation {
                         received_us,

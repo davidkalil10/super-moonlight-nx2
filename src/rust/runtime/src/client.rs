@@ -233,6 +233,7 @@ fn latency(
         queue_us: presented
             .filter(|stats| stats.received > 0)
             .map(|stats| stats.receive_mean_us),
+        wait_us: presented.map(|stats| stats.decoder_wait_mean_us),
         decode_us: presented.map(|stats| stats.decoder_mean_us),
         present_us: presented.map(|stats| stats.display_mean_us),
     }
@@ -714,6 +715,7 @@ mod overlay_stats_tests {
         );
         let native = moonlight_nx2_core::stats::StreamStats {
             presented: 60,
+            decoder_wait_mean_us: 1300,
             decoder_mean_us: 5200,
             display_mean_us: 8000,
             receive_mean_us: 400,
@@ -725,8 +727,8 @@ mod overlay_stats_tests {
             (None, None, None)
         );
         assert_eq!(
-            (shown.decode_us, shown.present_us),
-            (Some(5200), Some(8000))
+            (shown.wait_us, shown.decode_us, shown.present_us),
+            (Some(1300), Some(5200), Some(8000))
         );
         let native = moonlight_nx2_core::stats::StreamStats {
             host_mean_us: 2100,
@@ -746,7 +748,7 @@ mod overlay_stats_tests {
         let shown = latency(Some(second), Some(native));
         assert_eq!(
             moonlight_nx2_ui::badge::latency_text(&shown).as_str(),
-            "host 2.1 \u{b7} rtt 3.0 \u{b7} queue 0.4 \u{b7} decode 5.2 \u{b7} present 8.0 ms"
+            "host 2.1 rtt 3.0 queue 0.4 wait 1.3 decode 5.2 present 8.0 ms"
         );
     }
 }

@@ -15,6 +15,7 @@ use moonlight_nx2_core::{
     annexb,
     codec::{Capabilities, Codec, Depth, Evidence, Mode, Size},
     decoder::{Backend, BackendError, Config, HostImage, INPUT_MAX, SURFACES, UNITS},
+    stats::DecoderQueue,
     viddec,
     video_wire::Output,
 };
@@ -244,6 +245,7 @@ pub struct SdkVideo {
     /// Submission times of the units not yet seen decoded, oldest first.
     in_flight: [u64; UNITS],
     in_flight_count: usize,
+    queue: DecoderQueue,
 }
 
 impl SdkVideo {
@@ -286,6 +288,7 @@ impl SdkVideo {
             busy_submits: 0,
             in_flight: [0; UNITS],
             in_flight_count: 0,
+            queue: DecoderQueue::default(),
         }
     }
 
@@ -307,7 +310,9 @@ impl SdkVideo {
         if self.in_flight_count == 0 {
             return;
         }
-        stream_stats::decoded(now_ns.saturating_sub(self.in_flight[0]));
+        let submitted_ns = self.in_flight[0];
+        let started_ns = self.queue.start(submitted_ns, now_ns);
+        stream_stats::decoded(submitted_ns, started_ns, now_ns);
         self.in_flight.rotate_left(1);
         self.in_flight_count -= 1;
     }

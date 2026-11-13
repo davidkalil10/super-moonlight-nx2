@@ -397,7 +397,9 @@ pub struct Latency {
     pub rtt_us: Option<u32>,
     /// From a frame's last packet being read until its unit went to the decoder.
     pub queue_us: Option<u32>,
-    /// From a unit's submission until the decoder handed its frame back.
+    /// From a unit's submission until the decoder took it up, behind the frame ahead.
+    pub wait_us: Option<u32>,
+    /// From the decoder taking a unit up until it handed its frame back.
     pub decode_us: Option<u32>,
     /// From a decoded frame until its present returned.
     pub present_us: Option<u32>,
@@ -409,18 +411,21 @@ impl Latency {
         host_us: Some(88_800),
         rtt_us: Some(88_800),
         queue_us: Some(88_800),
+        wait_us: Some(88_800),
         decode_us: Some(88_800),
         present_us: Some(88_800),
     };
 }
 
-/// "host 2.1 · rtt 3.0 · queue 0.4 · decode 5.2 · present 8.0 ms", in tenths of a ms rounded
-/// to the nearest; stages not measured are left out.
+/// "host 2.1 rtt 3.0 queue 0.4 wait 1.3 decode 5.2 present 8.0 ms", in tenths of a ms rounded
+/// to the nearest; stages not measured are left out. Six stages with separators would not fit
+/// the badge at 720p.
 pub fn latency_text(latency: &Latency) -> Line {
     let stages = [
         ("host", latency.host_us),
         ("rtt", latency.rtt_us),
         ("queue", latency.queue_us),
+        ("wait", latency.wait_us),
         ("decode", latency.decode_us),
         ("present", latency.present_us),
     ];
@@ -430,7 +435,7 @@ pub fn latency_text(latency: &Latency) -> Line {
             continue;
         };
         if !out.is_empty() {
-            out.push_str(" \u{b7} ");
+            out.push_str(" ");
         }
         let tenths = us.saturating_add(50) / 100;
         let _ = write!(out, "{name} {}.{}", tenths / 10, tenths % 10);

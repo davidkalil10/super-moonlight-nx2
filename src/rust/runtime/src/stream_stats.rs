@@ -7,7 +7,7 @@ use alloc::{format, string::String};
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use moonlight_nx2_core::stats::StreamStats;
 
-const FIELDS: usize = 17;
+const FIELDS: usize = 18;
 
 static VALID: AtomicBool = AtomicBool::new(false);
 static IDR_WANTED: AtomicBool = AtomicBool::new(false);
@@ -38,8 +38,9 @@ pub fn latest() -> Option<StreamStats> {
         host_mean_us: field(12),
         received: field(13),
         receive_mean_us: field(14),
-        decoder_mean_us: field(15),
-        display_mean_us: field(16),
+        decoder_wait_mean_us: field(15),
+        decoder_mean_us: field(16),
+        display_mean_us: field(17),
     })
 }
 
@@ -60,6 +61,7 @@ pub fn publish(stats: StreamStats) {
         stats.host_mean_us,
         stats.received,
         stats.receive_mean_us,
+        stats.decoder_wait_mean_us,
         stats.decoder_mean_us,
         stats.display_mean_us,
     ];
@@ -273,6 +275,10 @@ static DECODER_FRAMES: AtomicU32 = AtomicU32::new(0);
 static DECODER_ERRORS: AtomicU32 = AtomicU32::new(0);
 static DECODE_SUM_US: AtomicU64 = AtomicU64::new(0);
 static DECODE_MAX_US: AtomicU32 = AtomicU32::new(0);
+static WAIT_SUM_US: AtomicU64 = AtomicU64::new(0);
+static WAIT_MAX_US: AtomicU32 = AtomicU32::new(0);
+static SERVICE_SUM_US: AtomicU64 = AtomicU64::new(0);
+static SERVICE_MAX_US: AtomicU32 = AtomicU32::new(0);
 static IN_FLIGHT_SUM: AtomicU32 = AtomicU32::new(0);
 static IN_FLIGHT_COUNT: AtomicU32 = AtomicU32::new(0);
 static IN_FLIGHT_MAX: AtomicU32 = AtomicU32::new(0);
@@ -299,12 +305,18 @@ pub fn decoder(event: DecoderEvent) {
     counter.fetch_add(1, Ordering::Relaxed);
 }
 
-/// A frame first seen finished, `decode_ns` after its unit was submitted.
-pub fn decoded(decode_ns: u64) {
-    let decode_us = u32::try_from(decode_ns / 1000).unwrap_or(u32::MAX);
+/// A frame first seen finished at `decoded_ns`, its unit submitted at `submitted_ns` and taken
+/// up by the decoder at `started_ns` (see `DecoderQueue`).
+pub fn decoded(submitted_ns: u64, started_ns: u64, decoded_ns: u64) {
+    let add = |sum: &AtomicU64, max: &AtomicU32, from_ns: u64, to_ns: u64| {
+        let us = u32::try_from(to_ns.saturating_sub(from_ns) / 1000).unwrap_or(u32::MAX);
+        sum.fetch_add(u64::from(us), Ordering::Relaxed);
+        max.fetch_max(us, Ordering::Relaxed);
+    };
     DECODER_FRAMES.fetch_add(1, Ordering::Relaxed);
-    DECODE_SUM_US.fetch_add(u64::from(decode_us), Ordering::Relaxed);
-    DECODE_MAX_US.fetch_max(decode_us, Ordering::Relaxed);
+    add(&DECODE_SUM_US, &DECODE_MAX_US, submitted_ns, decoded_ns);
+    add(&WAIT_SUM_US, &WAIT_MAX_US, submitted_ns, started_ns);
+    add(&SERVICE_SUM_US, &SERVICE_MAX_US, started_ns, decoded_ns);
 }
 
 /// How many units the decoder holds right after one went in, the new one included.
@@ -321,8 +333,14 @@ pub fn take_decoder_text() -> Option<String> {
     let busy = DECODER_BUSY.swap(0, Ordering::Relaxed);
     let frames = DECODER_FRAMES.swap(0, Ordering::Relaxed);
     let errors = DECODER_ERRORS.swap(0, Ordering::Relaxed);
-    let sum = DECODE_SUM_US.swap(0, Ordering::Relaxed);
-    let max = DECODE_MAX_US.swap(0, Ordering::Relaxed);
+    let mean_max = |sum: &AtomicU64, max: &AtomicU32| {
+        let sum = sum.swap(0, Ordering::Relaxed);
+        let max = max.swap(0, Ordering::Relaxed);
+        format!("{}/{max}", sum.checked_div(u64::from(frames)).unwrap_or(0))
+    };
+    let decode = mean_max(&DECODE_SUM_US, &DECODE_MAX_US);
+    let wait = mean_max(&WAIT_SUM_US, &WAIT_MAX_US);
+    let service = mean_max(&SERVICE_SUM_US, &SERVICE_MAX_US);
     let depth_sum = IN_FLIGHT_SUM.swap(0, Ordering::Relaxed);
     let depth_count = IN_FLIGHT_COUNT.swap(0, Ordering::Relaxed);
     let depth_max = IN_FLIGHT_MAX.swap(0, Ordering::Relaxed);
@@ -334,8 +352,7 @@ pub fn take_decoder_text() -> Option<String> {
     };
     (submits + busy + frames + errors != 0).then(|| {
         format!(
-            "decoder path={path} submits={submits} busy={busy} frames={frames} errors={errors} decode mean/max us={}/{max} in_flight mean/max={}.{}/{depth_max}",
-            sum.checked_div(u64::from(frames)).unwrap_or(0),
+            "decoder path={path} submits={submits} busy={busy} frames={frames} errors={errors} decode mean/max us={decode} wait mean/max us={wait} service mean/max us={service} in_flight mean/max={}.{}/{depth_max}",
             depth_x10 / 10,
             depth_x10 % 10
         )
