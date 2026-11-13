@@ -35,6 +35,8 @@ never collides with the old entry.
 
 ## Sunshine
 
+For router, PC and Sunshine settings that keep the stream smooth, see [NETWORK.md](NETWORK.md).
+
 - **Codec**: AV1 needs a GPU that encodes it. If Sunshine cannot, pick H.264 in Settings.
 - **Touch**: enable **Native Pen/Touch Support** under Input
   ([`native_pen_touch`](https://docs.lizardbyte.dev/projects/sunshine/latest/md_docs_2configuration.html#native_pen_touch)).
