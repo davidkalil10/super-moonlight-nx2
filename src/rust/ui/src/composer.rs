@@ -22,6 +22,11 @@ pub(crate) const LEGEND_WIDTH: u32 = 1200;
 const LEGEND_HEIGHT: u32 = 40;
 /// How far a hint's touch target reaches past its ink.
 const HINT_PAD: u32 = 12;
+/// How far a value arrow's touch target reaches out past its ink.
+const ARROW_REACH: u32 = 32;
+/// The console's bits for the pad's left and right, which a value's arrows press.
+const BUTTON_LEFT: u32 = 1 << 12;
+const BUTTON_RIGHT: u32 = 1 << 14;
 
 /// The console's bit for the button a legend key names, for the keys a touch can press.
 fn hint_button(key: &str) -> Option<u32> {
@@ -161,6 +166,22 @@ pub(crate) fn clear_run(bitmap: &mut Bitmap, from: i32, step: i32) {
         }
         column += step;
     }
+}
+
+/// The spans across a stepper's strip from each arrow's outer edge to halfway to the value.
+fn arrow_spans(strip: &Bitmap, can_left: bool, can_right: bool) -> [Option<(u32, u32)>; 2] {
+    let last = strip.width as i32 - 1;
+    let left = can_left.then(|| {
+        let (start, end) = ink_run(strip, 0, 1);
+        let (value, _) = ink_run(strip, end + 1, 1);
+        (start as u32, ((end + value) / 2) as u32)
+    });
+    let right = can_right.then(|| {
+        let (end, start) = ink_run(strip, last, -1);
+        let (value, _) = ink_run(strip, start - 1, -1);
+        (((start + value) / 2 + 1) as u32, end as u32 + 1)
+    });
+    [left, right]
 }
 
 /// Cuts an alpha strip to its ink plus a one-pixel margin; an empty strip becomes 1x1.
@@ -614,14 +635,15 @@ impl Builder<'_> {
         self.add_text(x, y, color, serial, cursor_item);
     }
 
+    /// A value between the arrows it can step to, right aligned in `width` at `x`, `y`. Each
+    /// arrow shown is a touch target over the `band` rows, pressing the pad's left or right.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn stepper(
         &mut self,
-        x: u32,
-        y: u32,
+        (x, y, width): (u32, u32, u32),
+        band: (u32, u32),
         value: &str,
         face: Face,
-        width: u32,
         color: u32,
         can_left: bool,
         can_right: bool,
@@ -655,6 +677,20 @@ impl Builder<'_> {
             }
         }
         self.add_text(x, y, color, serial, 0);
+        let Some(entry) = serial.and_then(|serial| self.composer.entry(serial)) else {
+            return;
+        };
+        let [left, right] = arrow_spans(&entry.bitmap, can_left, can_right);
+        let origin = x + entry.left;
+        let (top, height) = band;
+        if let Some((start, end)) = left {
+            let start = (origin + start).saturating_sub(ARROW_REACH);
+            self.hint(BUTTON_LEFT, (start, top, origin + end - start, height));
+        }
+        if let Some((start, end)) = right {
+            let width = end - start + ARROW_REACH;
+            self.hint(BUTTON_RIGHT, (origin + start, top, width, height));
+        }
     }
 
     pub(crate) fn shape(&mut self, shape: Shape) {
@@ -729,16 +765,29 @@ impl Builder<'_> {
                 continue;
             };
             let left = x + start as u32;
-            self.hints.push(Item {
-                id: item::HINT | button,
-                x: left.saturating_sub(HINT_PAD),
-                y: y.saturating_sub(HINT_PAD),
-                w: (end as u32).saturating_sub(start as u32) + 2 * HINT_PAD,
-                h: LEGEND_HEIGHT + 2 * HINT_PAD,
-                flags: page::ITEM_HINT,
-                radius: 0,
-            });
+            self.hint(
+                button,
+                (
+                    left.saturating_sub(HINT_PAD),
+                    y.saturating_sub(HINT_PAD),
+                    (end as u32).saturating_sub(start as u32) + 2 * HINT_PAD,
+                    LEGEND_HEIGHT + 2 * HINT_PAD,
+                ),
+            );
         }
+    }
+
+    /// A touch target that presses `button`, taken after the page's own items.
+    fn hint(&mut self, button: u32, (x, y, w, h): (u32, u32, u32, u32)) {
+        self.hints.push(Item {
+            id: item::HINT | button,
+            x,
+            y,
+            w,
+            h,
+            flags: page::ITEM_HINT,
+            radius: 0,
+        });
     }
 
     pub(crate) fn item(&mut self, id: u32, x: u32, y: u32, w: u32, h: u32, flags: u32, radius: u32) {

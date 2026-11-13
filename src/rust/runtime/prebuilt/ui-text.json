@@ -2,25 +2,25 @@
   "format": "moonlight.rust.ui-text",
   "version": 1,
   "builder": "rig",
-  "source_branch": "civ7-pipeline",
+  "source_branch": "r2-item3",
   "commands": [
     [
       "glslc",
       "-O",
       "--target-env=vulkan1.0",
       "-I",
-      "/media/storage2/builds/moonlight/shaders/20261113T104833Z-hints",
+      "/media/storage2/builds/moonlight/shaders/20261113T135604Z-item3",
       "-I",
-      "/media/storage2/builds/moonlight/wt-direct-perf/src/rust/runtime/shaders",
-      "/media/storage2/builds/moonlight/shaders/20261113T104833Z-hints/ui-text.frag",
+      "/media/storage2/builds/moonlight/wt-r2-item3/src/rust/runtime/shaders",
+      "/media/storage2/builds/moonlight/shaders/20261113T135604Z-item3/ui-text.frag",
       "-o",
-      "/media/storage2/builds/moonlight/shaders/20261113T104833Z-hints/ui-text.spv"
+      "/media/storage2/builds/moonlight/shaders/20261113T135604Z-item3/ui-text.spv"
     ],
     [
       "spirv-val",
       "--target-env",
       "vulkan1.0",
-      "/media/storage2/builds/moonlight/shaders/20261113T104833Z-hints/ui-text.spv"
+      "/media/storage2/builds/moonlight/shaders/20261113T135604Z-item3/ui-text.spv"
     ]
   ],
   "compiler": "shaderc v2026.2 2026-04-24spirv-tools v2026.2 2026-04-24glslang d5f08ae5c5a9a45165578445cbd0f9adf0223448\nTarget: SPIR-V 1.0",

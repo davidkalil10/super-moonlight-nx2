@@ -35,8 +35,11 @@ pub const ITEM_ADJUSTABLE: u32 = 4;
 pub const ITEM_PENDING: u32 = 8;
 pub const ITEM_EDITING: u32 = 16;
 pub const ITEM_REPORTS_FOCUS: u32 = 32;
-/// A footer button hint: touching it is pressing the button in the low bits of its id.
+/// A button hint, in the footer or a value's arrow: touching it is pressing the button in the
+/// low bits of its id.
 pub const ITEM_HINT: u32 = 64;
+/// A list entry that opens a pane: A moves the cursor right into it, as the pad's right does.
+pub const ITEM_OPENS: u32 = 128;
 
 const FNV_OFFSET_BASIS: u32 = 2_166_136_261;
 const FNV_PRIME: u32 = 16_777_619;

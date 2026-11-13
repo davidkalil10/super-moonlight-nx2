@@ -839,7 +839,7 @@ impl Builder<'_> {
                 y,
                 CATEGORY_WIDTH,
                 CATEGORY_HEIGHT,
-                page::ITEM_REPORTS_FOCUS,
+                page::ITEM_REPORTS_FOCUS | page::ITEM_OPENS,
                 PANEL_RADIUS,
             );
             let current = i == u32::from(model.category());
@@ -909,11 +909,10 @@ impl Builder<'_> {
             self.put(value_x, value_y, VALUE_WIDTH, value, VALUE, value_ink, Align::Right);
         } else {
             self.stepper(
-                value_x,
-                value_y,
+                (value_x, value_y, VALUE_WIDTH),
+                (y, ROW_HEIGHT),
                 value,
                 VALUE,
-                VALUE_WIDTH,
                 value_ink,
                 editing && row.can_left,
                 editing && row.can_right,

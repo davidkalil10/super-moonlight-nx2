@@ -11,7 +11,7 @@ const uint UI_MAX_ITEMS = 32u, UI_MAX_TEXTS = 48u, UI_MAX_IMAGES = 24u,
 const uint UI_FLAG_OVERLAY = 1u, UI_FLAG_HIDE_CURSOR = 2u, UI_FLAG_NO_CHORD = 4u;
 const uint UI_ITEM_GREYED = 1u, UI_ITEM_CURRENT = 2u, UI_ITEM_ADJUSTABLE = 4u,
            UI_ITEM_PENDING = 8u, UI_ITEM_EDITING = 16u, UI_ITEM_REPORTS_FOCUS = 32u,
-           UI_ITEM_HINT = 64u;
+           UI_ITEM_HINT = 64u, UI_ITEM_OPENS = 128u;
 const uint UI_OP_A = 1u, UI_OP_B = 2u, UI_OP_X = 3u, UI_OP_Y = 4u,
            UI_OP_ADJUST = 5u, UI_OP_CHORD = 6u, UI_OP_EDIT = 7u, UI_OP_FOCUS = 8u, UI_OP_MINUS = 9u;
 const uint UI_CHORD_FRAMES = 60u, UI_STICK_REPEAT = 12u;
@@ -164,20 +164,6 @@ void uiCommand(uint op, uint item, uint value) {
   uint sequence = uiWord(CMD_SEQUENCE) + 1u;
   storage.words[CMD_SEQUENCE] = sequence == 0u ? 1u : sequence;
 }
-// The edit lives here, not in the page, so input right after A already steps
-// the value (streamer/civ7/README.md, "Console UI"). A ends an edit; on an
-// adjustable item it starts one; elsewhere it is a plain A.
-void uiPress(uint base, uint index) {
-  uint id = uiItemId(base, index);
-  if (uiWord(UI_EDIT) != 0u) {
-    storage.words[UI_EDIT] = 0u;
-    uiCommand(UI_OP_EDIT, 0u, 0u);
-  } else if ((uiItemFlags(base, index) & UI_ITEM_ADJUSTABLE) != 0u) {
-    storage.words[UI_EDIT] = id;
-    uiCommand(UI_OP_EDIT, id, 0u);
-  } else
-    uiCommand(UI_OP_A, id, 0u);
-}
 // Nearest selectable item whose centre lies in the pressed direction, dominant
 // axis, no wrap.
 uint uiNeighbour(uint base, uint cursor, vec2 direction) {
@@ -201,6 +187,25 @@ uint uiNeighbour(uint base, uint cursor, vec2 direction) {
     }
   }
   return best;
+}
+// The edit lives here, not in the page, so input right after A already steps
+// the value (streamer/civ7/README.md, "Console UI"). A ends an edit; on an
+// adjustable item it starts one; on an item that opens a pane it shows that
+// pane and moves into it; elsewhere it is a plain A. Returns the new cursor.
+uint uiPress(uint base, uint index) {
+  uint id = uiItemId(base, index), flags = uiItemFlags(base, index);
+  if (uiWord(UI_EDIT) != 0u) {
+    storage.words[UI_EDIT] = 0u;
+    uiCommand(UI_OP_EDIT, 0u, 0u);
+  } else if ((flags & UI_ITEM_ADJUSTABLE) != 0u) {
+    storage.words[UI_EDIT] = id;
+    uiCommand(UI_OP_EDIT, id, 0u);
+  } else if ((flags & UI_ITEM_OPENS) != 0u) {
+    uiCommand(UI_OP_FOCUS, id, 0u);
+    return uiNeighbour(base, index, vec2(1, 0));
+  } else
+    uiCommand(UI_OP_A, id, 0u);
+  return index;
 }
 // Input for the applied page: cursor moves on the console, presses become
 // commands. Scratch: inputState.chordFrames chord frames,
@@ -228,6 +233,17 @@ void uiInput() {
     return;
   uint items = uiWord(base + UI_HDR_ITEMS),
        cursor = min(uiWord(UI_CURSOR), max(items, 1u) - 1u);
+  bool touching = inputState.touch[2] == 1u && (inputState.touch[6] & 2u) == 0u;
+  bool tapped = touching && inputState.touchHeld == 0u;
+  vec2 touch = vec2(inputState.touch[8], inputState.touch[9]) * 1.5;
+  inputState.touchHeld = touching ? 1u : 0u;
+  // A hint presses its button, through the same path as the pad.
+  for (uint i = 0u; tapped && i < items; i++)
+    if ((uiItemFlags(base, i) & UI_ITEM_HINT) != 0u &&
+        uiInside(touch, uiRect(base, UI_ITEMS, i, 1u))) {
+      pressed |= uiItemId(base, i) & 0xffffu;
+      tapped = false;
+    }
   vec2 stick = inputStick();
   vec2 move = vec2(0);
   if ((pressed & BUTTON_UP) != 0u)
@@ -259,31 +275,23 @@ void uiInput() {
       sent = true;
     }
   }
-  bool touching = inputState.touch[2] == 1u && (inputState.touch[6] & 2u) == 0u;
-  if (touching && inputState.touchHeld == 0u) {
-    vec2 p = vec2(inputState.touch[8], inputState.touch[9]) * 1.5;
-    for (uint i = 0u; i < items; i++)
-      if ((uiItemFlags(base, i) & UI_ITEM_HINT) != 0u) {
-        // A footer hint presses its button, through the same path as the pad.
-        if (uiInside(p, uiRect(base, UI_ITEMS, i, 1u)))
-          pressed |= uiItemId(base, i) & 0xffffu;
-      } else if ((uiItemFlags(base, i) & UI_ITEM_GREYED) == 0u &&
-                 uiInside(p, uiRect(base, UI_ITEMS, i, 1u))) {
-        cursor = i;
-        storage.words[UI_TOUCH_ITEM] = i;
-        if (!sent) {
-          uiPress(base, i);
-          sent = true;
-        }
+  for (uint i = 0u; tapped && i < items; i++)
+    if ((uiItemFlags(base, i) & (UI_ITEM_GREYED | UI_ITEM_HINT)) == 0u &&
+        uiInside(touch, uiRect(base, UI_ITEMS, i, 1u))) {
+      cursor = i;
+      storage.words[UI_TOUCH_ITEM] = i;
+      tapped = false;
+      if (!sent) {
+        cursor = uiPress(base, i);
+        sent = true;
       }
-  }
-  inputState.touchHeld = touching ? 1u : 0u;
+    }
   bool onHint = (uiItemFlags(base, cursor) & UI_ITEM_HINT) != 0u;
   if (!sent && items > 0u && !onHint) {
     uint id = uiItemId(base, cursor);
     bool greyed = (uiItemFlags(base, cursor) & UI_ITEM_GREYED) != 0u;
     if ((pressed & BUTTON_A) != 0u && !greyed) {
-      uiPress(base, cursor);
+      cursor = uiPress(base, cursor);
       sent = true;
     } else if ((pressed & BUTTON_X) != 0u) {
       uiCommand(UI_OP_X, id, 0u);
