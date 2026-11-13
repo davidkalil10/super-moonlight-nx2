@@ -6,7 +6,7 @@ use moonlight_nx2_core::input::{
     Pad, face_buttons_by_position, map_pad, map_pad_with_start_chord, stop_held,
 };
 use moonlight_nx2_io::media::MAX_INPUT_BYTES;
-use moonlight_nx2_ui::settings::ButtonLayout;
+use moonlight_nx2_ui::{model::Screen, settings::ButtonLayout};
 
 pub const VERSION: u32 = 1;
 /// Records carrying more players, motion or mouse touches; a v1 host never receives them.
@@ -27,6 +27,32 @@ const X_WORD: usize = 4;
 const Y_WORD: usize = 5;
 const ATTR_END: u32 = 0x2;
 const UNIT: u16 = 10_000;
+
+const PLUS: u64 = 1 << 10;
+
+/// Plus quits the app outside a stream, on a fresh press only. After the screen changes every
+/// button has to be let go first, so Plus still held from the stop chord does not quit.
+#[derive(Default)]
+pub struct ExitPress {
+    screen: Option<Screen>,
+    armed: bool,
+    held: bool,
+}
+
+impl ExitPress {
+    /// Whether `buttons` on `screen` ask to quit.
+    pub fn update(&mut self, buttons: u64, screen: Screen) -> bool {
+        if self.screen != Some(screen) {
+            self.screen = Some(screen);
+            self.armed = false;
+        }
+        self.armed |= buttons == 0;
+        let held = buttons & PLUS != 0;
+        let pressed = held && !self.held;
+        self.held = held;
+        pressed && self.armed && screen != Screen::Streaming
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Error {

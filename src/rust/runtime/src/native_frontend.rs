@@ -14,7 +14,7 @@ use crate::{
     sdk,
 };
 use alloc::{boxed::Box, format};
-use moonlight_nx2_app::{dock::Monitor, policy::DisplayCapabilities};
+use moonlight_nx2_app::{dock::Monitor, input::ExitPress, policy::DisplayCapabilities};
 use moonlight_nx2_core::codec::Capabilities;
 use moonlight_nx2_ui::{
     json::Json,
@@ -220,6 +220,7 @@ fn execute(
     };
     let (mut last_screen, mut failed, mut blocked_start) = (None, false, false);
     let mut input_gate = InputGate::default();
+    let mut exit_press = ExitPress::default();
     let mut dock = Monitor::new(docked);
     let mut probe = Probe::new(docked, unsafe { sdk::moonlightNowNs() }, 0);
     let (mut polled, mut last_mode, mut pending) = (start, None, false);
@@ -263,7 +264,7 @@ fn execute(
             failed = true;
             break;
         }
-        if input.raw_buttons & (1 << 10) != 0 && app.screen() != Screen::Streaming {
+        if exit_press.update(input.raw_buttons, app.screen()) {
             app.client.event(&Event::AppGone);
         }
         turns.lap(Phase::Input);
