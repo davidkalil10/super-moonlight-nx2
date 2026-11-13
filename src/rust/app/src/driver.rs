@@ -265,12 +265,14 @@ impl Driver {
 
     /// One media step's input. Only owned Streaming and UI permission forward live input;
     /// other phases release the previous pad/fingers once, including missing touch reads.
+    /// With the menu chord on, Plus and Minus are held back as `input::ChordHold` describes.
     pub fn input<'a, U: Ui>(
         &'a mut self,
         ui: &U,
         pad: &'a PadState,
         extra: Option<&'a Extra>,
         touches: Option<&'a Touches>,
+        now_ms: u64,
     ) -> FrameInput<'a> {
         let streaming = self.service.phase() == crate::stream::Phase::Streaming;
         let options = ui.stream_options();
@@ -282,6 +284,7 @@ impl Driver {
             touches,
             touch_mouse: streaming && options.touch_mouse,
             allowed: streaming && ui.allow_input(),
+            chord_ms: options.menu_chord.then_some(now_ms),
             failed: false,
         }
     }
@@ -493,6 +496,7 @@ pub struct FrameInput<'a> {
     touches: Option<&'a Touches>,
     touch_mouse: bool,
     allowed: bool,
+    chord_ms: Option<u64>,
     failed: bool,
 }
 
@@ -511,6 +515,7 @@ impl InputSource for FrameInput<'_> {
             self.touches,
             self.touch_mouse,
             self.allowed,
+            self.chord_ms,
             out,
         ) {
             Ok(length) => length,

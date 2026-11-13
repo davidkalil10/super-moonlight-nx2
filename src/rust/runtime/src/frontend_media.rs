@@ -44,12 +44,13 @@ pub fn send_input<F: Files + Clone>(
     client: &mut Client<F>,
     input: &FrameInput,
     epoch: Epoch,
+    now_ms: u64,
 ) {
     if client.session_epoch() != Some(epoch) {
         return;
     }
     let mut record = [0u8; MAX_INPUT_BYTES];
-    let length = client.input(input).take(&mut record);
+    let length = client.input(input, now_ms).take(&mut record);
     if length != 0 {
         crate::stream_stats::input_sent(crate::render_platform::now_ns());
         let _ = outbox.input(&record[..length]);

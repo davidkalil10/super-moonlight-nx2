@@ -418,12 +418,14 @@ impl<F: Files + Clone> Client<F> {
     pub fn input<'a>(
         &'a mut self,
         frame: &'a crate::hid::FrameInput,
+        now_ms: u64,
     ) -> moonlight_nx2_app::driver::FrameInput<'a> {
         self.driver.input(
             &View(&mut self.bridge),
             &frame.pad,
             Some(&frame.extra),
             Some(&frame.touches),
+            now_ms,
         )
     }
 

@@ -351,7 +351,7 @@ impl Stream {
             now_ms,
             interactive,
         };
-        frontend_media::send_input(&running.input, client, input, running.epoch);
+        frontend_media::send_input(&running.input, client, input, running.epoch, now_ms);
         let result = frontend_media::step(&mut running.session, client, renderer, tick);
         let presented = result.is_ok();
         if let Ok(step) = &result

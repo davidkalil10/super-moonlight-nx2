@@ -29,6 +29,10 @@ const ATTR_END: u32 = 0x2;
 const UNIT: u16 = 10_000;
 
 const PLUS: u64 = 1 << 10;
+const MINUS: u64 = 1 << 11;
+const PLUS_MINUS: u32 = (PLUS | MINUS) as u32;
+/// How long a lone Plus or Minus waits for its partner before it reaches the PC.
+pub const CHORD_WINDOW_MS: u64 = 60;
 
 /// Plus quits the app outside a stream, on a fresh press only. After the screen changes every
 /// button has to be let go first, so Plus still held from the stop chord does not quit.
@@ -51,6 +55,72 @@ impl ExitPress {
         let pressed = held && !self.held;
         self.held = held;
         pressed && self.armed && screen != Screen::Streaming
+    }
+}
+
+/// Keeps Plus and Minus from the PC while they may be forming the menu chord.
+///
+/// Both held are never forwarded, and one already forwarded is released, so the host never sees
+/// the chord. A lone button is held back for `CHORD_WINDOW_MS` and then forwarded; let go inside
+/// the window it is sent as a press in one record and a release in the next, so a quick tap
+/// still reaches the PC with no added delay. After the chord each button stays held back until
+/// it is let go.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ChordHold {
+    forwarded: u32,
+    waiting: u32,
+    suppressed: u32,
+    since: u64,
+}
+
+impl Default for ChordHold {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ChordHold {
+    pub const fn new() -> Self {
+        Self {
+            forwarded: 0,
+            waiting: 0,
+            suppressed: 0,
+            since: 0,
+        }
+    }
+
+    /// The raw buttons to forward this frame. With `active` false, when the menu chord is off or
+    /// input is gated, every button passes straight through.
+    pub fn update(&mut self, buttons: u32, active: bool, now_ms: u64) -> u32 {
+        let held = buttons & PLUS_MINUS;
+        let others = buttons & !PLUS_MINUS;
+        if !active {
+            *self = Self {
+                forwarded: held,
+                ..Self::new()
+            };
+            return buttons;
+        }
+        if held == PLUS_MINUS {
+            *self = Self {
+                suppressed: PLUS_MINUS,
+                ..Self::new()
+            };
+            return others;
+        }
+        let tapped = self.waiting & !held;
+        self.forwarded &= held;
+        self.suppressed &= held;
+        let fresh = held & !self.forwarded & !self.suppressed & !self.waiting;
+        if fresh != 0 {
+            self.since = now_ms;
+        }
+        self.waiting = (self.waiting & held) | fresh;
+        if self.waiting != 0 && now_ms.saturating_sub(self.since) >= CHORD_WINDOW_MS {
+            self.forwarded |= self.waiting;
+            self.waiting = 0;
+        }
+        others | self.forwarded | tapped
     }
 }
 
@@ -331,6 +401,8 @@ pub struct Recorder {
     held_across_gate: u32,
     last_extra: [Option<Pad>; EXTRA_PADS],
     held_extra: [u32; EXTRA_PADS],
+    chord_hold: ChordHold,
+    chord_hold_extra: [ChordHold; EXTRA_PADS],
     stopped: bool,
     start_chord: u64,
     layout: ButtonLayout,
@@ -358,6 +430,8 @@ impl Recorder {
             held_across_gate: 0,
             last_extra: [None; EXTRA_PADS],
             held_extra: [0; EXTRA_PADS],
+            chord_hold: ChordHold::new(),
+            chord_hold_extra: [ChordHold::new(); EXTRA_PADS],
             stopped: false,
             start_chord: chord,
             layout: ButtonLayout::Nintendo,
@@ -390,11 +464,12 @@ impl Recorder {
         allowed: bool,
         out: &mut [u8; MAX_INPUT_BYTES],
     ) -> Result<usize, Error> {
-        self.record_inner(pad, None, touch, false, allowed, false, out)
+        self.record_inner(pad, None, touch, false, allowed, None, false, out)
     }
 
     /// Driver gates release forwarded fingers even if this frame has no touch read. `extra`
     /// adds players 2 to 8 and motion; `touch_mouse` asks the host to drive its mouse.
+    /// `chord_ms` is the time when the menu chord is on, and holds Plus and Minus back.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn record_frame(
         &mut self,
@@ -403,9 +478,10 @@ impl Recorder {
         touch: Option<&Touches>,
         touch_mouse: bool,
         allowed: bool,
+        chord_ms: Option<u64>,
         out: &mut [u8; MAX_INPUT_BYTES],
     ) -> Result<usize, Error> {
-        self.record_inner(pad, extra, touch, touch_mouse, allowed, true, out)
+        self.record_inner(pad, extra, touch, touch_mouse, allowed, chord_ms, true, out)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -416,6 +492,7 @@ impl Recorder {
         touch: Option<&Touches>,
         touch_mouse: bool,
         allowed: bool,
+        chord_ms: Option<u64>,
         release_without_touch: bool,
         out: &mut [u8; MAX_INPUT_BYTES],
     ) -> Result<usize, Error> {
@@ -435,6 +512,9 @@ impl Recorder {
             return self.stop_record(pad.connected, out);
         }
 
+        let chord = allowed && chord_ms.is_some();
+        let now_ms = chord_ms.unwrap_or(0);
+        let forwarded = self.chord_hold.update(buttons, chord, now_ms);
         self.held_across_gate = if allowed {
             self.held_across_gate & buttons
         } else {
@@ -443,7 +523,7 @@ impl Recorder {
         let mapped = if allowed {
             self.laid_out(map_pad_with_start_chord(
                 pad.connected,
-                u64::from(buttons & !self.held_across_gate),
+                u64::from(forwarded & !self.held_across_gate),
                 pad.sticks,
                 self.start_chord,
             ))
@@ -452,7 +532,7 @@ impl Recorder {
         };
         let changed = self.changed(mapped);
         let mut extended = match extra {
-            Some(extra) => self.extend(extra, pad.connected, allowed),
+            Some(extra) => self.extend(extra, pad.connected, allowed, chord_ms),
             None => Extended::default(),
         };
 
@@ -479,10 +559,19 @@ impl Recorder {
 
     /// Players 2 to 8 that changed, mapped like the primary pad without the start chord, and
     /// the motion of every connected player. Gated frames release the pads and send no motion.
-    fn extend(&mut self, extra: &Extra, primary: bool, allowed: bool) -> Extended {
+    fn extend(
+        &mut self,
+        extra: &Extra,
+        primary: bool,
+        allowed: bool,
+        chord_ms: Option<u64>,
+    ) -> Extended {
         let mut extended = Extended::default();
+        let chord = allowed && chord_ms.is_some();
+        let now_ms = chord_ms.unwrap_or(0);
         for (slot, state) in extra.pads.iter().enumerate() {
             let buttons = if state.connected { state.buttons } else { 0 };
+            let forwarded = self.chord_hold_extra[slot].update(buttons, chord, now_ms);
             self.held_extra[slot] = if allowed {
                 self.held_extra[slot] & buttons
             } else {
@@ -491,7 +580,7 @@ impl Recorder {
             let mapped = if allowed {
                 self.laid_out(map_pad(
                     state.connected,
-                    u64::from(buttons & !self.held_extra[slot]),
+                    u64::from(forwarded & !self.held_extra[slot]),
                     state.sticks,
                 ))
             } else {
