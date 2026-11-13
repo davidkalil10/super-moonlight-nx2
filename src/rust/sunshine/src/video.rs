@@ -22,7 +22,8 @@ const FLAG_EOF: u8 = 0x2;
 const FLAG_SOF: u8 = 0x4;
 const SLOTS: usize = rs::MAX_SHARDS + 1;
 const NONE: u16 = u16::MAX;
-const IDR_RETRY_US: u64 = 500_000;
+const IDR_RETRY_MIN_US: u64 = 33_000;
+const IDR_RETRY_MAX_US: u64 = 100_000;
 const OOS_COOLDOWN_US: u64 = 300_000_000;
 
 #[derive(Clone, Copy)]
@@ -34,6 +35,15 @@ pub struct Config {
     pub key: Option<[u8; 16]>,
     /// Ring capacity for complete access units.
     pub frame_bytes: usize,
+    /// Negotiated frame rate, which paces repeated keyframe requests.
+    pub fps: u16,
+}
+
+/// Two frame periods: a lost request is retried before the stream stalls for long, without
+/// asking again for a keyframe the host is still encoding.
+fn idr_retry_us(fps: u16) -> u64 {
+    let period = 1_000_000 / u64::from(fps.max(1));
+    (2 * period).clamp(IDR_RETRY_MIN_US, IDR_RETRY_MAX_US)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -294,7 +304,7 @@ impl Receiver {
             block: Block::default(),
             current_frame: 1,
             workspace: Workspace::new(),
-            depack: Depacketizer::new(),
+            depack: Depacketizer::new(idr_retry_us(config.fps)),
             ring: Ring::new(config.frame_bytes),
             clock: Clock90k::default(),
             stats: Stats::default(),
@@ -735,6 +745,7 @@ struct Depacketizer {
     last_stream_index: u32,
     waiting_for_idr: bool,
     last_idr_request_us: Option<u64>,
+    idr_retry_us: u64,
     keyframe: bool,
     last_payload_length: u16,
     host_latency: u16,
@@ -742,12 +753,13 @@ struct Depacketizer {
 }
 
 impl Depacketizer {
-    fn new() -> Self {
+    fn new(idr_retry_us: u64) -> Self {
         Self {
             next_frame: 1,
             last_stream_index: u32::MAX,
             waiting_for_idr: true,
             last_idr_request_us: None,
+            idr_retry_us,
             keyframe: false,
             last_payload_length: 0,
             host_latency: 0,
@@ -758,7 +770,7 @@ impl Depacketizer {
     fn request_idr<E: Events>(&mut self, stats: &mut Stats, now_us: u64, events: &mut E) {
         let due = self
             .last_idr_request_us
-            .is_none_or(|last| now_us.saturating_sub(last) >= IDR_RETRY_US);
+            .is_none_or(|last| now_us.saturating_sub(last) >= self.idr_retry_us);
         if due {
             self.last_idr_request_us = Some(now_us);
             stats.idr_requests += 1;

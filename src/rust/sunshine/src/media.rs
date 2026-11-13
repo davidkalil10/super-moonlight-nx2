@@ -15,6 +15,7 @@ pub fn video_config(stream: &Negotiated, frame_bytes: usize) -> video::Config {
         packet_size: usize::from(stream.packet_size),
         key: stream.video_encrypted().then_some(stream.key.key),
         frame_bytes,
+        fps: stream.fps,
     }
 }
 
