@@ -402,13 +402,15 @@ impl Stream {
         };
         let (stats, recovery) = running.counters();
         log(&format!(
-            "stream: video units={} bytes={} presented={} dropped={} late={} caught_up={} skipped={} idr_requests={}",
+            "stream: video units={} bytes={} presented={} dropped={} late={} kept={} caught_up={} refused={} skipped={} idr_requests={}",
             stats.accepted_units,
             stats.accepted_bytes,
             stats.presented,
             stats.dropped,
             stats.late,
+            stats.kept,
             stats.caught_up,
+            stats.refused,
             recovery.frames_skipped,
             recovery.idr_requests
         ));
@@ -465,6 +467,7 @@ impl Stream {
         let Some(mut running) = self.running.take() else {
             return;
         };
+        renderer.release_held();
         if let Err(error) = renderer.forget_imports() {
             log(&format!("stream: renderer kept its imports {error:?}"));
         }

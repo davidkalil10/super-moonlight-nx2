@@ -45,9 +45,13 @@ pub struct Stats {
     /// Uploaded frames a newer one replaced before the display turned: a backlog worked off,
     /// not a loss.
     pub caught_up: u64,
-    /// Turns that left a finished frame in a full decoder for the next refresh instead of
-    /// replacing the one waiting to be shown.
+    /// Turns that held a finished frame back for the next refresh, behind the one waiting to
+    /// be shown, instead of replacing it.
     pub late: u64,
+    /// Frames shown from the renderer's second slot, kept there to make room in the decoder.
+    pub kept: u64,
+    /// Units the decoder had no room for, offered again later.
+    pub refused: u64,
     pub presented: u64,
 }
 
@@ -62,6 +66,22 @@ struct Arrival {
     pts_us: u64,
     received_us: Option<u64>,
     submitted_ns: u64,
+}
+
+/// A frame copied into the renderer's second slot while another waits for its present.
+#[derive(Clone, Copy)]
+struct Kept {
+    slot: usize,
+    layout: Layout,
+    arrival: Option<u64>,
+    timing: DecoderTiming,
+}
+
+/// What became of a frame taken from the decoder.
+enum Taken {
+    Dropped,
+    Shown,
+    Kept(usize, Layout),
 }
 
 /// When a frame's unit went to the decoder, when the decoder took it up and when its frame
@@ -175,6 +195,16 @@ const ARRIVAL_WAIT_NS: u64 = 2_000_000;
 /// With VRR, the longest the picture goes without a present while no frame comes.
 const HOLD_NS: u64 = 34_000_000;
 
+/// Copies a frame into a free slot: shown on the next present, or held there when `keep`.
+fn copy_in(renderer: &mut Renderer, frame: &Frame<'_>, keep: bool) -> Result<Taken, render::Error> {
+    match keep {
+        true => renderer
+            .stage(frame)
+            .map(|(slot, layout)| Taken::Kept(slot, layout)),
+        false => renderer.upload(frame).map(|_| Taken::Shown),
+    }
+}
+
 fn pump(audio: &mut dyn Pump) {
     audio.pump(platform::now_ns() / 1_000_000);
 }
@@ -224,6 +254,7 @@ pub struct Video<'a, B: Backend<N>, const N: usize = SURFACES> {
     arrivals: [Option<Arrival>; decoder::UNITS],
     pending_arrival: Option<u64>,
     pending_timing: Option<DecoderTiming>,
+    kept: Option<Kept>,
     queue: DecoderQueue,
     /// Presents in a row that found a frame waiting and the decoder full.
     late_turns: u32,
@@ -278,6 +309,7 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
             arrivals: [None; decoder::UNITS],
             pending_arrival: None,
             pending_timing: None,
+            kept: None,
             queue: DecoderQueue::default(),
             late_turns: 0,
             last_present_ns: 0,
@@ -301,7 +333,7 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
     }
 
     pub fn pending(&self) -> bool {
-        !self.closed && (self.pending || self.decoder.pending_units() != 0)
+        !self.closed && (self.pending || self.kept.is_some() || self.decoder.pending_units() != 0)
     }
 
     fn fail(&mut self, error: Error) -> Error {
@@ -379,7 +411,10 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
                 stream_stats::in_flight(self.decoder.pending_units());
                 Ok(())
             }
-            Err(decoder::Error::Again) => Err(Error::Decoder(decoder::Error::Again)),
+            Err(decoder::Error::Again) => {
+                self.stats.refused += 1;
+                Err(Error::Decoder(decoder::Error::Again))
+            }
             Err(error) => Err(self.fail(Error::Decoder(error))),
         }
     }
@@ -398,7 +433,12 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
         self.recovery.counters()
     }
 
-    fn upload(&mut self, renderer: &mut Renderer, info: &FrameInfo) -> Result<bool, Error> {
+    fn upload(
+        &mut self,
+        renderer: &mut Renderer,
+        info: &FrameInfo,
+        keep: bool,
+    ) -> Result<Taken, Error> {
         let bytes = match self.decoder.frame(info.token) {
             Ok(bytes) => bytes,
             Err(error) => return Err(self.fail(Error::Decoder(error))),
@@ -424,24 +464,22 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
             full_range: false,
             timestamp_ns: info.timestamp_ns,
         };
-        let uploaded = renderer.upload(&frame);
+        let uploaded = copy_in(renderer, &frame, keep);
         self.decoder
             .release(info.token)
             .map_err(|error| self.fail(Error::Decoder(error)))?;
-        match uploaded {
-            Ok(_) => Ok(true),
-            Err(render::Error::Busy) => Ok(false),
-            Err(error) => Err(self.fail(Error::Renderer(error))),
-        }
+        self.taken(uploaded)
     }
 
-    /// Shows a frame the decoder read straight into the renderer's upload slot.
+    /// Shows a frame the decoder read straight into the renderer's upload slot, or holds the
+    /// slot when `keep`.
     fn publish_staged(
         &mut self,
         renderer: &mut Renderer,
         slot: usize,
         info: &FrameInfo,
-    ) -> Result<bool, Error> {
+        keep: bool,
+    ) -> Result<Taken, Error> {
         let published = Layout::coded(
             info.coded.width(),
             info.coded.height(),
@@ -450,13 +488,20 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
             self.matrix,
         )
         .map_err(render::Error::from)
-        .and_then(|layout| renderer.publish(slot, layout));
+        .and_then(|layout| match keep {
+            true => renderer.hold(slot).map(|()| Taken::Kept(slot, layout)),
+            false => renderer.publish(slot, layout).map(|_| Taken::Shown),
+        });
         self.decoder
             .release(info.token)
             .map_err(|error| self.fail(Error::Decoder(error)))?;
-        match published {
-            Ok(_) => Ok(true),
-            Err(render::Error::Busy) => Ok(false),
+        self.taken(published)
+    }
+
+    fn taken(&mut self, result: Result<Taken, render::Error>) -> Result<Taken, Error> {
+        match result {
+            Ok(taken) => Ok(taken),
+            Err(render::Error::Busy) => Ok(Taken::Dropped),
             Err(error) => Err(self.fail(Error::Renderer(error))),
         }
     }
@@ -468,7 +513,7 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
         renderer: &mut Renderer,
         info: &FrameInfo,
         placed: Placed,
-    ) -> Result<bool, Error> {
+    ) -> Result<Taken, Error> {
         let published = Layout::coded(
             placed.placement.stride,
             placed.placement.slice_height,
@@ -479,23 +524,24 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
         .map_err(render::Error::from)
         .and_then(|layout| renderer.publish(placed.surface, layout));
         match published {
-            Ok(_) => Ok(true),
+            Ok(_) => Ok(Taken::Shown),
             Err(render::Error::Busy) => {
                 self.drop_frame(info)?;
-                Ok(false)
+                Ok(Taken::Dropped)
             }
             Err(error) => Err(self.fail(Error::Renderer(error))),
         }
     }
 
     /// Shows a frame left in the backend's memory: copied by the GPU from its import, or by
-    /// the CPU into a slot when the renderer cannot import it.
+    /// the CPU into a slot when the renderer cannot import it. Only a copied frame is kept.
     fn publish_hosted(
         &mut self,
         renderer: &mut Renderer,
         info: &FrameInfo,
         hosted: Hosted,
-    ) -> Result<bool, Error> {
+        keep: bool,
+    ) -> Result<Taken, Error> {
         let image = hosted.image;
         if self.stats.decoded == 1 {
             platform::log(&format!(
@@ -524,7 +570,9 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
                     pitch: image.pitch,
                     rows: image.rows,
                 };
-                renderer.publish_import(import, host, layout).map(|_| import)
+                renderer
+                    .publish_import(import, host, layout)
+                    .map(|_| import)
             });
             match imported {
                 Ok(import) => {
@@ -533,11 +581,11 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
                     }
                     self.host_import = Some(true);
                     self.imports[hosted.surface] = Some(import);
-                    return Ok(true);
+                    return Ok(Taken::Shown);
                 }
                 Err(render::Error::Busy) => {
                     self.drop_frame(info)?;
-                    return Ok(false);
+                    return Ok(Taken::Dropped);
                 }
                 Err(error) => {
                     platform::log(&format!("sdk-decoder: output=readback import {error:?}"));
@@ -572,16 +620,12 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
             timestamp_ns: info.timestamp_ns,
         };
         let read_start_ns = platform::now_ns();
-        let uploaded = renderer.upload(&frame);
+        let uploaded = copy_in(renderer, &frame, keep);
         stream_stats::stage(Stage::Readback, read_start_ns, platform::now_ns());
         self.decoder
             .release_surface(hosted.surface)
             .map_err(|error| self.fail(Error::Decoder(error)))?;
-        match uploaded {
-            Ok(_) => Ok(true),
-            Err(render::Error::Busy) => Ok(false),
-            Err(error) => Err(self.fail(Error::Renderer(error))),
-        }
+        self.taken(uploaded)
     }
 
     fn drop_frame(&mut self, info: &FrameInfo) -> Result<(), Error> {
@@ -650,8 +694,10 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
     /// the unit is offered once more, so it goes in on the turn it arrived. Left waiting, it
     /// would go in next turn together with that turn's unit, their two frames would finish
     /// together, fill the decoder again and keep every later turn in the same step of two.
-    /// A frame taken here replaces one that was taken and not shown yet: that is the catch-up
-    /// when units arrive faster than the display turns.
+    /// With a frame already waiting, the finished one is kept in the renderer's second slot
+    /// instead, when the frames are copied into slots, so it is still shown on the next
+    /// refresh. Only when both wait, or frames cannot be kept, does a frame taken here replace
+    /// one not shown yet: that is the catch-up when units arrive faster than the display turns.
     pub fn submit_draining(
         &mut self,
         renderer: &mut Renderer,
@@ -665,11 +711,15 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
             self.reclaim(renderer)?;
         }
         match self.submit_timed(header, bytes, received_us) {
+            Err(Error::Decoder(decoder::Error::Again)) if self.pending && self.can_keep() => {
+                self.take(renderer, audio, true)?;
+                self.submit_timed(header, bytes, received_us)
+            }
             Err(Error::Decoder(decoder::Error::Again)) if self.pending && !self.catching_up() => {
                 Err(Error::Decoder(decoder::Error::Again))
             }
             Err(Error::Decoder(decoder::Error::Again)) => {
-                self.poll_upload_pumping(renderer, audio)?;
+                self.replace(renderer, audio)?;
                 self.submit_timed(header, bytes, received_us)
             }
             result => result,
@@ -678,6 +728,25 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
 
     fn catching_up(&self) -> bool {
         self.late_turns >= CATCH_UP_TURNS
+    }
+
+    /// Whether a second finished frame can wait, in the renderer's other slot: frames are
+    /// copied into slots, and none is kept yet.
+    fn can_keep(&self) -> bool {
+        self.kept.is_none()
+            && !self.decoder.in_place()
+            && (!self.decoder.holds_frames() || self.host_import == Some(false))
+    }
+
+    /// Replaces the frame waiting to be shown with the next one, keeping the one after it
+    /// when the next one was kept.
+    fn replace(&mut self, renderer: &mut Renderer, audio: &mut dyn Pump) -> Result<(), Error> {
+        let kept = self.kept.is_some();
+        self.take(renderer, audio, false)?;
+        if kept && self.can_keep() {
+            self.take(renderer, audio, true)?;
+        }
+        Ok(())
     }
 
     pub fn poll_upload(&mut self, renderer: &mut Renderer) -> Result<bool, Error> {
@@ -689,18 +758,66 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
         renderer: &mut Renderer,
         audio: &mut dyn Pump,
     ) -> Result<bool, Error> {
+        self.take(renderer, audio, false)
+    }
+
+    /// Shows the kept frame, replacing one still waiting.
+    fn show_kept(&mut self, renderer: &mut Renderer) -> Result<bool, Error> {
+        let Some(kept) = self.kept.take() else {
+            return Ok(false);
+        };
+        match renderer.publish(kept.slot, kept.layout) {
+            Ok(_) => {}
+            Err(render::Error::Busy) => {
+                renderer.release_held();
+                self.stats.dropped += 1;
+                return Ok(false);
+            }
+            Err(error) => return Err(self.fail(Error::Renderer(error))),
+        }
+        self.stats.kept += 1;
+        self.waiting(kept.arrival, kept.timing);
+        Ok(true)
+    }
+
+    fn waiting(&mut self, arrival: Option<u64>, timing: DecoderTiming) {
+        if self.pending {
+            self.stats.caught_up += 1;
+            stream_stats::discarded();
+        }
+        self.pending = true;
+        self.pending_arrival = arrival;
+        self.pending_timing = Some(timing);
+    }
+
+    /// Takes the oldest frame not shown yet so the next present shows it: the kept one, or a
+    /// finished one from the decoder. With `keep`, a frame the decoder already finished is
+    /// held in the renderer's other slot instead, behind the one waiting.
+    fn take(
+        &mut self,
+        renderer: &mut Renderer,
+        audio: &mut dyn Pump,
+        keep: bool,
+    ) -> Result<bool, Error> {
         self.active()?;
+        if !keep && self.kept.is_some() {
+            return self.show_kept(renderer);
+        }
         self.recovery.tick(platform::now_ns() / 1_000_000);
         self.forward_idr_request();
         let (slot, frame, poll_start_ns) = if self.decoder.holds_frames() {
             self.reclaim(renderer)?;
-            self.wake(audio)?;
+            if !keep {
+                self.wake(audio)?;
+            }
             let poll_start_ns = platform::now_ns();
             (None, self.decoder.poll_into(None), poll_start_ns)
         } else {
             match renderer.staging(STAGING_WAIT_NS) {
                 Ok(Some((slot, staging))) => {
-                    self.wake(audio)?;
+                    if !keep {
+                        self.wake(audio)?;
+                    }
                     let poll_start_ns = platform::now_ns();
                     (
                         Some(slot),
@@ -754,17 +871,37 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
             (None, None, Some(_)) if info.staged => "staged",
             _ => "copied",
         };
-        let uploaded = match (info.placed, info.hosted, slot) {
+        let taken = match (info.placed, info.hosted, slot) {
             (Some(placed), _, _) => self.publish_placed(renderer, &info, placed),
-            (None, Some(hosted), _) => self.publish_hosted(renderer, &info, hosted),
-            (None, None, Some(slot)) if info.staged => self.publish_staged(renderer, slot, &info),
-            _ => self.upload(renderer, &info),
+            (None, Some(hosted), _) => self.publish_hosted(renderer, &info, hosted, keep),
+            (None, None, Some(slot)) if info.staged => {
+                self.publish_staged(renderer, slot, &info, keep)
+            }
+            _ => self.upload(renderer, &info, keep),
         };
         stream_stats::stage(Stage::Upload, decoded_ns, platform::now_ns());
         pump(audio);
-        if !uploaded? {
-            self.stats.dropped += 1;
-            return Ok(false);
+        let timing = DecoderTiming {
+            submitted: submitted_ns,
+            started: started_ns,
+            decoded: decoded_ns,
+        };
+        match taken? {
+            Taken::Dropped => {
+                self.stats.dropped += 1;
+                return Ok(false);
+            }
+            Taken::Kept(slot, layout) => {
+                self.stats.uploaded += 1;
+                self.kept = Some(Kept {
+                    slot,
+                    layout,
+                    arrival,
+                    timing,
+                });
+                return Ok(true);
+            }
+            Taken::Shown => {}
         }
         self.stats.uploaded += 1;
         #[cfg(feature = "frame-detail")]
@@ -773,17 +910,7 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
                 platform::log(&format!("video: shown {source} {layout:?} {detail:?}"));
             }
         }
-        if self.pending {
-            self.stats.caught_up += 1;
-            stream_stats::discarded();
-        }
-        self.pending = true;
-        self.pending_arrival = arrival;
-        self.pending_timing = Some(DecoderTiming {
-            submitted: submitted_ns,
-            started: started_ns,
-            decoded: decoded_ns,
-        });
+        self.waiting(arrival, timing);
         Ok(true)
     }
 
@@ -832,12 +959,13 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
         }
     }
 
-    /// Takes one finished frame, unless the step already took one to make room for a unit,
-    /// and presents once, so a turn lasts one display refresh and frames are shown in order.
-    /// Every frame is shown: one waiting with the decoder full holds the next in the decoder
-    /// and the unit after it in the network, a refresh late. Only when the decoder stays full
-    /// for `CATCH_UP_TURNS` refreshes has latency built up: `submit_draining` then replaces
-    /// the waiting frame, and so does a second frame taken here.
+    /// Takes one frame, unless the step already took one to make room for a unit, and
+    /// presents once, so a turn lasts one display refresh and frames are shown in order.
+    /// Every frame is shown: one waiting with the decoder full holds the next a refresh late,
+    /// kept in the renderer's second slot when frames are copied into slots, which makes room
+    /// in the decoder for the unit after it, or else in the decoder, holding that unit in the
+    /// network. Only when the decoder stays full for `CATCH_UP_TURNS` refreshes has latency
+    /// built up: `submit_draining` then replaces the waiting frame, and so does one taken here.
     /// With VRR the display refreshes on a present, so a frame is presented once it is ready
     /// and a turn without one presents nothing, up to `HOLD_NS`: a late frame then delays one
     /// refresh instead of repeating the previous picture for a whole one.
@@ -851,10 +979,10 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
         let full = self.decoder.pending_units() >= self.decoder.units();
         let waiting = self.pending;
         if !self.pending {
-            if vrr {
+            if vrr && self.kept.is_none() {
                 self.await_frame(audio)?;
             }
-            self.poll_upload_pumping(renderer, audio)?;
+            self.take(renderer, audio, false)?;
         }
         if waiting && full {
             self.late_turns += 1;
@@ -863,10 +991,13 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
         }
         if waiting && full {
             if self.catching_up() {
-                self.poll_upload_pumping(renderer, audio)?;
+                self.replace(renderer, audio)?;
             } else {
                 self.stats.late += 1;
                 stream_stats::shown_late(platform::now_ns());
+                if self.can_keep() {
+                    self.take(renderer, audio, true)?;
+                }
             }
         }
         if vrr && !self.pending && !self.hold_ended(interactive) {
@@ -919,6 +1050,7 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
         }
         self.closed = true;
         self.arrivals.fill(None);
+        self.kept = None;
         self.pending_arrival = None;
         self.pending_timing = None;
         crate::stream_stats::clear();

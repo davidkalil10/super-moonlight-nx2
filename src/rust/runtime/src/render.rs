@@ -273,6 +273,8 @@ struct Objects {
     slot_readers: [usize; 2],
     current_slot: Option<usize>,
     current_layout: Option<frame::Layout>,
+    /// A slot holding a frame for a later `publish`, kept from `free_slot`.
+    held_slot: Option<usize>,
     sequence: u32,
     rebuild: bool,
     retained: bool,
@@ -358,6 +360,7 @@ impl Renderer {
                 slot_readers: [0; 2],
                 current_slot: None,
                 current_layout: None,
+                held_slot: None,
                 sequence: 0,
                 rebuild: false,
                 retained: false,
@@ -378,9 +381,7 @@ impl Renderer {
         }
         log(&format!(
             "render: ready ui_shader={:?} cache={:?} mode={}",
-            config.ui_shader,
-            renderer.objects.info.cache,
-            renderer.objects.info.present_mode
+            config.ui_shader, renderer.objects.info.cache, renderer.objects.info.present_mode
         ));
         Ok(renderer)
     }
@@ -457,11 +458,39 @@ impl Renderer {
     }
 
     pub fn upload(&mut self, frame: &Frame<'_>) -> Result<usize, Error> {
+        let (slot, layout) = self.write(frame)?;
+        self.publish(slot, layout)
+    }
+
+    /// Copies a frame into a free slot and holds it there for a later `publish`, while the
+    /// frame shown before it still waits for its present.
+    pub fn stage(&mut self, frame: &Frame<'_>) -> Result<(usize, frame::Layout), Error> {
+        let (slot, layout) = self.write(frame)?;
+        self.hold(slot)?;
+        Ok((slot, layout))
+    }
+
+    fn write(&mut self, frame: &Frame<'_>) -> Result<(usize, frame::Layout), Error> {
         self.active()?;
         frame.plan()?;
         let slot = self.acquire_slot()?;
         let layout = frame.copy_to(self.slot_bytes(slot))?;
-        self.publish(slot, layout)
+        Ok((slot, layout))
+    }
+
+    /// Holds a free slot written in place for a later `publish`. One slot is held at most.
+    pub fn hold(&mut self, slot: usize) -> Result<(), Error> {
+        self.active()?;
+        if self.objects.held_slot.is_some() || !self.objects.slot_free(slot) {
+            return Err(Error::Busy);
+        }
+        self.objects.held_slot = Some(slot);
+        Ok(())
+    }
+
+    /// Lets go of a held slot whose frame will not be shown.
+    pub fn release_held(&mut self) {
+        self.objects.held_slot = None;
     }
 
     /// The free upload slot and its memory, for a frame written in place and then shown with
@@ -474,7 +503,7 @@ impl Renderer {
         Ok(Some((slot, self.slot_bytes(slot))))
     }
 
-    /// Whether `slot` is neither shown nor read by a frame still in flight.
+    /// Whether `slot` is neither shown, held nor read by a frame still in flight.
     pub fn slot_free(&mut self, slot: usize) -> Result<bool, Error> {
         self.active()?;
         self.objects.collect(0)?;
@@ -489,6 +518,9 @@ impl Renderer {
     /// Makes the frame in `slot` the one the next present shows.
     pub fn publish(&mut self, slot: usize, layout: frame::Layout) -> Result<usize, Error> {
         self.active()?;
+        if self.objects.held_slot == Some(slot) {
+            self.objects.held_slot = None;
+        }
         if !self.objects.slot_free(slot) {
             return Err(Error::Busy);
         }
@@ -580,7 +612,11 @@ impl Renderer {
         self.active()?;
         self.objects.collect(0)?;
         let objects = &self.objects;
-        Ok(objects.copies.iter().flatten().any(|copy| copy.import == import)
+        Ok(objects
+            .copies
+            .iter()
+            .flatten()
+            .any(|copy| copy.import == import)
             || objects
                 .flights
                 .iter()
@@ -1656,7 +1692,10 @@ impl Objects {
     }
 
     fn slot_free(&self, slot: usize) -> bool {
-        slot < 2 && Some(slot) != self.current_slot && self.slot_readers[slot] == 0
+        slot < 2
+            && Some(slot) != self.current_slot
+            && Some(slot) != self.held_slot
+            && self.slot_readers[slot] == 0
     }
 
     #[cfg(feature = "host-renderer")]
