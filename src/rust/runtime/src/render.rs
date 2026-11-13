@@ -22,7 +22,7 @@ use moonlight_nx2_core::{
 const UI_CONTROL_OFFSET: usize = 0xc000;
 const UI_CONTROL_END: usize = UI_CONTROL_OFFSET + 4096;
 const BADGE_WORDS_OFFSET: usize = 0xb100;
-const BADGE_AREA_BYTES: usize = 960 * 64 * 4;
+const BADGE_AREA_BYTES: usize = moonlight_nx2_ui::badge::AREA_BYTES;
 
 mod shaders {
     include!(concat!(env!("OUT_DIR"), "/shaders.rs"));

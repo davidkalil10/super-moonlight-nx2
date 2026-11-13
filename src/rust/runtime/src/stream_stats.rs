@@ -7,7 +7,7 @@ use alloc::{format, string::String};
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use moonlight_nx2_core::stats::StreamStats;
 
-const FIELDS: usize = 12;
+const FIELDS: usize = 17;
 
 static VALID: AtomicBool = AtomicBool::new(false);
 static IDR_WANTED: AtomicBool = AtomicBool::new(false);
@@ -35,6 +35,11 @@ pub fn latest() -> Option<StreamStats> {
         dropped: field(9),
         idr_requests: field(10),
         frames_skipped: field(11),
+        host_mean_us: field(12),
+        received: field(13),
+        receive_mean_us: field(14),
+        decoder_mean_us: field(15),
+        display_mean_us: field(16),
     })
 }
 
@@ -52,6 +57,11 @@ pub fn publish(stats: StreamStats) {
         stats.dropped,
         stats.idr_requests,
         stats.frames_skipped,
+        stats.host_mean_us,
+        stats.received,
+        stats.receive_mean_us,
+        stats.decoder_mean_us,
+        stats.display_mean_us,
     ];
     for (slot, value) in LATEST.iter().zip(fields) {
         slot.store(value, Ordering::Relaxed);
@@ -63,6 +73,7 @@ pub fn clear() {
     VALID.store(false, Ordering::Release);
     IDR_WANTED.store(false, Ordering::Release);
     take_input();
+    take_host_mean_us();
     take_stages();
     LAST_LATE_NS.store(0, Ordering::Relaxed);
 }
@@ -88,6 +99,23 @@ pub fn take_input() -> (u32, u32) {
     let max = INPUT_MAX_US.swap(0, Ordering::Relaxed);
     let mean = sum.checked_div(u64::from(count)).unwrap_or(0);
     (u32::try_from(mean).unwrap_or(u32::MAX), max)
+}
+
+static HOST_SUM_US: AtomicU64 = AtomicU64::new(0);
+static HOST_COUNT: AtomicU32 = AtomicU32::new(0);
+
+/// The host processing time the PC sent with a unit that went to the decoder.
+pub fn host_processing(host_us: u32) {
+    HOST_SUM_US.fetch_add(u64::from(host_us), Ordering::Relaxed);
+    HOST_COUNT.fetch_add(1, Ordering::Relaxed);
+}
+
+/// The mean host processing time since the last call, 0 when the PC sent none.
+pub fn take_host_mean_us() -> u32 {
+    let sum = HOST_SUM_US.swap(0, Ordering::Relaxed);
+    let count = HOST_COUNT.swap(0, Ordering::Relaxed);
+    let mean = sum.checked_div(u64::from(count)).unwrap_or(0);
+    u32::try_from(mean).unwrap_or(u32::MAX)
 }
 
 /// Where a frame's time goes between its unit arriving and its present returning.

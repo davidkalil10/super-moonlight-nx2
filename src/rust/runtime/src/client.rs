@@ -218,6 +218,26 @@ fn stream_readout(
     }
 }
 
+/// The latency stages of the full badge: the host and network figures the PC reports, then
+/// the console's own from the video path's window.
+fn latency(
+    network: Option<moonlight_nx2_app::metrics::Second>,
+    native: Option<moonlight_nx2_core::stats::StreamStats>,
+) -> moonlight_nx2_ui::badge::Latency {
+    let presented = native.filter(|stats| stats.presented > 0);
+    moonlight_nx2_ui::badge::Latency {
+        host_us: native
+            .map(|stats| stats.host_mean_us)
+            .filter(|host_us| *host_us != 0),
+        rtt_us: network.and_then(|second| second.network_rtt_us),
+        queue_us: presented
+            .filter(|stats| stats.received > 0)
+            .map(|stats| stats.receive_mean_us),
+        decode_us: presented.map(|stats| stats.decoder_mean_us),
+        present_us: presented.map(|stats| stats.display_mean_us),
+    }
+}
+
 /// The stats line of the stream menu, from the readout the badge shows.
 fn stream_stats_text(
     readout: &moonlight_nx2_ui::readout::StreamReadout,
@@ -583,6 +603,8 @@ impl<F: Files + Clone> Client<F> {
             self.session_us += report.second.elapsed_us;
             self.network_stats = Some(report.second);
             self.refresh_stream_stats();
+            self.badge
+                .set_latency(&latency(self.network_stats, self.native_stats));
         }
         let storage = badge_storage(bytes)?;
         Ok(self.badge.apply(
@@ -680,6 +702,50 @@ mod overlay_stats_tests {
         assert!(text.contains("Decode 1.2 ms"));
         assert!(text.contains("Present 3.4 ms"));
         assert!(text.contains("Input -- ms"));
+    }
+
+    #[test]
+    fn the_latency_line_leaves_out_what_was_not_measured() {
+        assert_eq!(
+            latency(None, None),
+            moonlight_nx2_ui::badge::Latency::default()
+        );
+        let native = moonlight_nx2_core::stats::StreamStats {
+            presented: 60,
+            decoder_mean_us: 5200,
+            display_mean_us: 8000,
+            receive_mean_us: 400,
+            ..Default::default()
+        };
+        let shown = latency(None, Some(native));
+        assert_eq!(
+            (shown.host_us, shown.rtt_us, shown.queue_us),
+            (None, None, None)
+        );
+        assert_eq!(
+            (shown.decode_us, shown.present_us),
+            (Some(5200), Some(8000))
+        );
+        let native = moonlight_nx2_core::stats::StreamStats {
+            host_mean_us: 2100,
+            received: 60,
+            ..native
+        };
+        let second = moonlight_nx2_app::metrics::Second {
+            elapsed_us: 1_000_000,
+            units: 60,
+            bytes: 0,
+            presented: 60,
+            caught_up: 0,
+            dropped_total: 0,
+            receive_to_present: None,
+            network_rtt_us: Some(3000),
+        };
+        let shown = latency(Some(second), Some(native));
+        assert_eq!(
+            moonlight_nx2_ui::badge::latency_text(&shown).as_str(),
+            "host 2.1 \u{b7} rtt 3.0 \u{b7} queue 0.4 \u{b7} decode 5.2 \u{b7} present 8.0 ms"
+        );
     }
 }
 

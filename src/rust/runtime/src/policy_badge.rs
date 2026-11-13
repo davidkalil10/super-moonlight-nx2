@@ -44,7 +44,8 @@ impl Badge {
                 self.stop(storage);
                 if !text.as_str().is_empty() || frame_counter {
                     let mut controller =
-                        badge::Controller::start(text.as_str(), duration_ms, frame_counter);
+                        badge::Controller::start(text.as_str(), duration_ms, frame_counter)
+                            .with_latency();
                     controller.show(glyphs, storage);
                     self.controller = Some(controller);
                     self.epoch = Some(epoch);
@@ -68,6 +69,13 @@ impl Badge {
             Feedback::Reconfigure { .. } => unreachable!(),
         }
         true
+    }
+
+    /// The stages the full badge shows with its next counter update.
+    pub fn set_latency(&mut self, latency: &badge::Latency) {
+        if let Some(controller) = &mut self.controller {
+            controller.set_latency(latency);
+        }
     }
 
     /// Shows `line` over the active stream; a badge that stays comes back after it.

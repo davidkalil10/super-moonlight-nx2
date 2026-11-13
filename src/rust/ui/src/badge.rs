@@ -11,7 +11,9 @@ use crate::text::Text;
 pub const WORDS: usize = 0xb100;
 pub const PIXELS: usize = 27_492_352;
 pub const MAX_BYTES: usize = 960 * 64 * 4;
-pub const STORAGE_BYTES: usize = PIXELS + MAX_BYTES;
+/// The renderer's badge area: the latency line takes a badge past the C port's `MAX_BYTES`.
+pub const AREA_BYTES: usize = 960 * 128 * 4;
+pub const STORAGE_BYTES: usize = PIXELS + AREA_BYTES;
 pub const SHOW_MS: u32 = 4000;
 pub const STAYS: u32 = 0;
 pub const NOTE_MS: u32 = 7000;
@@ -29,6 +31,7 @@ const MARGIN: f64 = 24.0;
 const ACCENT_WIDTH: f64 = 4.0;
 const MAX_WIDTH: u32 = 960;
 const MAX_HEIGHT: u32 = 96;
+const LATENCY_MAX_HEIGHT: u32 = 128;
 const WIDTH: u32 = 1920;
 const HEIGHT: u32 = 1080;
 
@@ -161,6 +164,18 @@ pub struct Badge {
     pub has_counter: bool,
     pub counter_from: u32,
     pub counter_top: u32,
+    /// The top of the latency line under the counter, when the badge has one.
+    pub latency_top: Option<u32>,
+}
+
+impl Badge {
+    fn max_bytes(&self) -> usize {
+        if self.latency_top.is_some() {
+            AREA_BYTES
+        } else {
+            MAX_BYTES
+        }
+    }
 }
 
 /// The text line, then the counter line when there is one. An empty text with a counter
@@ -172,17 +187,50 @@ pub fn compose(
     frame_height: u32,
     counter: Option<&str>,
 ) -> Result<Badge, &'static str> {
+    compose_lines(glyphs, text, frame_width, frame_height, counter, None)
+}
+
+/// `compose` with the latency line under the counter, sized for the widest one.
+pub fn compose_latency(
+    glyphs: &mut Glyphs,
+    text: &str,
+    frame_width: u32,
+    frame_height: u32,
+    counter: &str,
+    latency: &str,
+) -> Result<Badge, &'static str> {
+    compose_lines(
+        glyphs,
+        text,
+        frame_width,
+        frame_height,
+        Some(counter),
+        Some(latency),
+    )
+}
+
+fn compose_lines(
+    glyphs: &mut Glyphs,
+    text: &str,
+    frame_width: u32,
+    frame_height: u32,
+    counter: Option<&str>,
+    latency: Option<&str>,
+) -> Result<Badge, &'static str> {
     let metric = metrics(frame_height);
     let mut lines: Vec<&str> = Vec::new();
     if counter.is_none() || !text.is_empty() {
         lines.push(text);
     }
     lines.extend(counter);
+    lines.extend(latency);
     let widest = counter_text(888, 888, 888, 888);
+    let widest_latency = latency_text(&Latency::WIDEST);
     let sized = lines
         .iter()
         .copied()
-        .chain(counter.map(|_| widest.as_str()));
+        .chain(counter.map(|_| widest.as_str()))
+        .chain(latency.map(|_| widest_latency.as_str()));
 
     let mut strips = Vec::new();
     for text in sized {
@@ -195,7 +243,12 @@ pub fn compose(
     let width = even(f64::from(widest_ink + metric.accent) + 2.0 * f64::from(metric.padding_x));
     let height =
         even(f64::from(line_height) * f64::from(count) + 2.0 * f64::from(metric.padding_y));
-    let fits = width <= MAX_WIDTH && height <= MAX_HEIGHT;
+    let max_height = if latency.is_some() {
+        LATENCY_MAX_HEIGHT
+    } else {
+        MAX_HEIGHT
+    };
+    let fits = width <= MAX_WIDTH && height <= max_height;
     if !fits || width > frame_width || height > frame_height {
         return Err("Badge does not fit the frame");
     }
@@ -218,7 +271,7 @@ pub fn compose(
         );
     }
 
-    let last = count as usize - 1;
+    let last = count as usize - 1 - usize::from(latency.is_some());
     Ok(Badge {
         x: frame_width - metric.margin - width,
         y: metric.margin,
@@ -228,6 +281,7 @@ pub fn compose(
         has_counter: counter.is_some(),
         counter_from: if last == 0 { 0 } else { tops[last] },
         counter_top: tops[last],
+        latency_top: latency.map(|_| tops[last + 1]),
     })
 }
 
@@ -239,24 +293,70 @@ pub fn compose_counter(
     frame_width: u32,
     frame_height: u32,
 ) -> Result<(usize, Vec<u8>), &'static str> {
+    compose_counter_lines(glyphs, badge, counter, None, frame_width, frame_height)
+}
+
+/// The counter and latency rows of `badge` repainted, as `compose_counter`.
+pub fn compose_counter_latency(
+    glyphs: &mut Glyphs,
+    badge: &Badge,
+    counter: &str,
+    latency: &str,
+    frame_width: u32,
+    frame_height: u32,
+) -> Result<(usize, Vec<u8>), &'static str> {
+    compose_counter_lines(
+        glyphs,
+        badge,
+        counter,
+        Some(latency),
+        frame_width,
+        frame_height,
+    )
+}
+
+fn compose_counter_lines(
+    glyphs: &mut Glyphs,
+    badge: &Badge,
+    counter: &str,
+    latency: Option<&str>,
+    frame_width: u32,
+    frame_height: u32,
+) -> Result<(usize, Vec<u8>), &'static str> {
     if !badge.has_counter {
         return Err("The badge has no counter line");
+    }
+    if latency.is_some() != badge.latency_top.is_some() {
+        return Err("The badge's latency line does not match");
     }
 
     let metric = metrics(frame_height);
     let strip = line(glyphs, counter, frame_width, metric.font).ok_or(PAINT_FAILED)?;
     let rows = badge.height - badge.counter_from;
-    let length = rows as usize * badge.width as usize * 4;
-    let offset = badge.counter_from as usize * badge.width as usize * 4;
-    let mut rgba = zeroed(length).ok_or(ALLOCATION_FAILED)?;
+    let row_bytes = badge.width as usize * 4;
+    let offset = badge.counter_from as usize * row_bytes;
+    let mut rgba = zeroed(rows as usize * row_bytes).ok_or(ALLOCATION_FAILED)?;
+    let counter_to = badge.latency_top.unwrap_or(badge.height);
     paint_rows(
         &mut rgba,
         badge.width,
-        badge.counter_from..badge.height,
+        badge.counter_from..counter_to,
         &strip,
         badge.counter_top,
         &metric,
     );
+    if let (Some(latency), Some(top)) = (latency, badge.latency_top) {
+        let strip = line(glyphs, latency, frame_width, metric.font).ok_or(PAINT_FAILED)?;
+        let start = (top - badge.counter_from) as usize * row_bytes;
+        paint_rows(
+            &mut rgba[start..],
+            badge.width,
+            top..badge.height,
+            &strip,
+            top,
+            &metric,
+        );
+    }
     Ok((offset, rgba))
 }
 
@@ -286,6 +386,60 @@ pub fn counter_text(presented: i64, caught_up: i64, dropped: i64, console_ms: i6
     out
 }
 
+/// The latency stages of the full badge in microseconds, each None when it was not measured.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct Latency {
+    /// Host processing the PC reported for its frames.
+    pub host_us: Option<u32>,
+    /// The network round trip.
+    pub rtt_us: Option<u32>,
+    /// From a frame's last packet being read until its unit went to the decoder.
+    pub queue_us: Option<u32>,
+    /// From a unit's submission until the decoder handed its frame back.
+    pub decode_us: Option<u32>,
+    /// From a decoded frame until its present returned.
+    pub present_us: Option<u32>,
+}
+
+impl Latency {
+    /// The line the badge is sized for, so updates never resize it.
+    pub const WIDEST: Self = Self {
+        host_us: Some(88_800),
+        rtt_us: Some(88_800),
+        queue_us: Some(88_800),
+        decode_us: Some(88_800),
+        present_us: Some(88_800),
+    };
+}
+
+/// "host 2.1 · rtt 3.0 · queue 0.4 · decode 5.2 · present 8.0 ms", in tenths of a ms rounded
+/// to the nearest; stages not measured are left out.
+pub fn latency_text(latency: &Latency) -> Line {
+    let stages = [
+        ("host", latency.host_us),
+        ("rtt", latency.rtt_us),
+        ("queue", latency.queue_us),
+        ("decode", latency.decode_us),
+        ("present", latency.present_us),
+    ];
+    let mut out = Line::new();
+    for (name, us) in stages {
+        let Some(us) = us else {
+            continue;
+        };
+        if !out.is_empty() {
+            out.push_str(" \u{b7} ");
+        }
+        let tenths = us.saturating_add(50) / 100;
+        let _ = write!(out, "{name} {}.{}", tenths / 10, tenths % 10);
+    }
+    if out.is_empty() {
+        out.push_str("latency -");
+    }
+    out.push_str(" ms");
+    out
+}
+
 pub fn rate_text(from_height: u32, from_fps: u32, to_height: u32, to_fps: u32) -> Line {
     let mut out = Line::new();
     let _ = if from_fps == to_fps && from_height != to_height {
@@ -308,6 +462,8 @@ pub struct Controller {
     failure: Option<&'static str>,
     shown: Option<Badge>,
     counted: Line,
+    latency: Option<Line>,
+    latency_stale: bool,
     dropped: i64,
     console_ms: i64,
     armed: bool,
@@ -330,12 +486,33 @@ impl Controller {
             failure: None,
             shown: None,
             counted: counter_text(-1, -1, -1, -1),
+            latency: None,
+            latency_stale: false,
             dropped: 0,
             console_ms: -1,
             armed: false,
             armed_ms: 0,
             until_ns: 0,
             restore_ns: 0,
+        }
+    }
+
+    /// Adds the latency line under the counter of a badge that has one.
+    pub fn with_latency(mut self) -> Self {
+        if self.counter {
+            self.latency = Some(latency_text(&Latency::default()));
+        }
+        self
+    }
+
+    /// The stages the latency line shows from the next counter update on.
+    pub fn set_latency(&mut self, latency: &Latency) {
+        let line = latency_text(latency);
+        if let Some(shown) = &mut self.latency
+            && shown.as_str() != line.as_str()
+        {
+            *shown = line;
+            self.latency_stale = true;
         }
     }
 
@@ -362,7 +539,7 @@ impl Controller {
         duration_ms: u32,
     ) -> bool {
         let bytes = composed.width as usize * composed.height as usize * 4;
-        if bytes > MAX_BYTES {
+        if bytes > composed.max_bytes() {
             self.failure = Some("Badge exceeds its pixel area");
             return false;
         }
@@ -385,8 +562,25 @@ impl Controller {
             return;
         }
 
-        let counted = self.counter.then_some(self.counted.as_str());
-        let composed = match compose(glyphs, self.text.as_str(), WIDTH, HEIGHT, counted) {
+        let text = self.text.as_str();
+        let composed = match (self.counter, &self.latency) {
+            (true, Some(latency)) => compose_latency(
+                glyphs,
+                text,
+                WIDTH,
+                HEIGHT,
+                self.counted.as_str(),
+                latency.as_str(),
+            ),
+            (counter, _) => compose(
+                glyphs,
+                text,
+                WIDTH,
+                HEIGHT,
+                counter.then_some(self.counted.as_str()),
+            ),
+        };
+        let composed = match composed {
             Ok(composed) => composed,
             Err(error) => {
                 self.failure = Some(error);
@@ -394,6 +588,7 @@ impl Controller {
             }
         };
         if self.put(storage, &composed, self.duration_ms) {
+            self.latency_stale = false;
             self.shown = Some(composed);
         }
     }
@@ -445,7 +640,7 @@ impl Controller {
         let dropped = dropped_total.saturating_sub(self.dropped).max(0);
         let line = counter_text(presented, caught_up, dropped, self.console_ms);
         self.dropped = dropped_total;
-        if line.as_str() == self.counted.as_str() {
+        if line.as_str() == self.counted.as_str() && !self.latency_stale {
             return;
         }
 
@@ -456,10 +651,22 @@ impl Controller {
         let Some(shown) = &self.shown else {
             return;
         };
-        match compose_counter(glyphs, shown, line.as_str(), WIDTH, HEIGHT) {
+        let repainted = match (&self.latency, shown.latency_top) {
+            (Some(latency), Some(_)) => compose_counter_latency(
+                glyphs,
+                shown,
+                line.as_str(),
+                latency.as_str(),
+                WIDTH,
+                HEIGHT,
+            ),
+            _ => compose_counter(glyphs, shown, line.as_str(), WIDTH, HEIGHT),
+        };
+        match repainted {
             Ok((offset, rgba)) => {
                 let at = PIXELS + offset;
                 storage[at..at + rgba.len()].copy_from_slice(&rgba);
+                self.latency_stale = false;
             }
             Err(error) => self.failure = Some(error),
         }

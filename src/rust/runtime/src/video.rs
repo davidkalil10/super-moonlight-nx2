@@ -17,7 +17,7 @@ use moonlight_nx2_core::{
     frame::{Frame, Layout, Matrix, Plane},
     media::Header,
     recovery::{self, Decision, Recovery},
-    stats::StreamStats,
+    stats::{Stages, StreamStats},
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -72,12 +72,15 @@ struct Timing {
     decode_max_us: u64,
     latency_us: u64,
     latency_max_us: u64,
+    stages: Stages,
     dropped_start: u64,
     presented_start: u64,
 }
 
 impl Timing {
-    fn record(&mut self, submitted: u64, decoded: u64, returned: u64) {
+    fn record(&mut self, received_us: Option<u64>, submitted: u64, decoded: u64, returned: u64) {
+        let received = received_us.map(|received_us| received_us.saturating_mul(1000));
+        self.stages.record(received, submitted, decoded, returned);
         let decode_us = decoded.saturating_sub(submitted) / 1000;
         let latency_us = returned.saturating_sub(submitted) / 1000;
         self.frames += 1;
@@ -115,6 +118,11 @@ impl Timing {
             dropped: clamp(stats.dropped.saturating_sub(self.dropped_start)),
             idr_requests: clamp(recovery.idr_requests),
             frames_skipped: clamp(recovery.frames_skipped),
+            host_mean_us: crate::stream_stats::take_host_mean_us(),
+            received: self.stages.received,
+            receive_mean_us: self.stages.receive_mean_us().unwrap_or(0),
+            decoder_mean_us: self.stages.decode_mean_us().unwrap_or(0),
+            display_mean_us: self.stages.display_mean_us().unwrap_or(0),
         });
         self.restart(now, stats);
     }
@@ -783,11 +791,13 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
                 self.pending = false;
                 self.stats.presented += u64::from(presented);
                 if presented {
+                    let received_us = self.pending_arrival.take();
                     if let Some((submitted, decoded)) = self.pending_timing.take() {
-                        self.timing.record(submitted, decoded, platform::now_ns());
+                        self.timing
+                            .record(received_us, submitted, decoded, platform::now_ns());
                     }
                     self.presentation = Some(Presentation {
-                        received_us: self.pending_arrival.take(),
+                        received_us,
                         presented_us: platform::now_ns() / 1000,
                     });
                 }
@@ -1006,6 +1016,10 @@ impl<B: Backend<N>, const N: usize> moonlight_nx2_app::media::Decoder for Tick<'
         audio: &mut dyn Pump,
     ) -> moonlight_nx2_app::media::Submit {
         Tick::submit_pumping(self, header, payload, received_us, audio)
+    }
+
+    fn host_processing(&mut self, host_us: u32) {
+        stream_stats::host_processing(host_us);
     }
 
     fn poll(&mut self) -> moonlight_nx2_app::media::Poll {

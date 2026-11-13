@@ -89,6 +89,8 @@ pub trait Decoder {
         let _ = audio;
         self.submit_timed(header, payload, received_us)
     }
+    /// The host processing time the PC sent with the unit just accepted.
+    fn host_processing(&mut self, _host_us: u32) {}
     /// `poll` for a decoder that pumps `audio` while it waits.
     fn poll_pumping(&mut self, audio: &mut dyn Pump) -> Poll {
         let _ = audio;
@@ -146,6 +148,10 @@ pub trait VideoChannel {
     fn pump_video(&mut self, now_ms: u64) -> Result<(), Failure>;
     fn video_record(&self) -> Option<Record<'_>>;
     fn local_arrival_us(&self) -> Option<u64> {
+        None
+    }
+    /// The PC's capture-to-send time for the next record. None when it sent none.
+    fn host_latency_us(&self) -> Option<u32> {
         None
     }
     fn accept_video(&mut self) -> Result<(), Failure>;
@@ -790,6 +796,7 @@ impl<'a, S: Socket, D: Device, VC: VideoChannel, P: PcmChannel> Media<'a, S, D, 
             }
 
             let received_us = self.video.local_arrival_us();
+            let host_us = self.video.host_latency_us();
             let Some(record) = self.video.video_record() else {
                 return Ok(());
             };
@@ -806,7 +813,11 @@ impl<'a, S: Socket, D: Device, VC: VideoChannel, P: PcmChannel> Media<'a, S, D, 
                 decoder.submit_pumping(&record.header, record.payload, received_us, &mut audio);
             audio.finish(progress)?;
             match submitted {
-                Submit::Accepted => {}
+                Submit::Accepted => {
+                    if let Some(host_us) = host_us {
+                        decoder.host_processing(host_us);
+                    }
+                }
                 Submit::Busy => return Ok(()),
                 Submit::Failed => return Err(Failure::Decoder),
             }

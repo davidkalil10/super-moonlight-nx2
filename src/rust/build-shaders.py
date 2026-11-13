@@ -55,7 +55,7 @@ UI_INSTANCES = 128
 VIDEO_SLOTS = 2
 # The badge pixels live in the third frame slot.
 BADGE_OFFSET = FRAMES_OFFSET + 2 * FRAME_BYTES
-BADGE_BYTES = 960 * 64 * 4
+BADGE_BYTES = 960 * 128 * 4
 
 # Byte offsets in storage; the shaders index it by word.
 CONTROL = {

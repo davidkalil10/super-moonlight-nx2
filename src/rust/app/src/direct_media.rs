@@ -176,6 +176,14 @@ impl<U: Datagram, E: video::Events> VideoChannel for DirectVideo<U, E> {
         self.receiver.peek().map(|frame| frame.received_us)
     }
 
+    /// Sunshine sends its processing time in tenths of a ms, 0 when it has none.
+    fn host_latency_us(&self) -> Option<u32> {
+        self.receiver
+            .peek()
+            .map(|frame| u32::from(frame.host_latency) * 100)
+            .filter(|host_us| *host_us != 0)
+    }
+
     fn accept_video(&mut self) -> Result<(), Failure> {
         self.receiver.release();
         Ok(())
