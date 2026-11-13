@@ -160,6 +160,18 @@ pub struct Telemetry {
     pub network_rtt_us: Option<u32>,
     pub connection_poor: Option<bool>,
 }
+
+impl Telemetry {
+    /// Adds what the network cost: frames it lost, frames dropped while the receiver waited for
+    /// a keyframe, and the keyframes it asked for. Both stay cumulative for the session.
+    pub fn with_link_losses(mut self, link: &moonlight_nx2_sunshine::video::Stats) -> Self {
+        let lost = link.frames_lost.saturating_add(link.waiting_drops);
+        let lost = u32::try_from(lost).unwrap_or(u32::MAX);
+        self.dropped_total = self.dropped_total.saturating_add(lost);
+        self.idr_requests = self.idr_requests.saturating_add(link.idr_requests);
+        self
+    }
+}
 #[derive(Clone, Copy, Debug)]
 pub enum Observation {
     Presented {

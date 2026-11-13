@@ -117,19 +117,23 @@ impl Running {
         self.session.audio_stats()
     }
 
-    /// What the console can measure for the bitrate and frame-rate policies: frames it lost,
-    /// could not upload or skipped while waiting for a keyframe, and the keyframes it asked for.
-    /// Frames replaced while working off a backlog are not counted: they say the link was late
-    /// once, not that it loses frames.
+    /// What the console can measure for the bitrate and frame-rate policies: frames the
+    /// network or the console lost, could not upload or skipped while waiting for a keyframe,
+    /// and the keyframes either side asked for. Frames replaced while working off a backlog
+    /// are not counted: they say the link was late once, not that it loses frames.
     fn telemetry(&self, now_ms: u64) -> Telemetry {
         let (stats, recovery) = self.counters();
         let dropped = stats.dropped.saturating_add(recovery.frames_skipped);
-        Telemetry {
+        let telemetry = Telemetry {
             at_us: now_ms.saturating_mul(1000),
             decoded_total: Some(stats.decoded),
             dropped_total: u32::try_from(dropped).unwrap_or(u32::MAX),
             idr_requests: recovery.idr_requests,
             ..Telemetry::default()
+        };
+        match self.session.link_stats() {
+            Some(link) => telemetry.with_link_losses(&link),
+            None => telemetry,
         }
     }
 }
