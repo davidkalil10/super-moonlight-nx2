@@ -36,6 +36,8 @@ const LOGO: u32 = 58;
 const RULE_TOP: u32 = 173;
 const RULE_BOTTOM: u32 = 952;
 const FOOT_Y: u32 = 984;
+/// The middle of the footer's button legend, whose discs are 40 high.
+const FOOT_MIDDLE: u32 = FOOT_Y + 20;
 const BODY_Y: u32 = 219;
 const RIGHT: u32 = SCREEN_WIDTH - SIDE;
 const PANEL_RADIUS: u32 = 18;
@@ -65,6 +67,7 @@ const CARD_HEIGHT: u32 = 96;
 const PC_CARD_WIDTH: u32 = 400;
 const PC_CARD_HEIGHT: u32 = 250;
 const PC_CARD_PAD: u32 = 34;
+const PC_STATE_MIDDLE: u32 = 112;
 const PC_GAP: u32 = 42;
 const PC_ROW_GAP: u32 = 30;
 const PCS_PER_ROW: u32 = 4;
@@ -202,14 +205,14 @@ impl Builder<'_> {
             let clock = format!("{hours}:{minutes:02}");
             let width = self.text_width(&clock, STATUS) + 2;
             right = right.saturating_sub(width);
-            self.put(right, HEAD_Y + 14, width, &clock, STATUS, pal.dim, Align::Left);
+            self.put_middle(right, centre, width, &clock, STATUS, pal.dim, Align::Left);
             right = right.saturating_sub(STATUS_GAP);
         }
         if let Some(percent) = readout.battery_percent {
             let text = format!("{percent}%");
             let width = self.text_width(&text, HINT) + 2;
             right = right.saturating_sub(width);
-            self.put(right, centre - 14, width, &text, HINT, pal.dim, Align::Left);
+            self.put_middle(right, centre, width, &text, HINT, pal.dim, Align::Left);
             right = right.saturating_sub(battery_width(readout.charging) + ICON_TEXT_GAP);
             self.battery_icon(right, centre, percent, readout.charging, pal.dim);
             right = right.saturating_sub(STATUS_GAP);
@@ -222,7 +225,7 @@ impl Builder<'_> {
             Some(Network::Wired) => {
                 let width = self.text_width("Wired", STATUS) + 2;
                 right = right.saturating_sub(width);
-                self.put(right, HEAD_Y + 14, width, "Wired", STATUS, pal.dim, Align::Left);
+                self.put_middle(right, centre, width, "Wired", STATUS, pal.dim, Align::Left);
             }
             None => {}
         }
@@ -294,9 +297,9 @@ impl Builder<'_> {
             stroke_width: 10,
             ..Shape::default()
         });
-        self.put(
+        self.put_middle(
             SIDE + LOGO + 27,
-            HEAD_Y + 3,
+            HEAD_Y + LOGO / 2,
             1000,
             chrome.title,
             TITLE,
@@ -314,7 +317,7 @@ impl Builder<'_> {
         };
         if !chrome.left.is_empty() {
             let width = left.saturating_sub(SIDE + 48).min(1000);
-            self.put(SIDE, FOOT_Y + 5, width, chrome.left, HINT, pal.dim, Align::Left);
+            self.put_middle(SIDE, FOOT_MIDDLE, width, chrome.left, HINT, pal.dim, Align::Left);
         }
     }
 
@@ -332,7 +335,7 @@ impl Builder<'_> {
             (pal.panel, pal.ink)
         };
         self.fill(x, y, width, height, fill, BUTTON_RADIUS);
-        self.put(x, y + (height - 40) / 2, width, label, BUTTON, ink, Align::Center);
+        self.put_middle(x, y + height / 2, width, label, BUTTON, ink, Align::Center);
     }
 
     fn pager(&mut self, y: u32, at: u32, pages: u32) {
@@ -380,7 +383,7 @@ impl Builder<'_> {
         let x = DIALOG_X + (DIALOG_WIDTH - BUTTON_WIDTH) / 2;
         self.item(id, x, y, BUTTON_WIDTH, DIALOG_BUTTON, 0, BUTTON_RADIUS);
         self.fill(x, y, BUTTON_WIDTH, DIALOG_BUTTON, pal.ground, BUTTON_RADIUS);
-        self.put(x, y + 20, BUTTON_WIDTH, label, BUTTON, pal.ink, Align::Center);
+        self.put_middle(x, y + DIALOG_BUTTON / 2, BUTTON_WIDTH, label, BUTTON, pal.ink, Align::Center);
     }
 
     /// A centred panel: a title, what happened, what to do, and one default button.
@@ -485,8 +488,9 @@ impl Builder<'_> {
                 join(&mut state, Some(&format!("{ms} ms")));
             }
         }
-        self.put(left, y + 92, DOT + 8, "\u{25cf}", BODY, dot, Align::Left);
-        self.put(left + DOT + 15, y + 92, inner - DOT - 15, &state, BODY, pal.ink, Align::Left);
+        let middle = y + PC_STATE_MIDDLE;
+        self.put_middle(left, middle, DOT + 8, "\u{25cf}", BODY, dot, Align::Left);
+        self.put_middle(left + DOT + 15, middle, inner - DOT - 15, &state, BODY, pal.ink, Align::Left);
 
         let detail = if asleep {
             String::from("Press A to wake")
@@ -514,7 +518,7 @@ impl Builder<'_> {
             dashed: true,
             ..Shape::default()
         });
-        self.put(x, y + PC_CARD_HEIGHT / 2 - 20, PC_CARD_WIDTH, label, BODY, pal.dim, Align::Center);
+        self.put_middle(x, y + PC_CARD_HEIGHT / 2, PC_CARD_WIDTH, label, BODY, pal.dim, Align::Center);
     }
 
     fn resume_bar(&mut self, model: &Model, app: &str, address: Address) {
@@ -528,21 +532,22 @@ impl Builder<'_> {
         self.item(item::RESUME_HOST, SIDE, y, CONTENT_WIDTH, RESUME_HEIGHT, 0, PANEL_RADIUS);
         self.fill(SIDE, y, CONTENT_WIDTH, RESUME_HEIGHT, pal.panel, PANEL_RADIUS);
         let left = SIDE + RESUME_PAD;
-        self.put(left, y + 20, DOT + 8, "\u{25cf}", BODY, pal.warn, Align::Left);
+        let middle = y + RESUME_HEIGHT / 2;
+        self.put_middle(left, middle, DOT + 8, "\u{25cf}", BODY, pal.warn, Align::Left);
         let text_x = left + DOT + 30;
         let app_width = self.text_width(app, BODY_BOLD).min(RESUME_APP_MAX);
-        self.put(text_x, y + 20, app_width, app, BODY_BOLD, pal.ink, Align::Left);
+        self.put_middle(text_x, middle, app_width, app, BODY_BOLD, pal.ink, Align::Left);
         let at = text_x + app_width + 10;
         let room = (RIGHT - RESUME_PAD - 300).saturating_sub(at);
-        self.put(at, y + 20, room, &format!("is still running on {name}"), BODY, pal.ink, Align::Left);
+        self.put_middle(at, middle, room, &format!("is still running on {name}"), BODY, pal.ink, Align::Left);
 
         let label = "Resume";
         let width = self.text_width(label, BODY) + 2;
         let label_x = RIGHT - RESUME_PAD - width;
-        self.put(label_x, y + 20, width, label, BODY, pal.ink, Align::Left);
+        self.put_middle(label_x, middle, width, label, BODY, pal.ink, Align::Left);
         let pill_x = label_x - 12 - RESUME_PILL.0;
         self.fill(pill_x, y + (RESUME_HEIGHT - RESUME_PILL.1) / 2, RESUME_PILL.0, RESUME_PILL.1, pal.ink, RESUME_PILL.1 / 2);
-        self.put(pill_x, y + 20, RESUME_PILL.0, "\u{2212}", BODY_BOLD, pal.ground, Align::Center);
+        self.put_middle(pill_x, middle, RESUME_PILL.0, "\u{2212}", BODY_BOLD, pal.ground, Align::Center);
     }
 
     fn add_host_page(&mut self, model: &Model) {
@@ -719,7 +724,7 @@ impl Builder<'_> {
                 let name_width = self.text_width(app.name.as_str(), APP_NAME).min(CONTENT_WIDTH - 160);
                 let pill_x = SIDE + name_width + 24;
                 self.fill(pill_x, name_y + 16, 112, 32, pal.ok, 16);
-                self.put(pill_x, name_y + 20, 112, "Running", Face::new(22, 600), pal.ground, Align::Center);
+                self.put_middle(pill_x, name_y + 32, 112, "Running", Face::new(22, 600), pal.ground, Align::Center);
             }
             self.stream_chips(model, SIDE, name_y + CHIPS_GAP);
         }
@@ -761,7 +766,7 @@ impl Builder<'_> {
                 stroke_width: 2,
                 ..Shape::default()
             });
-            self.put(at + CHIP_PAD, y + 5, width, chip, HINT, ink, Align::Left);
+            self.put_middle(at + CHIP_PAD, y + CHIP_HEIGHT / 2, width, chip, HINT, ink, Align::Left);
             at += width + 17;
         }
     }
@@ -832,7 +837,7 @@ impl Builder<'_> {
                 );
             }
             let (face, ink) = if current { (BUTTON, pal.accent) } else { (OPTION, pal.dim) };
-            self.put(SIDE + 28, y + 20, CATEGORY_WIDTH - 56, name, face, ink, Align::Left);
+            self.put_middle(SIDE + 28, y + CATEGORY_HEIGHT / 2, CATEGORY_WIDTH - 56, name, face, ink, Align::Left);
         }
     }
 
@@ -875,7 +880,7 @@ impl Builder<'_> {
         self.put(x + ROW_PAD, y + 54, hint_width, hint, HINT, pal.dim, Align::Left);
 
         let value_x = x + pane - ROW_PAD - VALUE_WIDTH;
-        let value_y = y + 22;
+        let value_y = self.top_for(y + ROW_HEIGHT / 2, "H", VALUE);
         if let Some(reason) = locked_reason(row) {
             self.put(value_x, y + 12, VALUE_WIDTH, row.value.as_str(), VALUE, pal.dim, Align::Right);
             self.put(value_x, y + 58, VALUE_WIDTH, reason, HINT, pal.dim, Align::Right);
@@ -904,7 +909,7 @@ impl Builder<'_> {
         let hint = "Copy the newest log to the logs folder on the SD card";
         self.put(PANE_X + ROW_PAD, y + 54, PANE_WIDTH - 2 * ROW_PAD - VALUE_WIDTH, hint, HINT, pal.dim, Align::Left);
         let value_x = PANE_X + PANE_WIDTH - ROW_PAD - VALUE_WIDTH;
-        self.put(value_x - 38, y + 22, VALUE_WIDTH, "Copy", VALUE, pal.accent, Align::Right);
+        self.put_middle(value_x - 38, y + ROW_HEIGHT / 2, VALUE_WIDTH, "Copy", VALUE, pal.accent, Align::Right);
     }
 
     /// A choice this console cannot make now: greyed, with the reason at the right.
@@ -921,8 +926,8 @@ impl Builder<'_> {
             stroke_width: 2,
             ..Shape::default()
         });
-        self.put(x + ROW_PAD, y + 8, 520, label, BODY, pal.faint, Align::Left);
-        self.put(x + width - ROW_PAD - VALUE_WIDTH, y + 8, VALUE_WIDTH, reason, BODY, pal.faint, Align::Right);
+        self.put_middle(x + ROW_PAD, y + LOCKED_ROW_HEIGHT / 2, 520, label, BODY, pal.faint, Align::Left);
+        self.put_middle(x + width - ROW_PAD - VALUE_WIDTH, y + LOCKED_ROW_HEIGHT / 2, VALUE_WIDTH, reason, BODY, pal.faint, Align::Right);
     }
 
     /// The picture choices this console or its current mode does not offer, below the rows.
@@ -1142,9 +1147,10 @@ impl Builder<'_> {
             let y = SHEET_ITEMS_Y + i as u32 * (SHEET_ITEM + SHEET_ITEM_GAP);
             self.item(id, left, y, inner, SHEET_ITEM, 0, SHEET_ITEM_RADIUS);
             self.fill(left, y, inner, SHEET_ITEM, pal.panel, SHEET_ITEM_RADIUS);
-            self.put(left + 27, y + 20, inner - 54, label, OPTION, ink, Align::Left);
+            let middle = y + SHEET_ITEM / 2;
+            self.put_middle(left + 27, middle, inner - 54, label, OPTION, ink, Align::Left);
             if let Some(value) = value {
-                self.put(left + 27, y + 20, inner - 54, value, OPTION, pal.dim, Align::Right);
+                self.put_middle(left + 27, middle, inner - 54, value, OPTION, pal.dim, Align::Right);
             }
         }
         self.legend_right(SCREEN_WIDTH - SHEET_PAD, SHEET_FOOT_Y, &[("B", "Close"), ("A", "Choose")], pal.dim, 0);
@@ -1164,7 +1170,7 @@ impl Builder<'_> {
         let badge_color = (pal.ground & 0x00ff_ffff) | BADGE_ALPHA;
         self.fill(BADGE_X, BADGE_Y, width, BADGE_HEIGHT, badge_color, BADGE_HEIGHT / 2);
         self.dot(BADGE_X + BADGE_PAD, BADGE_Y + (BADGE_HEIGHT - DOT) / 2, DOT, pal.ok);
-        self.put(BADGE_X + BADGE_PAD + DOT + 19, BADGE_Y + 10, width, &badge, HINT, pal.ink, Align::Left);
+        self.put_middle(BADGE_X + BADGE_PAD + DOT + 19, BADGE_Y + BADGE_HEIGHT / 2, width, &badge, HINT, pal.ink, Align::Left);
     }
 
     /// The battery and Wi-Fi cells of the sheet, drawn as the header's icons.
@@ -1172,24 +1178,24 @@ impl Builder<'_> {
         let pal = self.pal;
         let row = SHEET_GRID_Y + 2 * SHEET_CELL;
         let centre = row + SHEET_ICON_CENTRE;
-        self.put(left, row, cell_width, "Battery", HINT, pal.dim, Align::Left);
+        self.put_middle(left, centre, cell_width, "Battery", HINT, pal.dim, Align::Left);
         let label = self.text_width("Battery", HINT) + 12;
         match readout.battery_percent {
             Some(percent) => {
                 let at = left + label;
                 self.battery_icon(at, centre, percent, readout.charging, pal.ink);
                 let text_x = at + battery_width(readout.charging) + ICON_TEXT_GAP;
-                self.put(text_x, row, cell_width, &format!("{percent}%"), HINT, pal.ink, Align::Left);
+                self.put_middle(text_x, centre, cell_width, &format!("{percent}%"), HINT, pal.ink, Align::Left);
             }
-            None => self.put(left + label, row, cell_width, "--", HINT, pal.ink, Align::Left),
+            None => self.put_middle(left + label, centre, cell_width, "--", HINT, pal.ink, Align::Left),
         }
         let x = left + cell_width;
-        self.put(x, row, cell_width, "Wi-Fi", HINT, pal.dim, Align::Left);
+        self.put_middle(x, centre, cell_width, "Wi-Fi", HINT, pal.dim, Align::Left);
         let label = self.text_width("Wi-Fi", HINT) + 12;
         match readout.network {
             Some(Network::Wifi(bars)) => self.signal_icon(x + label, centre, bars, pal.ink),
-            Some(Network::Wired) => self.put(x + label, row, cell_width, "Wired", HINT, pal.ink, Align::Left),
-            None => self.put(x + label, row, cell_width, "--", HINT, pal.ink, Align::Left),
+            Some(Network::Wired) => self.put_middle(x + label, centre, cell_width, "Wired", HINT, pal.ink, Align::Left),
+            None => self.put_middle(x + label, centre, cell_width, "--", HINT, pal.ink, Align::Left),
         }
     }
 

@@ -509,6 +509,43 @@ impl Builder<'_> {
         Some(self.composer.store(key, trim(bitmap)))
     }
 
+    /// Where a `put` of `label` goes so that its ink is centred on `middle`. Words centre on
+    /// their capitals, so a line sits the same whatever letters it holds; a lone mark such
+    /// as a dot centres on its own ink.
+    pub(crate) fn top_for(&mut self, middle: u32, label: &str, face: Face) -> u32 {
+        let style = TextStyle {
+            weight: face.weight,
+            tracking: 0.0,
+        };
+        let sample = if label.chars().any(char::is_alphanumeric) {
+            "H"
+        } else {
+            label
+        };
+        let ink = self
+            .composer
+            .glyphs
+            .ink_middle(sample, face.size, Some(&style))
+            .unwrap_or(f64::from(face.size) / 2.0);
+        middle.saturating_sub((ink + 0.5) as u32)
+    }
+
+    /// As `put`, with the ink centred on `middle` rather than the line's top at `y`.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn put_middle(
+        &mut self,
+        x: u32,
+        middle: u32,
+        width: u32,
+        label: &str,
+        face: Face,
+        color: u32,
+        align: Align,
+    ) {
+        let y = self.top_for(middle, label, face);
+        self.put(x, y, width, label, face, color, align);
+    }
+
     pub(crate) fn text_width(&mut self, label: &str, face: Face) -> u32 {
         let style = TextStyle {
             weight: face.weight,

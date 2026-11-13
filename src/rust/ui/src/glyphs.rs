@@ -809,6 +809,17 @@ impl Glyphs {
         Some(layout.length)
     }
 
+    /// How far below the top of a `text` strip the middle of the ink of `text` sits. With
+    /// "H" it is the middle of the capitals, the line a label is centred on in its box.
+    pub fn ink_middle(&mut self, text: &str, size: u32, style: Option<&TextStyle>) -> Option<f64> {
+        let index = self.face_at(size, style_weight(style))?;
+        let face = self.face(index);
+        let mut layout = Layout::default();
+        face.layout(&codes_of(text), style_tracking(style), &mut layout);
+        let (_, top, _, bottom) = face.text_box(&layout);
+        (bottom > top).then_some((top + bottom) / 2.0)
+    }
+
     /// Button legend: a disc with each key name cut out of it, then its label, left to right.
     pub fn legend(&mut self, keys: &[(&str, &str)], size: u32, width: u32) -> Option<Bitmap> {
         let face = self.face_at(size, DEFAULT_WEIGHT)?;
