@@ -250,6 +250,12 @@ impl<F: Files> Bridge<F> {
         }
     }
 
+    pub fn set_network_test(&mut self, supported: bool) {
+        if self.model.set_network_test(supported) {
+            self.revision += 1;
+        }
+    }
+
     pub fn set_console_dark(&mut self, dark: Option<bool>) {
         if self.model.set_console_dark(dark) {
             self.revision += 1;

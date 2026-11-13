@@ -409,6 +409,7 @@ pub struct Model {
     presence: Table,
     link_choice: Option<LinkChoice>,
     link_note: Message,
+    network_test: bool,
     system_status: Message,
     console_dark: Option<bool>,
     readout: Readout,
@@ -506,6 +507,7 @@ impl Model {
             presence: Table::default(),
             link_choice: None,
             link_note: Message::new(),
+            network_test: false,
             system_status: Message::new(),
             console_dark: None,
             readout: Readout::default(),
@@ -911,6 +913,18 @@ impl Model {
         let changed = self.link_choice != choice || self.link_note.as_str() != note;
         self.link_choice = choice;
         self.link_note = Message::of(note);
+        changed && self.screen == Screen::Settings
+    }
+
+    /// Whether the host can measure the link; Sunshine cannot, so X stays free on Settings.
+    pub fn network_test(&self) -> bool {
+        self.network_test
+    }
+
+    /// True when the settings page shows the change.
+    pub fn set_network_test(&mut self, supported: bool) -> bool {
+        let changed = self.network_test != supported;
+        self.network_test = supported;
         changed && self.screen == Screen::Settings
     }
 
@@ -1465,7 +1479,7 @@ impl Model {
                 step.changed = true;
                 step.add(IntentKind::SaveSettings, None);
             }
-            Op::X => step.add(IntentKind::TestNetwork, self.host),
+            Op::X if self.network_test => step.add(IntentKind::TestNetwork, self.host),
             Op::A if item == item::EXPORT_LOGS => step.add(IntentKind::ExportLogs, None),
             _ => {}
         }

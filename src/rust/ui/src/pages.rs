@@ -969,12 +969,16 @@ impl Builder<'_> {
 
     fn settings_page(&mut self, model: &Model, settings_error: Option<&str>) {
         let editing_keys: Keys = &[("\u{25c2}\u{25b8}", "Change"), ("B", "Done"), ("A", "Done")];
-        let browsing_keys: Keys = &[
-            ("Y", "Reset"),
-            ("X", "Test network"),
-            ("B", "Back"),
-            ("A", "Change"),
-        ];
+        let browsing_keys: Keys = if model.network_test() {
+            &[
+                ("Y", "Reset"),
+                ("X", "Test network"),
+                ("B", "Back"),
+                ("A", "Change"),
+            ]
+        } else {
+            &[("Y", "Reset"), ("B", "Back"), ("A", "Change")]
+        };
         let rows = model.settings().rows(model.docked(), model.capabilities());
         let editing = model.editing().is_some_and(|s| rows[s as usize].adjustable);
         let left = match settings_error.filter(|e| !e.is_empty()) {
