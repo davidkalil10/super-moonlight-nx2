@@ -513,6 +513,11 @@ impl Builder<'_> {
     /// their capitals, so a line sits the same whatever letters it holds; a lone mark such
     /// as a dot centres on its own ink.
     pub(crate) fn top_for(&mut self, middle: u32, label: &str, face: Face) -> u32 {
+        middle.saturating_sub(self.ink_middle(label, face))
+    }
+
+    /// How far below the top of a `put` the middle of `label`'s ink sits, by the rule of `top_for`.
+    pub(crate) fn ink_middle(&mut self, label: &str, face: Face) -> u32 {
         let style = TextStyle {
             weight: face.weight,
             tracking: 0.0,
@@ -527,7 +532,7 @@ impl Builder<'_> {
             .glyphs
             .ink_middle(sample, face.size, Some(&style))
             .unwrap_or(f64::from(face.size) / 2.0);
-        middle.saturating_sub((ink + 0.5) as u32)
+        (ink + 0.5) as u32
     }
 
     /// As `put`, with the ink centred on `middle` rather than the line's top at `y`.

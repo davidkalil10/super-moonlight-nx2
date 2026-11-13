@@ -107,6 +107,9 @@ const BACK_WIDTH: u32 = 220;
 const COVER_RADIUS: u32 = 12;
 const CHIP_HEIGHT: u32 = 44;
 const CHIP_PAD: u32 = 21;
+const RUNNING: Face = Face::new(22, 600);
+const RUNNING_HEIGHT: u32 = 32;
+const RUNNING_PAD: u32 = 16;
 const SHEET_WIDTH: u32 = 653;
 const SHEET_PAD: u32 = 50;
 const SHEET_TOP: u32 = 56;
@@ -723,8 +726,10 @@ impl Builder<'_> {
             if app.id == current {
                 let name_width = self.text_width(app.name.as_str(), APP_NAME).min(CONTENT_WIDTH - 160);
                 let pill_x = SIDE + name_width + 24;
-                self.fill(pill_x, name_y + 16, 112, 32, pal.ok, 16);
-                self.put_middle(pill_x, name_y + 32, 112, "Running", Face::new(22, 600), pal.ground, Align::Center);
+                let pill_width = self.text_width("Running", RUNNING) + 2 * RUNNING_PAD;
+                let middle = name_y + self.ink_middle(app.name.as_str(), APP_NAME);
+                self.fill(pill_x, middle - RUNNING_HEIGHT / 2, pill_width, RUNNING_HEIGHT, pal.ok, RUNNING_HEIGHT / 2);
+                self.put_middle(pill_x, middle, pill_width, "Running", RUNNING, pal.ground, Align::Center);
             }
             self.stream_chips(model, SIDE, name_y + CHIPS_GAP);
         }
