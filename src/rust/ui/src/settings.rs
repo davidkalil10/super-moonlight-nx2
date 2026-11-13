@@ -156,6 +156,18 @@ impl Size {
         [720, 1080, 1440, 2160][self as usize]
     }
 
+    /// The rate Automatic resolution streams this size at for the saved `fps`. 4K plays at 60,
+    /// and so does AV1 above 720p: nothing proves the decoder keeps up with it at 120 fps, and
+    /// handheld 1080p120 AV1 took 13 to 19 ms a frame where 120 fps leaves 8.3 ms.
+    pub fn auto_rate(self, codec: Codec, fps: u32) -> u32 {
+        let fast_av1 = codec == Codec::Av1 && self.height() > 720;
+        if self == Size::P2160 || fast_av1 {
+            fps.min(60)
+        } else {
+            fps
+        }
+    }
+
     fn docked_only(self) -> bool {
         matches!(self, Size::P1440 | Size::P2160)
     }
@@ -708,16 +720,17 @@ impl Settings {
         out
     }
 
-    /// Automatic: the largest size this dock state plays at the saved rate and codec, where
-    /// 4K always plays at 60 fps.
+    /// Automatic: the largest size this dock state plays at the saved codec and the rate
+    /// `Size::auto_rate` allows it.
     fn largest_size(&mut self, docked: bool, caps: &Capabilities) {
-        let rate = |size: Size| if size == Size::P2160 { 60 } else { self.fps() };
+        let (codec, fps) = (self.codec(), self.fps());
+        let rate = |size: Size| size.auto_rate(codec, fps);
         let fits = |size: &&Size| {
-            (docked || !size.docked_only()) && caps.mode(self.codec(), **size, rate(**size))
+            (docked || !size.docked_only()) && caps.mode(codec, **size, rate(**size))
         };
         let size = *Size::ALL.iter().rev().find(fits).unwrap_or(&Size::P1080);
         self.value[Setting::Size as usize] = size as u8;
-        if size == Size::P2160 {
+        if rate(size) != fps {
             self.value[Setting::Fps as usize] = 0;
         }
     }
@@ -814,7 +827,7 @@ impl Settings {
         let in_use = used.value[setting as usize];
 
         if setting == Setting::Size && self.size_auto() {
-            let _ = write!(out, "{}", value_text(setting, self, saved));
+            let _ = write!(out, "{}", value_text(setting, &used, saved));
             return out;
         }
         if matches!(setting, Setting::Codec | Setting::Size | Setting::Fps)
@@ -836,8 +849,15 @@ impl Settings {
             Setting::Size => write!(short, "{}", short_size(saved)),
             _ => write!(short, "{}", value_text(setting, self, saved)),
         };
+        let mut at_auto_size = *self;
+        at_auto_size.value[Setting::Size as usize] = used.value[Setting::Size as usize];
+        let held_by_auto = setting == Setting::Fps
+            && self.size_auto()
+            && at_auto_size.in_use(docked, caps).fps() == self.fps();
         let reason = if dock_only {
             "when docked"
+        } else if held_by_auto {
+            "at a set size"
         } else {
             "unavailable"
         };
@@ -1028,6 +1048,9 @@ impl core::fmt::Display for ValueText<'_> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let value = self.value;
         match self.setting.row().kind {
+            RowKind::Size if value == AUTO_SIZE => {
+                write!(f, "Auto ({}p)", self.for_auto.size().height())
+            }
             RowKind::Size => f.write_str(SIZE_TEXT[value as usize]),
             RowKind::Fps => write!(f, "{} fps", RATES[value as usize]),
             RowKind::Bitrate if value != AUTO_BITRATE => write!(f, "{} Mbps", bitrate_mbps(value)),
@@ -1045,15 +1068,16 @@ impl core::fmt::Display for ValueText<'_> {
     }
 }
 
-const SIZE_TEXT: [&str; 5] = [
+const SIZE_TEXT: [&str; 4] = [
     "1280 \u{d7} 720",
     "1920 \u{d7} 1080",
     "2560 \u{d7} 1440 (docked)",
     "3840 \u{d7} 2160 (docked, 60 fps)",
-    "Automatic",
 ];
-/// The size row's last value: the largest size the dock state plays, lowered by the network
-/// test when the link cannot carry it.
+/// The size row's last value: the largest size the dock state, the console's output and the
+/// decoder play, lowered by the network test when the link cannot carry it. Sunshine does not
+/// report the PC's display mode, so Auto cannot hold a stream to it: a 1440p PC on a 4K output
+/// streams 2160p, scaled up by the PC. A size picked by name is the way to match the PC.
 pub const AUTO_SIZE: u8 = 4;
 
 #[cfg(test)]

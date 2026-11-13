@@ -877,16 +877,25 @@ pub fn stream_info_text(options: &Options) -> metrics::Line {
     text
 }
 
+/// A size picked by name that the stream could not keep shows as "1440p ▸ 1080p". Automatic
+/// resolution asks for no size of its own (its saved size reads 2160p), so its stream names the
+/// mode it plays, "1080p60 auto", and only a rate below what Auto allows that size shows as a
+/// change.
 fn badge(session: &Session, preferences: StreamOptions) -> Feedback {
     use core::fmt::Write;
     let mut text = metrics::Line::new();
-    if (preferences.height, preferences.fps) != (session.options.height, session.options.fps) {
-        text = metrics::rate_text(
-            preferences.height,
-            preferences.fps,
-            session.options.height,
-            session.options.fps,
-        );
+    let options = &session.options;
+    let wanted = if preferences.size_auto {
+        let size = moonlight_nx2_ui::settings::Size::from_height(options.height);
+        let codec = moonlight_nx2_ui::settings::Codec::from(options.codec);
+        (options.height, size.auto_rate(codec, preferences.fps))
+    } else {
+        (preferences.height, preferences.fps)
+    };
+    if wanted != (options.height, options.fps) {
+        text = metrics::rate_text(wanted.0, wanted.1, options.height, options.fps);
+    } else if preferences.size_auto && !preferences.stream_info {
+        let _ = write!(text, "{}p{} auto", options.height, options.fps);
     }
     if preferences.stream_info {
         let separator = if text.as_str().is_empty() {
@@ -894,11 +903,7 @@ fn badge(session: &Session, preferences: StreamOptions) -> Feedback {
         } else {
             " \u{b7} "
         };
-        let _ = write!(
-            text,
-            "{separator}{}",
-            stream_info_text(&session.options).as_str()
-        );
+        let _ = write!(text, "{separator}{}", stream_info_text(options).as_str());
     }
     Feedback::Badge {
         epoch: session.epoch,

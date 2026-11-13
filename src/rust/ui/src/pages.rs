@@ -11,7 +11,7 @@ use crate::composer::{
 };
 use crate::extras::OVERRIDABLE;
 use crate::glyphs::Align;
-use crate::model::{APPS_PER_PAGE, Address, CATEGORIES, HOSTS_PER_PAGE, Host, Model, Screen, is_address, item};
+use crate::model::{APPS_PER_PAGE, Address, CATEGORIES, HOSTS_PER_PAGE, Host, Model, Screen, SizeLimit, is_address, item};
 use crate::presence::Presence;
 use crate::page::{self, Shape};
 use crate::readout::{Network, Readout};
@@ -160,6 +160,14 @@ fn join(out: &mut String, part: Option<&str>) {
 }
 
 const NEEDS_120_HZ: &str = "Needs a 120 Hz display";
+
+fn size_limit_hint(limit: SizeLimit) -> &'static str {
+    match limit {
+        SizeLimit::Network => "Lowered to what the network test carried",
+        SizeLimit::Output => "The largest the TV and the decoder play",
+        SizeLimit::Screen => "The largest the console screen plays",
+    }
+}
 
 /// Why a row cannot be changed right now, when it cannot.
 fn locked_reason(row: &SettingRow) -> Option<&'static str> {
@@ -751,8 +759,13 @@ impl Builder<'_> {
         } else {
             format!("{mbps:.0} Mbps")
         };
+        let size = if plan.size_auto {
+            format!("{}p auto", plan.height)
+        } else {
+            format!("{}p", plan.height)
+        };
         let chips = [
-            (format!("{}p", plan.height), true),
+            (size, !plan.size_auto),
             (format!("{} fps", plan.fps), true),
             (String::from(plan.codec.text()), true),
             (bitrate, !plan.bitrate_auto),
@@ -874,28 +887,31 @@ impl Builder<'_> {
         };
         self.put(x + ROW_PAD, y + 14, 520, row.setting.label(), OPTION, ink, Align::Left);
         let hint_width = pane - 2 * ROW_PAD - VALUE_WIDTH;
-        let hint = match own {
-            Some(true) => "Set for this app",
-            Some(false) => "Same as Settings",
-            None if row.setting == Setting::Size && model.settings().size_auto() => {
-                "Picked from the network test and the dock"
-            }
-            None => row.setting.hint(),
+        let auto = model
+            .automatic_size()
+            .filter(|_| own.is_none() && row.setting == Setting::Size);
+        let hint = match (own, auto) {
+            (Some(true), _) => "Set for this app",
+            (Some(false), _) => "Same as Settings",
+            (None, Some((_, limit))) => size_limit_hint(limit),
+            (None, None) => row.setting.hint(),
         };
+        let auto_value = auto.map(|(height, _)| format!("Auto ({height}p)"));
+        let value = auto_value.as_deref().unwrap_or(row.value.as_str());
         self.put(x + ROW_PAD, y + 54, hint_width, hint, HINT, pal.dim, Align::Left);
 
         let value_x = x + pane - ROW_PAD - VALUE_WIDTH;
         let value_y = self.top_for(y + ROW_HEIGHT / 2, "H", VALUE);
         if let Some(reason) = locked_reason(row) {
-            self.put(value_x, y + 12, VALUE_WIDTH, row.value.as_str(), VALUE, pal.dim, Align::Right);
+            self.put(value_x, y + 12, VALUE_WIDTH, value, VALUE, pal.dim, Align::Right);
             self.put(value_x, y + 58, VALUE_WIDTH, reason, HINT, pal.dim, Align::Right);
         } else if !row.adjustable {
-            self.put(value_x, value_y, VALUE_WIDTH, row.value.as_str(), VALUE, value_ink, Align::Right);
+            self.put(value_x, value_y, VALUE_WIDTH, value, VALUE, value_ink, Align::Right);
         } else {
             self.stepper(
                 value_x,
                 value_y,
-                row.value.as_str(),
+                value,
                 VALUE,
                 VALUE_WIDTH,
                 value_ink,

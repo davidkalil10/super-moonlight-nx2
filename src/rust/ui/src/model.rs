@@ -107,6 +107,18 @@ pub const NAME_KEYS: [&[u8]; 5] = [
     b"0123456789 -_.",
 ];
 
+/// What held Automatic resolution to the size it streams at. Sunshine does not report the PC's
+/// display mode, so the console and the network test are all Auto can go by.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SizeLimit {
+    /// The console screen, handheld.
+    Screen,
+    /// The TV the dock outputs to and the decoder.
+    Output,
+    /// The network test found the link too weak for the larger size.
+    Network,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Screen {
     Splash,
@@ -860,6 +872,27 @@ impl Model {
             .stream_options(self.docked, &self.capabilities);
         self.link_choice
             .map_or(options, |choice| choice.apply(options))
+    }
+
+    /// The height the saved Automatic resolution streams at now and what held it there; None
+    /// for a size picked by name.
+    pub fn automatic_size(&self) -> Option<(u32, SizeLimit)> {
+        let settings = self.settings();
+        if !settings.size_auto() {
+            return None;
+        }
+        let options = settings.stream_options(self.docked, &self.capabilities);
+        let tested = self
+            .link_choice
+            .map_or(options, |choice| choice.apply(options));
+        let limit = if tested.height < options.height {
+            SizeLimit::Network
+        } else if self.docked {
+            SizeLimit::Output
+        } else {
+            SizeLimit::Screen
+        };
+        Some((tested.height, limit))
     }
 
     pub fn link_choice(&self) -> Option<&LinkChoice> {
