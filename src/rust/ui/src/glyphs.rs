@@ -771,6 +771,46 @@ impl Glyphs {
         }
     }
 
+    /// Where `draw_runs` puts `layout` so the box of the pixels it covers sits in the middle of
+    /// the disc at `left`, `top`; none when it has no ink.
+    fn centred(
+        &self,
+        face: &Face,
+        layout: &Layout,
+        left: f64,
+        top: f64,
+        diameter: f64,
+    ) -> Option<(f64, f64)> {
+        let mut ink: Option<(i64, i64, i64, i64)> = None;
+        for run in &layout.runs {
+            let whole = trunc(run.x);
+            let start_pen = floor((run.x - whole) * 64.0);
+            for placed in &layout.placed[run.first..run.first + run.count] {
+                let glyph = &face.glyphs[placed.glyph];
+                let column = whole + floor((start_pen + placed.pen as f64 + 32.0) / 64.0);
+                let (gx, gy) = (column as i64 + i64::from(glyph.dx), i64::from(glyph.dy));
+                for row in 0..glyph.h {
+                    for col in 0..glyph.w {
+                        let at = row.wrapping_mul(glyph.w).wrapping_add(col);
+                        if self.mask_alpha(glyph.offset, at) == 0 {
+                            continue;
+                        }
+                        let (x, y) = (gx + i64::from(col), gy + i64::from(row));
+                        ink = Some(match ink {
+                            None => (x, y, x + 1, y + 1),
+                            Some((l, t, r, b)) => (l.min(x), t.min(y), r.max(x + 1), b.max(y + 1)),
+                        });
+                    }
+                }
+            }
+        }
+        let (l, t, r, b) = ink?;
+        let middle = diameter / 2.0;
+        let x = floor(left + middle - (l + r) as f64 / 2.0);
+        let y = floor(top + middle - (t + b) as f64 / 2.0);
+        Some((x, y))
+    }
+
     /// One line of white-on-black text, cut with an ellipsis to `width`.
     pub fn text(
         &mut self,
@@ -866,14 +906,9 @@ impl Glyphs {
             key_face.layout(&codes_of(name), 0.0, &mut key);
             face.layout(&codes_of(text), 0.0, &mut label);
 
-            self.draw_runs(
-                key_face,
-                &mut out,
-                x + (ring - key.length) / 2.0,
-                baseline,
-                &key,
-                &CUT_OUT,
-            );
+            if let Some((key_x, key_baseline)) = self.centred(key_face, &key, trunc(x), top, ring) {
+                self.draw_runs(key_face, &mut out, key_x, key_baseline, &key, &CUT_OUT);
+            }
             x += ring + KEY_GAP;
             self.draw_runs(face, &mut out, x, baseline, &label, &WHITE);
             x += label.length + ENTRY_GAP;
