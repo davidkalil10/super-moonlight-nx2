@@ -12,7 +12,7 @@ import subprocess
 
 ROOT = Path(__file__).resolve().parent
 APP = ROOT.parents[1]
-BUILDS = Path("/media/storage2/builds/moonlight")
+BUILDS = Path(os.environ.get("MOONLIGHT_BUILDS", "~/moonlight-builds")).expanduser()
 TARGET = "aarch64-unknown-none"
 RUST_COMMIT = "6efa357bff60d192688e02de0c78cae24a7f3a55"
 SDK = {

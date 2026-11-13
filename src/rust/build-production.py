@@ -2,7 +2,8 @@
 
 import argparse
 import json
-from pathlib import Path
+import os
+from pathlib import Path, PurePosixPath
 import re
 import shlex
 import subprocess
@@ -11,16 +12,25 @@ from build import BUILDS, SDK_DIAGNOSTICS, TRIALS, digest, git, utc_stamp, write
 
 
 APP = Path(__file__).resolve().parents[2]
-REMOTE_BUILDS = Path("/Users/azkali/claude-builds/moonlight")
-FOUNDATION = REMOTE_BUILDS / "20261109T060400Z-ae67243-rust-foundation"
-SDK = REMOTE_BUILDS / "20261113-sdk/sdk"
+BUILDER = os.environ.get("MOONLIGHT_BUILDER_HOST", "arm64-builder")
+REMOTE_BUILDS = os.environ.get("MOONLIGHT_REMOTE_BUILDS", "~/moonlight-builds")
+FOUNDATION = "20261109T060400Z-ae67243-rust-foundation"
+SDK = "20261113-sdk/sdk"
 SDK_ARCHIVE = "ounce-sdk-20261113.tar.xz"
 SDK_SHA256 = "30d28d0909a0a60b4de87930d773ac9770530d70a1b9b3acd3b0491579368a9b"
 BUILDER_IMAGE = "sha256:1fc388c3a0d34bd2045a6dadcb1020e069d5f876a187fd705de14b4440c00282"
 
 
-def m4(command, **kwargs):
-    return subprocess.run(["ssh", "m4", command], check=True, **kwargs)
+def remote(command, **kwargs):
+    return subprocess.run(["ssh", BUILDER, command], check=True, **kwargs)
+
+
+def remote_builds():
+    """MOONLIGHT_REMOTE_BUILDS, with a leading ~ taken as the builder's home."""
+    if REMOTE_BUILDS != "~" and not REMOTE_BUILDS.startswith("~/"):
+        return PurePosixPath(REMOTE_BUILDS)
+    home = remote('printf %s "$HOME"', capture_output=True, text=True).stdout
+    return PurePosixPath(home + REMOTE_BUILDS[1:])
 
 
 def nacp_version(description, revision):
@@ -82,12 +92,15 @@ def main():
     branch = git("branch", "--show-current") or "detached"
     version = args.release or nacp_version(description, revision)
     build_id = f"{utc_stamp()}-{revision[:7]}-{name}"
-    remote_sdk = shlex.quote(str(SDK / SDK_ARCHIVE))
-    remote_sdk_sha = m4(f"shasum -a 256 {remote_sdk}", capture_output=True, text=True).stdout.split()[0]
+    builds = remote_builds()
+    sdk = builds / SDK
+    foundation_root = builds / FOUNDATION
+    remote_sdk = shlex.quote(str(sdk / SDK_ARCHIVE))
+    remote_sdk_sha = remote(f"shasum -a 256 {remote_sdk}", capture_output=True, text=True).stdout.split()[0]
     if remote_sdk_sha != SDK_SHA256:
-        raise ValueError("The pinned m4 SDK archive changed")
+        raise ValueError(f"The pinned SDK archive on {BUILDER} changed")
     local_root = BUILDS / build_id
-    remote_root = f"{REMOTE_BUILDS}/{build_id}"
+    remote_root = f"{builds}/{build_id}"
     local_root.mkdir(parents=True, exist_ok=False)
 
     archive = local_root / "source.tar"
@@ -101,35 +114,36 @@ def main():
         "nacp_version": version,
         "branch": branch,
         "archive_sha256": digest(archive),
-        "builder": "m4",
+        "builder": BUILDER,
         "diagnostic": diagnostic,
         "trials": args.trials if diagnostic == "sdk-modes" else None,
         "sdk_sha256": SDK_SHA256,
         "builder_image": BUILDER_IMAGE,
     })
 
-    remote = shlex.quote(remote_root)
+    remote_dir = shlex.quote(remote_root)
     setup = " && ".join([
         "set -eu",
-        f"test ! -e {remote}",
-        f"mkdir -p {remote}/source",
-        f"tar -xf - -C {remote}/source",
+        f"test ! -e {remote_dir}",
+        f"mkdir -p {remote_dir}/source",
+        f"tar -xf - -C {remote_dir}/source",
     ])
     with archive.open("rb") as source:
-        m4(setup, stdin=source)
+        remote(setup, stdin=source)
 
-    foundation = shlex.quote(str(FOUNDATION))
-    toolchain = shlex.quote(str(FOUNDATION / "rustup/toolchains/nightly-2026-02-09-aarch64-apple-darwin/bin"))
-    cargo_home = shlex.quote(str(FOUNDATION / "cargo"))
+    foundation = shlex.quote(str(foundation_root))
+    toolchain = shlex.quote(str(foundation_root / "rustup/toolchains/nightly-2026-02-09-aarch64-apple-darwin/bin"))
+    cargo_home = shlex.quote(str(foundation_root / "cargo"))
+    builder = shlex.quote(BUILDER)
     what = (f"--revision {revision} --branch {shlex.quote(branch)} "
             f"--diagnostic {diagnostic} --trials {args.trials}")
-    m4(" ".join([
+    remote(" ".join([
         "set -eu;",
-        f"export RUSTUP_HOME={foundation}/rustup CARGO_HOME={cargo_home} MOONLIGHT_BUILDER=m4 CARGO_NET_GIT_FETCH_WITH_CLI=true;",
+        f"export RUSTUP_HOME={foundation}/rustup CARGO_HOME={cargo_home} MOONLIGHT_BUILDER={builder} CARGO_NET_GIT_FETCH_WITH_CLI=true;",
         f"export PATH={toolchain}:$PATH;",
-        f"/usr/bin/python3 -B {remote}/source/src/rust/build.py rust",
-        f"--directory {remote}/rust --cargo-home {cargo_home} {what}",
-        f"> {remote}/rust-orchestrator.log 2>&1",
+        f"/usr/bin/python3 -B {remote_dir}/source/src/rust/build.py rust",
+        f"--directory {remote_dir}/rust --cargo-home {cargo_home} {what}",
+        f"> {remote_dir}/rust-orchestrator.log 2>&1",
     ]))
 
     container_script = "\n".join([
@@ -138,19 +152,19 @@ def main():
         "export PATH=/opt/devkitpro/devkitA64/bin:/opt/devkitpro/tools/bin:$PATH",
         f"python3 -B /work/source/src/rust/build.py nro --directory /work/nro --rust-directory /work/rust {what} --nacp-version {shlex.quote(version)}",
     ])
-    m4(" ".join([
+    remote(" ".join([
         "/usr/local/bin/docker run --rm --network=none",
-        "-e MOONLIGHT_BUILDER=m4",
-        f"-v {remote}:/work -v {shlex.quote(str(SDK))}:/sdk:ro",
+        f"-e MOONLIGHT_BUILDER={builder}",
+        f"-v {remote_dir}:/work -v {shlex.quote(str(sdk))}:/sdk:ro",
         shlex.quote(BUILDER_IMAGE),
         "sh -c", shlex.quote(container_script),
-        f"> {remote}/nro-orchestrator.log 2>&1",
+        f"> {remote_dir}/nro-orchestrator.log 2>&1",
     ]))
 
-    subprocess.run(["rsync", "-a", f"m4:{remote_root}/", str(local_root) + "/"], check=True)
+    subprocess.run(["rsync", "-a", f"{BUILDER}:{remote_root}/", str(local_root) + "/"], check=True)
     artifact = local_root / "nro/moonlight-nx2.nro"
     if not artifact.is_file() or artifact.stat().st_size < 20:
-        raise RuntimeError(f"m4 did not return the {name} NRO")
+        raise RuntimeError(f"{BUILDER} did not return the {name} NRO")
     receipt = json.loads((local_root / "nro/BUILD-INFO.json").read_text())
     if (receipt["status"] != "built" or receipt["diagnostic"] != diagnostic
             or receipt["source_revision"] != revision):

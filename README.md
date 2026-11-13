@@ -8,14 +8,19 @@ else runs on the PC.
 
 ## Build
 
-The NRO is built on the arm64 builder `m4`, from the committed `HEAD`, against the pinned
-Switch 2 SDK and Rust toolchain:
+The NRO is built on an arm64 builder reachable over ssh, from the committed `HEAD`, against
+the pinned Switch 2 SDK and Rust toolchain:
 
 ```sh
-python3 src/rust/build-production.py
+MOONLIGHT_BUILDER_HOST=my-arm64-box python3 src/rust/build-production.py
 ```
 
-The NRO and its receipts land in `/media/storage2/builds/moonlight/<build-id>/`.
+- `MOONLIGHT_BUILDER_HOST`: the builder's ssh host, `arm64-builder` by default.
+- `MOONLIGHT_REMOTE_BUILDS`: the build root on the builder, `~/moonlight-builds` by default.
+  It holds the Rust foundation and the SDK the script expects.
+- `MOONLIGHT_BUILDS`: the local build root, `~/moonlight-builds` by default.
+
+The NRO and its receipts land in `$MOONLIGHT_BUILDS/<build-id>/`.
 `--release 0.1.0-rc6` names a tester build with that version, which hbmenu shows.
 `--decode120` and `--tcp-video` are test builds.
 
@@ -99,8 +104,10 @@ The shaders are in `src/rust/runtime/shaders`, compiled into `src/rust/runtime/p
 After changing one, with glslc and spirv-val installed:
 
 ```sh
-python3 src/rust/build-shaders.py --directory /media/storage2/builds/moonlight/<build-id> --install
+python3 src/rust/build-shaders.py --directory ~/moonlight-builds/<build-id> --install
 ```
+
+The directory is a new one under `MOONLIGHT_BUILDS`.
 
 `--check` compares the prebuilt files with the sources without compiling.
 

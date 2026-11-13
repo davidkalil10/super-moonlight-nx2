@@ -11,6 +11,7 @@ storage layout below, the same one core/src/frame.rs and the ui crate use.
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 import platform
 import re
@@ -22,6 +23,7 @@ from build import BUILDS, digest, git, output, write_json
 
 
 ROOT = Path(__file__).resolve().parent
+APP = ROOT.parents[1]
 SHADERS = ROOT / "runtime/shaders"
 PREBUILT = ROOT / "runtime/prebuilt"
 BUNDLE = "shaders.bin"
@@ -199,11 +201,21 @@ def text_sources():
     return hashes
 
 
+def recorded(word, directory):
+    """Paths relative to the build directory or the app checkout."""
+    if isinstance(word, Path):
+        if word == directory or directory in word.parents:
+            return str(word.relative_to(directory))
+        if APP in word.parents:
+            return str(word.relative_to(APP))
+    return str(word)
+
+
 def compile_shader(source, target, commands, log):
     for command in (["glslc", "-O", "--target-env=vulkan1.0", "-I", target.parent, "-I", SHADERS,
                      source, "-o", target],
                     ["spirv-val", "--target-env", "vulkan1.0", target]):
-        commands.append([str(word) for word in command])
+        commands.append([recorded(word, target.parent) for word in command])
         subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, check=True)
     return target.read_bytes()
 
@@ -233,7 +245,7 @@ def build(directory, install):
     compiler = output("glslc", "--version")
     branch = git("branch", "--show-current")
     write_json(directory / f"{TEXT}.json", {
-        "format": f"moonlight.rust.{TEXT}", "version": 1, "builder": platform.node(),
+        "format": f"moonlight.rust.{TEXT}", "version": 1,
         "source_branch": branch, "commands": text_commands, "compiler": compiler,
         "sources": text_sources(),
         "shader": {"path": text.name, "bytes": text.stat().st_size, "sha256": digest(text)},
@@ -241,7 +253,7 @@ def build(directory, install):
     write_json(directory / "BUILD-INFO.json", {
         "source_revision": git("rev-parse", "HEAD"), "source_branch": branch,
         "dirty": bool(git("status", "--porcelain", "--", ROOT)),
-        "builder": platform.node(), "target": "SPIR-V for Vulkan 1.0", "compiler": compiler,
+        "builder": os.environ.get("MOONLIGHT_BUILDER", platform.node()), "target": "SPIR-V for Vulkan 1.0", "compiler": compiler,
         "commands": commands + text_commands,
         "shader_bytes": {name: len(data) for name, data in shaders.items()},
         "installed": install})

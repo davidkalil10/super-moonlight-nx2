@@ -118,6 +118,6 @@ From a moonlight-nx2 checkout, with git, podman and network access:
 
     python3 src/rust/build-pc-bundle.py
 
-builds the committed HEAD into `/media/storage2/builds/moonlight/<UTC>-<revision>-pc-bundle/`
-(`--directory` for another place). The build directory keeps `build.log`,
+builds the committed HEAD into `$MOONLIGHT_BUILDS/<UTC>-<revision>-pc-bundle/`, by default under
+`~/moonlight-builds` (`--directory` for another place). The build directory keeps `build.log`,
 `BUILD-INFO.json` and `SHA256SUMS` beside `bundle/` and its `.tar.gz`.
