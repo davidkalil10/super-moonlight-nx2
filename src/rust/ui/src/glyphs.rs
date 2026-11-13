@@ -21,7 +21,6 @@ const HEADER_BYTES: u64 = 16;
 const COMBO_BYTES: u64 = 24;
 const COMBO_READ_BYTES: u64 = 20;
 const TABLE_BYTES: u64 = 12;
-const RING_BYTES: u64 = 12;
 const GLYPH_BYTES: u64 = 24;
 const KERN_ENTRY_BYTES: u64 = 6;
 const ATLAS_VERSION: u16 = 1;
@@ -146,12 +145,6 @@ enum TableStatus {
     Broken,
 }
 
-struct RingMask {
-    w: u32,
-    h: u32,
-    offset: u32,
-}
-
 #[derive(Clone, Copy)]
 struct Placed {
     glyph: usize,
@@ -177,9 +170,7 @@ pub struct Glyphs {
     atlas: Vec<u8>,
     combo_count: u32,
     table_count: u32,
-    ring_count: u32,
     tables_at: u64,
-    rings_at: u64,
     faces: Vec<Option<Face>>,
 }
 
@@ -440,16 +431,12 @@ impl Glyphs {
             atlas,
             combo_count: 0,
             table_count: 0,
-            ring_count: 0,
             tables_at: 0,
-            rings_at: 0,
             faces: Vec::new(),
         };
         glyphs.combo_count = glyphs.u16_at(6);
         glyphs.table_count = glyphs.u16_at(8);
-        glyphs.ring_count = glyphs.u16_at(10);
         glyphs.tables_at = HEADER_BYTES + u64::from(glyphs.combo_count) * COMBO_BYTES;
-        glyphs.rings_at = glyphs.tables_at + u64::from(glyphs.table_count) * TABLE_BYTES;
         glyphs
             .faces
             .resize_with(glyphs.combo_count as usize, || None);
@@ -696,27 +683,6 @@ impl Glyphs {
         self.faces[index].as_ref().expect("face_at loaded it")
     }
 
-    fn ring_at(&self, size: u32) -> Option<RingMask> {
-        for r in 0..self.ring_count {
-            let at = self.rings_at + u64::from(r) * RING_BYTES;
-            if !self.in_atlas(at, 2) {
-                return None;
-            }
-            if self.u16_at(at) != size {
-                continue;
-            }
-            if !self.in_atlas(at, RING_BYTES) {
-                return None;
-            }
-            return Some(RingMask {
-                w: self.u16_at(at + 2),
-                h: self.u16_at(at + 4),
-                offset: self.u32_at(at + 8),
-            });
-        }
-        None
-    }
-
     fn mask_alpha(&self, offset: u32, index: u32) -> u32 {
         let half = if index >= 0x8000_0000 {
             -(((1i64 << 32) - i64::from(index) + 1) / 2)
@@ -847,7 +813,6 @@ impl Glyphs {
     pub fn legend(&mut self, keys: &[(&str, &str)], size: u32, width: u32) -> Option<Bitmap> {
         let face = self.face_at(size, DEFAULT_WEIGHT)?;
         let key_face = self.face_at(size, KEY_WEIGHT)?;
-        let mask = self.ring_at(size)?;
         let (face, key_face) = (self.face(face), self.face(key_face));
 
         let ring = python_round(f64::from(size) * 1.55);
@@ -864,11 +829,12 @@ impl Glyphs {
         };
         let baseline = (height + f64::from(face.ascent) - f64::from(face.descent)) / 2.0;
         let mut out = Bitmap::new(width, height as u32, 1);
+        let top = trunc((height - ring) / 2.0);
 
         let mut x = 0.0;
         let (mut key, mut label) = (Layout::default(), Layout::default());
         for (name, text) in keys {
-            self.blend_mask(&mut out, mask.offset, mask.w, mask.h, trunc(x), 0.0, &WHITE);
+            disc(&mut out, trunc(x) as i64, top as i64, ring as i64);
             key_face.layout(&codes_of(name), 0.0, &mut key);
             face.layout(&codes_of(text), 0.0, &mut label);
 
@@ -916,6 +882,36 @@ impl Glyphs {
             &LETTER_INK,
         );
         Some(out)
+    }
+}
+
+/// Coverage of a pixel by a disc, out of 64: the samples of an 8x8 grid inside the circle.
+const DISC_SAMPLES: i64 = 8;
+
+/// A white disc `diameter` across with its box's corner at `left`, `top`. Each pixel takes the
+/// share of its area inside the circle, so the edge stays smooth at any size.
+fn disc(target: &mut Bitmap, left: i64, top: i64, diameter: i64) {
+    let scale = 2 * DISC_SAMPLES;
+    let radius = diameter * DISC_SAMPLES;
+    let (cx, cy) = (left * scale + radius, top * scale + radius);
+    for row in top.max(0)..(top + diameter).min(i64::from(target.height)) {
+        for col in left.max(0)..(left + diameter).min(i64::from(target.width)) {
+            let mut inside = 0;
+            for j in 0..DISC_SAMPLES {
+                let dy = row * scale + 2 * j + 1 - cy;
+                for i in 0..DISC_SAMPLES {
+                    let dx = col * scale + 2 * i + 1 - cx;
+                    inside += u32::from(dx * dx + dy * dy <= radius * radius);
+                }
+            }
+            if inside == 0 {
+                continue;
+            }
+            let alpha = (inside * 255 + 32) / 64;
+            let at = (row * i64::from(target.width) + col) as usize;
+            let mixed = u32::from(target.bytes[at]) * (255 - alpha) + 255 * alpha;
+            target.bytes[at] = div255(mixed) as u8;
+        }
     }
 }
 
