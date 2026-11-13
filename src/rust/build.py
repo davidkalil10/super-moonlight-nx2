@@ -16,10 +16,10 @@ BUILDS = Path("/media/storage2/builds/moonlight")
 TARGET = "aarch64-unknown-none"
 RUST_COMMIT = "6efa357bff60d192688e02de0c78cae24a7f3a55"
 SDK = {
-    "ounce-sdk": "20261112c",
+    "ounce-sdk": "20261113",
     "libounce": "db3f88a3",
-    "ouncevk": "96102e4",
-    "ouncehen": "f2fee66",
+    "ouncevk": "791c34e",
+    "ouncehen": "9451c44",
 }
 SDK_FILES = (
     "ounce-sdk-version.txt",
