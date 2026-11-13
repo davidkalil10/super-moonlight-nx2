@@ -39,6 +39,8 @@ pub const RESUME_ATTEMPTS: u8 = 3;
 pub const RESUME_RESET_MS: u64 = 60_000;
 /// How long a launch waits for the earlier stream to close: its stop, then its media.
 pub const LAUNCH_AFTER_STOP_TIMEOUT_MS: u64 = STOP_TIMEOUT_MS + MEDIA_CLOSE_TIMEOUT_MS;
+/// Why a stream that had shown frames could not go on: the PC closed its stream ports.
+pub const HOST_ENDED: &str = "The PC ended the stream: Sunshine stopped or restarted";
 
 #[cfg(test)]
 mod wake_tests {
@@ -126,6 +128,7 @@ pub enum Notice {
     StreamEnded,
     ConnectionLost {
         host: Option<Host>,
+        reason: Option<&'static str>,
     },
     Failed {
         message: Message,
@@ -339,6 +342,8 @@ pub struct Service {
     input_paused: bool,
     streamed: bool,
     media_refused: bool,
+    /// A stream that had shown frames is starting again after its media failed.
+    resuming: bool,
     now_ms: u64,
     resumes: u8,
     resumed_ms: u64,
@@ -400,6 +405,7 @@ impl Service {
             input_paused: false,
             streamed: false,
             media_refused: false,
+            resuming: false,
             now_ms: 0,
             resumes: 0,
             resumed_ms: 0,
@@ -648,8 +654,9 @@ impl Service {
             },
             Notice::StreamStarted => Event::StreamStarted,
             Notice::StreamEnded => Event::StreamEnded,
-            Notice::ConnectionLost { host } => Event::ConnectionLost {
+            Notice::ConnectionLost { host, reason } => Event::ConnectionLost {
                 host: host.as_ref(),
+                reason: *reason,
             },
             Notice::Failed { message, back_apps } => Event::Failed {
                 message: Some(message.as_str()),
@@ -984,6 +991,7 @@ impl Service {
         options.transport = self.transport;
         self.automatic_start = false;
         self.resumes = 0;
+        self.resuming = false;
         self.start_stream(host, app, options, self.telemetry);
     }
 
@@ -1132,6 +1140,7 @@ impl Service {
                 self.automatic_start = true;
                 self.start_stream(next.host, next.app, next.options, next.telemetry);
             }
+            (StopNotice::Relaunch, _) if self.host_ended_resume() => {}
             (StopNotice::Relaunch, _) => self.fail(
                 Some(true),
                 format_args!("The stream stopped for the session change and could not start again"),
@@ -1635,10 +1644,25 @@ impl Service {
             self.active_start_id = None;
         }
         self.stream_failure_reported = true;
-        self.fail(
-            Some(true),
-            format_args!("The stream did not start: {reason}"),
-        );
+        if !self.host_ended_resume() {
+            self.fail(
+                Some(true),
+                format_args!("The stream did not start: {reason}"),
+            );
+        }
+    }
+
+    /// A stream that had shown frames lost its media and could not start again: the PC
+    /// ended it, so say so and offer to reconnect rather than calling it a failed start.
+    fn host_ended_resume(&mut self) -> bool {
+        if !core::mem::take(&mut self.resuming) {
+            return false;
+        }
+        self.notify(Notice::ConnectionLost {
+            host: self.stream_host,
+            reason: Some(HOST_ENDED),
+        });
+        true
     }
 
     /// A failed stop keeps ownership uncertain; closing control is the bounded cleanup.
@@ -1794,10 +1818,14 @@ impl Service {
         if !self.streamed {
             self.stream_failure_reported = true;
             self.stop_notice = StopNotice::Reported;
-            self.fail(
-                Some(true),
-                format_args!("The stream did not start: the PC ended it before the first frame"),
-            );
+            if !self.host_ended_resume() {
+                self.fail(
+                    Some(true),
+                    format_args!(
+                        "The stream did not start: the PC ended it before the first frame"
+                    ),
+                );
+            }
         }
         self.close_media();
         self.finish_stop();
@@ -1816,6 +1844,7 @@ impl Service {
         }
         self.phase = Phase::Streaming;
         self.automatic_start = false;
+        self.resuming = false;
         self.streamed = true;
         self.notify(Notice::StreamStarted);
     }
@@ -1828,24 +1857,30 @@ impl Service {
         if streamed && self.resume() {
             return;
         }
-        let notice = if streamed {
+        let refused = streamed && self.media_refused;
+        let notice = if streamed && !refused {
             StopNotice::Ended
         } else {
             StopNotice::Reported
         };
         self.begin_stop(true, notice);
-        if !streamed {
-            self.stream_failure_reported = true;
-            let reason = if self.media_refused {
-                "the PC stopped answering for video. Restart Sunshine on the PC, then try again"
-            } else {
-                "the console could not play it"
-            };
-            self.fail(
-                Some(true),
-                format_args!("The stream did not start: {reason}"),
-            );
+        if streamed && !refused {
+            return;
         }
+        self.stream_failure_reported = true;
+        self.resuming |= refused;
+        if self.host_ended_resume() {
+            return;
+        }
+        let reason = if self.media_refused {
+            "the PC stopped answering for video. Restart Sunshine on the PC, then try again"
+        } else {
+            "the console could not play it"
+        };
+        self.fail(
+            Some(true),
+            format_args!("The stream did not start: {reason}"),
+        );
     }
 
     /// Starts a playing stream again after its media failed: an outage the control link
@@ -1864,6 +1899,7 @@ impl Service {
         }
         self.resumes += 1;
         self.resumed_ms = self.now_ms;
+        self.resuming = true;
         self.relaunch = Some(Relaunch {
             host,
             app,
@@ -1956,6 +1992,7 @@ impl Service {
             self.streamed = false;
             self.notify(Notice::ConnectionLost {
                 host: self.stream_host,
+                reason: None,
             });
             self.fail_queue("the connection to the PC closed");
             self.finish_stop();

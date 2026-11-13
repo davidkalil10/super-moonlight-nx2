@@ -29,6 +29,9 @@ pub const FRAME_BYTES: usize = 8 << 20;
 /// Sunshine starts video right after the first ping; nothing by then fails the stream.
 pub const FIRST_VIDEO_TIMEOUT_MS: u64 = 10_000;
 const MAX_OPUS_SAMPLES: usize = 5760;
+/// How long a stream that already received media rides out the PC refusing its datagrams
+/// before it fails: a host-side blip should not end the session.
+pub const REFUSED_GRACE_MS: u64 = 500;
 
 pub type DirectMedia<'a, S, D, U, E, O> = Media<'a, S, D, DirectVideo<U, E>, DirectAudio<U, O>>;
 pub type Opened<'a, S, D, U, E, O> = Result<DirectMedia<'a, S, D, U, E, O>, (Failure, Closed<D>)>;
@@ -78,6 +81,28 @@ fn send_ping<U: Datagram>(socket: &mut U, ping: &mut Ping, now_us: u64) -> Resul
     }
 }
 
+/// Refused datagrams on a socket that already received media, kept until one arrives again.
+#[derive(Default)]
+struct Refusals {
+    since_ms: Option<u64>,
+}
+
+impl Refusals {
+    /// Whether `error` ends the stream: any error but a refusal, a refusal before media
+    /// arrived, or refusals for `REFUSED_GRACE_MS` with nothing received.
+    fn fails(&mut self, error: IoError, received: bool, now_ms: u64) -> bool {
+        if !matches!(error, IoError::Refused(_)) || !received {
+            return true;
+        }
+        let since = *self.since_ms.get_or_insert(now_ms);
+        now_ms.saturating_sub(since) >= REFUSED_GRACE_MS
+    }
+
+    fn received(&mut self) {
+        self.since_ms = None;
+    }
+}
+
 fn connected<U: Datagram>(
     socket: &mut U,
     done: &mut bool,
@@ -99,6 +124,7 @@ pub struct DirectVideo<U: Datagram, E: video::Events> {
     connected: bool,
     opened_ms: u64,
     draining: bool,
+    refusals: Refusals,
 }
 
 impl<U: Datagram, E: video::Events> DirectVideo<U, E> {
@@ -116,6 +142,7 @@ impl<U: Datagram, E: video::Events> DirectVideo<U, E> {
                 events,
                 connected: false,
                 opened_ms: now_ms,
+                refusals: Refusals::default(),
                 draining: false,
             }),
             Err(_) => Err((Failure::Invalid, socket)),
@@ -141,13 +168,23 @@ impl<U: Datagram, E: video::Events> VideoChannel for DirectVideo<U, E> {
             return Ok(());
         }
         let now_us = self.now_us(now_ms);
-        send_ping(&mut self.socket, &mut self.ping, now_us)
-            .map_err(|e| Failure::Udp(udp::Error::Io(e)))?;
+        let received = self.receiver.stats().packets > 0;
+        if let Err(error) = send_ping(&mut self.socket, &mut self.ping, now_us)
+            && self.refusals.fails(error, received, now_ms)
+        {
+            return Err(Failure::Udp(udp::Error::Io(error)));
+        }
         for _ in 0..VIDEO_DATAGRAMS_PER_PUMP {
             match self.socket.recv(self.receiver.buffer()) {
-                Ok(length) => self.receiver.commit(length, now_us, &mut self.events),
+                Ok(length) => {
+                    self.refusals.received();
+                    self.receiver.commit(length, now_us, &mut self.events);
+                }
                 Err(error) if error.is_retry() => break,
-                Err(error) => return Err(Failure::Udp(udp::Error::Io(error))),
+                Err(error) if self.refusals.fails(error, received, now_ms) => {
+                    return Err(Failure::Udp(udp::Error::Io(error)));
+                }
+                Err(_) => break,
             }
         }
         let silent = self.receiver.stats().packets == 0;
@@ -229,6 +266,7 @@ pub struct DirectAudio<U: Datagram, O: OpusDecoder> {
     connected: bool,
     draining: bool,
     decode_failures: u64,
+    refusals: Refusals,
 }
 
 impl<U: Datagram, O: OpusDecoder> DirectAudio<U, O> {
@@ -258,6 +296,7 @@ impl<U: Datagram, O: OpusDecoder> DirectAudio<U, O> {
             connected: false,
             draining: false,
             decode_failures: 0,
+            refusals: Refusals::default(),
         })
     }
 
@@ -322,13 +361,23 @@ impl<U: Datagram, O: OpusDecoder> PcmChannel for DirectAudio<U, O> {
             return Ok(());
         }
         let now_us = self.socket.now_us().unwrap_or(now_ms.saturating_mul(1000));
-        send_ping(&mut self.socket, &mut self.ping, now_us)
-            .map_err(|e| Failure::Udp(udp::Error::Io(e)))?;
+        let received = self.receiver.stats().packets > 0;
+        if let Err(error) = send_ping(&mut self.socket, &mut self.ping, now_us)
+            && self.refusals.fails(error, received, now_ms)
+        {
+            return Err(Failure::Udp(udp::Error::Io(error)));
+        }
         for _ in 0..AUDIO_DATAGRAMS_PER_PUMP {
             match self.socket.recv(self.receiver.buffer()) {
-                Ok(length) => self.receiver.commit(length, now_us),
+                Ok(length) => {
+                    self.refusals.received();
+                    self.receiver.commit(length, now_us);
+                }
                 Err(error) if error.is_retry() => break,
-                Err(error) => return Err(Failure::Udp(udp::Error::Io(error))),
+                Err(error) if self.refusals.fails(error, received, now_ms) => {
+                    return Err(Failure::Udp(udp::Error::Io(error)));
+                }
+                Err(_) => break,
             }
         }
         self.fill(now_us);

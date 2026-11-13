@@ -212,6 +212,8 @@ pub enum Event<'a> {
     Unpaired,
     ConnectionLost {
         host: Option<&'a Host>,
+        /// What ended the stream, when the PC said; None for a closed connection.
+        reason: Option<&'a str>,
     },
     /// Open the selected PC again without the user; `resume` launches the app it still runs.
     Reopen {
@@ -1616,7 +1618,7 @@ impl Model {
         }
     }
 
-    fn on_connection_lost(&mut self, lost: Option<&Host>, step: &mut Step) {
+    fn on_connection_lost(&mut self, lost: Option<&Host>, reason: Option<&str>, step: &mut Step) {
         let index = lost.and_then(|lost| self.find_host(&lost.address));
         self.screen = Screen::ConnectionLost;
         self.app = None;
@@ -1627,7 +1629,10 @@ impl Model {
         let Some(index) = index else {
             self.host = None;
             self.back_apps = false;
-            self.message = Some(Message::of("Connection lost. Select a PC to reconnect."));
+            self.message = match reason {
+                Some(reason) => formatted(format_args!("{reason}. Select a PC to reconnect.")),
+                None => Some(Message::of("Connection lost. Select a PC to reconnect.")),
+            };
             return;
         };
 
@@ -1636,10 +1641,13 @@ impl Model {
         self.host_index = index as u32;
         self.host_page = index as u32 / HOSTS_PER_PAGE;
         self.back_apps = true;
-        self.message = formatted(format_args!(
-            "The stream from {} was cut off. Press A to reconnect.",
-            host.name
-        ));
+        self.message = match reason {
+            Some(reason) => formatted(format_args!("{reason}. Press A to reconnect.")),
+            None => formatted(format_args!(
+                "The stream from {} was cut off. Press A to reconnect.",
+                host.name
+            )),
+        };
     }
 
     fn list_again(&mut self, step: &mut Step) {
@@ -1656,7 +1664,7 @@ impl Model {
                 self.screen = Screen::Hosts;
                 step.changed = true;
             }
-            Event::ConnectionLost { host } => self.on_connection_lost(host, step),
+            Event::ConnectionLost { host, reason } => self.on_connection_lost(host, reason, step),
             Event::Reopen { resume }
                 if matches!(
                     screen,
