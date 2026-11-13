@@ -193,6 +193,9 @@ pub enum RuntimeEvent {
     FramePresented,
     /// Media failed while open; the service stops the stream and media closes at once.
     MediaFailed,
+    /// The PC refused the media connection; reported just before `MediaFailed` so its
+    /// message points at the PC.
+    MediaRefused,
     /// Every media channel ended cleanly and drained (`Progress.drained`) while streaming.
     MediaEnded,
     /// Media closed; `retained` when any decoder/GPU/audio resource could not be released.
@@ -335,6 +338,7 @@ pub struct Service {
     /// The overlay paused stream input; PC rumble is dropped until it resumes.
     input_paused: bool,
     streamed: bool,
+    media_refused: bool,
     now_ms: u64,
     resumes: u8,
     resumed_ms: u64,
@@ -395,6 +399,7 @@ impl Service {
             upstream: false,
             input_paused: false,
             streamed: false,
+            media_refused: false,
             now_ms: 0,
             resumes: 0,
             resumed_ms: 0,
@@ -706,6 +711,9 @@ impl Service {
             }
             RuntimeEvent::FramePresented => self.frame_presented(),
             RuntimeEvent::MediaFailed => self.media_failed(),
+            RuntimeEvent::MediaRefused => {
+                self.media_refused = matches!(self.phase, Phase::Opening | Phase::Streaming)
+            }
             RuntimeEvent::MediaEnded => self.host_ended(),
             RuntimeEvent::MediaClosed { retained } => self.media_closed(retained),
         }
@@ -1024,6 +1032,7 @@ impl Service {
         self.stream_app = Some(app);
         self.upstream = false;
         self.streamed = false;
+        self.media_refused = false;
     }
 
     /// Holds a launch while the earlier stream closes; the newest request replaces an older one
@@ -1827,9 +1836,14 @@ impl Service {
         self.begin_stop(true, notice);
         if !streamed {
             self.stream_failure_reported = true;
+            let reason = if self.media_refused {
+                "the PC stopped answering for video. Restart Sunshine on the PC, then try again"
+            } else {
+                "the console could not play it"
+            };
             self.fail(
                 Some(true),
-                format_args!("The stream did not start: the console could not play it"),
+                format_args!("The stream did not start: {reason}"),
             );
         }
     }

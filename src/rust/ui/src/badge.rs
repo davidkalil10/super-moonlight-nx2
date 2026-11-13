@@ -20,6 +20,8 @@ pub const NOTE_MS: u32 = 7000;
 pub const TEXT_BYTES: usize = 192;
 pub const TOUCH_NOTE: &str =
     "Touch is off on this PC \u{b7} enable Native Pen/Touch Support in Sunshine";
+pub const NETWORK_NOTE: &str =
+    "Your network can't keep up. Check the connection or lower the bitrate.";
 
 /// Badge text: C keeps up to 191 bytes, cut at a character boundary here.
 pub type Line = Text<{ TEXT_BYTES - 1 }>;

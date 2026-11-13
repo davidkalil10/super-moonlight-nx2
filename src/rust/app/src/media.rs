@@ -142,6 +142,17 @@ pub enum Failure {
     Udp(udp::Error),
 }
 
+impl Failure {
+    /// The PC refused a media connection: its stream ports are closed, as when Sunshine is
+    /// stopped or restarting, so the console is not at fault.
+    pub fn refused_by_host(self) -> bool {
+        matches!(
+            self,
+            Self::Connect(_, IoError::Refused(_)) | Self::Udp(udp::Error::Io(IoError::Refused(_)))
+        )
+    }
+}
+
 /// Common video ownership boundary. UDP acceptance keeps its slot until feedback is queued;
 /// TCP acceptance moves the original header into its bounded acknowledgement queue.
 pub trait VideoChannel {

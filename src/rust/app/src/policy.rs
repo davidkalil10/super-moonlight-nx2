@@ -4,10 +4,11 @@ use crate::{
     bitrate, metrics,
     request::Options,
     service::{ReconfigureError, RuntimeEvent, Service},
+    stall::Stall,
     stream::Phase,
 };
 use moonlight_nx2_core::codec::Capabilities;
-use moonlight_nx2_ui::settings::StreamOptions;
+use moonlight_nx2_ui::{badge::NETWORK_NOTE, settings::StreamOptions};
 
 pub const DISPLAY_MODES: usize = 8;
 
@@ -202,6 +203,8 @@ pub enum Feedback {
         options: Options,
         result: Result<(), ReconfigureError>,
     },
+    /// A one-line note over the stream, shown once.
+    Notice { epoch: Epoch, text: &'static str },
 }
 
 #[derive(Clone, Copy)]
@@ -224,6 +227,7 @@ struct Session {
     opened_us: u64,
     started: bool,
     metrics: metrics::Metrics,
+    stall: Stall,
     guard: Option<metrics::FrameRateGuard>,
     telemetry: Telemetry,
     remote: Remote,
@@ -245,6 +249,7 @@ pub(super) struct State {
     metrics_out: Option<Feedback>,
     badge_out: Option<Feedback>,
     change_out: Option<Feedback>,
+    notice_out: Option<Feedback>,
 }
 impl State {
     pub fn new() -> Self {
@@ -259,6 +264,7 @@ impl State {
             metrics_out: None,
             badge_out: None,
             change_out: None,
+            notice_out: None,
         }
     }
     pub fn epoch(&self) -> Option<Epoch> {
@@ -269,11 +275,13 @@ impl State {
             .take()
             .or_else(|| self.badge_out.take())
             .or_else(|| self.change_out.take())
+            .or_else(|| self.notice_out.take())
     }
     fn clear_outputs(&mut self) {
         self.metrics_out = None;
         self.badge_out = None;
         self.change_out = None;
+        self.notice_out = None;
     }
     pub fn context(&mut self, managed: bool) -> bool {
         self.pending = None;
@@ -378,6 +386,7 @@ impl State {
             opened_us: now_us,
             started: false,
             metrics: metrics::Metrics::new(now_us),
+            stall: Stall::new(options.fps),
             guard: None,
             telemetry: Telemetry::default(),
             remote: Remote::default(),
@@ -689,6 +698,16 @@ impl State {
             epoch: session.epoch,
             report,
         });
+        if session.stall.second(
+            report.second.presented,
+            report.second.dropped_total,
+            session.telemetry.idr_requests,
+        ) {
+            self.notice_out = Some(Feedback::Notice {
+                epoch: session.epoch,
+                text: NETWORK_NOTE,
+            });
+        }
         if !self.managed
             || self.launch.as_ref().is_none_or(|launch| launch.suspended)
             || self.pending.is_some()

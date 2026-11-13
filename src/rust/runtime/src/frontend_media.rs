@@ -8,6 +8,7 @@ use moonlight_nx2_app::{
     direct_stream::Outbox,
     media::{InputSource, PcmChannel, VideoChannel},
     policy::{Epoch, Observation},
+    service::RuntimeEvent,
 };
 use moonlight_nx2_core::decoder::Backend;
 use moonlight_nx2_io::{audio::Device, media::MAX_INPUT_BYTES, socket::Socket};
@@ -76,6 +77,7 @@ pub fn pump_network<
     let result = session.pump_network_observed(now_ms, &mut |event| {
         failed |= matches!(event, Observation::Failed);
     });
+    report_refusal(client, &result);
     if failed {
         client.observe(epoch, Observation::Failed);
     }
@@ -101,6 +103,7 @@ pub fn step<
     }
     let mut observations = [None; 5];
     let mut count = 0;
+    let mut skipped = 0u64;
     let mut overflow = false;
     let result = session.step_observed(
         renderer,
@@ -108,7 +111,9 @@ pub fn step<
         tick.now_ms,
         tick.interactive,
         &mut |event| {
-            if let Some(slot) = observations.get_mut(count) {
+            if matches!(event, Observation::Skipped) {
+                skipped += 1;
+            } else if let Some(slot) = observations.get_mut(count) {
                 *slot = Some(event);
                 count += 1;
             } else {
@@ -116,6 +121,10 @@ pub fn step<
             }
         },
     );
+    report_refusal(client, &result);
+    for _ in 0..skipped {
+        client.observe(tick.epoch, Observation::Skipped);
+    }
     for observation in observations.into_iter().flatten() {
         client.observe(tick.epoch, observation);
     }
@@ -126,6 +135,18 @@ pub fn step<
         return Err(Error::ObservationOverflow);
     }
     result.map_err(Error::Media)
+}
+
+/// Tells the service the PC refused the media before the failure itself is observed.
+fn report_refusal<F: Files + Clone, T>(
+    client: &mut Client<F>,
+    result: &Result<T, media_session::Error>,
+) {
+    if let Err(media_session::Error::Media(failure)) = result
+        && failure.refused_by_host()
+    {
+        client.runtime(RuntimeEvent::MediaRefused);
+    }
 }
 
 pub fn close<

@@ -17,7 +17,7 @@ use moonlight_nx2_app::{
     driver::Effect,
     link::{Link, LinkError},
     pairings::Loaded,
-    policy::{Context, DisplayCapabilities},
+    policy::{Context, DisplayCapabilities, Feedback},
     presence_watch::{Seen, Watch},
     service::{Action, RuntimeEvent},
     wake,
@@ -826,7 +826,15 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
             self.client.set_status(Some(text.as_str()));
         }
         while let Some(feedback) = self.client.next_policy_output() {
-            self.client.paint_policy(bytes, feedback)?;
+            match feedback {
+                Feedback::Notice { epoch, text } if self.client.session_epoch() == Some(epoch) => {
+                    crate::render_platform::log(&alloc::format!("policy: notice \"{text}\""));
+                    self.client.stream_note(bytes, now_ms, text)?;
+                }
+                feedback => {
+                    self.client.paint_policy(bytes, feedback)?;
+                }
+            }
         }
         self.stats.frames += 1;
         Ok(frame)

@@ -29,7 +29,7 @@ impl Badge {
     ) -> bool {
         let epoch = match feedback {
             Feedback::Metrics { epoch, .. } | Feedback::Badge { epoch, .. } => epoch,
-            Feedback::Reconfigure { .. } => return false,
+            Feedback::Reconfigure { .. } | Feedback::Notice { .. } => return false,
         };
         if active != Some(epoch) {
             return false;
@@ -66,7 +66,7 @@ impl Badge {
                     );
                 }
             }
-            Feedback::Reconfigure { .. } => unreachable!(),
+            Feedback::Reconfigure { .. } | Feedback::Notice { .. } => unreachable!(),
         }
         true
     }

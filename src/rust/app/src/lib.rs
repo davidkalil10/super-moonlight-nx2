@@ -33,6 +33,7 @@ pub mod reconnect;
 pub mod reply;
 pub mod request;
 pub mod service;
+pub mod stall;
 pub mod stream;
 pub mod suspend;
 pub mod typing;
