@@ -217,17 +217,17 @@ mod tests {
             .is_ok()
     }
 
-    fn rig() -> Address {
-        Address::of("192.168.8.245")
+    fn pc() -> Address {
+        Address::of("192.0.2.245")
     }
 
     #[test]
     fn a_version_1_book_gives_its_identity_to_each_paired_host() {
-        let v1 = b"sunshine 1\nidentity 93DD5A0B8D24E4E0 0a0b 0c0d\nhost 192.168.8.245 0e0f\nhost 192.168.8.9 1011\n";
+        let v1 = b"sunshine 1\nidentity 93DD5A0B8D24E4E0 0a0b 0c0d\nhost 192.0.2.245 0e0f\nhost 192.0.2.9 1011\n";
         let keys = Keys::parse(v1).unwrap();
         for (host, server) in [
-            (rig(), [0x0e, 0x0f]),
-            (Address::of("192.168.8.9"), [0x10, 0x11]),
+            (pc(), [0x0e, 0x0f]),
+            (Address::of("192.0.2.9"), [0x10, 0x11]),
         ] {
             let identity = keys.identity(&host).unwrap();
             assert_eq!(identity.uniqueid, "93DD5A0B8D24E4E0");
@@ -243,29 +243,29 @@ mod tests {
             migrated
                 .format()
                 .unwrap()
-                .starts_with(b"sunshine 2\nhost 192.168.8.245 93DD5A0B8D24E4E0 0a0b 0c0d 0e0f\n")
+                .starts_with(b"sunshine 2\nhost 192.0.2.245 93DD5A0B8D24E4E0 0a0b 0c0d 0e0f\n")
         );
         assert_eq!(
-            migrated.identity(&rig()).unwrap().uniqueid,
+            migrated.identity(&pc()).unwrap().uniqueid,
             "93DD5A0B8D24E4E0"
         );
 
         let unpaired = Keys::parse(b"sunshine 1\nidentity 93DD5A0B8D24E4E0 0a0b 0c0d\n").unwrap();
-        assert!(unpaired.identity(&rig()).is_none());
+        assert!(unpaired.identity(&pc()).is_none());
     }
 
     #[test]
     fn forgetting_a_host_makes_its_next_pairing_show_a_new_certificate() {
         let first = Identity::generate(Random(fill)).unwrap();
         let mut keys = Keys::default();
-        assert!(keys.pin(&rig(), &first, b"server"));
-        assert!(keys.forget(&rig()));
-        assert!(keys.identity(&rig()).is_none() && keys.server(&rig()).is_none());
+        assert!(keys.pin(&pc(), &first, b"server"));
+        assert!(keys.forget(&pc()));
+        assert!(keys.identity(&pc()).is_none() && keys.server(&pc()).is_none());
 
         let second = Identity::generate(Random(fill)).unwrap();
-        assert!(keys.pin(&rig(), &second, b"server"));
+        assert!(keys.pin(&pc(), &second, b"server"));
         let loaded = Keys::parse(&keys.format().unwrap()).unwrap();
-        let kept = loaded.identity(&rig()).unwrap();
+        let kept = loaded.identity(&pc()).unwrap();
         assert_eq!(kept.uniqueid, second.uniqueid());
         assert_ne!(kept.cert, first.cert_der());
         assert_eq!(kept.identity().unwrap().cert_der(), second.cert_der());
@@ -276,10 +276,10 @@ mod tests {
         let identity = Identity::generate(Random(fill)).unwrap();
         let mut keys = Keys::default();
         for host in 0..MAX_HOSTS {
-            let address = Address::of(&alloc::format!("192.168.8.{}", host + 1));
+            let address = Address::of(&alloc::format!("192.0.2.{}", host + 1));
             assert!(keys.pin(&address, &identity, &alloc::vec![0xab; 1400]));
         }
-        assert!(!keys.pin(&Address::of("192.168.9.1"), &identity, b"server"));
+        assert!(!keys.pin(&Address::of("198.51.100.1"), &identity, b"server"));
         let size = keys.format().map(|text| text.len());
         assert!(size.is_some(), "a full book fits in {MAX_BYTES} bytes");
     }

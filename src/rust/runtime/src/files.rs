@@ -377,7 +377,7 @@ mod tests {
         let mut directory = Directory::create(&path).unwrap();
         let identity = Identity::generate(Random(fill)).unwrap();
         let mut keys = Keys::default();
-        assert!(keys.pin(&Address::of("192.168.8.245"), &identity, identity.cert_der()));
+        assert!(keys.pin(&Address::of("192.0.2.245"), &identity, identity.cert_der()));
         let size = keys.format().unwrap().len();
         assert!(size > 4096, "the book is {size} bytes");
 
@@ -386,9 +386,9 @@ mod tests {
         assert!(folder.join(FILE).exists());
         let (loaded, state) = Keys::load(&mut directory);
         assert_eq!(state, Loaded::Read);
-        let rig = Address::of("192.168.8.245");
-        assert_eq!(loaded.identity(&rig).unwrap().uniqueid, identity.uniqueid());
-        assert!(loaded.server(&Address::of("192.168.8.245")).is_some());
+        let pc = Address::of("192.0.2.245");
+        assert_eq!(loaded.identity(&pc).unwrap().uniqueid, identity.uniqueid());
+        assert!(loaded.server(&Address::of("192.0.2.245")).is_some());
         let _ = std::fs::remove_dir_all(&folder);
     }
 
@@ -411,17 +411,17 @@ mod tests {
         let _ = std::fs::remove_dir_all(&folder);
         let path = CString::new(folder.to_str().unwrap()).unwrap();
         let cache = CoverDirectory::open(&path).unwrap();
-        let rig = host("192.168.1.5", "ABC");
+        let pc = host("192.168.1.5", "ABC");
         let den = host("192.168.1.6", "DEF");
-        assert!(cache.write(&rig, 1, b"png"));
-        assert!(cache.write(&rig, 22, b"png"));
+        assert!(cache.write(&pc, 1, b"png"));
+        assert!(cache.write(&pc, 22, b"png"));
         assert!(cache.write(&den, 1, b"png"));
         std::fs::write(folder.join("192.168.1.5-3.png"), b"png").unwrap();
 
-        assert_eq!(cache.forget(&rig), 3);
-        assert!(cache.read(&rig, 1).is_none() && cache.read(&rig, 22).is_none());
+        assert_eq!(cache.forget(&pc), 3);
+        assert!(cache.read(&pc, 1).is_none() && cache.read(&pc, 22).is_none());
         assert!(cache.read(&den, 1).is_some());
-        assert_eq!(cache.forget(&rig), 0);
+        assert_eq!(cache.forget(&pc), 0);
         let _ = std::fs::remove_dir_all(&folder);
     }
 }

@@ -234,20 +234,25 @@ mod tests {
     fn answers_name_hosts_by_srv_and_a() {
         let mut packet = alloc::vec![0, 0, 0x84, 0, 0, 0, 0, 3, 0, 0, 0, 0];
         let mut target = Vec::new();
-        name(&mut target, "Rig._nvstream._tcp.local");
+        name(&mut target, "Desktop PC._nvstream._tcp.local");
         record(&mut packet, SERVICE, TYPE_PTR, &target);
         let mut srv = alloc::vec![0, 0, 0, 0, 0xba, 0x6b];
-        name(&mut srv, "rig.local");
-        record(&mut packet, "Rig._nvstream._tcp.local", TYPE_SRV, &srv);
-        record(&mut packet, "rig.local", TYPE_A, &[192, 168, 8, 245]);
+        name(&mut srv, "pc.local");
+        record(
+            &mut packet,
+            "Desktop PC._nvstream._tcp.local",
+            TYPE_SRV,
+            &srv,
+        );
+        record(&mut packet, "pc.local", TYPE_A, &[192, 0, 2, 245]);
         let mut answers = Answers::default();
         answers.add(&packet);
         answers.add(&packet);
         answers.add(&[0; 4]);
         let hosts = answers.hosts();
         assert_eq!(hosts.len(), 1);
-        assert_eq!(hosts[0].address.as_str(), "192.168.8.245");
-        assert_eq!(hosts[0].name.as_str(), "Rig");
+        assert_eq!(hosts[0].address.as_str(), "192.0.2.245");
+        assert_eq!(hosts[0].name.as_str(), "Desktop PC");
     }
 
     #[test]

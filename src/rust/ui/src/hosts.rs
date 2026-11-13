@@ -496,7 +496,7 @@ mod rename_tests {
 mod extras_tests {
     use super::*;
 
-    const SAVED: &[u8] = br#"{"hosts":[{"name":"Rig","address":"192.168.0.5","uniqueid":"one","lastPlayed":"Desktop","apps":[{"id":12,"size":3,"codec":1},{"id":30,"fps":1}]}],"removed":[]}"#;
+    const SAVED: &[u8] = br#"{"hosts":[{"name":"Desktop PC","address":"192.168.0.5","uniqueid":"one","lastPlayed":"Desktop","apps":[{"id":12,"size":3,"codec":1},{"id":30,"fps":1}]}],"removed":[]}"#;
 
     #[test]
     fn extras_round_trip_through_the_file() {

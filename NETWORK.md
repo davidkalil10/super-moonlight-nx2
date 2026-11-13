@@ -12,17 +12,17 @@ settings, in this order, has the most effect.
   then loses 64 packets at a time. That shows as choppy 4K and 1440p. Limiting only the
   console's traffic to about 200 Mbps removes the loss. A typical 4K frame then takes
   about 4 ms to send, and a keyframe up to about 40 ms.
-  - Linux, replacing `enp8s0` and the console's address with your own:
+  - Linux, replacing `eth0` and the console's address with your own:
     ```sh
-    sudo tc qdisc replace dev enp8s0 root handle 1: htb default 1
-    sudo tc class add dev enp8s0 parent 1: classid 1:1 htb rate 2500mbit
-    sudo tc class add dev enp8s0 parent 1: classid 1:10 htb rate 200mbit ceil 200mbit burst 15k cburst 15k
-    sudo tc qdisc add dev enp8s0 parent 1:1 fq_codel
-    sudo tc qdisc add dev enp8s0 parent 1:10 pfifo limit 4000
-    sudo tc filter add dev enp8s0 parent 1: protocol ip prio 1 u32 \
-        match ip dst 192.168.1.50/32 match ip protocol 17 0xff flowid 1:10
+    sudo tc qdisc replace dev eth0 root handle 1: htb default 1
+    sudo tc class add dev eth0 parent 1: classid 1:1 htb rate 2500mbit
+    sudo tc class add dev eth0 parent 1: classid 1:10 htb rate 200mbit ceil 200mbit burst 15k cburst 15k
+    sudo tc qdisc add dev eth0 parent 1:1 fq_codel
+    sudo tc qdisc add dev eth0 parent 1:10 pfifo limit 4000
+    sudo tc filter add dev eth0 parent 1: protocol ip prio 1 u32 \
+        match ip dst 192.0.2.50/32 match ip protocol 17 0xff flowid 1:10
     ```
-    `sudo tc qdisc replace dev enp8s0 root fq_codel` undoes it. It does not survive a reboot.
+    `sudo tc qdisc replace dev eth0 root fq_codel` undoes it. It does not survive a reboot.
   - Windows: a Policy-based QoS rule (`gpedit.msc`, Computer Configuration → Windows
     Settings → Policy-based QoS) for `sunshine.exe` with an outbound throttle rate of
     200000 Kbps.

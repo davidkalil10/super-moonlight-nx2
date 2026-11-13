@@ -200,7 +200,7 @@ mod tests {
             id: [id; ID_BYTES],
             key: [id ^ 0xff; KEY_BYTES],
             paired_at: u64::from(id),
-            address: format!("192.168.8.{id}"),
+            address: format!("192.0.2.{id}"),
         }
     }
 
