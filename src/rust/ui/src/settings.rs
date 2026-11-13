@@ -156,12 +156,9 @@ impl Size {
         [720, 1080, 1440, 2160][self as usize]
     }
 
-    /// The rate Automatic resolution streams this size at for the saved `fps`. 4K plays at 60,
-    /// and so does AV1 above 720p: nothing proves the decoder keeps up with it at 120 fps, and
-    /// handheld 1080p120 AV1 took 13 to 19 ms a frame where 120 fps leaves 8.3 ms.
-    pub fn auto_rate(self, codec: Codec, fps: u32) -> u32 {
-        let fast_av1 = codec == Codec::Av1 && self.height() > 720;
-        if self == Size::P2160 || fast_av1 {
+    /// The rate Automatic resolution streams this size at for the saved `fps`: 4K plays at 60.
+    pub fn auto_rate(self, fps: u32) -> u32 {
+        if self == Size::P2160 {
             fps.min(60)
         } else {
             fps
@@ -724,7 +721,7 @@ impl Settings {
     /// `Size::auto_rate` allows it.
     fn largest_size(&mut self, docked: bool, caps: &Capabilities) {
         let (codec, fps) = (self.codec(), self.fps());
-        let rate = |size: Size| size.auto_rate(codec, fps);
+        let rate = |size: Size| size.auto_rate(fps);
         let fits = |size: &&Size| {
             (docked || !size.docked_only()) && caps.mode(codec, **size, rate(**size))
         };
@@ -849,15 +846,8 @@ impl Settings {
             Setting::Size => write!(short, "{}", short_size(saved)),
             _ => write!(short, "{}", value_text(setting, self, saved)),
         };
-        let mut at_auto_size = *self;
-        at_auto_size.value[Setting::Size as usize] = used.value[Setting::Size as usize];
-        let held_by_auto = setting == Setting::Fps
-            && self.size_auto()
-            && at_auto_size.in_use(docked, caps).fps() == self.fps();
         let reason = if dock_only {
             "when docked"
-        } else if held_by_auto {
-            "at a set size"
         } else {
             "unavailable"
         };
@@ -1205,5 +1195,46 @@ mod legacy_capability_tests {
         let changed = settings.adjust(Setting::Size, -1, false, &caps).unwrap();
         assert_eq!(changed.fps(), 60);
         assert_eq!(changed.fps_before_4k(), 0);
+    }
+}
+
+#[cfg(test)]
+mod av1_rate_tests {
+    use super::*;
+
+    fn handheld(fps120: bool) -> Capabilities {
+        let mut caps = Capabilities {
+            av1: true,
+            fps120,
+            ..Capabilities::default()
+        };
+        for size in [Size::P720, Size::P1080] {
+            for fps in RATES {
+                caps.verify_mode(Codec::Av1, size, fps);
+            }
+        }
+        caps
+    }
+
+    fn played(settings: &Settings, caps: &Capabilities) -> (u32, u32) {
+        let options = settings.stream_options(false, caps);
+        (options.height, options.fps)
+    }
+
+    #[test]
+    fn av1_1080p_defaults_to_120_fps_where_the_display_has_120_hz() {
+        let fresh = Settings::default();
+        assert!(fresh.size_auto());
+        assert_eq!(fresh.codec(), Codec::Av1);
+        assert_eq!(played(&fresh, &handheld(true)), (1080, 120));
+        assert_eq!(played(&fresh, &handheld(false)), (1080, 60));
+
+        let mut json = Json::new();
+        let picked = Settings::from_json(
+            br#"{"version":9,"size":"1920x1080","fps":120,"codec":"av1"}"#,
+            &mut json,
+        );
+        assert_eq!(played(&picked, &handheld(true)), (1080, 120));
+        assert_eq!(played(&picked, &handheld(false)), (1080, 60));
     }
 }

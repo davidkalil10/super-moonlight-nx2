@@ -887,8 +887,7 @@ fn badge(session: &Session, preferences: StreamOptions) -> Feedback {
     let options = &session.options;
     let wanted = if preferences.size_auto {
         let size = moonlight_nx2_ui::settings::Size::from_height(options.height);
-        let codec = moonlight_nx2_ui::settings::Codec::from(options.codec);
-        (options.height, size.auto_rate(codec, preferences.fps))
+        (options.height, size.auto_rate(preferences.fps))
     } else {
         (preferences.height, preferences.fps)
     };

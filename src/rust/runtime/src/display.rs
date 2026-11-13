@@ -130,11 +130,14 @@ const SLOW_SECONDS: u32 = 3;
 /// the console's own mode. A withdrawn request or a dock change takes a moment to settle.
 const OUTPUT_SETTLE_NS: u64 = 2_000_000_000;
 
-/// The per-second present rate and the display modes of each operation mode. Sizes are shown
-/// at 60 from the start, up to 1080p handheld and up to the console's own output docked (2160p
-/// until it is known). A rate above 60 counts once a full second presented on pace at the
-/// layer's size while 120 Hz is requested; docked, it is dropped with the request. The set of
-/// the other operation mode is kept, so docking back reuses what was already shown.
+/// The console's own panel: 1080p at 120 Hz with VRR, offered before a frame is presented.
+const HANDHELD: (u32, u32, u32) = (1920, 1080, 120);
+
+/// The per-second present rate and the display modes of each operation mode. Handheld starts
+/// at the panel's 1080p120. Docked starts at 60 up to the console's own output (2160p until it
+/// is known), and a rate above 60 counts once a full second presented on pace at the layer's
+/// size while 120 Hz is requested; it is dropped with the request. The set of the other
+/// operation mode is kept, so docking back reuses what was already shown.
 pub struct Probe {
     docked: bool,
     requested: bool,
@@ -149,14 +152,14 @@ pub struct Probe {
 }
 
 impl Probe {
-    /// Every size up to the largest of its operation mode is shown at 60 from the start: the
-    /// layer scales, so only rates above 60 wait for the display to present them.
+    /// Every size up to the largest of its operation mode is offered from the start: the layer
+    /// scales, so docked only rates above 60 wait for the TV to present them.
     pub fn new(docked: bool, now_ns: u64, presented: u64) -> Self {
         let mut probe = Self {
             docked,
             requested: false,
             verified: Default::default(),
-            best: [(1920, 1080, 60), (3840, 2160, 60)],
+            best: [HANDHELD, (3840, 2160, 60)],
             output: None,
             seen: None,
             slow_seconds: 0,
@@ -170,25 +173,25 @@ impl Probe {
         probe
     }
 
-    /// Starts the set of `index` again at 60 fps, up to its ceiling.
+    /// Starts the set of `index` again: the panel's modes handheld, 60 fps up to the output
+    /// docked.
     fn reset(&mut self, index: usize) {
         use moonlight_nx2_app::policy::{DisplayEvidence, DisplayMode};
-        let (best_width, best_height) = match index {
-            0 => (1920, 1080),
-            _ => moonlight_nx2_app::dock::output_ceiling(self.output),
+        let (best_width, best_height, fps) = match index {
+            0 => HANDHELD,
+            _ => {
+                let (width, height) = moonlight_nx2_app::dock::output_ceiling(self.output);
+                (width, height, 60)
+            }
         };
         self.verified[index] = Default::default();
         for (width, height) in Size::largest_first() {
             if width <= best_width && height <= best_height {
-                let mode = DisplayMode {
-                    width,
-                    height,
-                    fps: 60,
-                };
+                let mode = DisplayMode { width, height, fps };
                 self.verified[index].record(mode, DisplayEvidence::PresentedAndCloseVerified);
             }
         }
-        self.best[index] = (best_width, best_height, 60);
+        self.best[index] = (best_width, best_height, fps);
     }
 
     pub fn set_docked(&mut self, docked: bool) {
@@ -413,11 +416,50 @@ mod tests {
     }
 
     #[test]
+    fn handheld_offers_the_panels_1080p120_before_anything_is_presented() {
+        let probe = Probe::new(false, 0, 0);
+        assert_eq!(largest_at(probe.capabilities(), 120), Some(1080));
+        assert_eq!(probe.verified_fps(), 120);
+        let mut docked = Probe::new(true, 0, 0);
+        assert_eq!(largest_at(docked.capabilities(), 120), None);
+        docked.set_docked(false);
+        assert_eq!(largest_at(docked.capabilities(), 120), Some(1080));
+    }
+
+    #[test]
+    fn handheld_1080p_offers_and_picks_120_fps_on_the_first_context() {
+        use moonlight_nx2_core::codec::{self, Depth, Evidence};
+        use moonlight_nx2_ui::settings::{Setting, Settings};
+        let mut decoder = codec::Capabilities::default();
+        decoder.record(
+            codec::Mode {
+                codec: codec::Codec::Av1,
+                depth: Depth::Eight,
+                maximum: codec::Size::new(3840, 2160).unwrap(),
+                fps: 120,
+            },
+            Evidence::PixelsAndCloseVerified,
+        );
+        let context = moonlight_nx2_app::policy::Context {
+            docked: false,
+            decoder,
+            display: Probe::new(false, 0, 0).capabilities(),
+        };
+        let caps = crate::client::ui_capabilities(&context);
+        assert!(caps.fps120);
+        let settings = Settings::default();
+        let options = settings.stream_options(false, &caps);
+        assert_eq!((options.height, options.fps), (1080, 120));
+        let rows = settings.rows(false, &caps);
+        assert_eq!(rows[Setting::Fps as usize].value.as_str(), "120 fps");
+    }
+
+    #[test]
     fn handheld_keeps_1080p120_and_only_caps_at_60_while_requested() {
         let mut probe = Probe::new(false, 0, 0);
         assert!(!settle(&mut probe, 1920, 1080));
         probe.set_requested(true);
-        assert!(probe.verify(1920, 1080, 120, true));
+        assert!(!probe.verify(1920, 1080, 120, true));
         assert_eq!(largest_at(probe.capabilities(), 120), Some(1080));
         assert!(!probe.set_requested(false));
         for _ in 0..SLOW_SECONDS {
