@@ -485,6 +485,10 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
             self.matrix,
         )
         .map_err(render::Error::from);
+        if self.host_import.is_none() && !renderer.host_import() {
+            platform::log("sdk-decoder: output=readback, no VK_EXT_external_memory_host");
+            self.host_import = Some(false);
+        }
         if self.host_import != Some(false) {
             let imported = layout.and_then(|layout| {
                 let import = renderer.import_host(image.base, image.bytes)?;
