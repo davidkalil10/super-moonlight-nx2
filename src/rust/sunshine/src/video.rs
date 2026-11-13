@@ -93,6 +93,8 @@ impl FecStatus {
 pub struct Stats {
     pub packets: u64,
     pub bytes: u64,
+    /// Packets skipped in the RTP sequence: lost on the way, or still to come out of order.
+    pub missing: u64,
     pub invalid: u64,
     pub undecryptable: u64,
     pub rejected: u64,
@@ -152,6 +154,8 @@ pub struct Receiver {
     pool: Pool,
     spare: u16,
     started: bool,
+    last_sequence: Option<u16>,
+    unsequenced: u16,
     block: Block,
     current_frame: u32,
     workspace: Workspace,
@@ -285,6 +289,8 @@ impl Receiver {
             },
             spare,
             started: false,
+            last_sequence: None,
+            unsequenced: 0,
             block: Block::default(),
             current_frame: 1,
             workspace: Workspace::new(),
@@ -343,6 +349,7 @@ impl Receiver {
         let frame = u32::from_le_bytes(bytes[12..16].try_into().unwrap());
         if frame != 0 && frame < current {
             self.stats.rejected += 1;
+            self.unsequenced = self.unsequenced.saturating_add(1);
             return None;
         }
         let (header, body) = bytes.split_at_mut(ENC_HEADER_BYTES);
@@ -371,6 +378,7 @@ impl Receiver {
             return false;
         };
         let seq = header.sequence;
+        self.count_missing(seq);
         if self.started && before16(seq, self.block.next_contiguous) {
             self.stats.rejected += 1;
             return false;
@@ -443,6 +451,21 @@ impl Receiver {
             Recovery::Failed => self.fail_block(now_us, events),
         }
         true
+    }
+
+    /// Sequence gaps, less the encrypted packets of finished frames dropped before they were
+    /// opened: those arrived, only their sequence numbers went unread.
+    fn count_missing(&mut self, seq: u16) {
+        let arrived = core::mem::take(&mut self.unsequenced);
+        match self.last_sequence {
+            Some(last) if !before16(last, seq) => return,
+            Some(last) => {
+                let skipped = seq.wrapping_sub(last) - 1;
+                self.stats.missing += u64::from(skipped.saturating_sub(arrived));
+            }
+            None => {}
+        }
+        self.last_sequence = Some(seq);
     }
 
     fn begin_block<E: Events>(

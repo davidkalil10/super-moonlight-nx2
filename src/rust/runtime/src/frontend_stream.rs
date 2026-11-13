@@ -24,6 +24,7 @@ use moonlight_nx2_app::{
     sunshine::{
         control::{ControlSender, Delivery, SendError},
         stream::{Codec as SunshineCodec, Negotiated},
+        video::Stats as LinkStats,
     },
 };
 use moonlight_nx2_core::{
@@ -104,6 +105,7 @@ struct Running {
     draining: bool,
     last_record_ms: Option<u64>,
     silent: bool,
+    link: Cell<LinkStats>,
 }
 
 impl Running {
@@ -283,6 +285,7 @@ impl Stream {
                 draining: false,
                 last_record_ms: None,
                 silent: false,
+                link: Cell::new(LinkStats::default()),
             }),
             Err((failure, closed)) => {
                 log(&format!("stream: direct media open failed {failure:?}"));
@@ -421,6 +424,9 @@ impl Stream {
         ));
         if let Some(overruns) = crate::stream_stats::take_overruns_text() {
             log(&format!("stream: {overruns}"));
+        }
+        if let Some(link) = running.session.link_stats() {
+            log(&direct_media::link_line(&link, &running.link.replace(link)));
         }
         let Some(audio) = running.audio_stats() else {
             return;

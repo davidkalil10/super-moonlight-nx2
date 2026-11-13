@@ -175,6 +175,10 @@ pub trait VideoChannel {
     fn close_video(self) -> bool;
     /// The stop was sent; a transport without an end of stream can call itself drained.
     fn begin_video_drain(&mut self) {}
+    /// What the network delivered, for a transport that sees Sunshine's own packets.
+    fn link_stats(&self) -> Option<moonlight_nx2_sunshine::video::Stats> {
+        None
+    }
 }
 
 /// Common PCM boundary: the helper's TCP channel, or audio decoded on the console.
@@ -778,6 +782,10 @@ impl<'a, S: Socket, D: Device, VC: VideoChannel, P: PcmChannel> Media<'a, S, D, 
 
     pub fn audio_stats(&self) -> Option<audio::Stats> {
         self.audio.as_ref().map(Output::stats)
+    }
+
+    pub fn link_stats(&self) -> Option<moonlight_nx2_sunshine::video::Stats> {
+        self.video.link_stats()
     }
 
     /// Starts the bounded drain after the stop: keep stepping until `Progress.drained`, then

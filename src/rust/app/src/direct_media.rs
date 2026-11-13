@@ -5,7 +5,7 @@
 
 extern crate alloc;
 
-use alloc::{vec, vec::Vec};
+use alloc::{format, string::String, vec, vec::Vec};
 
 use moonlight_nx2_core::media::{HEADER_BYTES, Header, Record};
 use moonlight_nx2_io::audio::{Device, Slots};
@@ -28,6 +28,28 @@ pub const AUDIO_DATAGRAMS_PER_PUMP: usize = 64;
 pub const FRAME_BYTES: usize = 8 << 20;
 /// Sunshine starts video right after the first ping; nothing by then fails the stream.
 pub const FIRST_VIDEO_TIMEOUT_MS: u64 = 10_000;
+
+/// The `stream: link` log line: what the network delivered between two snapshots.
+pub fn link_line(now: &video::Stats, before: &video::Stats) -> String {
+    let delta = |pick: fn(&video::Stats) -> u64| pick(now).saturating_sub(pick(before));
+    format!(
+        "stream: link packets={} missing={} recovered={} unrecoverable_blocks={} \
+         frames_lost={} waiting_drops={} stall_drops={} oversize={} idr_requests={} \
+         invalid={} rejected={} undecryptable={}",
+        delta(|s| s.packets),
+        delta(|s| s.missing),
+        delta(|s| s.fec_recovered),
+        delta(|s| s.unrecoverable_blocks),
+        delta(|s| s.frames_lost),
+        delta(|s| s.waiting_drops),
+        delta(|s| s.stall_drops),
+        delta(|s| s.oversize),
+        delta(|s| s.idr_requests),
+        delta(|s| s.invalid),
+        delta(|s| s.rejected),
+        delta(|s| s.undecryptable),
+    )
+}
 const MAX_OPUS_SAMPLES: usize = 5760;
 /// How long a stream that already received media rides out the PC refusing its datagrams
 /// before it fails: a host-side blip should not end the session.
@@ -244,6 +266,10 @@ impl<U: Datagram, E: video::Events> VideoChannel for DirectVideo<U, E> {
 
     fn begin_video_drain(&mut self) {
         self.draining = true;
+    }
+
+    fn link_stats(&self) -> Option<video::Stats> {
+        Some(self.receiver.stats())
     }
 }
 

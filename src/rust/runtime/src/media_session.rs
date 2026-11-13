@@ -76,6 +76,10 @@ impl<'a, B: Backend<N>, S: Socket, D: Device, V: VideoChannel, const N: usize, P
         self.media.as_ref().and_then(Media::audio_stats)
     }
 
+    pub fn link_stats(&self) -> Option<moonlight_nx2_app::sunshine::video::Stats> {
+        self.media.as_ref().and_then(Media::link_stats)
+    }
+
     pub fn begin_drain(&mut self, now_ms: u64) {
         if let Some(media) = self.media.as_mut() {
             self.closing = true;
