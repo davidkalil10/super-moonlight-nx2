@@ -7,7 +7,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use crate::glyphs::{Align, Bitmap, Glyphs, TextStyle};
-use crate::model::Model;
+use crate::model::{Model, item};
 use crate::page::{self, Image, Item, Page, Placement, Shape, Strip};
 use crate::theme::Palette;
 
@@ -18,6 +18,22 @@ pub(crate) const COVER_WIDTH: u32 = 200;
 pub(crate) const COVER_HEIGHT: u32 = 300;
 pub(crate) const LEGEND_SIZE: u32 = 26;
 pub(crate) const LEGEND_WIDTH: u32 = 1200;
+/// The height of a legend at `LEGEND_SIZE`, its discs' diameter.
+const LEGEND_HEIGHT: u32 = 40;
+/// How far a hint's touch target reaches past its ink.
+const HINT_PAD: u32 = 12;
+
+/// The console's bit for the button a legend key names, for the keys a touch can press.
+fn hint_button(key: &str) -> Option<u32> {
+    match key {
+        "A" => Some(1),
+        "B" => Some(2),
+        "X" => Some(4),
+        "Y" => Some(8),
+        "\u{2212}" => Some(1 << 11),
+        _ => None,
+    }
+}
 const DEFAULT_CACHE: usize = 8 << 20;
 
 /// One size and weight of the glyph atlas. Only the pairs fonts/glyphs.bin holds can be drawn.
@@ -104,6 +120,7 @@ pub(crate) struct Builder<'c> {
     pub(crate) cursor_home: u32,
     shapes: Vec<Shape>,
     items: Vec<Item>,
+    hints: Vec<Item>,
     texts: Vec<Placed>,
     images: Vec<Placed>,
     pub(crate) error: Option<Error>,
@@ -392,6 +409,7 @@ impl Composer {
             cursor_home: 0,
             shapes: Vec::new(),
             items: Vec::new(),
+            hints: Vec::new(),
             texts: Vec::new(),
             images: Vec::new(),
             error: None,
@@ -403,6 +421,7 @@ impl Composer {
             cursor_home,
             shapes,
             items,
+            hints,
             texts,
             images,
             error,
@@ -425,7 +444,8 @@ impl Composer {
         for shape in shapes {
             page.push_shape(shape);
         }
-        for item in items {
+        let room = page::MAX_ITEMS - items.len();
+        for item in items.into_iter().chain(hints.into_iter().take(room)) {
             page.push_item(item);
         }
         for text in &texts {
@@ -692,7 +712,33 @@ impl Builder<'_> {
         };
         let x = right.saturating_sub(left + width);
         self.add_text(x, y, color, serial, cursor_item);
+        if cursor_item == 0 {
+            self.hints(x, y, keys);
+        }
         x + left
+    }
+
+    /// Touch targets over the entries of a legend drawn at `x`, `y`, taken after the page's
+    /// own items so the cursor never lands on them.
+    fn hints(&mut self, x: u32, y: u32, keys: Keys) {
+        let Some(spans) = self.composer.glyphs.legend_spans(keys, LEGEND_SIZE) else {
+            return;
+        };
+        for ((key, _), (start, end)) in keys.iter().zip(spans) {
+            let Some(button) = hint_button(key) else {
+                continue;
+            };
+            let left = x + start as u32;
+            self.hints.push(Item {
+                id: item::HINT | button,
+                x: left.saturating_sub(HINT_PAD),
+                y: y.saturating_sub(HINT_PAD),
+                w: (end as u32).saturating_sub(start as u32) + 2 * HINT_PAD,
+                h: LEGEND_HEIGHT + 2 * HINT_PAD,
+                flags: page::ITEM_HINT,
+                radius: 0,
+            });
+        }
     }
 
     pub(crate) fn item(&mut self, id: u32, x: u32, y: u32, w: u32, h: u32, flags: u32, radius: u32) {

@@ -35,6 +35,8 @@ pub const ITEM_ADJUSTABLE: u32 = 4;
 pub const ITEM_PENDING: u32 = 8;
 pub const ITEM_EDITING: u32 = 16;
 pub const ITEM_REPORTS_FOCUS: u32 = 32;
+/// A footer button hint: touching it is pressing the button in the low bits of its id.
+pub const ITEM_HINT: u32 = 64;
 
 const FNV_OFFSET_BASIS: u32 = 2_166_136_261;
 const FNV_PRIME: u32 = 16_777_619;

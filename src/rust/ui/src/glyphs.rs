@@ -820,6 +820,23 @@ impl Glyphs {
         (bottom > top).then_some((top + bottom) / 2.0)
     }
 
+    /// Where each entry of `legend` starts and ends across its strip.
+    pub fn legend_spans(&mut self, keys: &[(&str, &str)], size: u32) -> Option<Vec<(f64, f64)>> {
+        let face = self.face_at(size, DEFAULT_WEIGHT)?;
+        let face = self.face(face);
+        let ring = python_round(f64::from(size) * 1.55);
+        let mut label = Layout::default();
+        let mut x = 0.0;
+        let mut spans = Vec::with_capacity(keys.len());
+        for (_, text) in keys {
+            face.layout(&codes_of(text), 0.0, &mut label);
+            let end = x + ring + KEY_GAP + label.length;
+            spans.push((trunc(x), end));
+            x = end + ENTRY_GAP;
+        }
+        Some(spans)
+    }
+
     /// Button legend: a disc with each key name cut out of it, then its label, left to right.
     pub fn legend(&mut self, keys: &[(&str, &str)], size: u32, width: u32) -> Option<Bitmap> {
         let face = self.face_at(size, DEFAULT_WEIGHT)?;

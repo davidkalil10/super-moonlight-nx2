@@ -39,7 +39,8 @@ void main() {
     item = instance - 95u;
     uint at = base + 16u + item * 8u;
     uint flags = word(at + 5u);
-    bool cursor = item == word(UI_CURSOR) && (word(base + 3u) & 2u) == 0u;
+    bool cursor = item == word(UI_CURSOR) && (word(base + 3u) & 2u) == 0u &&
+                  (flags & 64u) == 0u;
     visible =
         visible && item < word(base + 4u) && (cursor || (flags & 2u) != 0u);
     rect = uvec4(word(at + 1u), word(at + 2u), word(at + 3u), word(at + 4u));

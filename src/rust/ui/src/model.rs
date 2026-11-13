@@ -93,6 +93,8 @@ pub mod item {
     pub const APP: u32 = 20000;
     pub const SETTING: u32 = 30000;
     pub const KEY: u32 = 40000;
+    /// Footer button hints, plus the button's bit as the console reports it.
+    pub const HINT: u32 = 0x0010_0000;
 }
 
 /// Characters of the address keypad, by `item::KEY` offset.

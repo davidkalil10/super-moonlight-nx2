@@ -10,7 +10,8 @@ const uint UI_MAX_ITEMS = 32u, UI_MAX_TEXTS = 48u, UI_MAX_IMAGES = 24u,
            UI_MAX_SHAPES = 22u, UI_MAX_BODY = UI_PAGE_WORDS * 4u - 4096u;
 const uint UI_FLAG_OVERLAY = 1u, UI_FLAG_HIDE_CURSOR = 2u, UI_FLAG_NO_CHORD = 4u;
 const uint UI_ITEM_GREYED = 1u, UI_ITEM_CURRENT = 2u, UI_ITEM_ADJUSTABLE = 4u,
-           UI_ITEM_PENDING = 8u, UI_ITEM_EDITING = 16u, UI_ITEM_REPORTS_FOCUS = 32u;
+           UI_ITEM_PENDING = 8u, UI_ITEM_EDITING = 16u, UI_ITEM_REPORTS_FOCUS = 32u,
+           UI_ITEM_HINT = 64u;
 const uint UI_OP_A = 1u, UI_OP_B = 2u, UI_OP_X = 3u, UI_OP_Y = 4u,
            UI_OP_ADJUST = 5u, UI_OP_CHORD = 6u, UI_OP_EDIT = 7u, UI_OP_FOCUS = 8u, UI_OP_MINUS = 9u;
 const uint UI_CHORD_FRAMES = 60u, UI_STICK_REPEAT = 12u;
@@ -185,7 +186,7 @@ uint uiNeighbour(uint base, uint cursor, vec2 direction) {
   uvec4 from = uiRect(base, UI_ITEMS, cursor, 1u);
   vec2 origin = vec2(from.xy) + vec2(from.zw) * 0.5;
   for (uint i = 0u; i < items; i++) {
-    if (i == cursor || (uiItemFlags(base, i) & UI_ITEM_GREYED) != 0u)
+    if (i == cursor || (uiItemFlags(base, i) & (UI_ITEM_GREYED | UI_ITEM_HINT)) != 0u)
       continue;
     uvec4 r = uiRect(base, UI_ITEMS, i, 1u);
     vec2 d = vec2(r.xy) + vec2(r.zw) * 0.5 - origin;
@@ -262,8 +263,12 @@ void uiInput() {
   if (touching && inputState.touchHeld == 0u) {
     vec2 p = vec2(inputState.touch[8], inputState.touch[9]) * 1.5;
     for (uint i = 0u; i < items; i++)
-      if ((uiItemFlags(base, i) & UI_ITEM_GREYED) == 0u &&
-          uiInside(p, uiRect(base, UI_ITEMS, i, 1u))) {
+      if ((uiItemFlags(base, i) & UI_ITEM_HINT) != 0u) {
+        // A footer hint presses its button, through the same path as the pad.
+        if (uiInside(p, uiRect(base, UI_ITEMS, i, 1u)))
+          pressed |= uiItemId(base, i) & 0xffffu;
+      } else if ((uiItemFlags(base, i) & UI_ITEM_GREYED) == 0u &&
+                 uiInside(p, uiRect(base, UI_ITEMS, i, 1u))) {
         cursor = i;
         storage.words[UI_TOUCH_ITEM] = i;
         if (!sent) {
@@ -273,7 +278,8 @@ void uiInput() {
       }
   }
   inputState.touchHeld = touching ? 1u : 0u;
-  if (!sent && items > 0u) {
+  bool onHint = (uiItemFlags(base, cursor) & UI_ITEM_HINT) != 0u;
+  if (!sent && items > 0u && !onHint) {
     uint id = uiItemId(base, cursor);
     bool greyed = (uiItemFlags(base, cursor) & UI_ITEM_GREYED) != 0u;
     if ((pressed & BUTTON_A) != 0u && !greyed) {
