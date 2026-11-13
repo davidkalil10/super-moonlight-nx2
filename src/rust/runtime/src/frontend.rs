@@ -529,11 +529,22 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
         self.wake_connect = Some(pending);
     }
 
-    /// Asks the saved PCs whether they answer while the hosts page is up and nothing is open.
+    /// Asks the saved PCs whether they answer while the hosts page is up. The PC an open link
+    /// talks to is online while the link is healthy, whatever a probe says.
     fn watch_presence<C: Connections<Socket = S>>(&mut self, connections: &mut C, now_ms: u64) {
-        let watching = self.control.is_none()
-            && self.wake_connect.is_none()
-            && self.client.bridge.model().screen() == Screen::Hosts;
+        let linked = self
+            .control
+            .as_ref()
+            .is_some_and(|control| self.authenticated && !control.failed())
+            .then_some(self.peer)
+            .flatten();
+        if let Some(host) = linked.and_then(|peer| self.host_at(peer))
+            && self.client.bridge.model().presence(&host) != Presence::Online
+        {
+            self.client.set_presence(&host, Presence::Online);
+        }
+        let watching =
+            self.wake_connect.is_none() && self.client.bridge.model().screen() == Screen::Hosts;
         if !watching {
             if !self.presence.stop() {
                 crate::render_platform::retire_process();
@@ -548,6 +559,7 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
         );
         match seen {
             Seen::Nothing => {}
+            Seen::Answer { address, .. } if linked.is_some() && octets(&address) == linked => {}
             Seen::Answer { address, online } => {
                 let presence = if online {
                     Presence::Online
@@ -568,6 +580,16 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
                 self.exit = true;
             }
         }
+    }
+
+    fn host_at(&self, peer: [u8; 4]) -> Option<Address> {
+        self.client
+            .bridge
+            .model()
+            .hosts()
+            .iter()
+            .map(|host| host.address)
+            .find(|address| octets(address) == Some(peer))
     }
 
     /// A new display or decoder context, as on a dock change. The network test's choice is
