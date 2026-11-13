@@ -26,11 +26,24 @@ unsafe extern "C" {
     fn moonlightPlatformNetStart() -> bool;
     fn moonlightPlatformRandom(out: *mut u8, bytes: usize);
     fn moonlightPlatformNetStop();
+    fn moonlightPlatformNetReport() -> *const core::ffi::c_char;
+    fn moonlightPlatformUdpReceiveLimit() -> u32;
     fn moonlightPlatformStackAvailable() -> u64;
 }
 
 struct NativeConnections {
     network: bool,
+}
+
+fn start_network() -> bool {
+    let started = unsafe { moonlightPlatformNetStart() };
+    let tried = unsafe { core::ffi::CStr::from_ptr(moonlightPlatformNetReport()) };
+    log(&alloc::format!(
+        "net: socket service started={started} udp limit={} (tried {})",
+        unsafe { moonlightPlatformUdpReceiveLimit() },
+        tried.to_str().unwrap_or("?")
+    ));
+    started
 }
 
 impl Connections for NativeConnections {
@@ -41,7 +54,7 @@ impl Connections for NativeConnections {
         port: u16,
     ) -> Result<NetSocket, moonlight_nx2_io::socket::IoError> {
         if !self.network {
-            self.network = unsafe { moonlightPlatformNetStart() };
+            self.network = start_network();
             if !self.network {
                 return Err(moonlight_nx2_io::socket::IoError::Failed);
             }
@@ -50,7 +63,7 @@ impl Connections for NativeConnections {
     }
     fn wake(&mut self, mac: [u8; 6], address: Option<[u8; 4]>) {
         if !self.network {
-            self.network = unsafe { moonlightPlatformNetStart() };
+            self.network = start_network();
         }
         let subnet = crate::system::subnet();
         let directed = subnet.map(|(console, mask)| {
@@ -77,7 +90,7 @@ impl Connections for NativeConnections {
         &mut self,
     ) -> Result<Box<dyn moonlight_nx2_io::udp::Datagram>, moonlight_nx2_io::socket::IoError> {
         if !self.network {
-            self.network = unsafe { moonlightPlatformNetStart() };
+            self.network = start_network();
             if !self.network {
                 return Err(moonlight_nx2_io::socket::IoError::Failed);
             }
@@ -86,7 +99,7 @@ impl Connections for NativeConnections {
     }
     fn dialer(&mut self) -> Option<crate::upstream::Dialer<NetSocket>> {
         if !self.network {
-            self.network = unsafe { moonlightPlatformNetStart() };
+            self.network = start_network();
         }
         self.network
             .then(|| Box::new(NativeDial) as crate::upstream::Dialer<NetSocket>)

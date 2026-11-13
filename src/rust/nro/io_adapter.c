@@ -15,8 +15,6 @@
 #include <switch.h>
 
 #define AUDIO_SLOTS 16u
-/* Room for a keyframe's fragments between two receive passes. */
-#define DATAGRAM_RECEIVE_BYTES (512 * 1024)
 
 enum {
     IO_OK = 0,
@@ -90,13 +88,12 @@ static void open_socket(const uint8_t address[4], uint16_t port, int type, int p
         return;
     }
 
-    /* Best effort: acknowledgements and input must not wait for Nagle, and a keyframe burst
-     * must fit the datagram buffer. A refused option leaves the socket usable. */
-    int value = type == SOCK_STREAM ? 1 : DATAGRAM_RECEIVE_BYTES;
-    if (type == SOCK_STREAM)
+    /* Best effort: acknowledgements and input must not wait for Nagle. A refused option
+     * leaves the socket usable. */
+    if (type == SOCK_STREAM) {
+        int value = 1;
         setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &value, sizeof(value));
-    else
-        setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &value, sizeof(value));
+    }
 
     struct sockaddr_in endpoint;
     memset(&endpoint, 0, sizeof(endpoint));
@@ -125,6 +122,31 @@ void moonlightIoSocketOpen(const uint8_t address[4], uint16_t port, MoonlightIoS
 void moonlightIoDatagramOpen(const uint8_t address[4], uint16_t port, MoonlightIoStatus *status)
 {
     open_socket(address, port, SOCK_DGRAM, IPPROTO_UDP, status);
+}
+
+/* Room for a 4K keyframe's fragments between two receive passes: the largest size up to the
+ * socket service's limit that the stack accepts, and what it reports back. A refused size
+ * leaves the default buffer, and the last refusal's errno is kept. */
+void moonlightIoDatagramReceiveBuffer(int fd, int32_t limit, int32_t *requested, int32_t *granted,
+                                      int32_t *error)
+{
+    *requested = 0;
+    *error = 0;
+    for (int size = limit; size >= 64 * 1024; size /= 2) {
+        if (setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &size, sizeof(size)) == 0) {
+            *requested = size;
+            break;
+        }
+        *error = errno;
+    }
+    int value = 0;
+    socklen_t length = sizeof(value);
+    if (getsockopt(fd, SOL_SOCKET, SO_RCVBUF, &value, &length) == 0) {
+        *granted = value;
+    } else {
+        *granted = -1;
+        *error = errno;
+    }
 }
 
 /* An unconnected, nonblocking UDP socket on an ephemeral port for one mDNS query: answers

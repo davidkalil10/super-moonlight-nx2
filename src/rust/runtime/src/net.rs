@@ -1,6 +1,8 @@
 //! libounce BSD sockets behind the io crate's `Socket`. C side: src/rust/nro/io_adapter.c.
 //! Behaviour follows src/native/media/channel.c.
 
+extern crate alloc;
+
 use crate::sdk;
 use moonlight_nx2_io::socket::{IoError, Socket};
 use moonlight_nx2_io::udp::Datagram;
@@ -33,6 +35,14 @@ unsafe extern "C" {
     ) -> i32;
     fn moonlightIoSocketOpen(address: *const [u8; 4], port: u16, status: *mut Status);
     fn moonlightIoDatagramOpen(address: *const [u8; 4], port: u16, status: *mut Status);
+    fn moonlightIoDatagramReceiveBuffer(
+        fd: i32,
+        limit: i32,
+        requested: *mut i32,
+        granted: *mut i32,
+        error: *mut i32,
+    );
+    fn moonlightPlatformUdpReceiveLimit() -> u32;
     fn moonlightIoSocketPollConnect(fd: i32, status: *mut Status);
     fn moonlightIoSocketSend(fd: i32, data: *const u8, bytes: usize, status: *mut Status);
     fn moonlightIoSocketRecv(fd: i32, data: *mut u8, bytes: usize, status: *mut Status);
@@ -81,6 +91,13 @@ impl NetSocket {
         }
         let mut status = Status::default();
         unsafe { open(&address, port, &mut status) };
+        if !matches!(status.kind, IO_OK | IO_IN_PROGRESS) {
+            crate::device::log(&alloc::format!(
+                "net: open port={port} failed kind={} errno={}",
+                status.kind,
+                status.error
+            ));
+        }
         if status.kind == IO_CLOSE_FAILED {
             sdk::retire_process();
             return Err(IoError::Failed);
@@ -127,7 +144,23 @@ pub struct UdpSocket {
 
 impl UdpSocket {
     pub fn connect(address: [u8; 4], port: u16) -> Result<Self, IoError> {
-        NetSocket::open(address, port, moonlightIoDatagramOpen).map(|socket| Self { socket })
+        let socket = NetSocket::open(address, port, moonlightIoDatagramOpen)?;
+        let limit = unsafe { moonlightPlatformUdpReceiveLimit() };
+        let (mut requested, mut granted, mut error) = (0, 0, 0);
+        unsafe {
+            moonlightIoDatagramReceiveBuffer(
+                socket.fd,
+                i32::try_from(limit).unwrap_or(i32::MAX),
+                &mut requested,
+                &mut granted,
+                &mut error,
+            )
+        };
+        crate::device::log(&alloc::format!(
+            "net: udp port={port} receive buffer asked={requested} got={granted} limit={limit} \
+             errno={error}"
+        ));
+        Ok(Self { socket })
     }
 }
 

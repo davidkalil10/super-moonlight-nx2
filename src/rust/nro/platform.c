@@ -12,6 +12,10 @@
 #include <time.h>
 #include <unistd.h>
 
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <poll.h>
+#include <sys/socket.h>
 #include <switch.h>
 
 #define LOG_DIRECTORY "sdmc:/switch/moonlight-nx2/rust"
@@ -88,7 +92,99 @@ _Static_assert(MAKERESULT(Module_Libnx, LibnxError_BadInput) == ((11u << 9) | 34
 
 uint64_t moonlightNowNs(void) { return armTicksToNs(armGetSystemTick()); }
 
-bool moonlightPlatformNetStart(void) { return R_SUCCEEDED(socketInitializeDefault()); }
+/* The default configuration caps a UDP socket's receive buffer at 0xA500 bytes, far below
+ * one 4K keyframe burst. The service's pool is sb_efficiency times one socket's TCP and UDP
+ * buffers, so it holds four full UDP buffers next to the TCP ones: 2 MiB per socket leaves
+ * the stream no room. Each limit is kept only if a stream's worth of UDP sockets can then be
+ * opened with it and carry a datagram. */
+#define STREAM_UDP_SOCKETS 4
+#define LOOPBACK_WAIT_MS 100
+static const uint32_t udp_receive_limits[] = {1u << 20, 512u << 10, 256u << 10};
+static uint32_t udp_receive_limit;
+static char net_report[192];
+
+static int loopback(int fd)
+{
+    struct sockaddr_in local;
+    socklen_t length = sizeof(local);
+    if (getsockname(fd, (struct sockaddr *)&local, &length) != 0)
+        return errno;
+    local.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    uint8_t byte = 0x5a;
+    if (sendto(fd, &byte, 1, 0, (const struct sockaddr *)&local, sizeof(local)) != 1)
+        return errno == ENETUNREACH || errno == EHOSTUNREACH || errno == EADDRNOTAVAIL ? 0 : errno;
+    struct pollfd ready = {.fd = fd, .events = POLLIN};
+    if (poll(&ready, 1, LOOPBACK_WAIT_MS) != 1)
+        return ETIMEDOUT;
+    return recv(fd, &byte, 1, 0) == 1 ? 0 : errno;
+}
+
+static int probe_udp(int size)
+{
+    int fds[STREAM_UDP_SOCKETS];
+    int count = 0;
+    int error = 0;
+    while (count < STREAM_UDP_SOCKETS && error == 0) {
+        int fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+        if (fd < 0) {
+            error = errno;
+            break;
+        }
+        fds[count++] = fd;
+        struct sockaddr_in local = {.sin_len = sizeof(local), .sin_family = AF_INET};
+        int granted = 0;
+        socklen_t length = sizeof(granted);
+        if (setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &size, sizeof(size)) != 0
+            || bind(fd, (const struct sockaddr *)&local, sizeof(local)) != 0
+            || getsockopt(fd, SOL_SOCKET, SO_RCVBUF, &granted, &length) != 0)
+            error = errno;
+    }
+    if (error == 0)
+        error = loopback(fds[0]);
+    while (count > 0)
+        close(fds[--count]);
+    return error;
+}
+
+static void note_attempt(size_t *used, uint32_t limit, const char *outcome)
+{
+    if (*used < sizeof(net_report))
+        *used += snprintf(net_report + *used, sizeof(net_report) - *used, "%s%" PRIu32 ":%s",
+                          *used ? " " : "", limit, outcome);
+}
+
+bool moonlightPlatformNetStart(void)
+{
+    const SocketInitConfig *fallback = socketGetDefaultInitConfig();
+    size_t used = 0;
+    net_report[0] = 0;
+    char outcome[24];
+    for (size_t index = 0; index < sizeof(udp_receive_limits) / sizeof(udp_receive_limits[0]); index++) {
+        SocketInitConfig config = *fallback;
+        config.udp_rx_buf_size = udp_receive_limits[index];
+        Result rc = socketInitialize(&config);
+        if (R_FAILED(rc)) {
+            snprintf(outcome, sizeof(outcome), "rc=%#" PRIx32, rc);
+            note_attempt(&used, config.udp_rx_buf_size, outcome);
+            continue;
+        }
+        int error = probe_udp((int)config.udp_rx_buf_size);
+        if (error == 0) {
+            udp_receive_limit = config.udp_rx_buf_size;
+            note_attempt(&used, udp_receive_limit, "ok");
+            return true;
+        }
+        snprintf(outcome, sizeof(outcome), "errno=%d", error);
+        note_attempt(&used, config.udp_rx_buf_size, outcome);
+        socketExit();
+    }
+    udp_receive_limit = fallback->udp_rx_buf_size;
+    return R_SUCCEEDED(socketInitializeDefault());
+}
+
+uint32_t moonlightPlatformUdpReceiveLimit(void) { return udp_receive_limit; }
+
+const char *moonlightPlatformNetReport(void) { return net_report; }
 
 /* Key material: the kernel-seeded generator, mixed with the csrng service where it opens. */
 void moonlightPlatformRandom(uint8_t *out, size_t bytes)
