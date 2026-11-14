@@ -245,6 +245,7 @@ pub struct Decoder<'a, B: Backend<N>, const N: usize = SURFACES> {
     placed: [bool; N],
     arrived: [Option<Output>; N],
     rejected: Option<Rejected>,
+    invalid: Option<&'static str>,
     pending: [Option<Pending>; UNITS],
     generation: u64,
     failed: bool,
@@ -292,6 +293,7 @@ impl<'a, B: Backend<N>, const N: usize> Decoder<'a, B, N> {
             placed: [false; N],
             arrived: [None; N],
             rejected: None,
+            invalid: None,
             pending: [None; UNITS],
             generation: 0,
             failed: false,
@@ -332,7 +334,10 @@ impl<'a, B: Backend<N>, const N: usize> Decoder<'a, B, N> {
         }
         match error {
             BackendError::Busy | BackendError::Refused => Error::Refused,
-            BackendError::Invalid => Error::Invalid,
+            BackendError::Invalid => {
+                self.invalid.get_or_insert("backend");
+                Error::Invalid
+            }
             BackendError::NoMemory => Error::NoMemory,
             BackendError::Unsupported => Error::Unsupported,
             BackendError::Malformed | BackendError::Uncertain => unreachable!(),
@@ -351,8 +356,14 @@ impl<'a, B: Backend<N>, const N: usize> Decoder<'a, B, N> {
 
     pub fn submit(&mut self, bytes: &[u8], pts_us: u64) -> Result<(), Error> {
         self.active()?;
-        if bytes.is_empty() || bytes.len() > INPUT_MAX || pts_us.checked_mul(1000).is_none() {
-            return Err(Error::Invalid);
+        if bytes.is_empty() {
+            return Err(self.invalid("empty unit"));
+        }
+        if bytes.len() > INPUT_MAX {
+            return Err(self.invalid("unit over INPUT_MAX"));
+        }
+        if pts_us.checked_mul(1000).is_none() {
+            return Err(self.invalid("timestamp range"));
         }
         if self
             .pending
@@ -360,7 +371,7 @@ impl<'a, B: Backend<N>, const N: usize> Decoder<'a, B, N> {
             .flatten()
             .any(|unit| unit.pts_us == pts_us)
         {
-            return Err(Error::Invalid);
+            return Err(self.invalid("timestamp already pending"));
         }
         if self.pending_units() >= self.units() {
             return Err(Error::Again);
@@ -404,6 +415,16 @@ impl<'a, B: Backend<N>, const N: usize> Decoder<'a, B, N> {
             self.arrived[index] = Some(output);
         }
         Err(self.fail(BackendError::Malformed))
+    }
+
+    fn invalid(&mut self, reason: &'static str) -> Error {
+        self.invalid = Some(reason);
+        Error::Invalid
+    }
+
+    /// What the last `Error::Invalid` was returned for.
+    pub fn invalid_reason(&self) -> Option<&'static str> {
+        self.invalid
     }
 
     fn reject(&mut self, reason: &'static str, output: Output) -> Error {
@@ -465,7 +486,7 @@ impl<'a, B: Backend<N>, const N: usize> Decoder<'a, B, N> {
     pub fn release_surface(&mut self, surface: usize) -> Result<(), Error> {
         self.active()?;
         if !self.holds_surface(surface) {
-            return Err(Error::Invalid);
+            return Err(self.invalid("surface not held"));
         }
         if let Err(error) = self.backend.release(surface) {
             return Err(self.fail(error));
@@ -500,7 +521,7 @@ impl<'a, B: Backend<N>, const N: usize> Decoder<'a, B, N> {
         if !ready {
             let Some(waited) = self.backend.now_ms().checked_sub(oldest.submitted_ms) else {
                 self.failed = true;
-                return Err(Error::Invalid);
+                return Err(self.invalid("clock before submission"));
             };
             if waited > self.config.timeout_ms {
                 self.failed = true;
@@ -584,10 +605,10 @@ impl<'a, B: Backend<N>, const N: usize> Decoder<'a, B, N> {
             return Err(Error::Closed);
         }
         if token.owner != self.owner {
-            return Err(Error::Invalid);
+            return Err(self.invalid("token of another decoder"));
         }
         if self.held.get(token.index) != Some(&Some(token)) {
-            return Err(Error::Invalid);
+            return Err(self.invalid("token not held"));
         }
         self.held[token.index] = None;
         Ok(())

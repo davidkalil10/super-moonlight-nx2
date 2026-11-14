@@ -343,7 +343,12 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
                     "video: failed {error:?} on {} of {:?}",
                     rejected.reason, rejected.output
                 )),
-                None => platform::log(&format!("video: failed {error:?}")),
+                None => match (error, self.decoder.invalid_reason()) {
+                    (Error::Decoder(decoder::Error::Invalid), Some(reason)) => {
+                        platform::log(&format!("video: failed {error:?}, {reason}"))
+                    }
+                    _ => platform::log(&format!("video: failed {error:?}")),
+                },
             }
         }
         if matches!(
@@ -380,6 +385,12 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
     ) -> Result<(), Error> {
         self.active()?;
         if header.payload_bytes as usize != bytes.len() {
+            platform::log(&format!(
+                "video: unit {} declares {} bytes and carries {}",
+                header.sequence,
+                header.payload_bytes,
+                bytes.len()
+            ));
             return Err(self.fail(Error::Decoder(decoder::Error::Invalid)));
         }
         let submitted_ns = platform::now_ns();
@@ -415,7 +426,15 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
                 self.stats.refused += 1;
                 Err(Error::Decoder(decoder::Error::Again))
             }
-            Err(error) => Err(self.fail(Error::Decoder(error))),
+            Err(error) => {
+                platform::log(&format!(
+                    "video: submit failed {error:?} sequence={} pts_us={} bytes={}",
+                    header.sequence,
+                    header.pts_us,
+                    bytes.len()
+                ));
+                Err(self.fail(Error::Decoder(error)))
+            }
         }
     }
 
@@ -843,6 +862,10 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
             .iter()
             .position(|entry| entry.is_some_and(|arrival| arrival.pts_us == info.pts_us))
         else {
+            platform::log(&format!(
+                "video: frame pts_us={} has no arrival",
+                info.pts_us
+            ));
             return Err(self.fail(Error::Decoder(decoder::Error::Invalid)));
         };
         let arrival = self.arrivals[index].unwrap().received_us;

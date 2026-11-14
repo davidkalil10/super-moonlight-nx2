@@ -341,7 +341,7 @@ impl SdkVideo {
     }
 
     fn start(&mut self, access_unit: &[u8]) -> Result<(), BackendError> {
-        let config = self.config.ok_or(BackendError::Invalid)?;
+        let config = self.config.ok_or_else(|| invalid("start before open"))?;
         let session = viddec::session(config.codec, config.display, self.fps)
             .ok_or(BackendError::Unsupported)?;
         #[cfg(feature = "diagnostic-sdk-modes")]
@@ -422,6 +422,11 @@ impl SdkVideo {
         self.started = true;
         Ok(())
     }
+}
+
+fn invalid(reason: &str) -> BackendError {
+    log(&format!("sdk-video: invalid, {reason}"));
+    BackendError::Invalid
 }
 
 fn check(operation: &str, result: u32) -> Result<(), BackendError> {
@@ -532,7 +537,7 @@ impl Backend for SdkVideo {
         let timestamp_ns = pts_us
             .checked_mul(1000)
             .and_then(|timestamp| i64::try_from(timestamp).ok())
-            .ok_or(BackendError::Invalid)?;
+            .ok_or_else(|| invalid("submit timestamp range"))?;
         #[cfg(feature = "diagnostic-sdk-decode")]
         if self.chatty() {
             log(&format!(
@@ -587,7 +592,10 @@ impl Backend for SdkVideo {
     }
 
     fn output(&mut self) -> Result<Output, BackendError> {
-        let surface = self.ready.take().ok_or(BackendError::Invalid)?;
+        let surface = self
+            .ready
+            .take()
+            .ok_or_else(|| invalid("output before ready"))?;
         let mut properties = Properties::default();
         #[cfg(feature = "diagnostic-sdk-decode")]
         if self.chatty() {
@@ -626,11 +634,11 @@ impl Backend for SdkVideo {
     }
 
     fn readback(&mut self, surface: usize, out: &mut [u8]) -> Result<(), BackendError> {
-        let config = self.config.ok_or(BackendError::Invalid)?;
+        let config = self.config.ok_or_else(|| invalid("readback before open"))?;
         let width = config.coded.width() as usize;
         let luma_bytes = width * config.coded.height() as usize;
         if out.len() < config.coded.nv12_bytes() {
-            return Err(BackendError::Invalid);
+            return Err(invalid("readback target too small"));
         }
         let (luma, chroma) = out.split_at_mut(luma_bytes);
         let mut layout = Layout::default();
