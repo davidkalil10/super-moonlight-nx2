@@ -1492,7 +1492,15 @@ impl Model {
         }
     }
 
-    fn on_streaming(&mut self, op: Op, item: u32, step: &mut Step) {
+    /// Leaving the stream menu ends its sensitivity edit. An edit left from Settings stays,
+    /// as it always has.
+    fn end_sheet_edit(&mut self) {
+        if self.editing == Some(Setting::MouseSensitivity) {
+            self.editing = None;
+        }
+    }
+
+    fn on_streaming(&mut self, op: Op, item: u32, value: i32, step: &mut Step) {
         if op == Op::Chord {
             if self.overlay || !self.settings.on(Setting::MenuChord) {
                 return;
@@ -1505,8 +1513,22 @@ impl Model {
         if !self.overlay {
             return;
         }
+        let sensitivity = Some(Setting::MouseSensitivity);
+        if op == Op::Edit && (Self::setting_item(item) == sensitivity || self.editing == sensitivity) {
+            let editing = Self::setting_item(item).filter(|&setting| self.settings.shown(setting));
+            if editing != self.editing {
+                self.editing = editing;
+                step.changed = true;
+            }
+            return;
+        }
+        if op == Op::Adjust && self.editing == sensitivity {
+            self.on_edit_command(op, item, value, step);
+            return;
+        }
         if op == Op::B || (op == Op::A && item == item::RESUME_STREAM) {
             self.overlay = false;
+            self.end_sheet_edit();
             step.changed = true;
             step.add(IntentKind::ResumeInput, None);
             return;
@@ -1541,6 +1563,7 @@ impl Model {
         if op == Op::A && item == item::RETURN_TO_APPS && !quit_on_return {
             self.screen = Screen::Connecting;
             self.overlay = false;
+            self.end_sheet_edit();
             step.changed = true;
             step.add(IntentKind::StopStream, None);
             return;
@@ -1548,6 +1571,7 @@ impl Model {
         if op == Op::A && (quit_on_return || item == item::QUIT_HOST) {
             self.screen = Screen::Quitting;
             self.overlay = false;
+            self.end_sheet_edit();
             step.changed = true;
             step.add(IntentKind::StopStream, None);
             step.add(IntentKind::QuitHost, self.host);
@@ -1616,7 +1640,7 @@ impl Model {
                 step.changed = true;
                 step.add(IntentKind::StopStream, None);
             }
-            Screen::Streaming => self.on_streaming(op, item, step),
+            Screen::Streaming => self.on_streaming(op, item, value, step),
             Screen::Error | Screen::ConnectionLost => self.on_error(op, step),
             _ => {}
         }

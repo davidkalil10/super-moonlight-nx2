@@ -118,8 +118,8 @@ const SCREEN_HEIGHT: u32 = 1080;
 const SHEET_GRID_Y: u32 = 186;
 const SHEET_CELL: u32 = 46;
 const SHEET_ITEMS_Y: u32 = 350;
-const SHEET_ITEM: u32 = 72;
-const SHEET_ITEM_GAP: u32 = 16;
+const SHEET_ITEM: u32 = 64;
+const SHEET_ITEM_GAP: u32 = 12;
 const SHEET_ITEM_RADIUS: u32 = 13;
 const SHEET_FOOT_Y: u32 = 984;
 const BADGE_X: u32 = 58;
@@ -1156,7 +1156,9 @@ impl Builder<'_> {
         }
         self.sheet_status(readout, left, inner / 2);
 
-        let items = [
+        let sensitivity = Setting::MouseSensitivity;
+        let mouse = model.settings().shown(sensitivity);
+        let mut items = Vec::from([
             (item::RESUME_STREAM, "Resume", None, pal.ink),
             (item::SHOW_KEYBOARD, "Show keyboard", None, pal.ink),
             (
@@ -1171,16 +1173,39 @@ impl Builder<'_> {
                 Some(model.settings().joycon_mouse().label()),
                 pal.ink,
             ),
-            (item::RETURN_TO_APPS, "Disconnect", None, pal.ink),
-            (item::QUIT_HOST, "Quit app on PC", None, pal.warn),
-        ];
+        ]);
+        if mouse {
+            items.push((item::SETTING + sensitivity as u32, "Mouse sensitivity", None, pal.ink));
+        }
+        items.push((item::RETURN_TO_APPS, "Disconnect", None, pal.ink));
+        items.push((item::QUIT_HOST, "Quit app on PC", None, pal.warn));
+        let rows = model.settings().rows(model.docked(), model.capabilities());
+        let row = &rows[sensitivity as usize];
+        let editing = model.editing() == Some(sensitivity);
         for (i, (id, label, value, ink)) in items.into_iter().enumerate() {
             let y = SHEET_ITEMS_Y + i as u32 * (SHEET_ITEM + SHEET_ITEM_GAP);
-            self.item(id, left, y, inner, SHEET_ITEM, 0, SHEET_ITEM_RADIUS);
+            let stepper = id == item::SETTING + sensitivity as u32;
+            let flags = match (stepper, editing) {
+                (true, true) => page::ITEM_ADJUSTABLE | page::ITEM_EDITING,
+                (true, false) => page::ITEM_ADJUSTABLE,
+                _ => 0,
+            };
+            self.item(id, left, y, inner, SHEET_ITEM, flags, SHEET_ITEM_RADIUS);
             self.fill(left, y, inner, SHEET_ITEM, pal.panel, SHEET_ITEM_RADIUS);
             let middle = y + SHEET_ITEM / 2;
             self.put_middle(left + 27, middle, inner - 54, label, OPTION, ink, Align::Left);
-            if let Some(value) = value {
+            if stepper {
+                let top = self.top_for(middle, "H", OPTION);
+                self.stepper(
+                    (left + 27, top, inner - 54),
+                    (y, SHEET_ITEM),
+                    row.value.as_str(),
+                    OPTION,
+                    if editing { pal.accent } else { pal.dim },
+                    editing && row.can_left,
+                    editing && row.can_right,
+                );
+            } else if let Some(value) = value {
                 self.put_middle(left + 27, middle, inner - 54, value, OPTION, pal.dim, Align::Right);
             }
         }
