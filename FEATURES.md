@@ -36,6 +36,7 @@
 - Tap a button hint on screen to press it
 - Button layout: Xbox (by position) or Nintendo (by label)
 - USB keyboard and mouse
+- Joy-Con mouse: a Joy-Con laid on a table moves the PC mouse, with adjustable sensitivity
 
 ## Stream controls
 - Hold Plus+Minus to open the stream menu, from any player; the PC never sees the chord
