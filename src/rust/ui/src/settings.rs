@@ -479,7 +479,12 @@ impl StreamArgs {
     }
 }
 
-/// moonlight-common's default bitrate for a catalog size, catalog rate and codec.
+/// 4K60 over Wi-Fi settles three quarters of the way up the table: Auto stepped every docked
+/// AV1 stream from 56 down to 42 Mbps, so it starts there.
+const P2160_60_REACH: f64 = 0.75;
+
+/// moonlight-common's default bitrate for a catalog size, catalog rate and codec, with 4K60
+/// started lower.
 fn default_bitrate(size: Size, fps: u32, codec: Codec) -> u32 {
     let factor = match size {
         Size::P720 => 5.0,
@@ -496,7 +501,12 @@ fn default_bitrate(size: Size, fps: u32, codec: Codec) -> u32 {
         Codec::Av1 => 0.7,
         Codec::H264 | Codec::Hevc => 1.0,
     };
-    round_half_up(factor * rate * share) * 1000
+    let reach = if size == Size::P2160 && fps == 60 {
+        P2160_60_REACH
+    } else {
+        1.0
+    };
+    round_half_up(factor * rate * share * reach) * 1000
 }
 
 impl Default for Settings {
