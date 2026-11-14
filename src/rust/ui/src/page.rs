@@ -499,7 +499,11 @@ impl<'a> Page<'a> {
         ];
         put(out, 0, &header);
         let sum = checksum(out);
-        put(out, CHECKSUM_WORDS * 4, &[sum, self.shape_count as u32, self.accent]);
+        put(
+            out,
+            CHECKSUM_WORDS * 4,
+            &[sum, self.shape_count as u32, self.accent],
+        );
         Ok(placed)
     }
 
@@ -655,6 +659,10 @@ mod tests {
         assert_eq!(kept.offset_of(2), placed.offset_of(2));
         assert_eq!(&out[second_at..second_at + 8], &second);
         assert!(out[BODY_OFFSET..second_at].iter().all(|&byte| byte == 0));
-        assert!(out[second_at + 8..kept.bytes()].iter().all(|&byte| byte == 0));
+        assert!(
+            out[second_at + 8..kept.bytes()]
+                .iter()
+                .all(|&byte| byte == 0)
+        );
     }
 }

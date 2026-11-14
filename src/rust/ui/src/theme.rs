@@ -13,7 +13,10 @@ impl Preference {
     pub const ALL: [Preference; 3] = [Self::System, Self::Dark, Self::Light];
 
     pub fn from_index(index: u8) -> Self {
-        Self::ALL.get(usize::from(index)).copied().unwrap_or_default()
+        Self::ALL
+            .get(usize::from(index))
+            .copied()
+            .unwrap_or_default()
     }
 
     pub fn saved(self) -> &'static str {

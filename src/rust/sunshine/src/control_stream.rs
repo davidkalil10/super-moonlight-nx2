@@ -4,10 +4,7 @@
 
 use alloc::vec::Vec;
 
-use aes_gcm::{
-    Aes128Gcm, KeyInit, Nonce, Tag,
-    aead::AeadInOut,
-};
+use aes_gcm::{Aes128Gcm, KeyInit, Nonce, Tag, aead::AeadInOut};
 
 use crate::{
     control::{ControlSender, Delivery, HostEvent, HostEvents, SendError, channel, kind},
@@ -55,7 +52,13 @@ fn le16(bytes: &[u8], at: usize) -> u16 {
 }
 
 /// Seals one message the way Sunshine opens it: wrapper, tag, then ciphertext.
-pub fn seal(cipher: &Aes128Gcm, sequence: u32, origin: u8, message: u16, payload: &[u8]) -> Option<Vec<u8>> {
+pub fn seal(
+    cipher: &Aes128Gcm,
+    sequence: u32,
+    origin: u8,
+    message: u16,
+    payload: &[u8],
+) -> Option<Vec<u8>> {
     let length = u16::try_from(4 + TAG_BYTES + INNER_BYTES + payload.len()).ok()?;
     let mut packet = Vec::with_capacity(WRAPPER_BYTES + TAG_BYTES + INNER_BYTES + payload.len());
     packet.extend_from_slice(&kind::ENCRYPTED.to_le_bytes());
@@ -76,7 +79,8 @@ pub fn seal(cipher: &Aes128Gcm, sequence: u32, origin: u8, message: u16, payload
 
 /// Opens one sealed message: its type and payload.
 pub fn open(cipher: &Aes128Gcm, origin: u8, packet: &[u8]) -> Option<(u16, Vec<u8>)> {
-    if packet.len() < WRAPPER_BYTES + TAG_BYTES + INNER_BYTES || le16(packet, 0) != kind::ENCRYPTED {
+    if packet.len() < WRAPPER_BYTES + TAG_BYTES + INNER_BYTES || le16(packet, 0) != kind::ENCRYPTED
+    {
         return None;
     }
     let length = usize::from(le16(packet, 2));
@@ -194,7 +198,13 @@ impl ControlStream {
     }
 
     pub fn request_idr(&mut self, now_ms: u64) -> Result<(), SendError> {
-        self.send_at(kind::REQUEST_IDR, channel::URGENT, Delivery::Reliable, &[0, 0], now_ms)
+        self.send_at(
+            kind::REQUEST_IDR,
+            channel::URGENT,
+            Delivery::Reliable,
+            &[0, 0],
+            now_ms,
+        )
     }
 
     pub fn disconnect(&mut self, now_ms: u64) {
@@ -206,13 +216,34 @@ impl ControlStream {
         if self.peer.state() == enet::State::Connected && self.terminated.is_none() {
             if !self.started {
                 self.started = true;
-                let _ = self.send_at(kind::REQUEST_IDR, channel::GENERIC, Delivery::Reliable, &[0, 0], now_ms);
-                let _ = self.send_at(kind::START_B, channel::GENERIC, Delivery::Reliable, &[0], now_ms);
+                let _ = self.send_at(
+                    kind::REQUEST_IDR,
+                    channel::GENERIC,
+                    Delivery::Reliable,
+                    &[0, 0],
+                    now_ms,
+                );
+                let _ = self.send_at(
+                    kind::START_B,
+                    channel::GENERIC,
+                    Delivery::Reliable,
+                    &[0],
+                    now_ms,
+                );
                 self.next_loss_ms = now_ms + LOSS_INTERVAL_MS;
             } else if now_ms >= self.next_loss_ms {
                 self.next_loss_ms = now_ms + LOSS_INTERVAL_MS;
                 let stats = self.loss_payload();
-                if self.send_at(kind::LOSS_STATS, channel::GENERIC, Delivery::Unreliable, &stats, now_ms).is_ok() {
+                if self
+                    .send_at(
+                        kind::LOSS_STATS,
+                        channel::GENERIC,
+                        Delivery::Unreliable,
+                        &stats,
+                        now_ms,
+                    )
+                    .is_ok()
+                {
                     self.lost = 0;
                 }
             }
@@ -241,7 +272,8 @@ impl ControlStream {
         if self.terminated.is_some() {
             return Err(SendError::Closed);
         }
-        let packet = seal(&self.cipher, self.sequence, b'C', message, payload).ok_or(SendError::TooLarge)?;
+        let packet =
+            seal(&self.cipher, self.sequence, b'C', message, payload).ok_or(SendError::TooLarge)?;
         let sent = match delivery {
             Delivery::Reliable => self.peer.send_reliable(channel, &packet, now_ms),
             Delivery::Unreliable => self.peer.send_unsequenced(channel, &packet),
@@ -263,7 +295,14 @@ pub struct Sender<'a> {
 }
 
 impl ControlSender for Sender<'_> {
-    fn send(&mut self, message: u16, channel: u8, delivery: Delivery, payload: &[u8]) -> Result<(), SendError> {
-        self.stream.send_at(message, channel, delivery, payload, self.now_ms)
+    fn send(
+        &mut self,
+        message: u16,
+        channel: u8,
+        delivery: Delivery,
+        payload: &[u8],
+    ) -> Result<(), SendError> {
+        self.stream
+            .send_at(message, channel, delivery, payload, self.now_ms)
     }
 }

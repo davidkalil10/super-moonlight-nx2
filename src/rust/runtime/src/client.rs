@@ -403,7 +403,9 @@ impl<F: Files + Clone> Client<F> {
     }
 
     pub fn install_cover(&mut self, app: u32, png: &[u8]) -> bool {
-        let Some(tile) = moonlight_nx2_ui::png::tile(png, Composer::COVER_SIZE.0, Composer::COVER_SIZE.1) else {
+        let Some(tile) =
+            moonlight_nx2_ui::png::tile(png, Composer::COVER_SIZE.0, Composer::COVER_SIZE.1)
+        else {
             return false;
         };
         self.composer.set_cover(app, tile);
@@ -453,7 +455,8 @@ impl<F: Files + Clone> Client<F> {
                 if !agrees || self.page_checks.is_multiple_of(20) {
                     crate::render_platform::log(&alloc::format!(
                         "ui: page body checksum agrees={agrees} checked={} mismatched={}",
-                        self.page_checks, self.page_check_bad
+                        self.page_checks,
+                        self.page_check_bad
                     ));
                 }
             }
@@ -784,8 +787,14 @@ mod presented_rate_tests {
             ..Default::default()
         };
         let window = second(60, 1_000_000);
-        assert_eq!(presented_fps_x10(Some(window), Some(video_window)), Some(600));
-        assert_eq!(presented_fps_x10(Some(second(59, 1_001_000)), None), Some(589));
+        assert_eq!(
+            presented_fps_x10(Some(window), Some(video_window)),
+            Some(600)
+        );
+        assert_eq!(
+            presented_fps_x10(Some(second(59, 1_001_000)), None),
+            Some(589)
+        );
     }
 
     #[test]
@@ -810,7 +819,10 @@ mod presented_rate_tests {
             ..Default::default()
         };
         assert_eq!(presented_fps_x10(None, Some(video_window)), Some(599));
-        assert_eq!(presented_fps_x10(Some(second(0, 0)), Some(video_window)), Some(599));
+        assert_eq!(
+            presented_fps_x10(Some(second(0, 0)), Some(video_window)),
+            Some(599)
+        );
         assert_eq!(presented_fps_x10(None, None), None);
     }
 }

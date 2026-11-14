@@ -591,7 +591,10 @@ impl Service {
                 eprintln!("service: console {name} asked to be forgotten; removed={removed:?}");
                 let flush_until = Instant::now() + REVOKE_FLUSH;
                 while connection.flushing() && Instant::now() < flush_until {
-                    if connection.pump_with_video_readiness(Instant::now()).is_err() {
+                    if connection
+                        .pump_with_video_readiness(Instant::now())
+                        .is_err()
+                    {
                         break;
                     }
                     thread::sleep(Duration::from_millis(2));

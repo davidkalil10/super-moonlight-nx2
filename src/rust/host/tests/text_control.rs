@@ -55,14 +55,23 @@ fn text_reaches_the_worker_as_one_line_and_is_refused_when_invalid() {
     assert_eq!(kind, Kind::Event);
     assert_eq!(value["op"], "text");
     assert_eq!(value["value"]["queued"], true);
-    for (id, bad) in [(4, json!("")), (5, json!("a".repeat(513))), (6, json!("a\u{0}b"))] {
+    for (id, bad) in [
+        (4, json!("")),
+        (5, json!("a".repeat(513))),
+        (6, json!("a\u{0}b")),
+    ] {
         let (kind, _, value) = request(&mut control, id, json!({"op":"text","text":bad}));
         assert_eq!(kind, Kind::Error);
         assert_eq!(value["code"], "invalid_request");
     }
     let (_, _, value) = request(&mut control, 7, json!({"op":"text","text":"a".repeat(512)}));
     assert_eq!(value["value"]["queued"], true);
-    while fs::read_to_string(&marker).unwrap_or_default().lines().count() != 2 {
+    while fs::read_to_string(&marker)
+        .unwrap_or_default()
+        .lines()
+        .count()
+        != 2
+    {
         assert!(Instant::now() < deadline);
         std::thread::sleep(Duration::from_millis(2));
     }

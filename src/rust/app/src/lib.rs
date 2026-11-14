@@ -8,14 +8,14 @@
 #![no_std]
 
 pub mod bitrate;
-pub mod dock;
 pub mod clocks;
 pub mod covers;
 pub mod direct;
-pub mod direct_keys;
 pub mod direct_input;
+pub mod direct_keys;
 pub mod direct_media;
 pub mod direct_stream;
+pub mod dock;
 pub mod driver;
 pub mod hosts;
 pub mod input;
@@ -27,8 +27,8 @@ pub mod metrics;
 pub mod netprobe;
 pub mod pads;
 pub mod pairings;
-pub mod policy;
 pub mod pointer;
+pub mod policy;
 pub mod presence_watch;
 pub mod reconnect;
 pub mod reply;
@@ -37,8 +37,8 @@ pub mod service;
 pub mod stall;
 pub mod stream;
 pub mod suspend;
-pub mod typing;
 pub mod system_status;
+pub mod typing;
 pub mod wake;
 pub mod wake_connect;
 

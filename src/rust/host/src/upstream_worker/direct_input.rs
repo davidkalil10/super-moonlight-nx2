@@ -187,9 +187,8 @@ impl DirectInput {
                 if text.is_empty() || text.len() > moonlight_nx2_host::MAX_TEXT_BYTES {
                     return Err(Error::Invalid);
                 }
-                let result = unsafe {
-                    native::LiSendUtf8TextEvent(text.as_ptr().cast(), text.len() as u32)
-                };
+                let result =
+                    unsafe { native::LiSendUtf8TextEvent(text.as_ptr().cast(), text.len() as u32) };
                 if result != 0 {
                     return Err(Error::Backend);
                 }

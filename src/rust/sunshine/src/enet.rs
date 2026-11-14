@@ -292,8 +292,12 @@ impl Peer {
             }
             let data_length = match command {
                 SEND_RELIABLE => usize::from(be16(datagram, at + 4).unwrap_or(0)),
-                SEND_UNRELIABLE | SEND_UNSEQUENCED => usize::from(be16(datagram, at + 6).unwrap_or(0)),
-                SEND_FRAGMENT | SEND_UNRELIABLE_FRAGMENT => usize::from(be16(datagram, at + 6).unwrap_or(0)),
+                SEND_UNRELIABLE | SEND_UNSEQUENCED => {
+                    usize::from(be16(datagram, at + 6).unwrap_or(0))
+                }
+                SEND_FRAGMENT | SEND_UNRELIABLE_FRAGMENT => {
+                    usize::from(be16(datagram, at + 6).unwrap_or(0))
+                }
                 _ => 0,
             };
             let end = at + size + data_length;
@@ -312,16 +316,22 @@ impl Peer {
 
     /// Whether to acknowledge the command: reliable ones ahead of the next expected are left
     /// unacknowledged so the host sends them again in order.
-    fn handle(&mut self, command: u8, channel: u8, sequence: u16, body: &[u8], data: &[u8], now_ms: u64) -> bool {
+    fn handle(
+        &mut self,
+        command: u8,
+        channel: u8,
+        sequence: u16,
+        body: &[u8],
+        data: &[u8],
+        now_ms: u64,
+    ) -> bool {
         match command {
             ACKNOWLEDGE => {
                 let acked = be16(body, 4).unwrap_or(0);
                 let sent = be16(body, 6).unwrap_or(0);
-                if let Some(index) = self
-                    .pending
-                    .iter()
-                    .position(|pending| pending.channel == channel && pending.sequence == acked && pending.sent_ms != 0)
-                {
+                if let Some(index) = self.pending.iter().position(|pending| {
+                    pending.channel == channel && pending.sequence == acked && pending.sent_ms != 0
+                }) {
                     let pending = self.pending.remove(index);
                     let rtt = u64::from((now_ms as u16).wrapping_sub(sent)).max(1);
                     self.rtt_ms = (self.rtt_ms * 7 + rtt) / 8;
@@ -348,7 +358,8 @@ impl Peer {
                     self.channel_count = channels as u8;
                     self.channels.truncate(usize::from(self.channel_count));
                 }
-                self.pending.retain(|pending| pending.command[0] & COMMAND_MASK != CONNECT);
+                self.pending
+                    .retain(|pending| pending.command[0] & COMMAND_MASK != CONNECT);
                 self.peer_incoming = sequence;
                 self.state = State::Connected;
                 true
@@ -447,7 +458,10 @@ impl Peer {
             }
             _ => {}
         }
-        let stale = self.pending.iter().any(|pending| now_ms >= pending.first_ms + TIMEOUT_MS);
+        let stale = self
+            .pending
+            .iter()
+            .any(|pending| now_ms >= pending.first_ms + TIMEOUT_MS);
         if stale || now_ms >= self.last_receive_ms + TIMEOUT_MS {
             self.state = State::Closed(End::TimedOut);
             return;

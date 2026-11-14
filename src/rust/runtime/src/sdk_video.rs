@@ -387,7 +387,10 @@ impl SdkVideo {
             };
             log(&format!(
                 "sdk-decoder: start codec={:?} result=0x{result:x} codec_config_bytes={bytes} fps={} stream_fps={} max_input={INPUT_MAX} took_ms={}",
-                config.codec, session.frame_rate, self.fps, took_ms()
+                config.codec,
+                session.frame_rate,
+                self.fps,
+                took_ms()
             ));
             check("start", result)?;
             self.started = true;
@@ -406,7 +409,12 @@ impl SdkVideo {
         };
         log(&format!(
             "sdk-video: start codec={:?} value={} result=0x{result:x} stage={stage} codec_config_bytes={bytes} work_bytes={} fps={} stream_fps={} took_ms={}",
-            config.codec, session.codec, session.work_bytes, session.frame_rate, self.fps, took_ms()
+            config.codec,
+            session.codec,
+            session.work_bytes,
+            session.frame_rate,
+            self.fps,
+            took_ms()
         ));
         if result != 0 {
             return Err(BackendError::Refused);

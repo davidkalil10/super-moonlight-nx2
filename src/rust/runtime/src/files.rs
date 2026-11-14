@@ -361,7 +361,9 @@ mod tests {
 
     fn fill(bytes: &mut [u8]) -> bool {
         use std::io::Read;
-        std::fs::File::open("/dev/urandom").and_then(|mut file| file.read_exact(bytes)).is_ok()
+        std::fs::File::open("/dev/urandom")
+            .and_then(|mut file| file.read_exact(bytes))
+            .is_ok()
     }
 
     #[test]

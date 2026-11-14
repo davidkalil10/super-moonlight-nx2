@@ -790,7 +790,16 @@ impl Builder<'_> {
         });
     }
 
-    pub(crate) fn item(&mut self, id: u32, x: u32, y: u32, w: u32, h: u32, flags: u32, radius: u32) {
+    pub(crate) fn item(
+        &mut self,
+        id: u32,
+        x: u32,
+        y: u32,
+        w: u32,
+        h: u32,
+        flags: u32,
+        radius: u32,
+    ) {
         if self.items.len() >= page::MAX_ITEMS {
             self.error = Some(Error::TextLimit);
             return;
@@ -865,7 +874,10 @@ impl Builder<'_> {
             return Some(serial);
         }
 
-        let tile = self.composer.glyphs.letters(name, COVER_WIDTH, COVER_HEIGHT)?;
+        let tile = self
+            .composer
+            .glyphs
+            .letters(name, COVER_WIDTH, COVER_HEIGHT)?;
         let bytes = tile.width as usize * tile.height as usize * 4;
         Some(self.composer.store_sized(key, tile, 0, 0, bytes))
     }
@@ -926,7 +938,15 @@ impl Builder<'_> {
             "Good link (80 Mbps, 7 ms): 1080p60 at 14 Mbps"
         };
         for (row, face) in PATTERN_FACES.into_iter().enumerate() {
-            self.put(96, 630 + row as u32 * 70, 1700, sentence, face, ink, Align::Left);
+            self.put(
+                96,
+                630 + row as u32 * 70,
+                1700,
+                sentence,
+                face,
+                ink,
+                Align::Left,
+            );
         }
         let name = format!("Pattern {view} of 2");
         self.put(96, 990, 600, &name, PATTERN_FACES[1], ink, Align::Left);

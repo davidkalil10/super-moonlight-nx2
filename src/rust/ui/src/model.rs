@@ -769,9 +769,7 @@ impl Model {
     /// The settings a stream of the chosen or focused app uses: the saved ones with that
     /// app's own choices on top.
     pub fn stream_settings(&self) -> Settings {
-        let stored = self
-            .overridden_app()
-            .and_then(|app| self.override_of(app));
+        let stored = self.overridden_app().and_then(|app| self.override_of(app));
         match stored {
             Some(stored) => self.settings.with_override(&stored.values),
             None => self.settings,
@@ -1438,7 +1436,9 @@ impl Model {
                 }
             }
             Op::Adjust if adjusting => {
-                let Some(setting) = self.app_option_item(item).filter(|s| Some(*s) == self.editing)
+                let Some(setting) = self
+                    .app_option_item(item)
+                    .filter(|s| Some(*s) == self.editing)
                 else {
                     return;
                 };
@@ -1514,7 +1514,9 @@ impl Model {
             return;
         }
         let sensitivity = Some(Setting::MouseSensitivity);
-        if op == Op::Edit && (Self::setting_item(item) == sensitivity || self.editing == sensitivity) {
+        if op == Op::Edit
+            && (Self::setting_item(item) == sensitivity || self.editing == sensitivity)
+        {
             let editing = Self::setting_item(item).filter(|&setting| self.settings.shown(setting));
             if editing != self.editing {
                 self.editing = editing;
@@ -1597,7 +1599,10 @@ impl Model {
             self.on_focus(item, step);
             return;
         }
-        let menu = matches!(self.screen, Screen::Hosts | Screen::Apps | Screen::AppOptions);
+        let menu = matches!(
+            self.screen,
+            Screen::Hosts | Screen::Apps | Screen::AppOptions
+        );
         let editing_option = self.screen == Screen::AppOptions && self.editing.is_some();
         if op == Op::X && menu && !editing_option {
             self.from = self.screen;
@@ -1657,12 +1662,13 @@ impl Model {
         self.set_apps(apps);
         self.screen = Screen::Apps;
         self.current_game = current_game;
-        self.resume = self.host.zip(self.apps().iter().find(|app| app.id == current_game)).map(
-            |(host, app)| Resume {
+        self.resume = self
+            .host
+            .zip(self.apps().iter().find(|app| app.id == current_game))
+            .map(|(host, app)| Resume {
                 address: host.address,
                 app: app.name,
-            },
-        );
+            });
         self.app_page = self.app_page.min(last_page(self.app_count, APPS_PER_PAGE));
         self.pin = None;
         self.url = None;

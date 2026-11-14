@@ -195,7 +195,10 @@ impl HostBook {
         if let Some(name) = string(entry.member("lastPlayed")).filter(|name| !name.is_empty()) {
             self.played.push((address, Name::of(name)));
         }
-        let mut app = entry.member("apps").filter(|a| a.kind() == Kind::Array).and_then(|a| a.child());
+        let mut app = entry
+            .member("apps")
+            .filter(|a| a.kind() == Kind::Array)
+            .and_then(|a| a.child());
         while let Some(value) = app {
             app = value.next();
             let Some(id) = value.member("id").and_then(|id| id.number()) else {
@@ -408,7 +411,11 @@ impl HostBook {
             quote(out, name.as_str());
         }
         let mut first = true;
-        for stored in self.overrides.iter().filter(|stored| stored.host == *address) {
+        for stored in self
+            .overrides
+            .iter()
+            .filter(|stored| stored.host == *address)
+        {
             out.push_str(if first { ",\"apps\":[{" } else { ",{" });
             first = false;
             let _ = write!(out, "\"id\":{}", stored.app);

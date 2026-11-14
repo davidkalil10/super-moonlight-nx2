@@ -74,14 +74,33 @@ pub trait ControlSender {
 /// What the host asks of the console during a stream.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HostEvent {
-    Rumble { controller: u16, low: u16, high: u16 },
-    TriggerRumble { controller: u16, left: u16, right: u16 },
+    Rumble {
+        controller: u16,
+        low: u16,
+        high: u16,
+    },
+    TriggerRumble {
+        controller: u16,
+        left: u16,
+        right: u16,
+    },
     /// `kind`: 1 accelerometer, 2 gyroscope. A rate of 0 stops the reports.
-    Motion { controller: u16, rate_hz: u16, kind: u8 },
-    Led { controller: u16, red: u8, green: u8, blue: u8 },
+    Motion {
+        controller: u16,
+        rate_hz: u16,
+        kind: u8,
+    },
+    Led {
+        controller: u16,
+        red: u8,
+        green: u8,
+        blue: u8,
+    },
     Hdr(bool),
     /// The host ended the stream; `reason` as sent, 0 for a clean end.
-    Terminated { reason: u32 },
+    Terminated {
+        reason: u32,
+    },
 }
 
 /// Receives host events as the control channel decodes them.

@@ -594,12 +594,10 @@ impl<F: Files> Bridge<F> {
         }
         let range = self.shown_page();
         let body = storage.get(range.start + page::BODY_OFFSET..range.end)?;
-        let sum = body
-            .chunks_exact(4)
-            .fold(0u32, |sum, word| {
-                sum.wrapping_mul(31)
-                    .wrapping_add(u32::from_ne_bytes(word.try_into().unwrap()))
-            });
+        let sum = body.chunks_exact(4).fold(0u32, |sum, word| {
+            sum.wrapping_mul(31)
+                .wrapping_add(u32::from_ne_bytes(word.try_into().unwrap()))
+        });
         self.checked = self.sequence;
         Some(sum == word(storage, SUM_VALUE))
     }

@@ -10,7 +10,9 @@ pub struct StreamKey {
 
 impl core::fmt::Debug for StreamKey {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("StreamKey").field("key_id", &self.key_id).finish_non_exhaustive()
+        f.debug_struct("StreamKey")
+            .field("key_id", &self.key_id)
+            .finish_non_exhaustive()
     }
 }
 

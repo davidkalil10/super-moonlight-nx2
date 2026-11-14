@@ -29,10 +29,16 @@ pub fn channel_mask(channels: u8) -> u16 {
 }
 
 /// The path and query after the common `uniqueid` and `uuid` arguments.
-pub fn target(app: u32, resume: bool, request: &Request, key: &StreamKey, options: Options) -> String {
+pub fn target(
+    app: u32,
+    resume: bool,
+    request: &Request,
+    key: &StreamKey,
+    options: Options,
+) -> String {
     let path = if resume { "resume" } else { "launch" };
-    let surround = u32::from(channel_mask(request.audio_channels)) << 16
-        | u32::from(request.audio_channels);
+    let surround =
+        u32::from(channel_mask(request.audio_channels)) << 16 | u32::from(request.audio_channels);
     let mut target = format!(
         "/{path}?appid={app}&mode={}x{}x{}&additionalStates=1&sops={}&rikey={}&rikeyid={}\
          &localAudioPlayMode={}&surroundAudioInfo={surround}&remoteControllersBitmap={}&gcmap={}\

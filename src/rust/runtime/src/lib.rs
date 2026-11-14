@@ -26,10 +26,10 @@ mod device;
 mod frontend_stream;
 #[cfg(all(target_os = "none", feature = "frontend"))]
 mod native_frontend;
-#[cfg(all(target_os = "none", feature = "frontend"))]
-mod opus;
 #[cfg(target_os = "none")]
 pub mod net;
+#[cfg(all(target_os = "none", feature = "frontend"))]
+mod opus;
 #[cfg(all(target_os = "none", feature = "diagnostic-sdk-decode"))]
 mod ref_replay;
 
@@ -37,8 +37,6 @@ mod ref_replay;
 mod cache_file;
 #[cfg(any(target_os = "none", feature = "host-renderer"))]
 pub mod client;
-#[cfg(any(target_os = "none", feature = "host-renderer"))]
-pub mod upstream;
 #[cfg(any(target_os = "none", feature = "host-renderer"))]
 pub mod display;
 #[cfg(any(target_os = "none", feature = "host-renderer"))]
@@ -66,6 +64,8 @@ mod sdk_video;
 pub mod stream_stats;
 #[cfg(all(target_os = "none", feature = "frontend"))]
 mod system;
+#[cfg(any(target_os = "none", feature = "host-renderer"))]
+pub mod upstream;
 #[cfg(any(target_os = "none", feature = "host-renderer"))]
 pub mod video;
 

@@ -5,8 +5,8 @@
 use alloc::{boxed::Box, sync::Arc, vec, vec::Vec};
 use core::time::Duration;
 
-use aes_gcm::{Aes128Gcm, KeyInit, aead::AeadInOut};
 use ::hmac::{Hmac as HmacOf, KeyInit as HmacKeyInit, Mac};
+use aes_gcm::{Aes128Gcm, KeyInit, aead::AeadInOut};
 use once_cell::race::OnceBox;
 use rsa::{
     pss,
@@ -14,8 +14,7 @@ use rsa::{
 };
 use rustls::{
     CipherSuite, ClientConfig, ContentType, DigitallySignedStruct, Error, NamedGroup,
-    ProtocolVersion, SignatureAlgorithm, SignatureScheme, SupportedCipherSuite,
-    Tls13CipherSuite,
+    ProtocolVersion, SignatureAlgorithm, SignatureScheme, SupportedCipherSuite, Tls13CipherSuite,
     client::{
         ResolvesClientCert,
         danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier},
@@ -25,8 +24,8 @@ use rustls::{
         SecureRandom, SharedSecret, SupportedKxGroup, WebPkiSupportedAlgorithms,
         cipher::{
             AeadKey, InboundOpaqueMessage, InboundPlainMessage, Iv, MessageDecrypter,
-            MessageEncrypter, Nonce, OutboundOpaqueMessage, OutboundPlainMessage,
-            PrefixedPayload, Tls13AeadAlgorithm, UnsupportedOperationError, make_tls13_aad,
+            MessageEncrypter, Nonce, OutboundOpaqueMessage, OutboundPlainMessage, PrefixedPayload,
+            Tls13AeadAlgorithm, UnsupportedOperationError, make_tls13_aad,
         },
         hash::{self, HashAlgorithm},
         hmac,
@@ -293,7 +292,9 @@ struct TimeOfPairing;
 
 impl TimeProvider for TimeOfPairing {
     fn current_time(&self) -> Option<UnixTime> {
-        Some(UnixTime::since_unix_epoch(Duration::from_secs(1_790_000_000)))
+        Some(UnixTime::since_unix_epoch(Duration::from_secs(
+            1_790_000_000,
+        )))
     }
 }
 
@@ -441,7 +442,11 @@ pub fn provider(random: Random) -> Arc<CryptoProvider> {
 }
 
 /// A client config that presents `identity` and trusts only `server_cert`.
-pub fn config(identity: &Identity, server_cert: &[u8], random: Random) -> Result<Arc<ClientConfig>, Error> {
+pub fn config(
+    identity: &Identity,
+    server_cert: &[u8],
+    random: Random,
+) -> Result<Arc<ClientConfig>, Error> {
     let key = ConsoleKey {
         key: pss::SigningKey::<Sha256>::new(identity.key().clone()),
         random,

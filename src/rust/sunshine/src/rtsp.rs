@@ -57,7 +57,10 @@ pub fn parse_offer(sdp: &str) -> Offer {
         ..Offer::default()
     };
     for line in sdp.lines().map(str::trim) {
-        let number = |prefix: &str| line.strip_prefix(prefix).and_then(|value| value.trim().parse().ok());
+        let number = |prefix: &str| {
+            line.strip_prefix(prefix)
+                .and_then(|value| value.trim().parse().ok())
+        };
         if let Some(flags) = number("a=x-ss-general.encryptionSupported:") {
             offer.encryption_supported = flags;
         }
@@ -78,7 +81,9 @@ pub fn parse_offer(sdp: &str) -> Offer {
                 for (slot, digit) in mapping.iter_mut().zip(&digits[3..]) {
                     *slot = *digit;
                 }
-                offer.surround.push((digits[0], digits[1], digits[2], mapping));
+                offer
+                    .surround
+                    .push((digits[0], digits[1], digits[2], mapping));
             }
         }
     }
@@ -116,7 +121,11 @@ fn stereo(channels: u8) -> Audio {
         channel_mask: launch::channel_mask(channels),
         packet_duration_ms: 5,
         high_quality: false,
-        streams: if channels == 2 { 1 } else { channels - channels / 2 },
+        streams: if channels == 2 {
+            1
+        } else {
+            channels - channels / 2
+        },
         coupled_streams: if channels == 2 { 1 } else { channels / 2 - 1 },
         mapping: [0, 1, 2, 3, 4, 5, 6, 7],
     }
@@ -125,14 +134,22 @@ fn stereo(channels: u8) -> Audio {
 fn server_port(response: &Response, fallback: u16) -> u16 {
     response
         .header("Transport")
-        .and_then(|transport| transport.split(';').find_map(|part| part.trim().strip_prefix("server_port=")))
+        .and_then(|transport| {
+            transport
+                .split(';')
+                .find_map(|part| part.trim().strip_prefix("server_port="))
+        })
         .and_then(|ports| ports.split('-').next())
         .and_then(|port| port.parse().ok())
         .unwrap_or(fallback)
 }
 
 fn ping_payload(response: &Response) -> Option<[u8; 16]> {
-    response.header("X-SS-Ping-Payload")?.as_bytes().try_into().ok()
+    response
+        .header("X-SS-Ping-Payload")?
+        .as_bytes()
+        .try_into()
+        .ok()
 }
 
 impl Handshake {
@@ -174,7 +191,9 @@ impl Handshake {
             Step::Describe => (
                 "DESCRIBE",
                 url,
-                String::from("Accept: application/sdp\r\nIf-Modified-Since: Thu, 01 Jan 1970 00:00:00 GMT\r\n"),
+                String::from(
+                    "Accept: application/sdp\r\nIf-Modified-Since: Thu, 01 Jan 1970 00:00:00 GMT\r\n",
+                ),
                 String::new(),
             ),
             Step::SetupAudio | Step::SetupVideo | Step::SetupControl => {
@@ -195,7 +214,10 @@ impl Handshake {
             }
             Step::Announce => {
                 let sdp = self.announcement();
-                let extra = format!("Content-type: application/sdp\r\nContent-length: {}\r\n", sdp.len());
+                let extra = format!(
+                    "Content-type: application/sdp\r\nContent-length: {}\r\n",
+                    sdp.len()
+                );
                 ("ANNOUNCE", String::from(CONTROL_STREAM), extra, sdp)
             }
             Step::Play => ("PLAY", String::from("/"), String::new(), String::new()),
@@ -275,7 +297,12 @@ impl Handshake {
             Codec::Hevc => offer.hevc,
             Codec::Av1 => offer.av1,
         };
-        self.codec = *self.request.codecs.iter().find(|codec| offered(codec)).ok_or(Error::NoCodec)?;
+        self.codec = *self
+            .request
+            .codecs
+            .iter()
+            .find(|codec| offered(codec))
+            .ok_or(Error::NoCodec)?;
         if offer.encryption_supported & encryption::CONTROL_V2 == 0 {
             return Err(Error::OldHost);
         }
@@ -333,14 +360,21 @@ impl Handshake {
             String::from("x-ss-video[0].intraRefresh:0"),
             format!("x-nv-video[0].encoderCscMode:{csc}"),
             format!("x-nv-audio.surround.numChannels:{}", self.audio.channels),
-            format!("x-nv-audio.surround.channelMask:{}", self.audio.channel_mask),
+            format!(
+                "x-nv-audio.surround.channelMask:{}",
+                self.audio.channel_mask
+            ),
             format!("x-nv-audio.surround.enable:{surround}"),
-            format!("x-nv-audio.surround.AudioQuality:{}", u8::from(self.audio.high_quality)),
+            format!(
+                "x-nv-audio.surround.AudioQuality:{}",
+                u8::from(self.audio.high_quality)
+            ),
             format!("x-nv-aqos.packetDuration:{}", self.audio.packet_duration_ms),
             String::from("x-nv-general.useReliableUdp:13"),
             String::from("x-nv-ri.useControlChannel:1"),
         ];
-        let mut sdp = format!("v=0\r\no=android 0 14 IN IPv4 {host}\r\ns=NVIDIA Streaming Client\r\n");
+        let mut sdp =
+            format!("v=0\r\no=android 0 14 IN IPv4 {host}\r\ns=NVIDIA Streaming Client\r\n");
         for line in lines {
             sdp.push_str("a=");
             sdp.push_str(&line);
@@ -439,9 +473,15 @@ mod tests {
         let mut handshake = handshake(&[Codec::Av1, Codec::H264]);
         assert_eq!(describe(&mut handshake), Ok(Step::SetupAudio));
         assert_eq!(handshake.codec, Codec::Av1);
-        assert_eq!(handshake.encryption, encryption::CONTROL_V2 | encryption::AUDIO);
+        assert_eq!(
+            handshake.encryption,
+            encryption::CONTROL_V2 | encryption::AUDIO
+        );
         assert_eq!(handshake.host_features(), 3);
-        assert_eq!((handshake.audio.streams, handshake.audio.coupled_streams), (1, 1));
+        assert_eq!(
+            (handshake.audio.streams, handshake.audio.coupled_streams),
+            (1, 1)
+        );
         assert_eq!(handshake.audio.mapping[..2], [0, 1]);
     }
 
@@ -450,7 +490,10 @@ mod tests {
         let sdp = core::str::from_utf8(DESCRIBE_2026[1]).unwrap();
         let offer = parse_offer(sdp);
         assert!(offer.hevc && offer.av1);
-        assert_eq!((offer.encryption_supported, offer.encryption_requested), (7, 1));
+        assert_eq!(
+            (offer.encryption_supported, offer.encryption_requested),
+            (7, 1)
+        );
         assert_eq!(offer.surround.len(), 6);
         assert_eq!(offer.surround[2], (6, 4, 2, [0, 1, 2, 4, 5, 3, 0, 0]));
     }

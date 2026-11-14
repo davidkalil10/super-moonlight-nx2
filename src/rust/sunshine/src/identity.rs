@@ -4,7 +4,7 @@
 use alloc::{string::String, vec::Vec};
 use core::str::FromStr;
 
-use der::{DateTime, Decode, Encode, referenced::OwnedToRef, pem::LineEnding};
+use der::{DateTime, Decode, Encode, pem::LineEnding, referenced::OwnedToRef};
 use rsa::{
     PrivateKey, PublicKey,
     pkcs1v15::{Signature, SigningKey, VerifyingKey},

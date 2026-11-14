@@ -78,7 +78,10 @@ impl Drop for Pairing {
 
 /// The AES key both sides derive from the salt and the PIN.
 pub fn key_of(salt: &[u8; BLOCK], pin: &[u8; PIN_DIGITS]) -> [u8; BLOCK] {
-    let digest = Sha256::new().chain_update(salt).chain_update(pin).finalize();
+    let digest = Sha256::new()
+        .chain_update(salt)
+        .chain_update(pin)
+        .finalize();
     let mut key = [0; BLOCK];
     key.copy_from_slice(&digest[..BLOCK]);
     key

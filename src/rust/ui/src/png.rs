@@ -966,7 +966,12 @@ mod tests {
             let gray = |x: usize, y: usize| i32::from(tile.bytes[(y * 40 + x) * 4]);
             for y in 1..59 {
                 for x in 1..39 {
-                    let around = [gray(x - 1, y), gray(x + 1, y), gray(x, y - 1), gray(x, y + 1)];
+                    let around = [
+                        gray(x - 1, y),
+                        gray(x + 1, y),
+                        gray(x, y - 1),
+                        gray(x, y + 1),
+                    ];
                     assert!(
                         around.iter().any(|&other| (gray(x, y) - other).abs() <= 3),
                         "isolated pixel at {x},{y} with filters {filters:?}"

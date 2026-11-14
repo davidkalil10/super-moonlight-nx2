@@ -10,7 +10,12 @@ pub const MAX_OVERRIDES: usize = 32;
 pub const INHERIT: u8 = 0xff;
 
 /// The settings an app can override, in the order of `AppOverride::values`.
-pub const OVERRIDABLE: [Setting; 4] = [Setting::Size, Setting::Fps, Setting::Bitrate, Setting::Codec];
+pub const OVERRIDABLE: [Setting; 4] = [
+    Setting::Size,
+    Setting::Fps,
+    Setting::Bitrate,
+    Setting::Codec,
+];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AppOverride {

@@ -224,7 +224,9 @@ mod tests {
     #[test]
     fn rtsp_reply_with_a_length_completes_before_the_close() {
         let mut reader = Reader::rtsp(1024);
-        reader.feed(b"RTSP/1.0 200 OK\r\nContent-Length: 2\r\n\r\nok").unwrap();
+        reader
+            .feed(b"RTSP/1.0 200 OK\r\nContent-Length: 2\r\n\r\nok")
+            .unwrap();
         assert_eq!(reader.complete(false).unwrap().unwrap().body, b"ok");
     }
 }

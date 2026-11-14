@@ -37,8 +37,8 @@ use moonlight_nx2_ui::{
 use crate::{
     covers,
     direct_input::DirectInput,
-    direct_stream::Live,
     direct_keys::{self, Keys},
+    direct_stream::Live,
     json,
     link::{Link, LinkError},
     request::DEFAULT_PAIR_TIMEOUT_S,
@@ -149,7 +149,10 @@ enum Step {
     Asset,
     Cancel,
     Pair(Stage),
-    Launch { app: u32, resume: bool },
+    Launch {
+        app: u32,
+        resume: bool,
+    },
     Rtsp,
     Control,
     /// Makes the identity a new pairing shows the host; it runs on its own pump.
@@ -190,7 +193,10 @@ pub struct DirectLink<D: Dial> {
     config: Option<Arc<rustls::ClientConfig>>,
     uuid: String,
     next_id: u32,
-    queue: VecDeque<(u32, Result<(Job, Option<Start>), (&'static str, &'static str)>)>,
+    queue: VecDeque<(
+        u32,
+        Result<(Job, Option<Start>), (&'static str, &'static str)>,
+    )>,
     active: Option<Active<D::Socket>>,
     replies: VecDeque<(Kind, u32, Vec<u8>)>,
     cover: Option<(u32, Vec<u8>)>,
@@ -219,7 +225,11 @@ fn quoted(text: &str) -> String {
 fn failure(code: &str, message: &str) -> Next {
     Next::Reply(
         Kind::Error,
-        format!("{{\"code\":{},\"message\":{}}}", quoted(code), quoted(message)),
+        format!(
+            "{{\"code\":{},\"message\":{}}}",
+            quoted(code),
+            quoted(message)
+        ),
     )
 }
 
@@ -232,7 +242,11 @@ fn stopped() -> Next {
 fn reply_head(response: &http::Response) -> String {
     let body = &response.body[..response.body.len().min(REPLY_LOG_BYTES)];
     let text = String::from_utf8_lossy(body).replace(['\r', '\n'], " ");
-    format!("status={} bytes={} body={text}", response.status, response.body.len())
+    format!(
+        "status={} bytes={} body={text}",
+        response.status,
+        response.body.len()
+    )
 }
 
 fn result(op: &str, value: &str) -> Next {
@@ -293,16 +307,27 @@ fn codec(name: &str) -> Option<Codec> {
 fn parse_start(root: json::Value<'_>) -> Option<Start> {
     let app = root.member("app")?.as_plain_str()?;
     let options = root.member("options");
-    let number = |key: &str| options.and_then(|options| options.member(key)).and_then(|value| value.as_u64());
+    let number = |key: &str| {
+        options
+            .and_then(|options| options.member(key))
+            .and_then(|value| value.as_u64())
+    };
     let flag = |key: &str| {
         options
             .and_then(|options| options.member(key))
             .and_then(|value| value.as_bool())
             .unwrap_or(false)
     };
-    let text = |key: &str| options.and_then(|options| options.member(key)).and_then(|value| value.as_plain_str());
+    let text = |key: &str| {
+        options
+            .and_then(|options| options.member(key))
+            .and_then(|value| value.as_plain_str())
+    };
     let small = |key: &str, default: u16| {
-        number(key).and_then(|value| u16::try_from(value).ok()).filter(|value| *value > 0).unwrap_or(default)
+        number(key)
+            .and_then(|value| u16::try_from(value).ok())
+            .filter(|value| *value > 0)
+            .unwrap_or(default)
     };
     Some(Start {
         app: String::from(app),
@@ -344,7 +369,11 @@ fn handoff(start: &Start, stream: &Negotiated) -> String {
     } else {
         String::new()
     };
-    let telemetry = if start.telemetry { ",\"telemetry\":\"upstream-v1\"" } else { "" };
+    let telemetry = if start.telemetry {
+        ",\"telemetry\":\"upstream-v1\""
+    } else {
+        ""
+    };
     format!(
         "{{\"codec\":\"{codec}\",\"width\":{},\"height\":{},\"fps\":{},\"video\":{{{video}\"port\":{},\"token\":\"{}\",\"max_payload\":{},\"ack\":\"input-v1\"}},\"audio\":{{\"port\":{},\"token\":\"{}\",\"rate\":48000,\"channels\":2,\"format\":\"s16le\",\"chunk_bytes\":1920,\"ack\":\"header\"}}{telemetry}}}",
         stream.width,
@@ -366,7 +395,9 @@ fn codecs(preferred: Option<Codec>) -> &'static [Codec] {
     }
 }
 
-fn parse_request(payload: &[u8]) -> Result<(Job, Option<Start>, Option<Address>), (&'static str, &'static str)> {
+fn parse_request(
+    payload: &[u8],
+) -> Result<(Job, Option<Start>, Option<Address>), (&'static str, &'static str)> {
     let invalid = ("invalid_request", "Malformed request");
     let root = json::parse(payload).map_err(|_| invalid)?;
     let op = root
@@ -536,7 +567,8 @@ impl<D: Dial> DirectLink<D> {
         if let (Some(seen), Next::Reply(Kind::Error, _)) = (seen, &next)
             && step != Step::Rtsp
         {
-            self.dial.log(&format!("direct: {step:?} reply not accepted: {seen}"));
+            self.dial
+                .log(&format!("direct: {step:?} reply not accepted: {seen}"));
         }
         self.go(next, now_ms);
     }
@@ -585,7 +617,9 @@ impl<D: Dial> DirectLink<D> {
                 _ => Next::Call(Step::Asset),
             },
             Job::Start if !self.paired() => failure("not_paired", NOT_PAIRED),
-            Job::Start if self.live.is_some() => failure("invalid_state", "A stream is already running"),
+            Job::Start if self.live.is_some() => {
+                failure("invalid_state", "A stream is already running")
+            }
             Job::Start => Next::Call(Step::SecureInfo),
             Job::Stop => {
                 self.end_live(now_ms);
@@ -611,7 +645,8 @@ impl<D: Dial> DirectLink<D> {
             Next::Reply(Kind::Error, payload) if active.launched => {
                 active.launched = false;
                 active.failed = Some(payload);
-                self.dial.log("direct: launch failed, cancelling the Sunshine session");
+                self.dial
+                    .log("direct: launch failed, cancelling the Sunshine session");
                 self.go(Next::Call(Step::Cancel), now_ms);
             }
             Next::Reply(kind, payload) => {
@@ -638,7 +673,10 @@ impl<D: Dial> DirectLink<D> {
 
     /// The identity requests present: a pairing's new one, else the host's own.
     fn identity(&self) -> Option<&Identity> {
-        let pairing = self.active.as_ref().and_then(|active| active.identity.as_ref());
+        let pairing = self
+            .active
+            .as_ref()
+            .and_then(|active| active.identity.as_ref());
         pairing.or(self.identity.as_ref())
     }
 
@@ -696,7 +734,11 @@ impl<D: Dial> DirectLink<D> {
             }
         };
 
-        let limit = if step == Step::Asset { covers::MAX_BYTES } else { MAX_REPLY_BYTES };
+        let limit = if step == Step::Asset {
+            covers::MAX_BYTES
+        } else {
+            MAX_REPLY_BYTES
+        };
         let port = if secure { self.https_port } else { HTTP_PORT };
         let request = http::get(self.host.as_str(), port, &target);
         let socket = self
@@ -746,7 +788,10 @@ impl<D: Dial> DirectLink<D> {
         let active = self.active.as_mut().expect("active");
         let job = active.job;
         if let Some(failed) = active.failed.take() {
-            self.dial.log(&format!("direct: cancelled the Sunshine session ok={}", outcome.is_ok()));
+            self.dial.log(&format!(
+                "direct: cancelled the Sunshine session ok={}",
+                outcome.is_ok()
+            ));
             return Next::Reply(Kind::Error, failed);
         }
         let response = match outcome {
@@ -754,7 +799,8 @@ impl<D: Dial> DirectLink<D> {
             Err(error) => {
                 if step == Step::Rtsp {
                     let rtsp = active.rtsp.as_ref().map(rtsp::Handshake::step);
-                    self.dial.log(&format!("direct: rtsp {rtsp:?} failed: {error:?}"));
+                    self.dial
+                        .log(&format!("direct: rtsp {rtsp:?} failed: {error:?}"));
                 }
                 return transport_failure(&error);
             }
@@ -782,7 +828,9 @@ impl<D: Dial> DirectLink<D> {
                 Ok(info) => {
                     active.info = Some(info);
                     match job {
-                        Job::Pair { .. } => result("pair", "{\"event\":\"paired\",\"already\":true}"),
+                        Job::Pair { .. } => {
+                            result("pair", "{\"event\":\"paired\",\"already\":true}")
+                        }
                         Job::Quit => self.quit_result(),
                         Job::Start if !self.apps.is_empty() => self.launch(),
                         _ => Next::Call(Step::AppList),
@@ -834,10 +882,16 @@ impl<D: Dial> DirectLink<D> {
                 Ok(port) => {
                     let active = self.active.as_mut().expect("active");
                     active.launched = !resume;
-                    let (Some(start), Some(key)) = (active.start.as_ref(), active.key.clone()) else {
+                    let (Some(start), Some(key)) = (active.start.as_ref(), active.key.clone())
+                    else {
                         return failure("invalid_state", "No start was asked for");
                     };
-                    active.rtsp = Some(Handshake::new(self.address, port, stream_request(start), key));
+                    active.rtsp = Some(Handshake::new(
+                        self.address,
+                        port,
+                        stream_request(start),
+                        key,
+                    ));
                     Next::Call(Step::Rtsp)
                 }
                 Err(serverinfo::Error::Status(401)) => failure("not_paired", LISTED),
@@ -854,7 +908,12 @@ impl<D: Dial> DirectLink<D> {
         let Some(start) = active.start.as_ref() else {
             return failure("invalid_state", "No start was asked for");
         };
-        let Some(app) = self.apps.iter().find(|app| app.title == start.app).map(|app| app.id) else {
+        let Some(app) = self
+            .apps
+            .iter()
+            .find(|app| app.title == start.app)
+            .map(|app| app.id)
+        else {
             return failure("invalid_request", NO_APP);
         };
         let current = active.info.as_ref().map_or(0, |info| info.current_game);
@@ -886,7 +945,12 @@ impl<D: Dial> DirectLink<D> {
             .dial
             .dial(self.address, port)
             .map_err(|_| failure("backend_failed", UNREACHABLE))?;
-        Ok(Exchange::rtsp(socket, request, MAX_REPLY_BYTES, deadline_ms))
+        Ok(Exchange::rtsp(
+            socket,
+            request,
+            MAX_REPLY_BYTES,
+            deadline_ms,
+        ))
     }
 
     fn rtsp_step(&mut self, response: &http::Response, now_ms: u64) -> Next {
@@ -931,13 +995,25 @@ impl<D: Dial> DirectLink<D> {
             .and_then(|start| self.apps.iter().find(|app| app.title == start.app))
             .map(|app| app.id);
         let input = DirectInput::new(features);
-        active.live = Some(Live::new(app.unwrap_or(0), negotiated, control, input, socket, now_ms));
+        active.live = Some(Live::new(
+            app.unwrap_or(0),
+            negotiated,
+            control,
+            input,
+            socket,
+            now_ms,
+        ));
         active.deadline_ms = now_ms.saturating_add(CONTROL_MS);
         Next::Call(Step::Control)
     }
 
     /// Logs why an RTSP reply was refused, with the SDP lines DESCRIBE is judged on.
-    fn log_rtsp_failure(&mut self, step: rtsp::Step, error: rtsp::Error, response: &http::Response) {
+    fn log_rtsp_failure(
+        &mut self,
+        step: rtsp::Step,
+        error: rtsp::Error,
+        response: &http::Response,
+    ) {
         let body = String::from_utf8_lossy(&response.body);
         self.dial.log(&format!(
             "direct: rtsp {step:?} refused: {error:?} status={} body_bytes={}",
@@ -973,7 +1049,10 @@ impl<D: Dial> DirectLink<D> {
             }
         }
         let live = active.live.take()?;
-        let handoff = active.start.as_ref().map(|start| handoff(start, &live.negotiated));
+        let handoff = active
+            .start
+            .as_ref()
+            .map(|start| handoff(start, &live.negotiated));
         self.live = Some(live);
         Some(Next::Reply(Kind::Stream, handoff.unwrap_or_default()))
     }
@@ -988,7 +1067,10 @@ impl<D: Dial> DirectLink<D> {
         let started = self.dial.now_ms();
         let identity = Identity::generate(self.dial.random());
         let took = self.dial.now_ms().saturating_sub(started);
-        self.dial.log(&format!("direct: generated a console key ok={} ms={took}", identity.is_ok()));
+        self.dial.log(&format!(
+            "direct: generated a console key ok={} ms={took}",
+            identity.is_ok()
+        ));
         let Ok(identity) = identity else {
             return failure("backend_failed", NO_RANDOM);
         };
@@ -1034,13 +1116,19 @@ impl<D: Dial> DirectLink<D> {
             Err(_) => return failure("backend_failed", UNREACHABLE),
         }
 
-        let cert = pairing.server_cert().map(<[u8]>::to_vec).unwrap_or_default();
+        let cert = pairing
+            .server_cert()
+            .map(<[u8]>::to_vec)
+            .unwrap_or_default();
         let identity = active.identity.take().expect("identity");
         let mut keys = core::mem::take(&mut self.keys);
         let saved = keys.pin(&self.host, &identity, &cert) && keys.save(files);
         if !saved {
             let size = keys.format().map(|text| text.len());
-            self.dial.log(&format!("direct: key file {} not saved bytes={size:?}", direct_keys::FILE));
+            self.dial.log(&format!(
+                "direct: key file {} not saved bytes={size:?}",
+                direct_keys::FILE
+            ));
             self.keys = Keys::load(files).0;
             return failure("backend_failed", KEY_NOT_SAVED);
         }
@@ -1079,7 +1167,11 @@ impl<D: Dial> DirectLink<D> {
             if index > 0 {
                 value.push(',');
             }
-            value.push_str(&format!("{{\"id\":{},\"name\":{}}}", app.id, quoted(&app.title)));
+            value.push_str(&format!(
+                "{{\"id\":{},\"name\":{}}}",
+                app.id,
+                quoted(&app.title)
+            ));
         }
         value.push_str("]}");
         result("list", &value)
@@ -1158,7 +1250,9 @@ impl<D: Dial> Link for DirectLink<D> {
         let id = self.next_id;
         self.next_id = self.next_id.wrapping_add(1).max(1);
         let job = parse_request(payload).and_then(|(job, start, host)| match host {
-            Some(host) if host != self.host => Err(("invalid_request", "This link serves another host")),
+            Some(host) if host != self.host => {
+                Err(("invalid_request", "This link serves another host"))
+            }
             _ => Ok((job, start)),
         });
         self.queue.push_back((id, job));
@@ -1196,7 +1290,10 @@ mod tests {
     #[test]
     fn sunshine_cancel_reply_moves_the_quit_on() {
         let body = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<root status_code=\"200\"><cancel>1</cancel></root>";
-        assert!(!matches!(serverinfo::parse(body), Err(serverinfo::Error::Status(401))));
+        assert!(!matches!(
+            serverinfo::parse(body),
+            Err(serverinfo::Error::Status(401))
+        ));
     }
 
     #[test]

@@ -51,7 +51,11 @@ pub fn elements<'a>(document: &'a str, tag: &'a str) -> impl Iterator<Item = &'a
             };
             let open_end = after.find('>')?;
             let attributes = &after[..open_end];
-            if attributes.chars().next().is_some_and(|c| !c.is_whitespace() && c != '/') {
+            if attributes
+                .chars()
+                .next()
+                .is_some_and(|c| !c.is_whitespace() && c != '/')
+            {
                 continue;
             }
             if attributes.ends_with('/') {
