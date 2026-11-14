@@ -165,3 +165,7 @@ To [ave](https://gitlab.com/a), who made this possible.
 ## Licence
 
 See [LICENSE](LICENSE) and the [font licence](src/rust/ui/fonts/OFL.txt).
+
+## Support
+
+If you enjoy moonlight-nx2, you can support my work on [Ko-fi](https://ko-fi.com/azkali).
