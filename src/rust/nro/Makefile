@@ -3,7 +3,7 @@
 SOURCE_DIR := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 
 ifeq ($(strip $(DEVKITPRO)),)
-$(error Set DEVKITPRO to the pinned Switch 2 SDK)
+$(error Set DEVKITPRO to devkitPro with the Switch 2 SDK or ounce-devkit)
 endif
 ifeq ($(strip $(BUILD_DIR)),)
 $(error Set BUILD_DIR to an external output directory)
@@ -24,7 +24,7 @@ CFLAGS := $(ARCH) -std=gnu11 -O2 -g -Wall -Wextra -Werror -ffunction-sections -f
 LDFLAGS := $(ARCH) -specs=$(LIBNX)/switch.specs -Wl,-Map,$(OUTPUT).map -Wl,--wrap=gsvRegisterFrame
 MIMALLOC ?= 1
 NX_LIBRARY := $(if $(filter 0,$(MIMALLOC)),-lounce_core,-lnx)
-LIBS := -L$(DEVKITPRO)/portlibs/switch2/lib -L$(LIBNX)/lib -lvulkan $(NX_LIBRARY) -lm
+LIBS := -L$(PORTLIBS_SWITCH2)/lib -L$(LIBNX)/lib -lvulkan $(NX_LIBRARY) -lm
 OBJECTS := $(BUILD_DIR)/platform.o $(BUILD_DIR)/io_adapter.o $(BUILD_DIR)/system.o $(BUILD_DIR)/sdk_viddec.o \
            $(BUILD_DIR)/software_keyboard.o $(BUILD_DIR)/opus.o $(BUILD_DIR)/sdk_decoder.o $(BUILD_DIR)/clocks.o
 

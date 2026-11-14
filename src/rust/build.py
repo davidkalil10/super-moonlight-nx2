@@ -22,7 +22,6 @@ SDK = {
     "ouncehen": "9451c44",
 }
 SDK_FILES = (
-    "ounce-sdk-version.txt",
     "libounce/switch2_rules",
     "libounce/switch.specs",
     "libounce/include/switch2/services/gsv.h",
@@ -30,10 +29,13 @@ SDK_FILES = (
     "libounce/lib/libounce.a",
     "libounce/lib/libounce_core.a",
     "libounce/lib/libounce_malloc.a",
-    "portlibs/switch2/include/ouncehen.h",
     "portlibs/switch2/include/vulkan/vulkan.h",
     "portlibs/switch2/lib/libvulkan.a",
 )
+# The version file and kaiHEN header of the pinned SDK, then of the public
+# devkit (github.com/ouncebrew/ounce-devkit), where OunceHEN became kaiHEN.
+PINNED_SDK_FILES = ("ounce-sdk-version.txt", "portlibs/switch2/include/ouncehen.h")
+DEVKIT_FILES = ("ounce-devkit-version.txt", "portlibs/switch2/include/kaihen.h")
 # The builds users and testers get, and the runtime features each one turns on.
 PRODUCTION = {
     "production": "frontend",
@@ -107,12 +109,18 @@ def nacp_title(name):
     return "Moonlight NX2" if name == "production" else f"Moonlight NX2 Rust {name}"
 
 
-def installed_sdk(path):
-    files = {name: (path / name).read_bytes() for name in SDK_FILES}
-    rows = [line.split() for line in files["ounce-sdk-version.txt"].decode().splitlines() if line.strip()]
-    if any(len(row) != 2 for row in rows) or dict(rows) != SDK:
+def installed_sdk(path, devkit=None):
+    names = (*(DEVKIT_FILES if devkit else PINNED_SDK_FILES), *SDK_FILES)
+    files = {name: (path / name).read_bytes() for name in names}
+    rows = [line.split() for line in files[names[0]].decode().splitlines() if line.strip()]
+    if any(len(row) != 2 for row in rows):
+        raise ValueError(f"Unreadable {names[0]}")
+    version = dict(rows)
+    if devkit and version.get("ounce-devkit") != devkit:
+        raise ValueError(f"Expected ounce-devkit {devkit}, found {version.get('ounce-devkit')}")
+    if not devkit and version != SDK:
         raise ValueError(f"Expected the pinned SDK {SDK}")
-    return {"version": SDK,
+    return {"version": version,
             "files": {name: hashlib.sha256(data).hexdigest() for name, data in files.items()}}
 
 
@@ -213,7 +221,7 @@ def build(args):
         if digest(library) != rust["artifact"]["sha256"]:
             raise ValueError("Rust archive checksum mismatch")
         info["rust_build"] = rust
-        info["sdk"] = installed_sdk(args.devkitpro)
+        info["sdk"] = installed_sdk(args.devkitpro, args.devkit)
         compiler = args.devkitpro / "devkitA64/bin/aarch64-none-elf-gcc"
         info["compiler"] = output(compiler, "--version").splitlines()[0]
         info["target"] = "aarch64-none-elf"
@@ -264,6 +272,8 @@ def main():
     parser.add_argument("--cargo-home", type=Path)
     parser.add_argument("--dev", type=Path)
     parser.add_argument("--devkitpro", type=Path, default=Path(os.environ.get("DEVKITPRO", "/opt/devkitpro")))
+    parser.add_argument("--devkit", metavar="VERSION",
+                        help="the public ounce-devkit version in --devkitpro, instead of the pinned SDK")
     build(parser.parse_args())
 
 
