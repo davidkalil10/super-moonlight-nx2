@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import platform
+import re
 import subprocess
 
 
@@ -122,6 +123,15 @@ def installed_sdk(path, devkit=None):
         raise ValueError(f"Expected the pinned SDK {SDK}")
     return {"version": version,
             "files": {name: hashlib.sha256(data).hexdigest() for name, data in files.items()}}
+
+
+def release_error(version):
+    """Why hbmenu cannot show VERSION as a release, or None."""
+    if not re.fullmatch(r"\d+\.\d+\.\d+(-[a-z0-9.]+)?", version):
+        return "--release takes a version like 1.0.0 or 1.0.0-test1"
+    if len(version) > 15:
+        return "--release is at most 15 characters, the NACP limit"
+    return None
 
 
 def remap_paths(prefixes):

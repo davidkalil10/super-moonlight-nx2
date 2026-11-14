@@ -7,10 +7,12 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+import time
 import urllib.error
 import urllib.request
+import zipfile
 
-from build import APP, BUILDS, digest, git, utc_stamp, write_json
+from build import APP, BUILDS, digest, git, release_error, utc_stamp, write_json
 
 
 RELEASES = "https://github.com/ouncebrew/ounce-devkit/releases"
@@ -75,11 +77,31 @@ def install_rust():
     os.environ["RUSTUP_TOOLCHAIN"] = TOOLCHAIN
 
 
+def package(directory, nro, version):
+    """moonlight-nx2-VERSION.zip with the NRO and the release notes, and its .sha256."""
+    notes = APP / "CHANGELOG.md"
+    if not notes.read_text().startswith(f"# moonlight-nx2 {version}\n"):
+        raise ValueError(f"CHANGELOG.md does not start with the notes of {version}")
+    stamp = time.gmtime(int(git("log", "-1", "--format=%ct")))[:6]
+    archive = directory / f"moonlight-nx2-{version}.zip"
+    with zipfile.ZipFile(archive, "w") as bundle:
+        for path in (nro, notes, APP / "FEATURES.md"):
+            entry = zipfile.ZipInfo(path.name, stamp)
+            entry.compress_type = zipfile.ZIP_DEFLATED
+            entry.create_system = 3
+            entry.external_attr = 0o644 << 16
+            bundle.writestr(entry, path.read_bytes(), compresslevel=9)
+    (directory / f"{archive.name}.sha256").write_text(f"{digest(archive)}  {archive.name}\n")
+    return archive
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Build the production NRO against the public ounce-devkit")
     parser.add_argument("--devkit", default=DEVKIT,
                         help=f"the devkit version, or latest; {DEVKIT} by default")
+    parser.add_argument("--release", metavar="VERSION",
+                        help="the release build, shown in hbmenu as VERSION, and its zip")
     parser.add_argument("--newer-only", action="store_true",
                         help="build only when the devkit is not the pinned one")
     parser.add_argument("--directory", type=Path,
@@ -89,6 +111,8 @@ def main():
     parser.add_argument("--devkitpro", type=Path,
                         default=Path(os.environ.get("DEVKITPRO", "/opt/devkitpro")))
     args = parser.parse_args()
+    if args.release and release_error(args.release):
+        parser.error(release_error(args.release))
 
     version = latest_devkit() if args.devkit == "latest" else args.devkit
     if args.newer_only and version == DEVKIT:
@@ -99,7 +123,8 @@ def main():
     install_rust()
 
     revision = git("rev-parse", "HEAD")
-    directory = args.directory or BUILDS / f"{utc_stamp()}-{revision[:7]}-devkit-{version}"
+    name = f"release-{args.release}" if args.release else f"devkit-{version}"
+    directory = args.directory or BUILDS / f"{utc_stamp()}-{revision[:7]}-{name}"
     branch = os.environ.get("CI_COMMIT_REF_NAME") or git("branch", "--show-current") or "detached"
     what = ["--revision", revision, "--branch", branch]
     build = [sys.executable, "-B", str(APP / "src/rust/build.py")]
@@ -108,11 +133,11 @@ def main():
     directory.mkdir(parents=True, exist_ok=False)
     subprocess.run([*build, "rust", "--directory", rust, *what], check=True)
     subprocess.run([*build, "nro", "--directory", nro, "--rust-directory", rust, *what,
-                    "--nacp-version", f"ci-{revision[:8]}",
+                    "--nacp-version", args.release or f"ci-{revision[:8]}",
                     "--devkitpro", args.devkitpro, "--devkit", version], check=True)
 
     artifact = nro / "moonlight-nx2.nro"
-    write_json(directory / "BUILD-RESULT.json", {
+    result = {
         "revision": revision,
         "devkit": version,
         "devkit_sha256": archive_sha256,
@@ -120,7 +145,12 @@ def main():
         "bytes": artifact.stat().st_size,
         "sha256": digest(artifact),
         "build_info": "nro/BUILD-INFO.json",
-    })
+    }
+    if args.release:
+        bundle = package(directory, artifact, args.release)
+        result["release"] = {"version": args.release, "zip": bundle.name, "sha256": digest(bundle)}
+        print(bundle)
+    write_json(directory / "BUILD-RESULT.json", result)
 
 
 if __name__ == "__main__":

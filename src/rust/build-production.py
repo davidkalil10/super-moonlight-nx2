@@ -8,7 +8,7 @@ import re
 import shlex
 import subprocess
 
-from build import BUILDS, SDK_DIAGNOSTICS, TRIALS, digest, git, utc_stamp, write_json
+from build import BUILDS, SDK_DIAGNOSTICS, TRIALS, digest, git, release_error, utc_stamp, write_json
 
 
 APP = Path(__file__).resolve().parents[2]
@@ -63,10 +63,8 @@ def main():
     if args.release and (args.ui_pattern or args.decode120 or args.tcp_video
                          or args.diagnostic):
         parser.error("--release goes alone")
-    if args.release and not re.fullmatch(r"\d+\.\d+\.\d+(-[a-z0-9.]+)?", args.release):
-        parser.error("--release takes a version like 1.0.0 or 1.0.0-test1")
-    if args.release and len(args.release) > 15:
-        parser.error("--release is at most 15 characters, the NACP limit")
+    if args.release and release_error(args.release):
+        parser.error(release_error(args.release))
     if args.ui_uncached and not args.ui_pattern:
         parser.error("--ui-uncached goes with --ui-pattern")
     if args.ui_pattern and (args.decode120 or args.tcp_video or args.diagnostic):
