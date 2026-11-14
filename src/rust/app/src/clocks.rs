@@ -13,9 +13,11 @@ pub const BEHIND_SECONDS: u32 = 3;
 /// A second falls behind when it presents fewer than this share of the stream rate, in
 /// percent, while the PC is sending.
 pub const PRESENTED_PERCENT: u64 = 95;
-/// Or when more than one frame in this many was dropped, replaced, lost on the way in or
-/// missed its wake.
+/// Or when more than one frame in this many was dropped, replaced or missed its wake on the
+/// console.
 pub const LOST_ONE_IN: u64 = 30;
+/// Seconds after the link lost frames that the keyframe it asked for is still being caught up.
+pub const RECOVERY_SECONDS: u32 = 2;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Mode {
@@ -140,14 +142,20 @@ impl Signals {
     }
 
     /// One second of a stream at `fps` that fell behind. Held-back frames and decoder
-    /// refusals are normal at high rates and do not count; a PC that sends little and loses
-    /// nothing is idle, not behind.
-    pub fn behind(self, fps: u32) -> bool {
+    /// refusals are normal at high rates and do not count, and a PC that sends little is
+    /// idle. Clocks can't help a lossy link: while the link loses frames and recovers, only
+    /// a full second of arrivals that was not shown counts, not the drops and late wakes of
+    /// the keyframe it asked for.
+    pub fn behind(self, fps: u32, recovering: bool) -> bool {
         let fps = u64::from(fps.max(1));
-        let lost = self.dropped + self.link_lost + self.wake_misses;
-        let idle = self.arrived * 2 < fps && self.link_lost == 0;
-        let short = self.presented * 100 < fps * PRESENTED_PERCENT && !idle;
-        short || lost * LOST_ONE_IN > fps
+        let full = self.arrived * 100 >= fps * PRESENTED_PERCENT;
+        let short = self.presented * 100 < fps * PRESENTED_PERCENT;
+        if recovering {
+            return full && short;
+        }
+        let idle = self.arrived * 2 < fps;
+        let lost = self.dropped + self.wake_misses;
+        (short && !idle) || lost * LOST_ONE_IN > fps
     }
 }
 
@@ -157,6 +165,7 @@ pub struct Governor {
     last: Option<Signals>,
     behind: u32,
     window: Signals,
+    since_loss: Option<u32>,
 }
 
 impl Governor {
@@ -165,7 +174,15 @@ impl Governor {
     pub fn second(&mut self, totals: Signals, fps: u32) -> Option<Signals> {
         let last = self.last.replace(totals)?;
         let second = totals.since(last);
-        if second.behind(fps) {
+        self.since_loss = if second.link_lost > 0 {
+            Some(0)
+        } else {
+            self.since_loss.map(|seconds| seconds + 1)
+        };
+        let recovering = self
+            .since_loss
+            .is_some_and(|seconds| seconds <= RECOVERY_SECONDS);
+        if second.behind(fps, recovering) {
             self.behind += 1;
             self.window = self.window.add(second);
         } else {
