@@ -52,7 +52,7 @@ pub struct Stats {
     pub kept: u64,
     /// Units the decoder had no room for, offered again later.
     pub refused: u64,
-    /// Units over `decoder::INPUT_MAX`, dropped until the next keyframe.
+    /// Units over the decoder's `input_max`, dropped until the next keyframe.
     pub oversize: u64,
     pub presented: u64,
 }
@@ -407,13 +407,14 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
         if decision == Decision::Skip {
             return Ok(());
         }
-        if bytes.len() > decoder::INPUT_MAX {
+        let input_max = self.decoder.input_max();
+        if bytes.len() > input_max {
             self.stats.oversize += 1;
             platform::log(&format!(
                 "video: dropped unit {} of {} bytes over the decoder's {}",
                 header.sequence,
                 bytes.len(),
-                decoder::INPUT_MAX
+                input_max
             ));
             self.recovery.lose(submitted_ns / 1_000_000);
             self.forward_idr_request();

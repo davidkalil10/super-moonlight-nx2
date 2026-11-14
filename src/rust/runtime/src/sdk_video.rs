@@ -14,7 +14,7 @@ use alloc::format;
 use moonlight_nx2_core::{
     annexb,
     codec::{Capabilities, Codec, Depth, Evidence, Mode, Size},
-    decoder::{Backend, BackendError, Config, HostImage, INPUT_MAX, SURFACES, UNITS},
+    decoder::{self, Backend, BackendError, Config, HostImage, SURFACES, UNITS},
     stats::DecoderQueue,
     viddec,
     video_wire::Output,
@@ -376,17 +376,18 @@ impl SdkVideo {
         let start_ns = unsafe { sdk::moonlightNowNs() };
         let took_ms = || (unsafe { sdk::moonlightNowNs() } - start_ns) / 1_000_000;
         if self.high_level() {
+            let input_max = decoder::input_max(config.display);
             let result = unsafe {
                 moonlightSdkDecoderStart(
                     session.codec,
                     session.frame_rate,
                     codec_config.as_ptr(),
                     bytes,
-                    INPUT_MAX as u64,
+                    input_max as u64,
                 )
             };
             log(&format!(
-                "sdk-decoder: start codec={:?} result=0x{result:x} codec_config_bytes={bytes} fps={} stream_fps={} max_input={INPUT_MAX} took_ms={}",
+                "sdk-decoder: start codec={:?} result=0x{result:x} codec_config_bytes={bytes} fps={} stream_fps={} max_input={input_max} took_ms={}",
                 config.codec,
                 session.frame_rate,
                 self.fps,

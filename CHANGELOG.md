@@ -3,7 +3,7 @@
 Changes since 1.0.0. Needs kaiHEN release `20261114c` or later.
 
 ## Streaming
-- Fixes 4K streams stopping for a moment after a big scene change, when the PC sent a frame larger than the decoder took. Frames up to 4 MiB now decode; a larger one is skipped and the PC sends a fresh keyframe.
+- Fixes 4K streams stopping for a moment after a big scene change, when the PC sent a frame larger than the decoder took. At 4K, frames up to 4 MiB now decode; a larger one is skipped and the PC sends a fresh keyframe.
 
 ## Builds
 - Release builds no longer contain paths from the build machine.

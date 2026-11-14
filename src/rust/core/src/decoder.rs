@@ -15,8 +15,19 @@ pub const SURFACES: usize = 2;
 pub const FRAMES: usize = 2;
 /// The most units a backend takes before the oldest one's frame is taken; see `Backend::units`.
 pub const UNITS: usize = 3;
-/// The largest unit the decoder takes. Big scene changes at 4K reach past 1 MiB.
+/// The largest unit any decoder takes; see `input_max`.
 pub const INPUT_MAX: usize = 4 << 20;
+const INPUT_MAX_BELOW_2160P: usize = 1 << 20;
+
+/// The largest unit a decoder for `display` takes. Big scene changes at 4K reach past 1 MiB,
+/// but the SDK decoder fails its first frame at 1080p (0xfa66f) when told 4 MiB.
+pub fn input_max(display: Size) -> usize {
+    if display.height() >= 2160 {
+        INPUT_MAX
+    } else {
+        INPUT_MAX_BELOW_2160P
+    }
+}
 static NEXT_OWNER: AtomicU64 = AtomicU64::new(1);
 
 /// Rows or columns a decoder may pad its pictures with beyond the stream's size.
@@ -360,8 +371,8 @@ impl<'a, B: Backend<N>, const N: usize> Decoder<'a, B, N> {
         if bytes.is_empty() {
             return Err(self.invalid("empty unit"));
         }
-        if bytes.len() > INPUT_MAX {
-            return Err(self.invalid("unit over INPUT_MAX"));
+        if bytes.len() > self.input_max() {
+            return Err(self.invalid("unit over input_max"));
         }
         if pts_us.checked_mul(1000).is_none() {
             return Err(self.invalid("timestamp range"));
@@ -416,6 +427,11 @@ impl<'a, B: Backend<N>, const N: usize> Decoder<'a, B, N> {
             self.arrived[index] = Some(output);
         }
         Err(self.fail(BackendError::Malformed))
+    }
+
+    /// The largest unit this decoder takes, from its display size.
+    pub fn input_max(&self) -> usize {
+        input_max(self.config.display)
     }
 
     fn invalid(&mut self, reason: &'static str) -> Error {
