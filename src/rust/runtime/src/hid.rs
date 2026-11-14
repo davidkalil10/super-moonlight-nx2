@@ -451,7 +451,10 @@ pub mod software_keyboard {
                 0 => Poll::Idle,
                 1 => Poll::Up,
                 2 => {
-                    let length = text.iter().position(|&byte| byte == 0).unwrap_or(text.len());
+                    let length = text
+                        .iter()
+                        .position(|&byte| byte == 0)
+                        .unwrap_or(text.len());
                     match core::str::from_utf8(&text[..length]) {
                         Ok(text) => Poll::Typed(String::from(text)),
                         Err(_) => Poll::Closed(result),
@@ -480,26 +483,91 @@ pub mod software_keyboard {
     }
 }
 
-/// The USB mouse and keyboard, for the direct input path.
+/// The USB mouse, player 1's Joy-Con mouse and the USB keyboard, for the direct input path.
 #[cfg(target_os = "none")]
 pub mod pointer {
+    extern crate alloc;
+
+    use core::sync::atomic::{AtomicU8, AtomicU64, Ordering};
     use moonlight_nx2_app::pointer::{KeyboardSample, MouseSample};
+    use moonlight_nx2_ui::settings::MouseSide;
 
     unsafe extern "C" {
         fn moonlightPlatformMouse(out: *mut i32) -> bool;
+        fn moonlightPlatformJoyMouse(side: i32, out: *mut i32) -> bool;
+        fn moonlightPlatformJoyMouseStop();
         fn moonlightPlatformKeyboard(out: *mut u64) -> bool;
     }
 
-    pub fn mouse() -> Option<MouseSample> {
-        let mut out = [0i32; 6];
-        unsafe { moonlightPlatformMouse(out.as_mut_ptr()) }.then_some(MouseSample {
+    static SIDE: AtomicU8 = AtomicU8::new(0);
+    /// The last open result and found state logged, so only changes are logged.
+    static LOGGED: AtomicU64 = AtomicU64::new(u64::MAX);
+
+    /// Which Joy-Con is the mouse from now on; Off also gives the pads back at once.
+    pub fn set_joycon_mouse(side: MouseSide) {
+        let side = match side {
+            MouseSide::Off => 0,
+            MouseSide::Right => 1,
+            MouseSide::Left => 2,
+        };
+        if SIDE.swap(side, Ordering::Relaxed) != 0 && side == 0 {
+            let mut out = [0i32; 8];
+            unsafe { moonlightPlatformJoyMouse(0, out.as_mut_ptr()) };
+        }
+    }
+
+    pub fn stop() {
+        SIDE.store(0, Ordering::Relaxed);
+        unsafe { moonlightPlatformJoyMouseStop() };
+    }
+
+    fn sample(out: &[i32]) -> MouseSample {
+        MouseSample {
             dx: out[0],
             dy: out[1],
             wheel_x: out[2],
             wheel_y: out[3],
             buttons: out[4] as u32,
             connected: out[5] != 0,
-        })
+        }
+    }
+
+    fn joycon() -> Option<MouseSample> {
+        let side = SIDE.load(Ordering::Relaxed);
+        if side == 0 {
+            return None;
+        }
+        let mut out = [0i32; 8];
+        let read = unsafe { moonlightPlatformJoyMouse(i32::from(side), out.as_mut_ptr()) };
+        let state =
+            (u64::from(side) << 40) | (u64::from(out[7] as u32) << 32) | u64::from(out[6] as u32);
+        if LOGGED.swap(state, Ordering::Relaxed) != state {
+            crate::device::log(&alloc::format!(
+                "input: joycon mouse side={} open=0x{:x} found={}",
+                if side == 1 { "right" } else { "left" },
+                out[6],
+                out[7] != 0
+            ));
+        }
+        read.then(|| sample(&out))
+    }
+
+    /// The USB mouse and the Joy-Con mouse together: their movement adds up and either
+    /// one's buttons hold.
+    pub fn mouse() -> Option<MouseSample> {
+        let mut out = [0i32; 6];
+        let usb = unsafe { moonlightPlatformMouse(out.as_mut_ptr()) }.then(|| sample(&out));
+        match (usb, joycon()) {
+            (Some(usb), Some(joy)) => Some(MouseSample {
+                dx: usb.dx + joy.dx,
+                dy: usb.dy + joy.dy,
+                wheel_x: usb.wheel_x + joy.wheel_x,
+                wheel_y: usb.wheel_y + joy.wheel_y,
+                buttons: usb.buttons | joy.buttons,
+                connected: usb.connected || joy.connected,
+            }),
+            (usb, joy) => usb.or(joy),
+        }
     }
 
     pub fn keyboard() -> Option<KeyboardSample> {
@@ -514,6 +582,11 @@ pub mod pointer {
 #[cfg(not(target_os = "none"))]
 pub mod pointer {
     use moonlight_nx2_app::pointer::{KeyboardSample, MouseSample};
+    use moonlight_nx2_ui::settings::MouseSide;
+
+    pub fn set_joycon_mouse(_side: MouseSide) {}
+
+    pub fn stop() {}
 
     pub fn mouse() -> Option<MouseSample> {
         None

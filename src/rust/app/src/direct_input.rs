@@ -57,6 +57,8 @@ pub struct Counters {
     pub pads: u16,
     pub touches: u32,
     pub mouse_touches: u32,
+    /// Mouse samples that moved the pointer: the USB mouse or the Joy-Con mouse.
+    pub mouse_moves: u32,
     pub sent: u32,
     pub send_errors: u32,
 }
@@ -143,7 +145,8 @@ impl DirectInput {
                 .map_err(|_| Error::Invalid)?;
         }
         if !touches.is_empty() {
-            let mouse = record.mouse == Some(true) || self.session.features() & FEATURE_PEN_TOUCH == 0;
+            let mouse =
+                record.mouse == Some(true) || self.session.features() & FEATURE_PEN_TOUCH == 0;
             self.counters.touches += touches.len() as u32;
             self.counters.mouse_touches += if mouse { touches.len() as u32 } else { 0 };
             self.session
@@ -189,8 +192,11 @@ impl DirectInput {
         sendable
     }
 
-    /// The USB mouse since the last sample; changes only.
+    /// The USB and Joy-Con mouse since the last sample; changes only.
     pub fn mouse(&mut self, sample: &MouseSample) {
+        if sample.connected && (sample.dx != 0 || sample.dy != 0) {
+            self.counters.mouse_moves += 1;
+        }
         self.pointer.mouse(sample, &mut self.session);
     }
 
@@ -215,7 +221,10 @@ impl DirectInput {
 
     /// The counters since the last call, and the packets still waiting.
     pub fn take_counters(&mut self) -> (Counters, usize) {
-        (core::mem::take(&mut self.counters), self.session.pending().len())
+        (
+            core::mem::take(&mut self.counters),
+            self.session.pending().len(),
+        )
     }
 
     pub fn session(&self) -> &Session {

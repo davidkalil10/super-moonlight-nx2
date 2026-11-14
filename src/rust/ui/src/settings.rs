@@ -33,10 +33,11 @@ pub enum Setting {
     RumbleOn,
     Rumble,
     ButtonLayout,
+    JoyConMouse,
 }
 
 impl Setting {
-    pub const COUNT: usize = 15;
+    pub const COUNT: usize = 16;
     pub const ALL: [Setting; Self::COUNT] = [
         Setting::Size,
         Setting::Fps,
@@ -53,6 +54,7 @@ impl Setting {
         Setting::RumbleOn,
         Setting::Rumble,
         Setting::ButtonLayout,
+        Setting::JoyConMouse,
     ];
 
     pub fn from_index(index: usize) -> Option<Self> {
@@ -77,7 +79,8 @@ impl Setting {
             | Self::TouchMouse
             | Self::RumbleOn
             | Self::Rumble
-            | Self::ButtonLayout => 2,
+            | Self::ButtonLayout
+            | Self::JoyConMouse => 2,
             Self::QuitOnReturn | Self::StreamInfo | Self::FrameCounter | Self::Theme => 3,
         }
     }
@@ -102,6 +105,9 @@ impl Setting {
             Self::ButtonLayout => {
                 "Xbox sends each button as the one in the same place, Nintendo by its label"
             }
+            Self::JoyConMouse => {
+                "Player 1's Joy-Con on a table moves the mouse; its shoulder buttons click"
+            }
         }
     }
 
@@ -116,6 +122,15 @@ pub enum ButtonLayout {
     #[default]
     Xbox,
     Nintendo,
+}
+
+/// Which of player 1's Joy-Con is the PC mouse, read from its optical sensor.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum MouseSide {
+    #[default]
+    Off,
+    Right,
+    Left,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -258,6 +273,7 @@ enum RowKind {
     Theme,
     Percent,
     Layout,
+    Side,
 }
 
 struct Row {
@@ -313,12 +329,18 @@ const ROWS: [Row; Setting::COUNT] = [
     row("rumbleOn", "Rumble", RowKind::Toggle, 2, 1),
     row("rumble", "Rumble strength", RowKind::Percent, 5, 4),
     row("buttons", "Button layout", RowKind::Layout, 2, 0),
+    row("joyconMouse", "Joy-Con mouse", RowKind::Side, 3, 0),
 ];
 
 const STRENGTHS: [u32; 5] = [0, 25, 50, 75, 100];
 const LAYOUTS: [(ButtonLayout, &str, &str); 2] = [
     (ButtonLayout::Xbox, "position", "Xbox"),
     (ButtonLayout::Nintendo, "labels", "Nintendo"),
+];
+const SIDES: [(MouseSide, &str, &str); 3] = [
+    (MouseSide::Off, "off", "Off"),
+    (MouseSide::Right, "right", "Right"),
+    (MouseSide::Left, "left", "Left"),
 ];
 
 fn bitrate_mbps(index: u8) -> f64 {
@@ -376,6 +398,7 @@ pub struct StreamOptions {
     /// Touches drive the PC mouse instead of touch input.
     pub touch_mouse: bool,
     pub button_layout: ButtonLayout,
+    pub joycon_mouse: MouseSide,
     pub launchable: bool,
     /// The size was left to the dock state and the network test (Resolution: Automatic).
     pub size_auto: bool,
@@ -533,6 +556,10 @@ impl Settings {
 
     pub fn button_layout(&self) -> ButtonLayout {
         LAYOUTS[self.value[Setting::ButtonLayout as usize] as usize].0
+    }
+
+    pub fn joycon_mouse(&self) -> MouseSide {
+        SIDES[self.value[Setting::JoyConMouse as usize] as usize].0
     }
 
     pub fn theme(&self) -> Preference {
@@ -878,6 +905,7 @@ impl Settings {
                 RowKind::Theme => write!(out, "\"{}\"", Preference::from_index(value).saved()),
                 RowKind::Percent => write!(out, "{}", STRENGTHS[value as usize]),
                 RowKind::Layout => write!(out, "\"{}\"", LAYOUTS[value as usize].1),
+                RowKind::Side => write!(out, "\"{}\"", SIDES[value as usize].1),
             };
         }
         if self.fps_before_4k != 0 {
@@ -954,6 +982,7 @@ impl Settings {
             frame_counter: used.on(Setting::FrameCounter),
             touch_mouse: used.on(Setting::TouchMouse),
             button_layout: used.button_layout(),
+            joycon_mouse: used.joycon_mouse(),
             launchable: caps.codec(codec),
             size_auto: self.size_auto(),
         }
@@ -1007,6 +1036,10 @@ fn match_value(value: Value<'_>, row: &Row) -> Option<u8> {
             .iter()
             .position(|&(_, saved, _)| value.string_is(saved))
             .map(|i| i as u8),
+        RowKind::Side => SIDES
+            .iter()
+            .position(|&(_, saved, _)| value.string_is(saved))
+            .map(|i| i as u8),
     }
 }
 
@@ -1054,6 +1087,7 @@ impl core::fmt::Display for ValueText<'_> {
             RowKind::Theme => f.write_str(Preference::from_index(value).label()),
             RowKind::Percent => write!(f, "{} %", STRENGTHS[value as usize]),
             RowKind::Layout => f.write_str(LAYOUTS[value as usize].2),
+            RowKind::Side => f.write_str(SIDES[value as usize].2),
         }
     }
 }

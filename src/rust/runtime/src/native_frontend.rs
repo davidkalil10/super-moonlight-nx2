@@ -281,6 +281,11 @@ fn execute(
             app.client.event(&Event::AppGone);
         }
         turns.lap(Phase::Input);
+        crate::hid::pointer::set_joycon_mouse(if app.screen() == Screen::Streaming {
+            app.client.bridge.model().stream_settings().joycon_mouse()
+        } else {
+            moonlight_nx2_ui::settings::MouseSide::Off
+        });
         let frame = match renderer
             .storage_mut()
             .ok()
@@ -488,13 +493,14 @@ fn execute(
             stream.report();
             if let Some((counters, waiting)) = app.take_input_counters() {
                 log(&format!(
-                    "input: direct records={} rejected={} pad_changes={} pads={:#x} touches={} as_mouse={} sent={} waiting={waiting} send_errors={}",
+                    "input: direct records={} rejected={} pad_changes={} pads={:#x} touches={} as_mouse={} mouse_moves={} sent={} waiting={waiting} send_errors={}",
                     counters.records,
                     counters.rejected,
                     counters.pad_changes,
                     counters.pads,
                     counters.touches,
                     counters.mouse_touches,
+                    counters.mouse_moves,
                     counters.sent,
                     counters.send_errors
                 ));
@@ -505,6 +511,7 @@ fn execute(
         turns.end();
     }
     stream.close(&mut app.client, renderer);
+    crate::hid::pointer::stop();
     system.stop();
     let changed = *app.client.bridge.model().settings() != original;
     let final_settings = *app.client.bridge.model().settings();

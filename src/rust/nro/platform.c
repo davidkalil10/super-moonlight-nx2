@@ -265,10 +265,32 @@ static bool read_motion(int index, HidNpadIdType id, int32_t out[6])
     return true;
 }
 
-static void write_pad(uint8_t *slot, PadState *pad)
+/* Player 1's Joy-Con that is the PC mouse: 0 none, 1 right, 2 left. Its shoulder buttons and
+   stick leave the pad while it is. */
+static int joy_mouse_side;
+
+static void mask_joy_mouse(int source, PadState *pad, uint64_t *buttons, HidAnalogStickState sticks[2])
+{
+    static const uint64_t taken[3] = {
+        0,
+        HidNpadButton_R | HidNpadButton_ZR | HidNpadButton_StickR | HidNpadButton_StickRLeft |
+            HidNpadButton_StickRUp | HidNpadButton_StickRRight | HidNpadButton_StickRDown,
+        HidNpadButton_L | HidNpadButton_ZL | HidNpadButton_StickL | HidNpadButton_StickLLeft |
+            HidNpadButton_StickLUp | HidNpadButton_StickLRight | HidNpadButton_StickLDown,
+    };
+    uint32_t style = padGetStyleSet(pad);
+    if (!joy_mouse_side || source > 1 ||
+        !(style & (HidNpadStyleTag_NpadJoyDual | HidNpadStyleTag_NpadHandheld)))
+        return;
+    *buttons &= ~taken[joy_mouse_side];
+    sticks[joy_mouse_side == 1 ? 1 : 0] = (HidAnalogStickState){0};
+}
+
+static void write_pad(uint8_t *slot, int source, PadState *pad)
 {
     uint64_t buttons = padGetButtons(pad);
     HidAnalogStickState sticks[2] = {padGetStickPos(pad, 0), padGetStickPos(pad, 1)};
+    mask_joy_mouse(source, pad, &buttons, sticks);
     int32_t axes[4] = {sticks[0].x, sticks[0].y, sticks[1].x, sticks[1].y};
     uint32_t attributes = padIsConnected(pad) ? 1 : 0;
     memset(slot, 0, SLOT_BYTES);
@@ -295,7 +317,7 @@ static void read_sources(uint8_t *sources)
     for (int source = 0; source < SOURCES; source++) {
         uint8_t *slot = sources + source * SOURCE_BYTES;
         padUpdate(&pads[source]);
-        write_pad(slot, &pads[source]);
+        write_pad(slot, source, &pads[source]);
         write_motion(slot + SLOT_BYTES, source, source_id(source), padIsConnected(&pads[source]));
     }
 }
@@ -514,6 +536,98 @@ bool moonlightPlatformMouse(int32_t out[6])
     }
     mouse_seen = newest;
     return count > 0;
+}
+
+static struct {
+    bool tried;
+    Result opened;
+    uint64_t seen;
+    HidNmouseHandle handle;
+    bool found;
+} joy_mouse;
+
+static Result joy_mouse_open(void)
+{
+    if (joy_mouse.tried)
+        return joy_mouse.opened;
+    joy_mouse.tried = true;
+    joy_mouse.opened = hidInitializeNmouse(NULL, 0, 1920, 1080, HidNmousePointerType_Default);
+    if (R_FAILED(joy_mouse.opened))
+        return joy_mouse.opened;
+    const HidNmouseButtonConfigJoyRightJcms right = {{1, 2, 0, 0, 0, 0, 3, 0}};
+    const HidNmouseButtonConfigJoyLeftJcms left = {{1, 2, 0, 0, 0, 0, 3, 0}};
+    Result config = hidSetNmouseButtonConfigJoyRightJcms(&right);
+    return R_SUCCEEDED(config) ? hidSetNmouseButtonConfigJoyLeftJcms(&left) : config;
+}
+
+/* Player 1's Joy-Con on side 1 (right) or 2 (left), detached or in handheld mode. */
+static bool joy_mouse_handle(int side, HidNmouseHandle *out)
+{
+    const HidNpadIdType ids[2] = {HidNpadIdType_No1, HidNpadIdType_Handheld};
+    const u32 type = side == 1 ? HidNmouseType_JoyRight : HidNmouseType_JoyLeft;
+    for (int i = 0; i < 2; i++) {
+        HidNmouseHandle handles[HID_NMOUSE_HANDLES_PER_NPAD];
+        s32 total = 0;
+        if (R_FAILED(hidGetNmouseHandles(handles, HID_NMOUSE_HANDLES_PER_NPAD, ids[i], &total)))
+            continue;
+        for (s32 j = 0; j < total; j++) {
+            u32 types = 0;
+            if (R_SUCCEEDED(hidGetNmouseTypeSet(handles[j], &types)) && (types & type)) {
+                *out = handles[j];
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+/*
+ * The Joy-Con mouse since the last call, laid out as moonlightPlatformMouse. out[6] is the open
+ * result, out[7] whether the Joy-Con was found. Side 0 leaves the pads whole.
+ */
+bool moonlightPlatformJoyMouse(int32_t side, int32_t out[8])
+{
+    memset(out, 0, 8 * sizeof(int32_t));
+    joy_mouse_side = 0;
+    if (side != 1 && side != 2)
+        return false;
+    out[6] = (int32_t)joy_mouse_open();
+    if (R_FAILED(joy_mouse.opened))
+        return false;
+    HidNmouseHandle handle;
+    bool found = joy_mouse_handle(side, &handle);
+    out[7] = found;
+    if (!found) {
+        joy_mouse.found = false;
+        return false;
+    }
+    joy_mouse_side = side;
+    bool fresh = !joy_mouse.found || joy_mouse.handle.handle != handle.handle;
+    joy_mouse.found = true;
+    joy_mouse.handle = handle;
+    HidNmouseStateWithDelta states[16];
+    size_t count = 0;
+    if (R_FAILED(hidGetNmouseStatesWithDelta(handle, states, 16, &count)) || count == 0)
+        return true;
+    out[4] = (int32_t)states[0].buttons;
+    out[5] = 1;
+    if (!fresh) {
+        for (size_t i = 0; i < count && states[i].sampling_number > joy_mouse.seen; i++) {
+            out[0] += states[i].delta_x;
+            out[1] += states[i].delta_y;
+            out[3] += states[i].wheel_delta_y;
+        }
+    }
+    joy_mouse.seen = states[0].sampling_number;
+    return true;
+}
+
+void moonlightPlatformJoyMouseStop(void)
+{
+    joy_mouse_side = 0;
+    if (joy_mouse.tried && R_SUCCEEDED(joy_mouse.opened))
+        hidFinalizeNmouse();
+    memset(&joy_mouse, 0, sizeof(joy_mouse));
 }
 
 bool moonlightPlatformKeyboard(uint64_t out[5])
