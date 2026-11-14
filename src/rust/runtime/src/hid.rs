@@ -488,8 +488,8 @@ pub mod software_keyboard {
 pub mod pointer {
     extern crate alloc;
 
-    use core::sync::atomic::{AtomicU8, AtomicU64, Ordering};
-    use moonlight_nx2_app::pointer::{KeyboardSample, MouseSample};
+    use core::sync::atomic::{AtomicI32, AtomicU8, AtomicU32, AtomicU64, Ordering};
+    use moonlight_nx2_app::pointer::{self as motion, KeyboardSample, MouseSample};
     use moonlight_nx2_ui::settings::MouseSide;
 
     unsafe extern "C" {
@@ -500,11 +500,18 @@ pub mod pointer {
     }
 
     static SIDE: AtomicU8 = AtomicU8::new(0);
+    static SENSITIVITY: AtomicU32 = AtomicU32::new(100);
+    /// The hundredths of a count each axis carries to the next sample.
+    static REMAINDER: [AtomicI32; 2] = [AtomicI32::new(0), AtomicI32::new(0)];
     /// The last open result and found state logged, so only changes are logged.
     static LOGGED: AtomicU64 = AtomicU64::new(u64::MAX);
 
-    /// Which Joy-Con is the mouse from now on; Off also gives the pads back at once.
-    pub fn set_joycon_mouse(side: MouseSide) {
+    /// Which Joy-Con is the mouse from now on, and its sensitivity in percent; Off also gives
+    /// the pads back at once.
+    pub fn set_joycon_mouse(side: MouseSide, sensitivity: u32) {
+        if SENSITIVITY.swap(sensitivity, Ordering::Relaxed) != sensitivity {
+            REMAINDER.iter().for_each(|r| r.store(0, Ordering::Relaxed));
+        }
         let side = match side {
             MouseSide::Off => 0,
             MouseSide::Right => 1,
@@ -549,7 +556,23 @@ pub mod pointer {
                 out[7] != 0
             ));
         }
-        read.then(|| sample(&out))
+        read.then(|| {
+            let mut joy = sample(&out);
+            let percent = SENSITIVITY.load(Ordering::Relaxed);
+            let axis = |delta, slot: &AtomicI32| {
+                let mut remainder = slot.load(Ordering::Relaxed);
+                let moved = motion::scale(delta, percent, &mut remainder);
+                slot.store(remainder, Ordering::Relaxed);
+                moved
+            };
+            joy.dx = axis(joy.dx, &REMAINDER[0]);
+            joy.dy = axis(joy.dy, &REMAINDER[1]);
+            joy
+        })
+    }
+
+    pub fn sensitivity() -> u32 {
+        SENSITIVITY.load(Ordering::Relaxed)
     }
 
     /// The USB mouse and the Joy-Con mouse together: their movement adds up and either
@@ -584,7 +607,11 @@ pub mod pointer {
     use moonlight_nx2_app::pointer::{KeyboardSample, MouseSample};
     use moonlight_nx2_ui::settings::MouseSide;
 
-    pub fn set_joycon_mouse(_side: MouseSide) {}
+    pub fn set_joycon_mouse(_side: MouseSide, _sensitivity: u32) {}
+
+    pub fn sensitivity() -> u32 {
+        100
+    }
 
     pub fn stop() {}
 

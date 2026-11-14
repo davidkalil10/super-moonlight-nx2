@@ -988,6 +988,7 @@ impl Builder<'_> {
         let shown: Vec<&SettingRow> = rows
             .iter()
             .filter(|row| row.setting.category() == model.category())
+            .filter(|row| model.settings().shown(row.setting))
             .collect();
         self.frame(
             model,

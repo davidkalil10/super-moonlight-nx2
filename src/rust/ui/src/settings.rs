@@ -34,10 +34,11 @@ pub enum Setting {
     Rumble,
     ButtonLayout,
     JoyConMouse,
+    MouseSensitivity,
 }
 
 impl Setting {
-    pub const COUNT: usize = 16;
+    pub const COUNT: usize = 17;
     pub const ALL: [Setting; Self::COUNT] = [
         Setting::Size,
         Setting::Fps,
@@ -55,6 +56,7 @@ impl Setting {
         Setting::Rumble,
         Setting::ButtonLayout,
         Setting::JoyConMouse,
+        Setting::MouseSensitivity,
     ];
 
     pub fn from_index(index: usize) -> Option<Self> {
@@ -80,7 +82,8 @@ impl Setting {
             | Self::RumbleOn
             | Self::Rumble
             | Self::ButtonLayout
-            | Self::JoyConMouse => 2,
+            | Self::JoyConMouse
+            | Self::MouseSensitivity => 2,
             Self::QuitOnReturn | Self::StreamInfo | Self::FrameCounter | Self::Theme => 3,
         }
     }
@@ -108,6 +111,7 @@ impl Setting {
             Self::JoyConMouse => {
                 "Player 1's Joy-Con on a table moves the mouse; its shoulder buttons click"
             }
+            Self::MouseSensitivity => "How far the pointer moves for each move of the Joy-Con",
         }
     }
 
@@ -274,6 +278,7 @@ enum RowKind {
     Percent,
     Layout,
     Side,
+    Sensitivity,
 }
 
 struct Row {
@@ -330,6 +335,13 @@ const ROWS: [Row; Setting::COUNT] = [
     row("rumble", "Rumble strength", RowKind::Percent, 5, 4),
     row("buttons", "Button layout", RowKind::Layout, 2, 0),
     row("joyconMouse", "Joy-Con mouse", RowKind::Side, 3, 0),
+    row(
+        "mouseSensitivity",
+        "Mouse sensitivity",
+        RowKind::Sensitivity,
+        8,
+        3,
+    ),
 ];
 
 const STRENGTHS: [u32; 5] = [0, 25, 50, 75, 100];
@@ -342,6 +354,11 @@ const SIDES: [(MouseSide, &str, &str); 3] = [
     (MouseSide::Right, "right", "Right"),
     (MouseSide::Left, "left", "Left"),
 ];
+const SENSITIVITIES: [u32; 8] = [25, 50, 75, 100, 125, 150, 200, 300];
+
+fn multiplier(index: u8) -> f64 {
+    f64::from(SENSITIVITIES[index as usize]) / 100.0
+}
 
 fn bitrate_mbps(index: u8) -> f64 {
     5.0 + (index as f64 - 1.0) * 2.5
@@ -399,6 +416,8 @@ pub struct StreamOptions {
     pub touch_mouse: bool,
     pub button_layout: ButtonLayout,
     pub joycon_mouse: MouseSide,
+    /// The Joy-Con mouse's sensitivity in percent.
+    pub mouse_sensitivity: u32,
     pub launchable: bool,
     /// The size was left to the dock state and the network test (Resolution: Automatic).
     pub size_auto: bool,
@@ -560,6 +579,16 @@ impl Settings {
 
     pub fn joycon_mouse(&self) -> MouseSide {
         SIDES[self.value[Setting::JoyConMouse as usize] as usize].0
+    }
+
+    /// How far the Joy-Con mouse moves the pointer, in percent of its sensor's counts.
+    pub fn mouse_sensitivity(&self) -> u32 {
+        SENSITIVITIES[self.value[Setting::MouseSensitivity as usize] as usize]
+    }
+
+    /// Whether the Settings page lists the row; sensitivity only matters with a Joy-Con mouse.
+    pub fn shown(&self, setting: Setting) -> bool {
+        setting != Setting::MouseSensitivity || self.joycon_mouse() != MouseSide::Off
     }
 
     pub fn theme(&self) -> Preference {
@@ -906,6 +935,7 @@ impl Settings {
                 RowKind::Percent => write!(out, "{}", STRENGTHS[value as usize]),
                 RowKind::Layout => write!(out, "\"{}\"", LAYOUTS[value as usize].1),
                 RowKind::Side => write!(out, "\"{}\"", SIDES[value as usize].1),
+                RowKind::Sensitivity => write!(out, "{}", multiplier(value)),
             };
         }
         if self.fps_before_4k != 0 {
@@ -983,6 +1013,7 @@ impl Settings {
             touch_mouse: used.on(Setting::TouchMouse),
             button_layout: used.button_layout(),
             joycon_mouse: used.joycon_mouse(),
+            mouse_sensitivity: used.mouse_sensitivity(),
             launchable: caps.codec(codec),
             size_auto: self.size_auto(),
         }
@@ -1040,6 +1071,9 @@ fn match_value(value: Value<'_>, row: &Row) -> Option<u8> {
             .iter()
             .position(|&(_, saved, _)| value.string_is(saved))
             .map(|i| i as u8),
+        RowKind::Sensitivity => {
+            (0..SENSITIVITIES.len() as u8).find(|&i| number == Some(multiplier(i)))
+        }
     }
 }
 
@@ -1088,6 +1122,7 @@ impl core::fmt::Display for ValueText<'_> {
             RowKind::Percent => write!(f, "{} %", STRENGTHS[value as usize]),
             RowKind::Layout => f.write_str(LAYOUTS[value as usize].2),
             RowKind::Side => f.write_str(SIDES[value as usize].2),
+            RowKind::Sensitivity => write!(f, "{}\u{d7}", multiplier(value)),
         }
     }
 }

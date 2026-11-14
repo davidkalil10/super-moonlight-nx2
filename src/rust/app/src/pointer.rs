@@ -36,6 +36,14 @@ pub struct MouseSample {
     pub connected: bool,
 }
 
+/// One axis of relative motion scaled linearly by `percent`. The hundredths it leaves over
+/// carry in `remainder` to the next move, so slow motion at a low sensitivity still counts.
+pub fn scale(delta: i32, percent: u32, remainder: &mut i32) -> i32 {
+    let total = delta.saturating_mul(percent as i32).saturating_add(*remainder);
+    *remainder = total % 100;
+    total / 100
+}
+
 /// The modifier bits and the 256-bit map of held keys, indexed by USB usage.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct KeyboardSample {
