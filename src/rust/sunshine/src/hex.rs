@@ -28,7 +28,7 @@ fn nibble(digit: u8) -> Option<u8> {
 
 pub fn decode(text: &str) -> Option<Vec<u8>> {
     let text = text.trim().as_bytes();
-    if text.len() % 2 != 0 {
+    if !text.len().is_multiple_of(2) {
         return None;
     }
 

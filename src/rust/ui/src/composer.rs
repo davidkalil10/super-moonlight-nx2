@@ -793,10 +793,7 @@ impl Builder<'_> {
     pub(crate) fn item(
         &mut self,
         id: u32,
-        x: u32,
-        y: u32,
-        w: u32,
-        h: u32,
+        (x, y, w, h): (u32, u32, u32, u32),
         flags: u32,
         radius: u32,
     ) {

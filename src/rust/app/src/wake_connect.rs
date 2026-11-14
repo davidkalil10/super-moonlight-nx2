@@ -21,6 +21,8 @@ pub trait Network {
     fn wake(&mut self, mac: [u8; 6], address: Option<[u8; 4]>);
 }
 
+// Boxing Failed would allocate, and this module allocates nothing (see lib.rs).
+#[allow(clippy::large_enum_variant)]
 pub enum Progress<S> {
     Pending,
     /// Seconds since the packet went out.

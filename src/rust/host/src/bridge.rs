@@ -325,21 +325,6 @@ impl Bridge {
     }
 }
 
-#[cfg(test)]
-mod pair_log_tests {
-    use super::redact_pair_line;
-
-    #[test]
-    fn removes_pin_tokens_and_control_bytes() {
-        let token = "a".repeat(64);
-        let line = format!("pair PIN=1234 token={token} code=13\r");
-        let logged = redact_pair_line(line.as_bytes());
-        assert!(!logged.contains("1234"));
-        assert!(!logged.contains(&token));
-        assert_eq!(logged, "pair PIN=**** token=[redacted] code=**?");
-    }
-}
-
 pub(crate) fn consume_available(pending: &mut Pending) -> Result<Option<Event>, ()> {
     let mut progress = None;
     while pending.buffer.contains(&b'\n') {
@@ -461,4 +446,19 @@ fn consume_line(pending: &mut Pending) -> Result<Option<Event>, ()> {
     }
     pending.value = Some(value);
     Ok(None)
+}
+
+#[cfg(test)]
+mod pair_log_tests {
+    use super::redact_pair_line;
+
+    #[test]
+    fn removes_pin_tokens_and_control_bytes() {
+        let token = "a".repeat(64);
+        let line = format!("pair PIN=1234 token={token} code=13\r");
+        let logged = redact_pair_line(line.as_bytes());
+        assert!(!logged.contains("1234"));
+        assert!(!logged.contains(&token));
+        assert_eq!(logged, "pair PIN=**** token=[redacted] code=**?");
+    }
 }

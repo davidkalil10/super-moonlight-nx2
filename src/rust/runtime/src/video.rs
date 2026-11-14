@@ -905,10 +905,11 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
         }
         self.stats.uploaded += 1;
         #[cfg(feature = "frame-detail")]
-        if self.stats.uploaded == DETAIL_FRAME && self.host_import != Some(true) {
-            if let Some((layout, detail)) = renderer.shown_detail() {
-                platform::log(&format!("video: shown {source} {layout:?} {detail:?}"));
-            }
+        if self.stats.uploaded == DETAIL_FRAME
+            && self.host_import != Some(true)
+            && let Some((layout, detail)) = renderer.shown_detail()
+        {
+            platform::log(&format!("video: shown {source} {layout:?} {detail:?}"));
         }
         self.waiting(arrival, timing);
         Ok(true)

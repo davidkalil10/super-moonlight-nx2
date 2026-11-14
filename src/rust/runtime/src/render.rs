@@ -921,7 +921,10 @@ impl Objects {
         }
         let api = self.host_api.clone().ok_or(Error::Unsupported)?;
         let alignment = self.host_alignment as usize;
-        if base.is_null() || base as usize % alignment != 0 || bytes == 0 || bytes % alignment != 0
+        if base.is_null()
+            || !(base as usize).is_multiple_of(alignment)
+            || bytes == 0
+            || !bytes.is_multiple_of(alignment)
         {
             return Err(Error::Unsupported);
         }

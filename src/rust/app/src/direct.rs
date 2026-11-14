@@ -184,6 +184,11 @@ enum Next {
     Reply(Kind, String),
 }
 
+/// A refused request: its error code and message.
+type Refusal = (&'static str, &'static str);
+/// A parsed request, ready to run or to refuse.
+type Parsed = Result<(Job, Option<Start>), Refusal>;
+
 pub struct DirectLink<D: Dial> {
     dial: D,
     address: [u8; 4],
@@ -193,10 +198,7 @@ pub struct DirectLink<D: Dial> {
     config: Option<Arc<rustls::ClientConfig>>,
     uuid: String,
     next_id: u32,
-    queue: VecDeque<(
-        u32,
-        Result<(Job, Option<Start>), (&'static str, &'static str)>,
-    )>,
+    queue: VecDeque<(u32, Parsed)>,
     active: Option<Active<D::Socket>>,
     replies: VecDeque<(Kind, u32, Vec<u8>)>,
     cover: Option<(u32, Vec<u8>)>,
@@ -395,9 +397,7 @@ fn codecs(preferred: Option<Codec>) -> &'static [Codec] {
     }
 }
 
-fn parse_request(
-    payload: &[u8],
-) -> Result<(Job, Option<Start>, Option<Address>), (&'static str, &'static str)> {
+fn parse_request(payload: &[u8]) -> Result<(Job, Option<Start>, Option<Address>), Refusal> {
     let invalid = ("invalid_request", "Malformed request");
     let root = json::parse(payload).map_err(|_| invalid)?;
     let op = root
@@ -562,7 +562,7 @@ impl<D: Dial> DirectLink<D> {
         let exchange = active.exchange.take().expect("exchange");
         let _ = exchange.close();
         let step = active.step;
-        let seen = outcome.as_ref().ok().map(|response| reply_head(response));
+        let seen = outcome.as_ref().ok().map(reply_head);
         let next = self.advance(step, outcome, files, now_ms);
         if let (Some(seen), Next::Reply(Kind::Error, _)) = (seen, &next)
             && step != Step::Rtsp

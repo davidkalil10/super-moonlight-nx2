@@ -368,7 +368,7 @@ pub fn choose(
 
 fn write_mbps(out: &mut Note, kbps: u32) {
     let tenths = (kbps + 50) / 100;
-    if tenths >= 100 || tenths % 10 == 0 {
+    if tenths >= 100 || tenths.is_multiple_of(10) {
         let _ = write!(out, "{}", (kbps + 500) / 1000);
     } else {
         let _ = write!(out, "{}.{}", tenths / 10, tenths % 10);

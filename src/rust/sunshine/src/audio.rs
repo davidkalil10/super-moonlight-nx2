@@ -401,7 +401,7 @@ impl Receiver {
         let Some(cipher) = &self.cipher else {
             return Some(data.len());
         };
-        if data.is_empty() || data.len() % 16 != 0 {
+        if data.is_empty() || !data.len().is_multiple_of(16) {
             return None;
         }
         let mut previous = [0u8; 16];

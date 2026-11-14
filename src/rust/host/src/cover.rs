@@ -163,7 +163,7 @@ pub(crate) fn decode_base64(text: &str) -> Result<Vec<u8>, Error> {
         }
     }
     let input = text.as_bytes();
-    if input.is_empty() || input.len() % 4 != 0 || input.len() > CHUNK_BYTES * 4 / 3 {
+    if input.is_empty() || !input.len().is_multiple_of(4) || input.len() > CHUNK_BYTES * 4 / 3 {
         return Err(Error::BackendFailed);
     }
     let mut bytes = Vec::with_capacity(input.len() / 4 * 3);

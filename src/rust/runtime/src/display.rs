@@ -312,7 +312,7 @@ impl Probe {
     /// judged: a menu that draws slower must not take 120 away from a stream.
     pub fn verify(&mut self, width: u32, height: u32, hz: u32, every_refresh: bool) -> bool {
         use moonlight_nx2_app::policy::{DisplayEvidence, DisplayMode};
-        if !FAST_STREAM_AT_60HZ && !(hz == 120 && every_refresh) {
+        if !(FAST_STREAM_AT_60HZ || (hz == 120 && every_refresh)) {
             return false;
         }
         let fps = 120;

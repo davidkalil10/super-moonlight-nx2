@@ -150,6 +150,8 @@ impl Clocks {
     fn stock_of(&mut self, reading: &Reading) -> [u32; CLOCKS] {
         let key = (reading.mode, reading.configuration);
         let mut read = [0u32; CLOCKS];
+        // `clock` is the clock's id across the parallel per-clock arrays.
+        #[allow(clippy::needless_range_loop)]
         for clock in 0..CLOCKS {
             if reading.clkrst[clock] == 0 {
                 read[clock] = reading.hz[clock];
@@ -300,6 +302,8 @@ impl Clocks {
         let Some(lowered) = self.lowered.as_mut() else {
             return;
         };
+        // `clock` is the clock's id across the parallel per-clock arrays.
+        #[allow(clippy::needless_range_loop)]
         for clock in 0..CLOCKS {
             let read = reading.hz[clock];
             let current = lowered.current[clock];

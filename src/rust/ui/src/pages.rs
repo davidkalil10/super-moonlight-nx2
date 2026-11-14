@@ -375,7 +375,7 @@ impl Builder<'_> {
     ) {
         let pal = self.pal;
         let flags = if greyed { page::ITEM_GREYED } else { 0 };
-        self.item(id, x, y, width, height, flags, BUTTON_RADIUS);
+        self.item(id, (x, y, width, height), flags, BUTTON_RADIUS);
         let (fill, ink) = if greyed {
             (pal.ground, pal.faint)
         } else {
@@ -428,7 +428,7 @@ impl Builder<'_> {
     fn dialog_button(&mut self, id: u32, y: u32, label: &str) {
         let pal = self.pal;
         let x = DIALOG_X + (DIALOG_WIDTH - BUTTON_WIDTH) / 2;
-        self.item(id, x, y, BUTTON_WIDTH, DIALOG_BUTTON, 0, BUTTON_RADIUS);
+        self.item(id, (x, y, BUTTON_WIDTH, DIALOG_BUTTON), 0, BUTTON_RADIUS);
         self.fill(x, y, BUTTON_WIDTH, DIALOG_BUTTON, pal.ground, BUTTON_RADIUS);
         self.put_middle(
             x,
@@ -535,7 +535,7 @@ impl Builder<'_> {
         let pal = self.pal;
         let inner = PC_CARD_WIDTH - 2 * PC_CARD_PAD;
         let left = x + PC_CARD_PAD;
-        self.item(id, x, y, PC_CARD_WIDTH, PC_CARD_HEIGHT, 0, PANEL_RADIUS);
+        self.item(id, (x, y, PC_CARD_WIDTH, PC_CARD_HEIGHT), 0, PANEL_RADIUS);
         self.fill(x, y, PC_CARD_WIDTH, PC_CARD_HEIGHT, pal.panel, PANEL_RADIUS);
         self.put(
             left,
@@ -556,10 +556,10 @@ impl Builder<'_> {
             Presence::Offline => (pal.dim, String::from("Offline")),
             Presence::Unknown => (pal.dim, String::from("Checking\u{2026}")),
         };
-        if presence == Presence::Online {
-            if let Some(ms) = model.link_ms(&host.address) {
-                join(&mut state, Some(&format!("{ms} ms")));
-            }
+        if presence == Presence::Online
+            && let Some(ms) = model.link_ms(&host.address)
+        {
+            join(&mut state, Some(&format!("{ms} ms")));
         }
         let middle = y + PC_STATE_MIDDLE;
         self.put_middle(left, middle, DOT + 8, "\u{25cf}", BODY, dot, Align::Left);
@@ -587,7 +587,7 @@ impl Builder<'_> {
 
     fn dashed_card(&mut self, id: u32, x: u32, y: u32, label: &str) {
         let pal = self.pal;
-        self.item(id, x, y, PC_CARD_WIDTH, PC_CARD_HEIGHT, 0, PANEL_RADIUS);
+        self.item(id, (x, y, PC_CARD_WIDTH, PC_CARD_HEIGHT), 0, PANEL_RADIUS);
         self.shape(Shape {
             x,
             y,
@@ -620,10 +620,7 @@ impl Builder<'_> {
         let y = RESUME_Y;
         self.item(
             item::RESUME_HOST,
-            SIDE,
-            y,
-            CONTENT_WIDTH,
-            RESUME_HEIGHT,
+            (SIDE, y, CONTENT_WIDTH, RESUME_HEIGHT),
             0,
             PANEL_RADIUS,
         );
@@ -906,10 +903,7 @@ impl Builder<'_> {
             let is_current = app.id == current;
             self.item(
                 item::APP + start + i,
-                x,
-                y,
-                w,
-                h,
+                (x, y, w, h),
                 page::ITEM_REPORTS_FOCUS,
                 COVER_RADIUS,
             );
@@ -1108,10 +1102,7 @@ impl Builder<'_> {
             let y = BODY_Y + 16 + i * (CATEGORY_HEIGHT + 12);
             self.item(
                 item::CATEGORY + i,
-                SIDE,
-                y,
-                CATEGORY_WIDTH,
-                CATEGORY_HEIGHT,
+                (SIDE, y, CATEGORY_WIDTH, CATEGORY_HEIGHT),
                 page::ITEM_REPORTS_FOCUS | page::ITEM_OPENS,
                 PANEL_RADIUS,
             );
@@ -1172,10 +1163,7 @@ impl Builder<'_> {
         }
         self.item(
             item::SETTING + row.setting as u32,
-            x,
-            y,
-            pane,
-            ROW_HEIGHT,
+            (x, y, pane, ROW_HEIGHT),
             flags,
             PANEL_RADIUS,
         );
@@ -1276,10 +1264,7 @@ impl Builder<'_> {
         let y = BODY_Y + 16 + slot * (ROW_HEIGHT + ROW_GAP);
         self.item(
             item::EXPORT_LOGS,
-            PANE_X,
-            y,
-            PANE_WIDTH,
-            ROW_HEIGHT,
+            (PANE_X, y, PANE_WIDTH, ROW_HEIGHT),
             0,
             PANEL_RADIUS,
         );
@@ -1488,7 +1473,7 @@ impl Builder<'_> {
             .enumerate()
         {
             let bx = x + i as u32 * (width + BUTTON_GAP);
-            self.item(id, bx, button_y, width, DIALOG_BUTTON, 0, BUTTON_RADIUS);
+            self.item(id, (bx, button_y, width, DIALOG_BUTTON), 0, BUTTON_RADIUS);
             self.fill(
                 bx,
                 button_y,
@@ -1540,7 +1525,7 @@ impl Builder<'_> {
             .enumerate()
         {
             let bx = x + i as u32 * (width + BUTTON_GAP);
-            self.item(id, bx, button_y, width, DIALOG_BUTTON, 0, BUTTON_RADIUS);
+            self.item(id, (bx, button_y, width, DIALOG_BUTTON), 0, BUTTON_RADIUS);
             self.fill(
                 bx,
                 button_y,
@@ -1671,7 +1656,7 @@ impl Builder<'_> {
                 (true, false) => page::ITEM_ADJUSTABLE,
                 _ => 0,
             };
-            self.item(id, left, y, inner, SHEET_ITEM, flags, SHEET_ITEM_RADIUS);
+            self.item(id, (left, y, inner, SHEET_ITEM), flags, SHEET_ITEM_RADIUS);
             self.fill(left, y, inner, SHEET_ITEM, pal.panel, SHEET_ITEM_RADIUS);
             let middle = y + SHEET_ITEM / 2;
             self.put_middle(

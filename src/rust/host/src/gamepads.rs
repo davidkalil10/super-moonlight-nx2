@@ -97,9 +97,9 @@ pub struct MotionGate {
 impl MotionGate {
     pub fn set_rates(&mut self, rates: &MotionRates) {
         for (pad, wanted) in rates.iter().enumerate() {
-            for kind in 0..2 {
-                if self.rates[pad][kind] != wanted[kind] {
-                    self.rates[pad][kind] = wanted[kind];
+            for (kind, &rate) in wanted.iter().enumerate() {
+                if self.rates[pad][kind] != rate {
+                    self.rates[pad][kind] = rate;
                     self.next_us[pad][kind] = 0;
                 }
             }

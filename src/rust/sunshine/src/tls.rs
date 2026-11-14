@@ -5,8 +5,8 @@
 use alloc::{boxed::Box, sync::Arc, vec, vec::Vec};
 use core::time::Duration;
 
-use ::hmac::{Hmac as HmacOf, KeyInit as HmacKeyInit, Mac};
-use aes_gcm::{Aes128Gcm, KeyInit, aead::AeadInOut};
+use ::hmac::{Hmac as HmacOf, KeyInit, Mac};
+use aes_gcm::{Aes128Gcm, aead::AeadInOut};
 use once_cell::race::OnceBox;
 use rsa::{
     pss,
@@ -101,7 +101,7 @@ struct Sha256HmacKey(HmacOf<Sha256>);
 
 impl hmac::Hmac for Sha256Hmac {
     fn with_key(&self, key: &[u8]) -> Box<dyn hmac::Key> {
-        let mac = <HmacOf<Sha256> as HmacKeyInit>::new_from_slice(key).expect("any length");
+        let mac = <HmacOf<Sha256> as KeyInit>::new_from_slice(key).expect("any length");
         Box::new(Sha256HmacKey(mac))
     }
 

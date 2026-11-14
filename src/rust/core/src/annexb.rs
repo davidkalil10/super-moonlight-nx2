@@ -45,7 +45,7 @@ struct Bits<'a> {
 
 impl Bits<'_> {
     fn bit(&mut self) -> Option<u32> {
-        if self.bit % 8 == 0 {
+        if self.bit.is_multiple_of(8) {
             let byte = *self.bytes.get(self.bit / 8)?;
             if self.zeros >= 2 && byte == 3 {
                 self.bit += 8;
