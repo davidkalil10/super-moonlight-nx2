@@ -282,6 +282,12 @@ impl State {
     pub fn epoch(&self) -> Option<Epoch> {
         self.session.as_ref().map(|session| session.epoch)
     }
+    /// The bitrate the session streams at, after any Auto step: the one its info badge shows.
+    pub fn bitrate_kbps(&self) -> Option<u32> {
+        self.session
+            .as_ref()
+            .map(|session| session.options.bitrate_kbps)
+    }
     pub fn next(&mut self) -> Option<Feedback> {
         self.metrics_out
             .take()

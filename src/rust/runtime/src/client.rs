@@ -205,13 +205,12 @@ fn presented_fps_x10(
 fn stream_readout(
     network: Option<moonlight_nx2_app::metrics::Second>,
     native: Option<moonlight_nx2_core::stats::StreamStats>,
+    bitrate_kbps: Option<u32>,
     session_us: u64,
 ) -> moonlight_nx2_ui::readout::StreamReadout {
     moonlight_nx2_ui::readout::StreamReadout {
         fps_x10: presented_fps_x10(network, native),
-        bitrate_kbps: network.filter(|s| s.elapsed_us > 0).map(|s| {
-            u32::try_from(u128::from(s.bytes) * 8_000 / u128::from(s.elapsed_us)).unwrap_or(u32::MAX)
-        }),
+        bitrate_kbps,
         decode_us: native.filter(|s| s.presented > 0).map(|s| s.decode_mean_us),
         network_us: network.and_then(|second| second.network_rtt_us),
         session_s: u32::try_from(session_us / 1_000_000).unwrap_or(u32::MAX),
@@ -545,7 +544,12 @@ impl<F: Files + Clone> Client<F> {
     }
 
     fn refresh_stream_stats(&mut self) {
-        let readout = stream_readout(self.network_stats, self.native_stats, self.session_us);
+        let readout = stream_readout(
+            self.network_stats,
+            self.native_stats,
+            self.driver.session_bitrate_kbps(),
+            self.session_us,
+        );
         self.bridge
             .set_stream_stats(&stream_stats_text(&readout, self.native_stats));
         self.bridge.set_stream(readout);
@@ -691,7 +695,7 @@ mod overlay_stats_tests {
 
     #[test]
     fn native_timing_is_displayed_only_when_observed() {
-        let unknown = stream_stats_text(&stream_readout(None, None, 0), None);
+        let unknown = stream_stats_text(&stream_readout(None, None, None, 0), None);
         assert!(unknown.contains("Present -- ms"));
         let native = moonlight_nx2_core::stats::StreamStats {
             fps_x10: 599,
@@ -700,7 +704,7 @@ mod overlay_stats_tests {
             presented: 60,
             ..Default::default()
         };
-        let text = stream_stats_text(&stream_readout(None, Some(native), 0), Some(native));
+        let text = stream_stats_text(&stream_readout(None, Some(native), None, 0), Some(native));
         assert!(text.contains("FPS 59.9"));
         assert!(text.contains("Decode 1.2 ms"));
         assert!(text.contains("Present 3.4 ms"));
@@ -792,8 +796,9 @@ mod presented_rate_tests {
             presented: 30,
             ..Default::default()
         };
-        let readout = stream_readout(Some(window), Some(video_window), 0);
+        let readout = stream_readout(Some(window), Some(video_window), Some(31_500), 0);
         assert_eq!(readout.fps_x10, Some(600));
+        assert_eq!(readout.bitrate_kbps, Some(31_500));
         assert!(stream_stats_text(&readout, Some(video_window)).contains("FPS 60.0"));
     }
 

@@ -118,6 +118,10 @@ impl Driver {
     pub fn session_epoch(&self) -> Option<Epoch> {
         self.policy.epoch()
     }
+
+    pub fn session_bitrate_kbps(&self) -> Option<u32> {
+        self.policy.bitrate_kbps()
+    }
     pub fn observe(&mut self, epoch: Epoch, event: Observation) -> bool {
         let accepted = self.policy.observe(&mut self.service, epoch, event);
         if accepted
