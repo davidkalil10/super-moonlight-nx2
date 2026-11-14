@@ -43,6 +43,8 @@ unsafe extern "C" {
 pub struct Streaming {
     pub mode: Mode,
     pub signals: Signals,
+    /// The stream menu, the keyboard or another overlay covers the video.
+    pub overlay: bool,
 }
 
 struct Lowered {
@@ -53,6 +55,7 @@ struct Lowered {
     governor: Governor,
     next_second_ms: u64,
     exhausted: bool,
+    holding: bool,
 }
 
 #[derive(Default)]
@@ -236,6 +239,7 @@ impl Clocks {
             governor: Governor::default(),
             next_second_ms: now_ms,
             exhausted: false,
+            holding: false,
         });
     }
 
@@ -247,6 +251,14 @@ impl Clocks {
             return;
         }
         lowered.next_second_ms = now_ms + 1000;
+        if stream.overlay {
+            if !core::mem::replace(&mut lowered.holding, true) {
+                log("clocks: hold reason=overlay");
+            }
+            lowered.governor.hold(stream.signals);
+            return;
+        }
+        lowered.holding = false;
         let Some(behind) = lowered.governor.second(stream.signals, stream.mode.fps) else {
             return;
         };

@@ -332,6 +332,7 @@ fn execute(
         stream.pump(&mut app.client, renderer, now_ms);
         let compute = app.client.needs_ui_compute(&input, &frame);
         let presented = stream.step(&mut app.client, renderer, &input, now_ms, compute);
+        let overlay = app.client.bridge.model().overlay() || app.keyboard_covers(now_ms);
         let clocked = stream
             .clock_inputs()
             .map(|((width, height, fps), signals)| crate::clocks::Streaming {
@@ -342,6 +343,7 @@ fn execute(
                     docked: dock.current(),
                 },
                 signals,
+                overlay,
             });
         system.tick(&mut app, renderer, clocked, now_ms);
         app.client

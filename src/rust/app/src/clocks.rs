@@ -169,6 +169,14 @@ pub struct Governor {
 }
 
 impl Governor {
+    /// A second spent under an overlay, which costs frames clocks shouldn't chase. It is
+    /// not counted, and the run of seconds behind starts over.
+    pub fn hold(&mut self, totals: Signals) {
+        self.last = Some(totals);
+        self.behind = 0;
+        self.window = Signals::default();
+    }
+
     /// Takes this second's totals. Some(the seconds behind, added up) when a clock should go
     /// up now; the count starts over after each step.
     pub fn second(&mut self, totals: Signals, fps: u32) -> Option<Signals> {
