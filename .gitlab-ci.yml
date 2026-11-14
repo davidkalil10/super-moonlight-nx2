@@ -1,16 +1,18 @@
 # Builds the NRO against the public ounce-devkit, so a devkit release that
-# breaks the app shows up as a failed pipeline. Releases still come from
-# build-production.py and the pinned SDK.
+# breaks the app shows up as a failed pipeline, and builds and publishes the
+# release of a v* tag. build-production.py and the pinned SDK stay the
+# fallback for releases.
 
 stages:
   - build
+  - release
 
 variables:
   CARGO_HOME: $CI_PROJECT_DIR/.cargo
   RUSTUP_HOME: $CI_PROJECT_DIR/.rustup
   CARGO_NET_GIT_FETCH_WITH_CLI: "true"
   # The device toolchain, as build-devkit.py pins it.
-  RUST_TOOLCHAIN: nightly-2026-02-09
+  RUSTUP_TOOLCHAIN: nightly-2026-02-09
   OUT: /tmp/moonlight-ci
 
 default:
@@ -19,7 +21,7 @@ default:
     - saas-linux-small-amd64
   cache:
     key:
-      prefix: $RUST_TOOLCHAIN
+      prefix: $RUSTUP_TOOLCHAIN
       files:
         - src/rust/Cargo.lock
     paths:
@@ -31,12 +33,28 @@ default:
     - git config --global --add safe.directory "$CI_PROJECT_DIR"
     - git config --global url."https://github.com/".insteadOf "ssh://git@github.com/"
 
+.checks:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    - if: $CI_COMMIT_TAG =~ /^v\d/
+
+.release:
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v\d/
+
+.rustup:
+  script:
+    - command -v rustup || curl -fsSL https://sh.rustup.rs | sh -s -- -y --no-modify-path --profile minimal --default-toolchain none
+    - rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal --component rust-src,rustfmt,clippy
+
 .nro:
   stage: build
   needs: []
   after_script:
     - mkdir -p out/rust
     - cp -r "$OUT"/nro "$OUT"/BUILD-RESULT.json out/ 2>/dev/null || true
+    - cp "$OUT"/*.zip "$OUT"/*.zip.sha256 out/ 2>/dev/null || true
     - cp "$OUT"/rust/BUILD-INFO.json "$OUT"/rust/build.log out/rust/ 2>/dev/null || true
   artifacts:
     when: always
@@ -66,13 +84,58 @@ nro-latest-devkit:
     - python3 -B src/rust/build-devkit.py --devkit latest ${DEVKIT_NEWER_ONLY:+--newer-only}
       --directory "$OUT" --cache .cache/ounce-devkit
 
+nro-release:
+  extends: .nro
+  rules: !reference [.release, rules]
+  script:
+    - python3 -B src/rust/build-devkit.py --release "${CI_COMMIT_TAG#v}"
+      --directory "$OUT" --cache .cache/ounce-devkit
+  artifacts:
+    expire_in: never
+    paths:
+      - out/BUILD-RESULT.json
+      - out/*.zip
+      - out/*.zip.sha256
+      - out/nro/moonlight-nx2.nro
+      - out/nro/moonlight-nx2.map
+      - out/nro/BUILD-INFO.json
+      - out/nro/build.log
+      - out/rust/
+
+lint:
+  stage: build
+  needs: []
+  rules: !reference [.checks, rules]
+  script:
+    - !reference [.rustup, script]
+    - cd src/rust
+    - cargo fmt --all --check
+    - cargo clippy --workspace --all-targets --locked -- -D warnings
+    - RUSTFLAGS="-C relocation-model=pic -C target-feature=+aes,+sha2"
+      cargo clippy -p moonlight-nx2-runtime --target aarch64-unknown-none --release --locked
+      -Zbuild-std=core,alloc -Zbuild-std-features= --features frontend -- -D warnings
+
 host-tests:
   stage: build
   needs: []
-  rules:
-    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
-    - if: $CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+  rules: !reference [.checks, rules]
   script:
-    - command -v rustup || curl -fsSL https://sh.rustup.rs | sh -s -- -y --no-modify-path --profile minimal --default-toolchain none
-    - rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal
-    - RUSTUP_TOOLCHAIN="$RUST_TOOLCHAIN" cargo test --manifest-path src/rust/Cargo.toml --workspace --locked
+    - !reference [.rustup, script]
+    - cargo test --manifest-path src/rust/Cargo.toml --workspace --locked
+
+release:
+  stage: release
+  image: registry.gitlab.com/gitlab-org/cli:v1.130.0
+  needs: [nro-release, lint, host-tests]
+  rules: !reference [.release, rules]
+  cache: []
+  before_script: []
+  variables:
+    GLAB_ENABLE_CI_AUTOLOGIN: "true"
+  script:
+    - VERSION="${CI_COMMIT_TAG#v}"
+    - glab release create "$CI_COMMIT_TAG"
+      "out/moonlight-nx2-$VERSION.zip#moonlight-nx2-$VERSION.zip"
+      "out/moonlight-nx2-$VERSION.zip.sha256#moonlight-nx2-$VERSION.zip.sha256"
+      --name "moonlight-nx2 $VERSION" --notes-file CHANGELOG.md --ref "$CI_COMMIT_SHA"
+      --use-package-registry --package-name moonlight-nx2 --no-update

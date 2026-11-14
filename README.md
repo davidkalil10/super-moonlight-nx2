@@ -46,12 +46,22 @@ release. The `url` line lets Cargo fetch its git dependencies without a GitHub s
 
 ## CI
 
-`.gitlab-ci.yml` builds the NRO against the pinned devkit and runs the workspace tests on
-every push to `main` and every merge request. Scheduled pipelines build against the latest
-devkit release, so a release that breaks the app fails a pipeline. With
-`DEVKIT_NEWER_ONLY=1` a schedule builds only when that release is not the pinned one. The
-NRO, its map and the build logs are kept as job artifacts. Releases still come from
-`build-production.py`.
+`.gitlab-ci.yml` builds the NRO against the pinned devkit, checks `cargo fmt` and
+`cargo clippy` (host and device) and runs the workspace tests on every push to `main` and
+every merge request. Scheduled pipelines build against the latest devkit release, so a
+release that breaks the app fails a pipeline. With `DEVKIT_NEWER_ONLY=1` a schedule builds
+only when that release is not the pinned one. The NRO, its map and the build logs are kept
+as job artifacts.
+
+A `v1.2.3` tag builds the release against the pinned devkit with
+`build-devkit.py --release 1.2.3`, which packs `moonlight-nx2-1.2.3.zip` with the NRO,
+`CHANGELOG.md` and `FEATURES.md` and writes its `.sha256`. Once the checks pass, the release
+job creates the GitLab release with `CHANGELOG.md` as its notes and the zip in the package
+registry. Before tagging, `CHANGELOG.md` must start with `# moonlight-nx2 1.2.3`.
+
+The same source and devkit give the same NRO and zip wherever they are built, so a tag build
+can be checked locally with the `docker run` above and `--release`.
+`build-production.py --release` against the pinned SDK stays the fallback.
 
 ## Run
 
