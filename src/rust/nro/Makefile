@@ -20,7 +20,8 @@ NACP_VERSION ?= 0.1.0
 ICON_PATH ?= $(SOURCE_DIR)/icon.jpg
 ARCH := $(SWITCH2_CPU) -mtp=soft -fPIE
 CPPFLAGS += -I$(LIBNX)/include
-CFLAGS := $(ARCH) -std=gnu11 -O2 -g -Wall -Wextra -Werror -ffunction-sections -fdata-sections
+CFLAGS := $(ARCH) -std=gnu11 -O2 -g -Wall -Wextra -Werror -ffunction-sections -fdata-sections \
+          -ffile-prefix-map=$(SOURCE_DIR)=/moonlight-nx2/src/rust/nro -ffile-prefix-map=$(BUILD_DIR)=/build
 LDFLAGS := $(ARCH) -specs=$(LIBNX)/switch.specs -Wl,-Map,$(OUTPUT).map -Wl,--wrap=gsvRegisterFrame
 MIMALLOC ?= 1
 NX_LIBRARY := $(if $(filter 0,$(MIMALLOC)),-lounce_core,-lnx)

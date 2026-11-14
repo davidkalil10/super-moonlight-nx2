@@ -124,6 +124,16 @@ def installed_sdk(path, devkit=None):
             "files": {name: hashlib.sha256(data).hexdigest() for name, data in files.items()}}
 
 
+def remap_paths(prefixes):
+    """--remap-path-prefix flags that keep the build paths out of the binary."""
+    flags = []
+    for path, name in prefixes.items():
+        if any(char.isspace() for char in str(path)):
+            raise ValueError(f"{path} has whitespace, which RUSTFLAGS cannot carry")
+        flags.append(f"--remap-path-prefix={path}={name}")
+    return flags
+
+
 def source_revision(override):
     if override:
         if len(override) != 40 or any(char not in "0123456789abcdef" for char in override):
@@ -176,10 +186,14 @@ def build(args):
         if args.stage == "rust":
             if f"commit-hash: {RUST_COMMIT}" not in rustc:
                 raise ValueError("Device builds require nightly-2026-02-09 and rust-src")
-            env["RUSTFLAGS"] = "-C relocation-model=pic -C target-feature=+aes,+sha2 -D warnings"
+            sysroot = Path(output("rustc", "--print", "sysroot"))
+            cargo_home = Path(env.get("CARGO_HOME", "~/.cargo")).expanduser()
+            env["RUSTFLAGS"] = " ".join([
+                "-C relocation-model=pic -C target-feature=+aes,+sha2 -D warnings",
+                *remap_paths({APP: "/moonlight-nx2", cargo_home: "/cargo", sysroot: "/rustc",
+                              directory / "cargo": "/target"})])
             info["rustflags"] = env["RUSTFLAGS"]
             info["target"] = TARGET
-            sysroot = Path(output("rustc", "--print", "sysroot"))
             manifest = sysroot / "lib/rustlib/multirust-channel-manifest.toml"
             info["rust_distribution_sha256"] = digest(manifest)
             commands = [["cargo", "build", "--manifest-path", str(ROOT / "Cargo.toml"),
@@ -227,7 +241,7 @@ def build(args):
         info["target"] = "aarch64-none-elf"
         env["DEVKITPRO"] = str(args.devkitpro)
         env["PATH"] = str(args.devkitpro / "tools/bin") + os.pathsep + env.get("PATH", "")
-        commands = [["make", "--no-print-directory", "-f", str(ROOT / "nro/Makefile"),
+        commands = [["make", "--no-print-directory", "-C", directory, "-f", str(ROOT / "nro/Makefile"),
                      f"BUILD_DIR={directory}", f"RUST_LIBRARY={library}",
                      "NACP_TITLE=" + nacp_title(build_name(args)),
                      "NACP_VERSION=" + args.nacp_version]]
