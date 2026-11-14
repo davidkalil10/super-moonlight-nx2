@@ -1,6 +1,6 @@
 //! Stream clocks: the CPU, GPU and memory rates each stream mode starts at, and the governor
 //! that raises one of them a notch when the stream falls behind. Rates only go up during a
-//! stream; the runtime puts the system's own rates back when the stream ends.
+//! stream; the runtime hands the clocks back to the system when the stream ends.
 
 pub const CPU: usize = 0;
 pub const GPU: usize = 1;
@@ -10,9 +10,12 @@ pub const NAMES: [&str; CLOCKS] = ["cpu", "gpu", "emc"];
 
 /// Seconds in a row the stream has to fall behind before a clock goes up.
 pub const BEHIND_SECONDS: u32 = 3;
-/// A second falls behind when more than one frame in this many was late, dropped, missed its
-/// wake or was refused by the decoder.
-pub const BEHIND_ONE_IN: u64 = 10;
+/// A second falls behind when it presents fewer than this share of the stream rate, in
+/// percent, while the PC is sending.
+pub const PRESENTED_PERCENT: u64 = 95;
+/// Or when more than one frame in this many was dropped, replaced, lost on the way in or
+/// missed its wake.
+pub const LOST_ONE_IN: u64 = 30;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Mode {
@@ -102,40 +105,53 @@ pub fn pick(current_hz: [u32; CLOCKS], stock_hz: [u32; CLOCKS]) -> Option<usize>
         })
 }
 
-/// Running totals of the stream's trouble counters.
+/// Running totals of what the stream received, showed and lost.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct Signals {
-    pub late: u64,
+    /// Frames that reached the decoder.
+    pub arrived: u64,
+    pub presented: u64,
+    /// Frames dropped, caught up or discarded on the console.
     pub dropped: u64,
-    pub refused: u64,
+    /// Frames the link lost or dropped while waiting for a keyframe.
+    pub link_lost: u64,
     pub wake_misses: u64,
 }
 
 impl Signals {
-    fn total(self) -> u64 {
-        self.late + self.dropped + self.refused + self.wake_misses
-    }
-
     pub fn since(self, earlier: Signals) -> Signals {
         Signals {
-            late: self.late.saturating_sub(earlier.late),
+            arrived: self.arrived.saturating_sub(earlier.arrived),
+            presented: self.presented.saturating_sub(earlier.presented),
             dropped: self.dropped.saturating_sub(earlier.dropped),
-            refused: self.refused.saturating_sub(earlier.refused),
+            link_lost: self.link_lost.saturating_sub(earlier.link_lost),
             wake_misses: self.wake_misses.saturating_sub(earlier.wake_misses),
         }
     }
 
     fn add(self, other: Signals) -> Signals {
         Signals {
-            late: self.late + other.late,
+            arrived: self.arrived + other.arrived,
+            presented: self.presented + other.presented,
             dropped: self.dropped + other.dropped,
-            refused: self.refused + other.refused,
+            link_lost: self.link_lost + other.link_lost,
             wake_misses: self.wake_misses + other.wake_misses,
         }
     }
+
+    /// One second of a stream at `fps` that fell behind. Held-back frames and decoder
+    /// refusals are normal at high rates and do not count; a PC that sends little and loses
+    /// nothing is idle, not behind.
+    pub fn behind(self, fps: u32) -> bool {
+        let fps = u64::from(fps.max(1));
+        let lost = self.dropped + self.link_lost + self.wake_misses;
+        let idle = self.arrived * 2 < fps && self.link_lost == 0;
+        let short = self.presented * 100 < fps * PRESENTED_PERCENT && !idle;
+        short || lost * LOST_ONE_IN > fps
+    }
 }
 
-/// Watches the trouble counters once a second.
+/// Watches the stream once a second.
 #[derive(Default)]
 pub struct Governor {
     last: Option<Signals>,
@@ -144,14 +160,12 @@ pub struct Governor {
 }
 
 impl Governor {
-    /// Takes this second's totals. Some(the trouble of the seconds behind) when a clock
-    /// should go up now; the count starts over after each step.
+    /// Takes this second's totals. Some(the seconds behind, added up) when a clock should go
+    /// up now; the count starts over after each step.
     pub fn second(&mut self, totals: Signals, fps: u32) -> Option<Signals> {
-        let Some(last) = self.last.replace(totals) else {
-            return None;
-        };
+        let last = self.last.replace(totals)?;
         let second = totals.since(last);
-        if second.total() * BEHIND_ONE_IN > u64::from(fps.max(1)) {
+        if second.behind(fps) {
             self.behind += 1;
             self.window = self.window.add(second);
         } else {

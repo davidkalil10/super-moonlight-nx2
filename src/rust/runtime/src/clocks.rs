@@ -1,6 +1,7 @@
 //! Stream clocks through `nro/clocks.c`: readings every few seconds, the lower rates of the
-//! stream's mode once it has settled, a notch up when it falls behind, and the system's own
-//! rates back when the stream ends, the app leaves focus or stops.
+//! stream's mode once it has settled, a notch up when it falls behind, and the clocks handed
+//! back to the system when the stream ends, the console docks or undocks, the app leaves
+//! focus or stops.
 
 extern crate alloc;
 
@@ -34,6 +35,7 @@ unsafe extern "C" {
         kind: *mut u32,
         count: *mut i32,
     ) -> u32;
+    fn moonlightClocksRelease() -> u32;
     fn moonlightClocksClose();
 }
 
@@ -57,9 +59,14 @@ struct Lowered {
 pub struct Clocks {
     next_read_ms: u64,
     open: bool,
+    /// A rate was set since the clocks were last handed back.
+    held: bool,
     rates: Option<[Vec<u32>; CLOCKS]>,
     seen: Option<(Mode, u64)>,
     lowered: Option<Lowered>,
+    /// The highest rates read under each performance mode and configuration. Rates are only
+    /// ever set below them, so no set of ours can raise these.
+    stock: Vec<((u32, u32), [u32; CLOCKS])>,
 }
 
 fn mhz(hz: u32) -> u32 {
@@ -101,20 +108,20 @@ impl Clocks {
         let stream = match stream {
             Ok(stream) => stream,
             Err(reason) => {
-                self.restore(reason);
+                self.release(reason);
                 self.close();
                 return;
             }
         };
         let reading = self.read(now_ms);
         if self.seen.is_none_or(|(mode, _)| mode != stream.mode) {
-            match self.lowered.as_ref() {
-                Some(lowered) if lowered.mode.docked != stream.mode.docked => {
-                    log("clocks: rates left to the system reason=dock-change");
-                    self.lowered = None;
-                }
-                Some(_) => self.restore("mode-change"),
-                None => {}
+            if let Some(lowered) = self.lowered.as_ref() {
+                let docking = lowered.mode.docked != stream.mode.docked;
+                self.release(if docking {
+                    "dock-change"
+                } else {
+                    "mode-change"
+                });
             }
             self.seen = Some((stream.mode, now_ms));
         }
@@ -130,10 +137,33 @@ impl Clocks {
         self.govern(&stream, now_ms);
     }
 
-    /// Puts the system's rates back and closes the sessions. Safe to call more than once.
+    /// Hands the clocks back and closes the sessions. Safe to call more than once.
     pub fn stop(&mut self) {
-        self.restore("exit");
+        self.release("exit");
         self.close();
+    }
+
+    /// Takes a reading into the stock rates of its configuration and returns them.
+    fn stock_of(&mut self, reading: &Reading) -> [u32; CLOCKS] {
+        let key = (reading.mode, reading.configuration);
+        let mut read = [0u32; CLOCKS];
+        for clock in 0..CLOCKS {
+            if reading.clkrst[clock] == 0 {
+                read[clock] = reading.hz[clock];
+            }
+        }
+        match self.stock.iter_mut().find(|(seen, _)| *seen == key) {
+            Some((_, stock)) => {
+                for clock in 0..CLOCKS {
+                    stock[clock] = stock[clock].max(read[clock]);
+                }
+                *stock
+            }
+            None => {
+                self.stock.push((key, read));
+                read
+            }
+        }
     }
 
     fn read(&mut self, now_ms: u64) -> Option<Reading> {
@@ -155,6 +185,7 @@ impl Clocks {
             reading.apm,
             reading.clkrst
         ));
+        self.stock_of(&reading);
         Some(reading)
     }
 
@@ -162,8 +193,8 @@ impl Clocks {
         self.open = true;
         let mut reading = Reading::default();
         unsafe { moonlightClocksRead(&mut reading) };
-        let mut stock = [0u32; CLOCKS];
-        stock.copy_from_slice(&reading.hz[..CLOCKS]);
+        let stock = self.stock_of(&reading);
+        self.held = true;
         let rates = self
             .rates
             .get_or_insert_with(|| core::array::from_fn(rates));
@@ -220,8 +251,8 @@ impl Clocks {
             return;
         };
         let trouble = format!(
-            "late={} dropped={} refused={} wake_misses={}",
-            behind.late, behind.dropped, behind.refused, behind.wake_misses
+            "presented={} arrived={} dropped={} link_lost={} wake_misses={}",
+            behind.presented, behind.arrived, behind.dropped, behind.link_lost, behind.wake_misses
         );
         let Some(clock) = plan::pick(lowered.current, lowered.stock) else {
             if !core::mem::replace(&mut lowered.exhausted, true) {
@@ -259,7 +290,11 @@ impl Clocks {
         };
         for clock in 0..CLOCKS {
             let read = reading.hz[clock];
-            if !lowered.changed[clock] || read < lowered.stock[clock] {
+            let current = lowered.current[clock];
+            if !lowered.changed[clock]
+                || current >= lowered.stock[clock]
+                || read < lowered.stock[clock]
+            {
                 continue;
             }
             let result = set(clock, lowered.current[clock]);
@@ -272,22 +307,36 @@ impl Clocks {
         }
     }
 
-    fn restore(&mut self, reason: &str) {
+    /// Closes our sessions and has the system apply its configuration again, then checks
+    /// the reading; a clock still below its stock rate is set to it, which is logged.
+    fn release(&mut self, reason: &str) {
         self.seen = None;
-        let Some(lowered) = self.lowered.take() else {
+        self.lowered = None;
+        if !core::mem::take(&mut self.held) {
             return;
-        };
-        let mut results = [0u32; CLOCKS];
+        }
+        self.open = true;
+        let result = unsafe { moonlightClocksRelease() };
+        let mut reading = Reading::default();
+        unsafe { moonlightClocksRead(&mut reading) };
+        let stock = self.stock_of(&reading);
+        let mut fallback = Vec::new();
         for clock in 0..CLOCKS {
-            if lowered.changed[clock] {
-                results[clock] = set(clock, lowered.stock[clock]);
+            if reading.clkrst[clock] == 0 && reading.hz[clock] < stock[clock] {
+                let set = set(clock, stock[clock]);
+                fallback.push(format!("{}={}:0x{set:x}", NAMES[clock], mhz(stock[clock])));
             }
         }
+        self.held = !fallback.is_empty();
         log(&format!(
-            "clocks: set cpu={} gpu={} emc={} MHz reason={reason} results={results:x?}",
-            mhz(lowered.stock[0]),
-            mhz(lowered.stock[1]),
-            mhz(lowered.stock[2])
+            "clocks: released reason={reason} apm=0x{result:x} configuration=0x{:08x} read={}/{}/{} stock={}/{}/{} MHz fallback={fallback:?}",
+            reading.configuration,
+            mhz(reading.hz[0]),
+            mhz(reading.hz[1]),
+            mhz(reading.hz[2]),
+            mhz(stock[0]),
+            mhz(stock[1]),
+            mhz(stock[2])
         ));
     }
 

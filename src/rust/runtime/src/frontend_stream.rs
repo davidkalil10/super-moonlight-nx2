@@ -407,12 +407,16 @@ impl Stream {
     pub fn clock_inputs(&self) -> Option<((u32, u32, u32), Signals)> {
         let running = self.running.as_ref()?;
         let (stats, _) = running.counters();
+        let link_lost = running.session.link_stats().map_or(0, |link| {
+            link.frames_lost + link.waiting_drops + link.stall_drops
+        });
         Some((
             running.size,
             Signals {
-                late: stats.late,
-                dropped: stats.dropped,
-                refused: stats.refused,
+                arrived: stats.accepted_units,
+                presented: stats.presented,
+                dropped: stats.dropped + stats.caught_up + crate::stream_stats::discarded_total(),
+                link_lost,
                 wake_misses: crate::stream_stats::wake_misses_total(),
             },
         ))

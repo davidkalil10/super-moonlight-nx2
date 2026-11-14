@@ -368,6 +368,7 @@ pub fn take_decoder_text() -> Option<String> {
 
 static SHOWN_LATE: AtomicU32 = AtomicU32::new(0);
 static DISCARDED: AtomicU32 = AtomicU32::new(0);
+static DISCARDED_TOTAL: AtomicU64 = AtomicU64::new(0);
 static LAST_LATE_NS: AtomicU64 = AtomicU64::new(0);
 static LATE_GAP_SUM_MS: AtomicU64 = AtomicU64::new(0);
 static LATE_GAPS: AtomicU32 = AtomicU32::new(0);
@@ -407,6 +408,12 @@ pub fn shown_late(now_ns: u64) {
 /// A frame replaced by a newer one before it was shown.
 pub fn discarded() {
     DISCARDED.fetch_add(1, Ordering::Relaxed);
+    DISCARDED_TOTAL.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Every frame replaced before it was shown, since the app started.
+pub fn discarded_total() -> u64 {
+    DISCARDED_TOTAL.load(Ordering::Relaxed)
 }
 
 /// An acquire returned after `waited_ns`.

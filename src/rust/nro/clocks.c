@@ -100,6 +100,33 @@ Result moonlightClocksRates(int clock, uint32_t *rates, int32_t max, uint32_t *t
     return result;
 }
 
+/*
+ * Hands the clocks back to the system: closes the clkrst sessions, so none holds a rate, then
+ * applies the active performance configuration again, so pcv programs its own rates.
+ */
+Result moonlightClocksRelease(void)
+{
+    ApmPerformanceMode mode = ApmPerformanceMode_Invalid;
+    u32 configuration = 0;
+    Result result;
+
+    if (clocks.clkrst_tried && R_SUCCEEDED(clocks.clkrst_opened)) {
+        for (int clock = 0; clock < CLOCKS; clock++)
+            if (R_SUCCEEDED(clocks.session_opened[clock]))
+                clkrstCloseSession(&clocks.sessions[clock]);
+        clkrstExit();
+    }
+    clocks.clkrst_tried = false;
+    result = open_apm();
+    if (R_SUCCEEDED(result))
+        result = apmGetPerformanceMode(&mode);
+    if (R_SUCCEEDED(result))
+        result = apmGetPerformanceConfiguration(mode, &configuration);
+    if (R_SUCCEEDED(result))
+        result = apmSetPerformanceConfiguration(mode, configuration);
+    return result;
+}
+
 /* Closes every session moonlightClocksRead opened, so none outlives the stream. */
 void moonlightClocksClose(void)
 {
