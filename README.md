@@ -21,7 +21,8 @@ MOONLIGHT_BUILDER_HOST=my-arm64-box python3 src/rust/build-production.py
 - `MOONLIGHT_BUILDS`: the local build root, `~/moonlight-builds` by default.
 
 The NRO and its receipts land in `$MOONLIGHT_BUILDS/<build-id>/`.
-`--release 0.1.0-rc6` names a tester build with that version, which hbmenu shows.
+`--release 1.0.0` names a release build with that version, which hbmenu shows; a suffix
+such as `1.0.0-test1` marks a test build.
 `--decode120` and `--tcp-video` are test builds.
 
 ### Public devkit

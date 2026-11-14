@@ -54,7 +54,7 @@ def main():
     parser.add_argument("--ui-uncached", action="store_true",
                         help="the pattern build with the UI buffers in non-cached host memory")
     parser.add_argument("--release", metavar="VERSION",
-                        help="the production build for testers, shown in hbmenu as VERSION (e.g. 0.1.0-rc6)")
+                        help="the production build, shown in hbmenu as VERSION (e.g. 1.0.0)")
     parser.add_argument("--diagnostic", choices=SDK_DIAGNOSTICS,
                         help="build this decoder diagnostic instead of the app")
     parser.add_argument("--trials", choices=TRIALS, default=TRIALS[0],
@@ -64,7 +64,7 @@ def main():
                          or args.diagnostic):
         parser.error("--release goes alone")
     if args.release and not re.fullmatch(r"\d+\.\d+\.\d+(-[a-z0-9.]+)?", args.release):
-        parser.error("--release takes a version like 0.1.0 or 0.1.0-rc6")
+        parser.error("--release takes a version like 1.0.0 or 1.0.0-test1")
     if args.release and len(args.release) > 15:
         parser.error("--release is at most 15 characters, the NACP limit")
     if args.ui_uncached and not args.ui_pattern:
