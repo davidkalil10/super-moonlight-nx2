@@ -15,7 +15,8 @@ pub const SURFACES: usize = 2;
 pub const FRAMES: usize = 2;
 /// The most units a backend takes before the oldest one's frame is taken; see `Backend::units`.
 pub const UNITS: usize = 3;
-pub const INPUT_MAX: usize = 1024 * 1024;
+/// The largest unit the decoder takes. Big scene changes at 4K reach past 1 MiB.
+pub const INPUT_MAX: usize = 4 << 20;
 static NEXT_OWNER: AtomicU64 = AtomicU64::new(1);
 
 /// Rows or columns a decoder may pad its pictures with beyond the stream's size.

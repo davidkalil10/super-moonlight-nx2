@@ -428,7 +428,7 @@ impl Stream {
         };
         let (stats, recovery) = running.counters();
         log(&format!(
-            "stream: video units={} bytes={} presented={} dropped={} late={} kept={} caught_up={} refused={} skipped={} idr_requests={}",
+            "stream: video units={} bytes={} presented={} dropped={} late={} kept={} caught_up={} refused={} decoder_oversize={} skipped={} idr_requests={}",
             stats.accepted_units,
             stats.accepted_bytes,
             stats.presented,
@@ -437,6 +437,7 @@ impl Stream {
             stats.kept,
             stats.caught_up,
             stats.refused,
+            stats.oversize,
             recovery.frames_skipped,
             recovery.idr_requests
         ));

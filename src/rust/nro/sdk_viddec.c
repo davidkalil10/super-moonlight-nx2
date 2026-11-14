@@ -6,7 +6,7 @@
 #include <string.h>
 #include <switch.h>
 
-#define INPUT_MAX (1024u * 1024)
+#define INPUT_MAX (4u << 20)
 #define WORK_RESTORE_POLLS 1000
 #define ACQUISITIONS_NOTED 8
 
