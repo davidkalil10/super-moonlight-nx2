@@ -18,7 +18,7 @@ OUTPUT := $(BUILD_DIR)/moonlight-nx2
 NACP_TITLE ?= Moonlight NX2
 NACP_VERSION ?= 0.1.0
 ICON_PATH ?= $(SOURCE_DIR)/icon.jpg
-ARCH := -march=armv8-a+crc+crypto -mtune=cortex-a57 -mtp=soft -fPIE
+ARCH := $(SWITCH2_CPU) -mtp=soft -fPIE
 CPPFLAGS += -I$(LIBNX)/include
 CFLAGS := $(ARCH) -std=gnu11 -O2 -g -Wall -Wextra -Werror -ffunction-sections -fdata-sections
 LDFLAGS := $(ARCH) -specs=$(LIBNX)/switch.specs -Wl,-Map,$(OUTPUT).map -Wl,--wrap=gsvRegisterFrame
