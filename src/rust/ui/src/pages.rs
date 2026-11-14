@@ -118,8 +118,8 @@ const SCREEN_HEIGHT: u32 = 1080;
 const SHEET_GRID_Y: u32 = 186;
 const SHEET_CELL: u32 = 46;
 const SHEET_ITEMS_Y: u32 = 350;
-const SHEET_ITEM: u32 = 84;
-const SHEET_ITEM_GAP: u32 = 21;
+const SHEET_ITEM: u32 = 72;
+const SHEET_ITEM_GAP: u32 = 16;
 const SHEET_ITEM_RADIUS: u32 = 13;
 const SHEET_FOOT_Y: u32 = 984;
 const BADGE_X: u32 = 58;
@@ -1163,6 +1163,12 @@ impl Builder<'_> {
                 item::TOGGLE_STATS,
                 "Show stats on screen",
                 Some(model.stats().label()),
+                pal.ink,
+            ),
+            (
+                item::TOGGLE_JOYCON_MOUSE,
+                "Joy-Con mouse",
+                Some(model.settings().joycon_mouse().label()),
                 pal.ink,
             ),
             (item::RETURN_TO_APPS, "Disconnect", None, pal.ink),

@@ -512,12 +512,13 @@ pub mod pointer {
         if SENSITIVITY.swap(sensitivity, Ordering::Relaxed) != sensitivity {
             REMAINDER.iter().for_each(|r| r.store(0, Ordering::Relaxed));
         }
-        let side = match side {
-            MouseSide::Off => 0,
-            MouseSide::Right => 1,
-            MouseSide::Left => 2,
-        };
-        if SIDE.swap(side, Ordering::Relaxed) != 0 && side == 0 {
+        let label = side.label();
+        let side = side as u8;
+        let was = SIDE.swap(side, Ordering::Relaxed);
+        if was != side {
+            crate::device::log(&alloc::format!("input: joycon mouse side={label}"));
+        }
+        if was != 0 && side == 0 {
             let mut out = [0i32; 8];
             unsafe { moonlightPlatformJoyMouse(0, out.as_mut_ptr()) };
         }
@@ -575,6 +576,14 @@ pub mod pointer {
         SENSITIVITY.load(Ordering::Relaxed)
     }
 
+    pub fn side() -> &'static str {
+        match SIDE.load(Ordering::Relaxed) {
+            1 => MouseSide::Right.label(),
+            2 => MouseSide::Left.label(),
+            _ => MouseSide::Off.label(),
+        }
+    }
+
     /// The USB mouse and the Joy-Con mouse together: their movement adds up and either
     /// one's buttons hold.
     pub fn mouse() -> Option<MouseSample> {
@@ -611,6 +620,10 @@ pub mod pointer {
 
     pub fn sensitivity() -> u32 {
         100
+    }
+
+    pub fn side() -> &'static str {
+        MouseSide::Off.label()
     }
 
     pub fn stop() {}

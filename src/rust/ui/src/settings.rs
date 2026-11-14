@@ -137,6 +137,12 @@ pub enum MouseSide {
     Left,
 }
 
+impl MouseSide {
+    pub fn label(self) -> &'static str {
+        SIDES[self as usize].2
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
 pub enum Size {
@@ -579,6 +585,12 @@ impl Settings {
 
     pub fn joycon_mouse(&self) -> MouseSide {
         SIDES[self.value[Setting::JoyConMouse as usize] as usize].0
+    }
+
+    /// These settings with player 1's Joy-Con mouse on `side`.
+    pub fn with_joycon_mouse(mut self, side: MouseSide) -> Settings {
+        self.value[Setting::JoyConMouse as usize] = side as u8;
+        self
     }
 
     /// How far the Joy-Con mouse moves the pointer, in percent of its sensor's counts.

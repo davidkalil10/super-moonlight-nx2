@@ -8,7 +8,7 @@ use crate::extras::{AppOverride, Extras, INHERIT, MAX_OVERRIDES, OVERRIDABLE};
 use crate::link_choice::LinkChoice;
 use crate::presence::{Presence, Table};
 use crate::readout::{Readout, StreamReadout};
-use crate::settings::{Capabilities, Setting, Settings, StreamOptions};
+use crate::settings::{Capabilities, MouseSide, Setting, Settings, StreamOptions};
 use crate::text::Text;
 use crate::theme::Look;
 
@@ -88,6 +88,7 @@ pub mod item {
     pub const EXPORT_LOGS: u32 = 22;
     pub const CONFIRM_FORGET: u32 = 23;
     pub const SHOW_KEYBOARD: u32 = 24;
+    pub const TOGGLE_JOYCON_MOUSE: u32 = 25;
     pub const CATEGORY: u32 = 50000;
     pub const HOST: u32 = 10000;
     pub const APP: u32 = 20000;
@@ -401,6 +402,8 @@ pub struct Model {
     back_apps: bool,
     from: Screen,
     overlay: bool,
+    /// The side the in-stream menu turns the Joy-Con mouse back on with.
+    joycon_side: MouseSide,
     stream_stats: Message,
     settings: Settings,
     docked: bool,
@@ -499,6 +502,10 @@ impl Model {
             back_apps: false,
             from: Screen::Hosts,
             overlay: false,
+            joycon_side: match settings.joycon_mouse() {
+                MouseSide::Off => MouseSide::Right,
+                side => side,
+            },
             stream_stats: Message::of("FPS --   Bitrate --   Latency --"),
             settings,
             docked: false,
@@ -1507,6 +1514,19 @@ impl Model {
 
         if op == Op::A && item == item::SHOW_KEYBOARD {
             step.add(IntentKind::ShowKeyboard, None);
+            return;
+        }
+        if op == Op::A && item == item::TOGGLE_JOYCON_MOUSE {
+            let side = match self.settings.joycon_mouse() {
+                MouseSide::Off => self.joycon_side,
+                side => {
+                    self.joycon_side = side;
+                    MouseSide::Off
+                }
+            };
+            self.settings = self.settings.with_joycon_mouse(side);
+            step.changed = true;
+            step.add(IntentKind::SaveSettings, None);
             return;
         }
         if op == Op::A && item == item::TOGGLE_STATS {

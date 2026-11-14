@@ -497,7 +497,7 @@ fn execute(
             stream.report();
             if let Some((counters, waiting)) = app.take_input_counters() {
                 log(&format!(
-                    "input: direct records={} rejected={} pad_changes={} pads={:#x} touches={} as_mouse={} mouse_moves={} mouse_sensitivity={}.{:02} sent={} waiting={waiting} send_errors={}",
+                    "input: direct records={} rejected={} pad_changes={} pads={:#x} touches={} as_mouse={} mouse_moves={} joycon_mouse={} mouse_sensitivity={}.{:02} sent={} waiting={waiting} send_errors={}",
                     counters.records,
                     counters.rejected,
                     counters.pad_changes,
@@ -505,6 +505,7 @@ fn execute(
                     counters.touches,
                     counters.mouse_touches,
                     counters.mouse_moves,
+                    crate::hid::pointer::side(),
                     crate::hid::pointer::sensitivity() / 100,
                     crate::hid::pointer::sensitivity() % 100,
                     counters.sent,
