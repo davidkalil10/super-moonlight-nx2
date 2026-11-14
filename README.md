@@ -43,6 +43,15 @@ nightly, then builds the Rust archive and the NRO into a new directory under
 `MOONLIGHT_BUILDS`. `--devkit 20261114` picks a version and `--devkit latest` the newest
 release. The `url` line lets Cargo fetch its git dependencies without a GitHub ssh key.
 
+## CI
+
+`.gitlab-ci.yml` builds the NRO against the pinned devkit and runs the workspace tests on
+every push to `main` and every merge request. Scheduled pipelines build against the latest
+devkit release, so a release that breaks the app fails a pipeline. With
+`DEVKIT_NEWER_ONLY=1` a schedule builds only when that release is not the pinned one. The
+NRO, its map and the build logs are kept as job artifacts. Releases still come from
+`build-production.py`.
+
 ## Run
 
 Copy `moonlight-nx2.nro` to `switch/` on the SD card and start it from the homebrew
