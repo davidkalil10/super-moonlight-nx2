@@ -24,6 +24,25 @@ The NRO and its receipts land in `$MOONLIGHT_BUILDS/<build-id>/`.
 `--release 0.1.0-rc6` names a tester build with that version, which hbmenu shows.
 `--decode120` and `--tcp-video` are test builds.
 
+### Public devkit
+
+The same NRO also builds on x86_64 against the public
+[ounce-devkit](https://github.com/ouncebrew/ounce-devkit), in devkitPro's image:
+
+```sh
+mkdir -p ~/moonlight-builds
+docker run --rm -v "$PWD:/src" -v ~/moonlight-builds:/builds -e MOONLIGHT_BUILDS=/builds \
+  -w /src docker.io/devkitpro/devkita64:20260219 sh -c '
+    git config --global --add safe.directory /src
+    git config --global url."https://github.com/".insteadOf ssh://git@github.com/
+    python3 -B src/rust/build-devkit.py'
+```
+
+The script installs the pinned devkit, checked against its SHA-256, and the pinned Rust
+nightly, then builds the Rust archive and the NRO into a new directory under
+`MOONLIGHT_BUILDS`. `--devkit 20261114` picks a version and `--devkit latest` the newest
+release. The `url` line lets Cargo fetch its git dependencies without a GitHub ssh key.
+
 ## Run
 
 Copy `moonlight-nx2.nro` to `switch/` on the SD card and start it from the homebrew
