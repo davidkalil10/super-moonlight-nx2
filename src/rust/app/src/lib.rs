@@ -9,6 +9,7 @@
 
 pub mod bitrate;
 pub mod dock;
+pub mod clocks;
 pub mod covers;
 pub mod direct;
 pub mod direct_keys;

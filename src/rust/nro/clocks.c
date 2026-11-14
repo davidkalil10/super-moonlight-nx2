@@ -1,7 +1,7 @@
 /*
- * Clock readings while streaming. None of these services is proven inside the hijacked title:
- * every call returns its result for the runtime to log, and a service that does not open is not
- * asked again before the next close. Nothing is changed.
+ * Clock readings and rates while streaming. None of these services is proven inside the hijacked
+ * title: every call returns its result for the runtime to log, and a service that does not open
+ * is not asked again before the next close.
  */
 #include <stdbool.h>
 #include <stdint.h>
@@ -69,6 +69,35 @@ void moonlightClocksRead(MoonlightClockReading *out)
         if (R_SUCCEEDED(out->clkrst[clock]))
             out->clkrst[clock] = clkrstGetClockRate(&clocks.sessions[clock], &out->hz[clock]);
     }
+}
+
+/* Sets one clock, CLOCK_CPU to CLOCK_EMC, through the session moonlightClocksRead opened. */
+Result moonlightClocksSet(int clock, uint32_t hz)
+{
+    if (clock < 0 || clock >= CLOCKS)
+        return MAKERESULT(Module_Libnx, LibnxError_BadInput);
+    open_clkrst();
+    if (R_FAILED(clocks.session_opened[clock]))
+        return clocks.session_opened[clock];
+    return clkrstSetClockRate(&clocks.sessions[clock], hz);
+}
+
+/* The rates one clock can take. *type is PcvClockRatesListType: 1 a list, 2 a range of two. */
+Result moonlightClocksRates(int clock, uint32_t *rates, int32_t max, uint32_t *type, int32_t *count)
+{
+    PcvClockRatesListType list = PcvClockRatesListType_Invalid;
+    Result result;
+
+    *type = 0;
+    *count = 0;
+    if (clock < 0 || clock >= CLOCKS)
+        return MAKERESULT(Module_Libnx, LibnxError_BadInput);
+    open_clkrst();
+    if (R_FAILED(clocks.session_opened[clock]))
+        return clocks.session_opened[clock];
+    result = clkrstGetPossibleClockRates(&clocks.sessions[clock], rates, max, &list, count);
+    *type = (uint32_t)list;
+    return result;
 }
 
 /* Closes every session moonlightClocksRead opened, so none outlives the stream. */

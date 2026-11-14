@@ -162,6 +162,7 @@ impl System {
         &mut self,
         app: &mut Frontend<Directory, NetSocket>,
         renderer: &mut Renderer,
+        stream: Option<crate::clocks::Streaming>,
         now_ms: u64,
     ) {
         let stalled_ms = now_ms.saturating_sub(self.last_tick_ms);
@@ -185,7 +186,13 @@ impl System {
         self.pause_or_resume(app, in_focus, woke, now_ms);
         self.reconnect(app, in_focus, now_ms);
         self.keep_awake(suspend::keeps_awake(app.screen()) && in_focus);
-        self.clocks.tick(app.screen() == Screen::Streaming, now_ms);
+        let clocks = match stream {
+            _ if app.screen() != Screen::Streaming => Err("stream-end"),
+            None => Err("stream-end"),
+            Some(_) if !in_focus => Err("focus"),
+            Some(stream) => Ok(stream),
+        };
+        self.clocks.tick(clocks, now_ms);
         if now_ms >= self.next_read_ms {
             self.next_read_ms = now_ms.saturating_add(READ_MS);
             self.read(app, renderer, now_ms);

@@ -227,6 +227,7 @@ static WAKE_SUM_US: AtomicU64 = AtomicU64::new(0);
 static WAKE_MAX_US: AtomicU32 = AtomicU32::new(0);
 static WAKE_HITS: AtomicU32 = AtomicU32::new(0);
 static WAKE_MISSES: AtomicU32 = AtomicU32::new(0);
+static WAKE_MISSES_TOTAL: AtomicU64 = AtomicU64::new(0);
 static WAKE_BUDGET_SUM_US: AtomicU64 = AtomicU64::new(0);
 
 /// One wait of a turn for its unit's frame: how long, out of what budget, and whether the
@@ -240,7 +241,13 @@ pub fn wake(waited_ns: u64, budget_ns: u64, hit: bool) {
         WAKE_HITS.fetch_add(1, Ordering::Relaxed);
     } else {
         WAKE_MISSES.fetch_add(1, Ordering::Relaxed);
+        WAKE_MISSES_TOTAL.fetch_add(1, Ordering::Relaxed);
     }
+}
+
+/// Every wake that found nothing ready, since the app started.
+pub fn wake_misses_total() -> u64 {
+    WAKE_MISSES_TOTAL.load(Ordering::Relaxed)
 }
 
 /// The waits since the last call as a log line, None when the turns did not wait.

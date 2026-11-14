@@ -17,6 +17,7 @@ use crate::{
 use alloc::{boxed::Box, format, vec};
 use core::cell::Cell;
 use moonlight_nx2_app::{
+    clocks::Signals,
     direct_media::{self, ControlEvents, DirectAudio, DirectVideo},
     direct_stream::Outbox,
     media::Closed,
@@ -106,6 +107,7 @@ struct Running {
     last_record_ms: Option<u64>,
     silent: bool,
     link: Cell<LinkStats>,
+    size: (u32, u32, u32),
 }
 
 impl Running {
@@ -290,6 +292,11 @@ impl Stream {
                 last_record_ms: None,
                 silent: false,
                 link: Cell::new(LinkStats::default()),
+                size: (
+                    u32::from(stream.width),
+                    u32::from(stream.height),
+                    u32::from(stream.fps),
+                ),
             }),
             Err((failure, closed)) => {
                 log(&format!("stream: direct media open failed {failure:?}"));
@@ -394,6 +401,21 @@ impl Stream {
             self.close(client, renderer);
         }
         presented
+    }
+
+    /// The open stream's size and rate, and its trouble so far, for the clocks.
+    pub fn clock_inputs(&self) -> Option<((u32, u32, u32), Signals)> {
+        let running = self.running.as_ref()?;
+        let (stats, _) = running.counters();
+        Some((
+            running.size,
+            Signals {
+                late: stats.late,
+                dropped: stats.dropped,
+                refused: stats.refused,
+                wake_misses: crate::stream_stats::wake_misses_total(),
+            },
+        ))
     }
 
     pub fn report(&self) {

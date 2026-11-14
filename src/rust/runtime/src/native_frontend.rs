@@ -323,7 +323,18 @@ fn execute(
         stream.pump(&mut app.client, renderer, now_ms);
         let compute = app.client.needs_ui_compute(&input, &frame);
         let presented = stream.step(&mut app.client, renderer, &input, now_ms, compute);
-        system.tick(&mut app, renderer, now_ms);
+        let clocked = stream
+            .clock_inputs()
+            .map(|((width, height, fps), signals)| crate::clocks::Streaming {
+                mode: moonlight_nx2_app::clocks::Mode {
+                    width,
+                    height,
+                    fps,
+                    docked: dock.current(),
+                },
+                signals,
+            });
+        system.tick(&mut app, renderer, clocked, now_ms);
         app.client
             .update_native_stats(crate::stream_stats::latest());
         turns.lap(Phase::Stream);
