@@ -6,12 +6,18 @@
 layout(location = 0) flat out uvec4 rect;
 layout(location = 1) flat out uvec4 info;
 layout(location = 2) flat out uint item;
+// What every fragment needs from the storage, read once per vertex: the page base, the
+// scaling filter and the display-to-target scale.
+layout(location = 3) flat out uvec2 page;
+layout(location = 4) flat out vec2 toDisplay;
 const float GLOW_REACH = 56.0;
 const vec2 CORNERS[6] = vec2[](vec2(0, 0), vec2(1, 0), vec2(0, 1), vec2(0, 1),
                                vec2(1, 0), vec2(1, 1));
 void main() {
   uint instance = uint(gl_InstanceIndex), base = pageBase();
   bool visible = pageVisible();
+  page = uvec2(base, word(UI_FILTER));
+  toDisplay = DISPLAY_SIZE / targetSize();
   vec2 origin = vec2(0), extent = DISPLAY_SIZE;
   rect = uvec4(0, 0, uvec2(DISPLAY_SIZE));
   info = uvec4(0);

@@ -1,7 +1,11 @@
 // The picture geometry and colour both video fragment shaders share. Each defines lumaAt and
 // chromaAt (byte offsets from FRAMES_OFFSET) before including this.
 layout(location = 0) flat in uint slot;
+layout(location = 1) flat in uint pictured;
+layout(location = 2) flat in vec4 backdrop;
 layout(location = 0) out vec4 color;
+// The renderer's clear colour, shown under a page background when there is no picture.
+const vec3 CLEAR = vec3(0.012, 0.02, 0.045);
 
 uint slotWord(uint field) { return word(VIDEO_BASE + slot * VIDEO_SLOT_WORDS + field); }
 
@@ -82,21 +86,24 @@ vec3 toRgb(float luma, vec2 chroma) {
   return vec3(y + 1.402 * v, y - 0.344136 * u - 0.714136 * v, y + 1.772 * u);
 }
 
-void main() {
-  if (any(greaterThanEqual(gl_FragCoord.xy, targetSize()))) discard;
+vec3 picture() {
   uvec2 size = uvec2(slotWord(SLOT_WIDTH), slotWord(SLOT_HEIGHT));
   uint stride = slotWord(SLOT_STRIDE);
   vec2 target = targetSize();
   float scale = min(target.x / float(size.x), target.y / float(size.y));
   vec2 s = (gl_FragCoord.xy - (target - vec2(size) * scale) * 0.5) / scale;
-  if (any(lessThan(s, vec2(0))) || any(greaterThanEqual(s, vec2(size)))) {
-    color = vec4(0, 0, 0, 1);
-    return;
-  }
+  if (any(lessThan(s, vec2(0))) || any(greaterThanEqual(s, vec2(size))))
+    return vec3(0);
 
   uint frame = slot * FRAME_BYTES;
   uint chroma = frame + stride * slotWord(SLOT_SLICE_HEIGHT);
   float y = lumaSample(frame, stride, size, s);
   vec2 uv = chromaSample(chroma, stride, size / 2u, s / 2.0);
-  color = vec4(clamp(toRgb(y, uv), 0.0, 1.0), 1);
+  return clamp(toRgb(y, uv), 0.0, 1.0);
+}
+
+void main() {
+  if (any(greaterThanEqual(gl_FragCoord.xy, targetSize()))) discard;
+  vec3 rgb = pictured != 0u ? picture() : CLEAR;
+  color = vec4(mix(rgb, backdrop.rgb, backdrop.a), 1);
 }

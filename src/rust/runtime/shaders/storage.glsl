@@ -7,6 +7,11 @@ layout(set = 0, binding = 1, std430) STORAGE_ACCESS buffer RendererStorage {
 }
 storage;
 uint word(uint index) { return storage.words[index]; }
+vec4 rgba(uint value) {
+  return vec4(value & 255u, (value >> 8u) & 255u, (value >> 16u) & 255u,
+              value >> 24u) /
+         255.0;
+}
 uint pageBase() { return UI_BASE + (word(UI_SHOWN) & 1u) * UI_PAGE_WORDS; }
 // Active drawing size, with 1920x1080 as the unset default.
 vec2 targetSize() {

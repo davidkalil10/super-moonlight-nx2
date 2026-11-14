@@ -24,15 +24,15 @@
   ],
   "compiler": "shaderc v2026.2 2026-04-24spirv-tools v2026.2 2026-04-24glslang d5f08ae5c5a9a45165578445cbd0f9adf0223448\nTarget: SPIR-V 1.0",
   "sources": {
-    "ui-text.frag": "781ac88178e92696b67f97aa8c56932fff581f91ecd9ac930c414c98d8495e3a",
-    "ui.frag": "bee39390effb9d2003dc87243c14667f570dd6a7bbf2598c0b5e2c8253645626",
-    "storage.glsl": "81c18548664c68dfcf7bb9b2ce683234dbcd08b161a6c1756555ace8a912d3e6",
-    "layout.glsl": "8bde7cd080352056066fbe91d12e71cac74cc13e9b3f51c8eeef146d2b7d1306"
+    "ui-text.frag": "5ff2e11dac239ca17d6efea62392dbda8638f71a9a2c70b6ff7ec576f82efe7c",
+    "ui.frag": "5b55ba9aa8baf5ed600e12168fec28c9600f137f150aead9c01fb6bac0b306bd",
+    "storage.glsl": "0bd45d229c4ffc4c3c37d6338bfbef53fa2c9dc952c0ee1d962c64d60b26ebe8",
+    "layout.glsl": "1c1f127f28f2284bfd7a7dc74285f96cd2e6ae50893143a7d425023c347fccad"
   },
   "shader": {
     "path": "ui-text.spv",
-    "bytes": 65800,
-    "sha256": "db0ce0616d944b752f4b9820fe0ade53f27c247e930e43ab3dd7bc5891e4cb5b"
+    "bytes": 64792,
+    "sha256": "38b92051feeb8e1609d4479c34a232a83b900af41c22bbbcc08e0d391912ccb5"
   },
   "scope": "Text branch separated; original colors, sampled alpha and blending retained"
 }

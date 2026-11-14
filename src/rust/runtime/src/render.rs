@@ -2012,6 +2012,7 @@ impl Objects {
                 &[self.set],
                 &[],
             );
+            // video.glsl's CLEAR matches it.
             let clear = [vk::ClearValue {
                 color: vk::ClearColorValue {
                     float32: [0.012, 0.02, 0.045, 1.0],
@@ -2049,7 +2050,9 @@ impl Objects {
                     vk::PipelineBindPoint::GRAPHICS,
                     self.pipelines[1],
                 );
-                self.device().cmd_draw(command, 3, 1, 0, slot as u32);
+                let backdrop = if interactive { frame::VIDEO_SLOTS } else { 0 };
+                self.device()
+                    .cmd_draw(command, 3, 1, 0, (backdrop + slot) as u32);
             }
             self.device().cmd_bind_pipeline(
                 command,
@@ -2057,8 +2060,9 @@ impl Objects {
                 self.pipelines[2],
             );
             if interactive {
+                let first = u32::from(self.current_slot.is_some());
                 self.device()
-                    .cmd_draw(command, 6, frame::UI_INSTANCES + 1, 0, 0);
+                    .cmd_draw(command, 6, frame::UI_INSTANCES + 1 - first, 0, first);
             } else {
                 self.device()
                     .cmd_draw(command, 6, 1, 0, frame::BADGE_INSTANCE);

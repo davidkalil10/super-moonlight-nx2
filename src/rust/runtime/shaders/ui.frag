@@ -6,12 +6,9 @@
 layout(location = 0) flat in uvec4 rect;
 layout(location = 1) flat in uvec4 info;
 layout(location = 2) flat in uint item;
+layout(location = 3) flat in uvec2 page;
+layout(location = 4) flat in vec2 toDisplay;
 layout(location = 0) out vec4 color;
-vec4 rgba(uint value) {
-  return vec4(value & 255u, (value >> 8u) & 255u, (value >> 16u) & 255u,
-              value >> 24u) /
-         255.0;
-}
 uvec2 sourceSize() {
   if (info.x == 1u && (info.z & 65535u) != 0u)
     return uvec2(info.z & 65535u, info.w);
@@ -24,9 +21,9 @@ vec4 bitmapAt(ivec2 point) {
   if (info.x == 5u)
     return rgba(word(BADGE_PIXELS + pixel));
   if (info.x == 1u)
-    return rgba(word(pageBase() + 1024u + info.y / 4u + pixel));
+    return rgba(word(page.x + 1024u + info.y / 4u + pixel));
   uint offset = info.y + pixel;
-  uint packed = word(pageBase() + 1024u + offset / 4u);
+  uint packed = word(page.x + 1024u + offset / 4u);
   return vec4(1, 1, 1, float((packed >> ((offset & 3u) * 8u)) & 255u) / 255.0);
 }
 vec4 premultiplied(vec4 value) {
@@ -74,9 +71,9 @@ vec4 lanczosSample(vec2 q) {
 }
 vec4 bitmapSample(vec2 p) {
   vec2 scale = vec2(sourceSize()) / vec2(rect.zw);
-  if (all(equal(targetSize(), DISPLAY_SIZE)) && scale == vec2(1.0))
+  if (toDisplay == vec2(1.0) && scale == vec2(1.0))
     return bitmapAt(ivec2(p) - ivec2(rect.xy));
-  uint filterMode = word(UI_FILTER);
+  uint filterMode = page.y;
   if (filterMode == 1u)
     return bitmapAt(ivec2(floor((p - vec2(rect.xy)) * scale)));
   vec2 q = (p - vec2(rect.xy)) * scale - 0.5;
@@ -107,8 +104,7 @@ vec4 over(vec4 top, vec4 bottom) {
   return alpha > 0.0 ? vec4(rgb / alpha, alpha) : vec4(0);
 }
 void main() {
-  uint base = pageBase();
-  vec2 p = gl_FragCoord.xy * (DISPLAY_SIZE / targetSize());
+  vec2 p = gl_FragCoord.xy * toDisplay;
   if (info.x == 0u) {
     color = rgba(info.z);
   } else if (info.x == 1u || info.x == 2u) {
@@ -144,7 +140,7 @@ void main() {
           (info.z & 8u) != 0u;
       float pulse =
           pending ? 0.55 + 0.45 * sin(float(word(FRAME_COUNTER)) * 0.4) : 1.0;
-      uint accent = word(base + 12u);
+      uint accent = word(page.x + 12u);
       vec3 ring = accent != 0u ? rgba(accent).rgb : vec3(0.25, 0.85, 0.90);
       float gap = 10.3;
       float distance = roundedBox(p - center, vec2(rect.zw) * 0.5 + gap, float(info.w) + gap);

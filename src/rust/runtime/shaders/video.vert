@@ -2,6 +2,8 @@
 #extension GL_GOOGLE_include_directive : require
 #include "storage.glsl"
 layout(location = 0) flat out uint slot;
+layout(location = 1) flat out uint pictured;
+layout(location = 2) flat out vec4 backdrop;
 
 uint slotWord(uint field) { return word(VIDEO_BASE + slot * VIDEO_SLOT_WORDS + field); }
 
@@ -16,9 +18,16 @@ bool slotFits() {
 
 void main() {
   vec2 p = vec2((gl_VertexIndex << 1) & 2, gl_VertexIndex & 2);
-  slot = uint(gl_InstanceIndex);
+  // Past the slots, the instance also lays the page background over the picture, so the UI
+  // pass needs no full-screen quad of its own.
+  uint instance = uint(gl_InstanceIndex);
+  slot = instance % VIDEO_SLOTS;
   bool covered = pageVisible() && (word(pageBase() + 3u) & 1u) == 0u;
   bool shown = slotWord(SLOT_SEQUENCE) != 0u && slotFits();
-  gl_Position = covered || !shown ? vec4(2, 2, 0, 1)
-                                : vec4(p * targetSize() / backingSize() * 2.0 - 1.0, 0, 1);
+  bool behind = instance >= VIDEO_SLOTS && pageVisible();
+  pictured = shown && !covered ? 1u : 0u;
+  backdrop = behind ? rgba(word(pageBase() + 8u)) : vec4(0);
+  gl_Position = pictured == 0u && !behind
+                    ? vec4(2, 2, 0, 1)
+                    : vec4(p * targetSize() / backingSize() * 2.0 - 1.0, 0, 1);
 }

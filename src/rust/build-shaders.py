@@ -102,6 +102,7 @@ def layout():
         *words("BADGE_", BADGE), *words("TARGET_", TARGET),
         f"const uint VIDEO_BASE = {VIDEO_BASE // 4}u;",
         f"const uint VIDEO_SLOT_WORDS = {VIDEO_SLOT_BYTES // 4}u;",
+        f"const uint VIDEO_SLOTS = {VIDEO_SLOTS}u;",
         f"const uint BADGE_PIXELS = {BADGE_OFFSET // 4}u;",
         f"const uint FRAME_BYTES = {FRAME_BYTES}u;",
         f"const uint FRAME_COUNT = {FRAME_COUNT}u;",
