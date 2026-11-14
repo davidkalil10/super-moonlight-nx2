@@ -162,6 +162,9 @@ Civilization VII payload, Node service and C helper this app replaced.
 
 To [ave](https://gitlab.com/a), who made this possible.
 
+Thanks to kurumuz for [kaiHEN](https://github.com/ouncebrew/kaihen) and the
+[ounce SDK](https://github.com/ouncebrew/ounce-devkit), which make this app possible.
+
 ## Licence
 
 See [LICENSE](LICENSE) and the [font licence](src/rust/ui/fonts/OFL.txt).
