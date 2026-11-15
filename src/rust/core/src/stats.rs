@@ -99,6 +99,11 @@ impl DecoderQueue {
 /// Refreshes in a row that may show a frame held back behind finished ones before those are
 /// dropped: longer than a burst takes to clear while the stream leaves refreshes spare.
 pub const BACKLOG_TURNS: u32 = 8;
+/// Frames a drain drops at most. Skipping a burst's frames all at once shows as a jump.
+pub const DRAIN_FRAMES: usize = 1;
+/// Refreshes after a drain before the next may come, so a deeper backlog is caught up on
+/// gently, one frame at a time, instead of in a cluster of skips.
+pub const BACKLOG_REST: u32 = 30;
 
 /// Whether finished frames queue up in the decoder. With the stream at the display's rate one
 /// unit goes in and one frame comes out each refresh, so the units a burst queued are never
@@ -106,22 +111,28 @@ pub const BACKLOG_TURNS: u32 = 8;
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct Backlog {
     turns: u32,
+    rest: u32,
 }
 
 impl Backlog {
     /// One refresh, showing a frame that waited `waited_ns` in the decoder, `behind` when
     /// another finished frame waits after it. True on the `BACKLOG_TURNS`th such refresh in a
-    /// row whose frame waited over `refresh_ns`, when the frames behind should be dropped.
+    /// row whose frame waited over `refresh_ns`, when up to `DRAIN_FRAMES` behind should be
+    /// dropped, and never within `BACKLOG_REST` refreshes of the last time.
     pub fn turn(&mut self, waited_ns: u64, refresh_ns: u64, behind: bool) -> bool {
+        if self.rest > 0 {
+            self.rest -= 1;
+        }
         if !behind || waited_ns <= refresh_ns {
             self.turns = 0;
             return false;
         }
         self.turns += 1;
-        if self.turns < BACKLOG_TURNS {
+        if self.turns < BACKLOG_TURNS || self.rest > 0 {
             return false;
         }
         self.turns = 0;
+        self.rest = BACKLOG_REST;
         true
     }
 }

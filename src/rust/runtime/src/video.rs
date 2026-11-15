@@ -17,7 +17,7 @@ use moonlight_nx2_core::{
     frame::{Frame, Layout, Matrix, Plane},
     media::Header,
     recovery::{self, Decision, Recovery},
-    stats::{Backlog, DecoderQueue, Stages, StreamStats},
+    stats::{Backlog, DRAIN_FRAMES, DecoderQueue, Stages, StreamStats},
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1027,8 +1027,8 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
     /// network. Only when the decoder stays full for `CATCH_UP_TURNS` refreshes has latency
     /// built up: `submit_draining` then replaces the waiting frame, and so does one taken here.
     /// A decoder that stays full at the display's rate never turns up empty for that, so once
-    /// finished frames queue behind the shown one for `BACKLOG_TURNS` refreshes, the queue is
-    /// drained to its newest frame.
+    /// finished frames queue behind the shown one for `BACKLOG_TURNS` refreshes, one of them is
+    /// skipped.
     /// With VRR the display refreshes on a present, so a frame is presented once it is ready
     /// and a turn without one presents nothing, up to `HOLD_NS`: a late frame then delays one
     /// refresh instead of repeating the previous picture for a whole one.
@@ -1063,7 +1063,7 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
                 }
             }
         }
-        if self.backed_up()? {
+        if self.backed_up() {
             self.drain(renderer, audio)?;
         }
         if vrr && !self.pending && !self.hold_ended(interactive) {
@@ -1073,31 +1073,29 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
     }
 
     /// Whether the frame about to be shown is part of a backlog `Backlog` says to drain: it
-    /// waited over a refresh and another finished frame waits behind it.
-    fn backed_up(&mut self) -> Result<bool, Error> {
+    /// waited over a refresh and another unit waits behind it. That unit need not have
+    /// finished: the drain waits for it within the turn's share, so the last refresh of lag a
+    /// burst leaves is worked off too.
+    fn backed_up(&mut self) -> bool {
         let Some(refresh_ns) = stream_stats::frame_ns() else {
-            return Ok(false);
+            return false;
         };
         let waited_ns = match (self.pending, self.pending_timing) {
             (true, Some(timing)) => timing.waited_ns(),
             _ => 0,
         };
-        let behind = waited_ns > refresh_ns
-            && (self.kept.is_some()
-                || self
-                    .decoder
-                    .wait(0)
-                    .map_err(|error| self.fail(Error::Decoder(error)))?);
-        Ok(self.backlog.turn(waited_ns, refresh_ns, behind))
+        let behind =
+            waited_ns > refresh_ns && (self.kept.is_some() || self.decoder.pending_units() != 0);
+        self.backlog.turn(waited_ns, refresh_ns, behind)
     }
 
-    /// Shows the newest frame in place of the finished ones queued before it, waiting for the
-    /// last unit up to what is left of the turn's share, so the decoder is left empty and the
-    /// next unit is shown on the refresh it arrives in.
+    /// Shows the next finished frame in place of the one queued before it, up to
+    /// `DRAIN_FRAMES`, waiting for it up to what is left of the turn's share. A deeper backlog
+    /// takes further drains, `BACKLOG_REST` refreshes apart.
     fn drain(&mut self, renderer: &mut Renderer, audio: &mut dyn Pump) -> Result<(), Error> {
         let waited_ns = self.pending_timing.map_or(0, |timing| timing.waited_ns());
         let mut frames = 0;
-        while self.kept.is_some() || self.decoder.pending_units() != 0 {
+        while frames < DRAIN_FRAMES && (self.kept.is_some() || self.decoder.pending_units() != 0) {
             self.turns.resume();
             if !self.take(renderer, audio, false)? {
                 break;
