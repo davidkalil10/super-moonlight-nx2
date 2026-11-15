@@ -8,45 +8,19 @@ extern crate alloc;
 use crate::{
     device::log,
     sdk,
+    sdk_modes::{self, verified},
     stream_stats::{self, DecoderEvent, Stage},
 };
 use alloc::format;
 use moonlight_nx2_core::{
     annexb,
-    codec::{Capabilities, Codec, Depth, Evidence, Mode, Size},
+    codec::{Capabilities, Codec},
     decoder::{self, Backend, BackendError, Config, HostImage, SURFACES, UNITS},
     stats::DecoderQueue,
     viddec,
     video_wire::Output,
 };
 
-/// Enable only in a commit citing matching pixel sums and a clean close on the console.
-pub const SDK_H264_VERIFIED: bool = true;
-/// AV1 stays out of the stream offer until the diagnostic shows matching sums on the console.
-pub const SDK_AV1_VERIFIED: bool = true;
-/// AV1 at 2160p60, configured at 30 (`viddec::session`): a real stream decoded, showed 914 of
-/// 1139 frames and closed cleanly on the console (3cf0628, 20261110T121625Z-3cf0628-sdk-
-/// integration/docked-modes/collected/runtime-000000629006da48.log).
-pub const SDK_AV1_2160P_VERIFIED: bool = true;
-/// H.264 at 2160p decoded 60 fed frames a second in the diagnostic with the decoder full on
-/// nearly every turn, and has not streamed: 2160p is AV1 only.
-pub const SDK_H264_2160P_VERIFIED: bool = false;
-/// 120 units a second were decoded at 1440p on AV1 by a decoder configured at 60, in a real
-/// stream on the console (2026-11-10). The display decides whether 120 is offered.
-const FAST_FPS: u32 = 120;
-/// Largest size and rate per tier, and whether it is offered on AV1 and on H.264. AV1 comes
-/// first and a tier may be offered on it alone: H.264 is the fallback, not a condition.
-const MODES: [(u32, u32, u32, bool, bool); 3] = [
-    (1920, 1080, FAST_FPS, true, true),
-    (2560, 1440, FAST_FPS, true, true),
-    (
-        3840,
-        2160,
-        60,
-        SDK_AV1_2160P_VERIFIED,
-        SDK_H264_2160P_VERIFIED,
-    ),
-];
 /// The SDK object's images: one shown and one waiting to be, while two more decode. With
 /// the two surfaces alone a held frame kept the next unit from decoding until it was shown.
 const SDK_BUFFERS: u32 = SURFACES as u32 + 2;
@@ -208,14 +182,6 @@ impl Tuning {
     };
 }
 
-fn verified(codec: Codec) -> bool {
-    match codec {
-        Codec::H264 => SDK_H264_VERIFIED,
-        Codec::Av1 => SDK_AV1_VERIFIED,
-        Codec::Hevc | Codec::Vp9 => false,
-    }
-}
-
 /// A verified codec, or AV1 in the diagnostic that verifies it.
 fn accepted(codec: Codec) -> bool {
     verified(codec) || (codec == Codec::Av1 && cfg!(feature = "diagnostic-sdk-decode"))
@@ -224,7 +190,7 @@ fn accepted(codec: Codec) -> bool {
 /// Logs the size the service reports for one image of every output format, HDR included.
 /// It opens the decoder root by itself, so call it with no session open.
 #[cfg(feature = "diagnostic-sdk-decode")]
-pub fn note_output_formats(size: Size) {
+pub fn note_output_formats(size: moonlight_nx2_core::codec::Size) {
     unsafe { moonlightSdkVideoNoteFormats(size.width(), size.height()) }
 }
 
@@ -441,23 +407,7 @@ fn check(operation: &str, result: u32) -> Result<(), BackendError> {
 
 impl Backend for SdkVideo {
     fn capabilities() -> Capabilities {
-        let mut capabilities = Capabilities::default();
-        for (width, height, fps, av1, h264) in MODES {
-            for (codec, offered) in [(Codec::Av1, av1), (Codec::H264, h264)] {
-                if verified(codec) && offered {
-                    capabilities.record(
-                        Mode {
-                            codec,
-                            depth: Depth::Eight,
-                            maximum: Size::new(width, height).unwrap(),
-                            fps,
-                        },
-                        Evidence::PixelsAndCloseVerified,
-                    );
-                }
-            }
-        }
-        capabilities
+        sdk_modes::capabilities()
     }
 
     fn open(&mut self, config: Config) -> Result<[u32; SURFACES], BackendError> {

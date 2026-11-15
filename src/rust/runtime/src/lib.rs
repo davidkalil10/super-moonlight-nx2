@@ -58,6 +58,7 @@ pub mod render;
 mod render_platform;
 #[cfg(target_os = "none")]
 pub mod sdk;
+pub mod sdk_modes;
 #[cfg(all(target_os = "none", feature = "frontend"))]
 mod sdk_video;
 #[cfg(any(target_os = "none", feature = "host-renderer"))]
