@@ -1,4 +1,4 @@
-# moonlight-nx2 1.1.0-test1
+# moonlight-nx2 1.1.0-test2
 
 Test build for 1.1.0. Changes since 1.0.1. Needs kaiHEN release `20261114c` or later.
 
@@ -6,7 +6,7 @@ Test build for 1.1.0. Changes since 1.0.1. Needs kaiHEN release `20261114c` or l
 - Cuts about 33 ms of latency docked at 60 Hz and about 17 ms handheld at 120 Hz when the decoder got stuck three frames behind after a burst. The queue now drains once to the newest frame and stays at one frame in flight.
 - Keyframes up to 4 MiB now decode above 1080p, not only at 4K. 1440p H.264 is decoded in the same tier as 4K, and big scene cuts there were dropped.
 - When the PC keeps sending keyframes too big for the console, the app asks for new ones less often and shows a note to lower the bitrate, instead of asking every half second.
-- 1440p H.264 is offered at 60 fps only. It decoded about 96 frames a second at 120. AV1 keeps 1440p120.
+- 1440p120 H.264 stays offered; with the queue drained it should keep up better. If the frame counter stays well under 120, use 60.
 - A stream whose PC sent no video now says so and points at the PC's firewall, instead of saying the console could not play it.
 
 ## Touch
