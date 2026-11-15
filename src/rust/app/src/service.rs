@@ -199,6 +199,9 @@ pub enum RuntimeEvent {
     /// The PC refused the media connection; reported just before `MediaFailed` so its
     /// message points at the PC.
     MediaRefused,
+    /// The PC sent no video; reported just before `MediaFailed` so its message points at the
+    /// PC.
+    MediaSilent,
     /// Every media channel ended cleanly and drained (`Progress.drained`) while streaming.
     MediaEnded,
     /// Media closed; `retained` when any decoder/GPU/audio resource could not be released.
@@ -342,6 +345,7 @@ pub struct Service {
     input_paused: bool,
     streamed: bool,
     media_refused: bool,
+    media_silent: bool,
     /// A stream that had shown frames is starting again after its media failed.
     resuming: bool,
     now_ms: u64,
@@ -405,6 +409,7 @@ impl Service {
             input_paused: false,
             streamed: false,
             media_refused: false,
+            media_silent: false,
             resuming: false,
             now_ms: 0,
             resumes: 0,
@@ -720,6 +725,9 @@ impl Service {
             RuntimeEvent::MediaFailed => self.media_failed(),
             RuntimeEvent::MediaRefused => {
                 self.media_refused = matches!(self.phase, Phase::Opening | Phase::Streaming)
+            }
+            RuntimeEvent::MediaSilent => {
+                self.media_silent = matches!(self.phase, Phase::Opening | Phase::Streaming)
             }
             RuntimeEvent::MediaEnded => self.host_ended(),
             RuntimeEvent::MediaClosed { retained } => self.media_closed(retained),
@@ -1041,6 +1049,7 @@ impl Service {
         self.upstream = false;
         self.streamed = false;
         self.media_refused = false;
+        self.media_silent = false;
     }
 
     /// Holds a launch while the earlier stream closes; the newest request replaces an older one
@@ -1874,6 +1883,8 @@ impl Service {
         }
         let reason = if self.media_refused {
             "the PC stopped answering for video. Restart Sunshine on the PC, then try again"
+        } else if self.media_silent {
+            "the PC sent no video. Check that its firewall lets Sunshine's video port through, then try again"
         } else {
             "the console could not play it"
         };

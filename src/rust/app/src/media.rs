@@ -151,6 +151,12 @@ impl Failure {
             Self::Connect(_, IoError::Refused(_)) | Self::Udp(udp::Error::Io(IoError::Refused(_)))
         )
     }
+
+    /// The PC sent no video at all after the stream opened, so the console had nothing to
+    /// play.
+    pub fn silent_host(self) -> bool {
+        matches!(self, Self::Udp(udp::Error::ConnectTimeout))
+    }
 }
 
 /// Common video ownership boundary. UDP acceptance keeps its slot until feedback is queued;

@@ -138,15 +138,18 @@ pub fn step<
     result.map_err(Error::Media)
 }
 
-/// Tells the service the PC refused the media before the failure itself is observed.
+/// Tells the service when the PC is at fault, before the failure itself is observed.
 fn report_refusal<F: Files + Clone, T>(
     client: &mut Client<F>,
     result: &Result<T, media_session::Error>,
 ) {
-    if let Err(media_session::Error::Media(failure)) = result
-        && failure.refused_by_host()
-    {
+    let Err(media_session::Error::Media(failure)) = result else {
+        return;
+    };
+    if failure.refused_by_host() {
         client.runtime(RuntimeEvent::MediaRefused);
+    } else if failure.silent_host() {
+        client.runtime(RuntimeEvent::MediaSilent);
     }
 }
 
