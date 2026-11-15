@@ -47,6 +47,12 @@ settings, in this order, has the most effect.
   pacing helps far more.
 - **Resolution**: stream at the TV's resolution, or the handheld's 1080p. 4K needs a strong
   link even when paced.
+- **AMD on Linux (VA-API) with H.264**: set `vaapi_strict_rc_buffer = enabled` in
+  `sunshine.conf`. Without it, keyframes after a scene cut can grow far past the bitrate and
+  come out blocky or frozen on the console until the next one.
+- **4K and 120 fps cost latency on the console**: each frame takes longer to decode, so
+  1080p60 or 1440p60 answers faster than 4K or 120 fps on the same link. 1440p on H.264 is
+  offered at 60 fps only.
 
 ## In the app
 
