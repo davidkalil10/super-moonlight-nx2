@@ -19,7 +19,7 @@ vec4 bitmapAt(ivec2 point) {
   uvec2 q = uvec2(clamp(point, ivec2(0), ivec2(size) - 1));
   uint pixel = q.y * size.x + q.x;
   if (info.x == 5u)
-    return rgba(word(BADGE_PIXELS + pixel));
+    return rgba(word(info.y + pixel));
   if (info.x == 1u)
     return rgba(word(page.x + 1024u + info.y / 4u + pixel));
   uint offset = info.y + pixel;

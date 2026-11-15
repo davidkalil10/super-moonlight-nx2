@@ -10,6 +10,7 @@ pub const FEATURE_PEN_TOUCH: u32 = 0x01;
 pub const FEATURE_CONTROLLER_TOUCH: u32 = 0x02;
 
 pub const TYPE_UNKNOWN: u8 = 0x00;
+pub const TYPE_XBOX: u8 = 0x01;
 pub const CAP_ANALOG_TRIGGERS: u16 = 0x01;
 pub const CAP_RUMBLE: u16 = 0x02;
 pub const CAP_TRIGGER_RUMBLE: u16 = 0x04;
@@ -67,6 +68,9 @@ pub const ARRIVAL_BUTTONS: u32 = 0x1000
 /// DualShock 4 or DualSense by the motion sensors, as the helper's worker has it.
 pub const ARRIVAL_CAPS: u16 =
     CAP_ANALOG_TRIGGERS | CAP_RUMBLE | CAP_TRIGGER_RUMBLE | CAP_ACCEL | CAP_GYRO;
+
+/// A pad without sensors, such as the on-screen one, arrives as a plain Xbox controller.
+pub const PLAIN_CAPS: u16 = CAP_ANALOG_TRIGGERS | CAP_RUMBLE;
 
 /// One plaintext input packet and how it travels on the control connection.
 #[derive(Clone, Debug, PartialEq, Eq)]

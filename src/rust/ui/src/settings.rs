@@ -35,10 +35,12 @@ pub enum Setting {
     ButtonLayout,
     JoyConMouse,
     MouseSensitivity,
+    VirtualPad,
+    PadOpacity,
 }
 
 impl Setting {
-    pub const COUNT: usize = 17;
+    pub const COUNT: usize = 19;
     pub const ALL: [Setting; Self::COUNT] = [
         Setting::Size,
         Setting::Fps,
@@ -57,6 +59,8 @@ impl Setting {
         Setting::ButtonLayout,
         Setting::JoyConMouse,
         Setting::MouseSensitivity,
+        Setting::VirtualPad,
+        Setting::PadOpacity,
     ];
 
     pub fn from_index(index: usize) -> Option<Self> {
@@ -83,7 +87,9 @@ impl Setting {
             | Self::Rumble
             | Self::ButtonLayout
             | Self::JoyConMouse
-            | Self::MouseSensitivity => 2,
+            | Self::MouseSensitivity
+            | Self::VirtualPad
+            | Self::PadOpacity => 2,
             Self::QuitOnReturn | Self::StreamInfo | Self::FrameCounter | Self::Theme => 3,
         }
     }
@@ -112,6 +118,8 @@ impl Setting {
                 "Player 1's Joy-Con on a table moves the mouse; its shoulder buttons click"
             }
             Self::MouseSensitivity => "How far the pointer moves for each move of the Joy-Con",
+            Self::VirtualPad => "Touch controls over the stream in handheld mode",
+            Self::PadOpacity => "How strongly the touch controls show over the stream",
         }
     }
 
@@ -285,6 +293,7 @@ enum RowKind {
     Layout,
     Side,
     Sensitivity,
+    Opacity,
 }
 
 struct Row {
@@ -348,6 +357,8 @@ const ROWS: [Row; Setting::COUNT] = [
         8,
         3,
     ),
+    row("virtualPad", "Virtual gamepad", RowKind::Toggle, 2, 0),
+    row("padOpacity", "Gamepad opacity", RowKind::Opacity, 5, 2),
 ];
 
 const STRENGTHS: [u32; 5] = [0, 25, 50, 75, 100];
@@ -361,6 +372,7 @@ const SIDES: [(MouseSide, &str, &str); 3] = [
     (MouseSide::Left, "left", "Left"),
 ];
 const SENSITIVITIES: [u32; 8] = [25, 50, 75, 100, 125, 150, 200, 300];
+const OPACITIES: [u32; 5] = [20, 35, 50, 65, 80];
 
 fn multiplier(index: u8) -> f64 {
     f64::from(SENSITIVITIES[index as usize]) / 100.0
@@ -615,9 +627,29 @@ impl Settings {
         SENSITIVITIES[self.value[Setting::MouseSensitivity as usize] as usize]
     }
 
-    /// Whether the Settings page lists the row; sensitivity only matters with a Joy-Con mouse.
+    pub fn virtual_pad(&self) -> bool {
+        self.on(Setting::VirtualPad)
+    }
+
+    /// These settings with the on-screen gamepad on or off.
+    pub fn with_virtual_pad(mut self, on: bool) -> Settings {
+        self.value[Setting::VirtualPad as usize] = u8::from(on);
+        self
+    }
+
+    /// How opaque the on-screen gamepad is drawn, in percent.
+    pub fn pad_opacity(&self) -> u32 {
+        OPACITIES[self.value[Setting::PadOpacity as usize] as usize]
+    }
+
+    /// Whether the Settings page lists the row; sensitivity only matters with a Joy-Con mouse
+    /// and opacity only with the on-screen gamepad.
     pub fn shown(&self, setting: Setting) -> bool {
-        setting != Setting::MouseSensitivity || self.joycon_mouse() != MouseSide::Off
+        match setting {
+            Setting::MouseSensitivity => self.joycon_mouse() != MouseSide::Off,
+            Setting::PadOpacity => self.virtual_pad(),
+            _ => true,
+        }
     }
 
     pub fn theme(&self) -> Preference {
@@ -965,6 +997,7 @@ impl Settings {
                 RowKind::Layout => write!(out, "\"{}\"", LAYOUTS[value as usize].1),
                 RowKind::Side => write!(out, "\"{}\"", SIDES[value as usize].1),
                 RowKind::Sensitivity => write!(out, "{}", multiplier(value)),
+                RowKind::Opacity => write!(out, "{}", OPACITIES[value as usize]),
             };
         }
         if self.fps_before_4k != 0 {
@@ -1103,6 +1136,10 @@ fn match_value(value: Value<'_>, row: &Row) -> Option<u8> {
         RowKind::Sensitivity => {
             (0..SENSITIVITIES.len() as u8).find(|&i| number == Some(multiplier(i)))
         }
+        RowKind::Opacity => OPACITIES
+            .iter()
+            .position(|&percent| number == Some(f64::from(percent)))
+            .map(|i| i as u8),
     }
 }
 
@@ -1152,6 +1189,7 @@ impl core::fmt::Display for ValueText<'_> {
             RowKind::Layout => f.write_str(LAYOUTS[value as usize].2),
             RowKind::Side => f.write_str(SIDES[value as usize].2),
             RowKind::Sensitivity => write!(f, "{}\u{d7}", multiplier(value)),
+            RowKind::Opacity => write!(f, "{} %", OPACITIES[value as usize]),
         }
     }
 }

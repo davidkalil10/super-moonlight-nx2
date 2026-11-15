@@ -140,6 +140,8 @@ pub struct Client<F> {
     native_stats: Option<moonlight_nx2_core::stats::StreamStats>,
     session_us: u64,
     badge: crate::policy_badge::Badge,
+    pad_overlay: moonlight_nx2_app::pad_overlay::Overlay,
+    pad_shown: bool,
 }
 
 pub(crate) fn ui_capabilities(context: &moonlight_nx2_app::policy::Context) -> Capabilities {
@@ -322,7 +324,39 @@ impl<F: Files + Clone> Client<F> {
             native_stats: None,
             session_us: 0,
             badge: crate::policy_badge::Badge::default(),
+            pad_overlay: moonlight_nx2_app::pad_overlay::Overlay::new(),
+            pad_shown: false,
         })
+    }
+
+    /// Shows the on-screen gamepad with `pressed` held, or hides it. Returns the storage bytes
+    /// drawn, to flush.
+    pub fn draw_virtual_pad(
+        &mut self,
+        bytes: &mut [u8],
+        pressed: Option<u32>,
+    ) -> Option<core::ops::Range<usize>> {
+        use moonlight_nx2_app::pad_overlay::BYTES;
+        use moonlight_nx2_core::frame::{PAD_OFFSET, PAD_VISIBLE};
+        let visible = bytes.get_mut(PAD_VISIBLE..PAD_VISIBLE + 4)?;
+        visible.copy_from_slice(&u32::from(pressed.is_some()).to_le_bytes());
+        if !core::mem::replace(&mut self.pad_shown, pressed.is_some()) {
+            self.pad_overlay.reset();
+        }
+        let pressed = pressed?;
+        let settings = self.bridge.model().stream_settings();
+        let nintendo =
+            settings.button_layout() == moonlight_nx2_ui::settings::ButtonLayout::Nintendo;
+        let area = bytes.get_mut(PAD_OFFSET..PAD_OFFSET + BYTES)?;
+        self.pad_overlay
+            .draw(
+                self.composer.glyphs_mut(),
+                area,
+                pressed,
+                settings.pad_opacity(),
+                nintendo,
+            )
+            .map(|range| PAD_OFFSET + range.start..PAD_OFFSET + range.end)
     }
 
     fn save_extras(&mut self) {

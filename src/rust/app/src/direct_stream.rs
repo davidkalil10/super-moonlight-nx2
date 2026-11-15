@@ -146,6 +146,11 @@ impl Live {
         channel.input.keyboard(keyboard);
     }
 
+    /// See `DirectInput::set_plain_player`; flushed with the next pump.
+    pub fn set_plain_player(&mut self, player: Option<u8>) {
+        self.channel.borrow_mut().input.set_plain_player(player);
+    }
+
     /// The input counters since the last call, and the packets still waiting.
     pub fn take_input_counters(&mut self) -> (direct_input::Counters, usize) {
         self.channel.borrow_mut().input.take_counters()

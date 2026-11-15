@@ -2067,8 +2067,13 @@ impl Objects {
                 self.device()
                     .cmd_draw(command, 6, frame::UI_INSTANCES + 1 - first, 0, first);
             } else {
-                self.device()
-                    .cmd_draw(command, 6, 1, 0, frame::BADGE_INSTANCE);
+                self.device().cmd_draw(
+                    command,
+                    6,
+                    1 + frame::PAD_INSTANCES,
+                    0,
+                    frame::BADGE_INSTANCE,
+                );
             }
             self.device().cmd_end_render_pass(command);
             self.record_present_transition(command, self.targets[image].image);

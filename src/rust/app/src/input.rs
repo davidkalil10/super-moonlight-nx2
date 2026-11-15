@@ -221,6 +221,35 @@ impl Touches {
     }
 }
 
+/// Keeps the points of a raw touch block whose finger `keep` accepts, in order, and lowers
+/// the count to match.
+pub fn retain_touch_block(block: &mut [u8], keep: impl Fn(u32) -> bool) {
+    let present = (block.len() / 4).saturating_sub(HEADER_WORDS) / POINT_WORDS;
+    let count = (word(block, COUNT_WORD) as usize)
+        .min(MAX_POINTS)
+        .min(present);
+    let point_bytes = POINT_WORDS * 4;
+    let mut kept = 0;
+    for index in 0..count {
+        let base = (HEADER_WORDS + index * POINT_WORDS) * 4;
+        if !keep(word(
+            block,
+            HEADER_WORDS + index * POINT_WORDS + FINGER_WORD,
+        )) {
+            continue;
+        }
+        let to = (HEADER_WORDS + kept * POINT_WORDS) * 4;
+        block.copy_within(base..base + point_bytes, to);
+        kept += 1;
+    }
+    if kept != count {
+        let start = (HEADER_WORDS + kept * POINT_WORDS) * 4;
+        let end = (HEADER_WORDS + count * POINT_WORDS) * 4;
+        block[start..end].fill(0);
+        block[COUNT_WORD * 4..COUNT_WORD * 4 + 4].copy_from_slice(&(kept as u32).to_le_bytes());
+    }
+}
+
 fn word(bytes: &[u8], index: usize) -> u32 {
     let at = index * 4;
     match bytes.get(at..at + 4) {

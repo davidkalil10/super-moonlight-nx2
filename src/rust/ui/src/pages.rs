@@ -1643,6 +1643,18 @@ impl Builder<'_> {
                 pal.ink,
             ),
         ]);
+        if !model.docked() {
+            items.push((
+                item::TOGGLE_VIRTUAL_PAD,
+                "Virtual gamepad",
+                Some(if model.settings().virtual_pad() {
+                    "On"
+                } else {
+                    "Off"
+                }),
+                pal.ink,
+            ));
+        }
         if mouse {
             items.push((
                 item::SETTING + sensitivity as u32,

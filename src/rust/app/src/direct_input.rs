@@ -11,7 +11,7 @@ use crate::reply::{RUMBLE_PLAYERS, Rumble};
 use alloc::vec::Vec;
 use moonlight_nx2_sunshine::control::{ControlSender, HostEvent};
 use moonlight_nx2_sunshine::input::{FEATURE_PEN_TOUCH, PadValues};
-use moonlight_nx2_sunshine::session::{self, Feedback, PADS, Session, Touch, TouchAction};
+use moonlight_nx2_sunshine::session::{self, Feedback, PADS, PadKind, Session, Touch, TouchAction};
 
 const LIMIT: usize = 3840;
 const MAX_TOUCH: usize = 32;
@@ -181,6 +181,19 @@ impl DirectInput {
         }
         self.pointer.release(&mut self.session);
         self.stopped = true;
+    }
+
+    /// The player the on-screen pad plays, if any: it arrives as a plain Xbox controller and
+    /// every other player as a pad with motion. Set it before the records that carry it.
+    pub fn set_plain_player(&mut self, player: Option<u8>) {
+        for index in 0..PADS as u8 {
+            let kind = if player == Some(index) {
+                PadKind::Plain
+            } else {
+                PadKind::Motion
+            };
+            let _ = self.session.set_kind(index, kind);
+        }
     }
 
     /// Types text on the PC, one packet per character; false when it is empty or too long.

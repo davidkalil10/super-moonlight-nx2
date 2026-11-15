@@ -4,8 +4,12 @@
 
 use crate::input::EXTRA_PADS;
 
-/// Controller sources in the Switch's player order: handheld, then No1 to No8.
-pub const SOURCES: usize = 9;
+/// Controller sources in the Switch's player order: handheld, then No1 to No8, and last the
+/// on-screen pad, so it takes the lowest player no controller holds.
+pub const SOURCES: usize = 10;
+/// The sources the platform reads; the on-screen pad comes after them.
+pub const PLATFORM_SOURCES: usize = 9;
+pub const VIRTUAL_SOURCE: u8 = 9;
 /// Player slots the frame block carries.
 pub const PLAYERS: usize = EXTRA_PADS + 1;
 /// Players that are routed, sent as Moonlight controllers 0 to 3.
@@ -119,7 +123,7 @@ pub fn changes(old: &Slots, new: &Slots) -> impl Iterator<Item = Change> {
 /// The Switch's name for a source: Handheld, then No1 to No8.
 pub fn source_name(source: u8) -> &'static str {
     const NAMES: [&str; SOURCES] = [
-        "handheld", "no1", "no2", "no3", "no4", "no5", "no6", "no7", "no8",
+        "handheld", "no1", "no2", "no3", "no4", "no5", "no6", "no7", "no8", "virtual",
     ];
     NAMES.get(usize::from(source)).copied().unwrap_or("unknown")
 }

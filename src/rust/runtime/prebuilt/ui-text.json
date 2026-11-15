@@ -25,14 +25,14 @@
   "compiler": "shaderc v2026.2 2026-04-24spirv-tools v2026.2 2026-04-24glslang d5f08ae5c5a9a45165578445cbd0f9adf0223448\nTarget: SPIR-V 1.0",
   "sources": {
     "ui-text.frag": "5ff2e11dac239ca17d6efea62392dbda8638f71a9a2c70b6ff7ec576f82efe7c",
-    "ui.frag": "5b55ba9aa8baf5ed600e12168fec28c9600f137f150aead9c01fb6bac0b306bd",
+    "ui.frag": "41db1ead813bb309c2b41775c4a75f9e7d78db40f9503a9a9ed4ffd0f7a0e8e8",
     "storage.glsl": "0bd45d229c4ffc4c3c37d6338bfbef53fa2c9dc952c0ee1d962c64d60b26ebe8",
-    "layout.glsl": "1c1f127f28f2284bfd7a7dc74285f96cd2e6ae50893143a7d425023c347fccad"
+    "layout.glsl": "d80692b294f13d50e9f6148f3afbee8e667e52f1251a36fa7bf098c76305da4f"
   },
   "shader": {
     "path": "ui-text.spv",
-    "bytes": 64792,
-    "sha256": "38b92051feeb8e1609d4479c34a232a83b900af41c22bbbcc08e0d391912ccb5"
+    "bytes": 65532,
+    "sha256": "e87ff2dd6ce34d50edd9034693d10b44dbc97141706996d3d1021581e5d2957a"
   },
   "scope": "Text branch separated; original colors, sampled alpha and blending retained"
 }

@@ -56,11 +56,16 @@ void main() {
     visible = starting || (visible && word(HOST_BUSY) != 0u);
     rect = starting ? uvec4(936, 516, 48, 48) : uvec4(1836, 36, 48, 48);
     info.x = 4u;
-  } else {
+  } else if (instance == 128u) {
     visible = word(BADGE_VISIBLE) != 0u;
     rect = uvec4(word(BADGE_X), word(BADGE_Y), word(BADGE_WIDTH),
                  word(BADGE_HEIGHT));
-    info.x = 5u;
+    info.xy = uvec2(5u, BADGE_PIXELS);
+  } else {
+    uint side = instance - 129u;
+    visible = word(PAD_VISIBLE) != 0u;
+    rect = side == 0u ? PAD_AREA_0 : PAD_AREA_1;
+    info.xy = uvec2(5u, PAD_PIXELS + side * PAD_AREA_WORDS);
   }
   if (instance != 0u) {
     origin = vec2(rect.xy);

@@ -89,6 +89,7 @@ pub mod item {
     pub const CONFIRM_FORGET: u32 = 23;
     pub const SHOW_KEYBOARD: u32 = 24;
     pub const TOGGLE_JOYCON_MOUSE: u32 = 25;
+    pub const TOGGLE_VIRTUAL_PAD: u32 = 26;
     pub const CATEGORY: u32 = 50000;
     pub const HOST: u32 = 10000;
     pub const APP: u32 = 20000;
@@ -908,7 +909,6 @@ impl Model {
         self.link_choice.as_ref()
     }
 
-    /// The network test's one line: what it measured and picked, or why it could not run.
     /// The throughput the network test measured, in kbps, when a fixed bitrate asks for more.
     pub fn bitrate_over_test(&self) -> Option<u32> {
         let options = self
@@ -918,6 +918,7 @@ impl Model {
         (!options.bitrate_auto && options.bitrate_kbps > measured).then_some(measured)
     }
 
+    /// The network test's one line: what it measured and picked, or why it could not run.
     pub fn link_note(&self) -> &str {
         self.link_note.as_str()
     }
@@ -1558,6 +1559,12 @@ impl Model {
                 }
             };
             self.settings = self.settings.with_joycon_mouse(side);
+            step.changed = true;
+            step.add(IntentKind::SaveSettings, None);
+            return;
+        }
+        if op == Op::A && item == item::TOGGLE_VIRTUAL_PAD && !self.docked {
+            self.settings = self.settings.with_virtual_pad(!self.settings.virtual_pad());
             step.changed = true;
             step.add(IntentKind::SaveSettings, None);
             return;

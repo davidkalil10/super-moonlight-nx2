@@ -244,6 +244,7 @@ fn execute(
     let mut second = start;
     let (mut publishes, mut busy_publishes) = ([0u32; 2], [0u32; 2]);
     let mut turns = Turns::default();
+    let mut shown_pad = (false, None, None);
     while unsafe { sdk::appletMainLoop() } && !app.exiting() && !sdk::process_retired() {
         let now = unsafe { sdk::moonlightNowNs() };
         turns.begin(now);
@@ -290,6 +291,37 @@ fn execute(
             },
             used.mouse_sensitivity(),
         );
+        let streaming = app.screen() == Screen::Streaming;
+        let menu_open = app.client.bridge.model().overlay();
+        sampler.set_virtual_pad(
+            streaming && used.virtual_pad() && !dock.current(),
+            menu_open,
+        );
+        let virtual_player = sampler.virtual_player();
+        app.set_plain_player(virtual_player);
+        let pad_state = (
+            sampler.virtual_pad().is_some(),
+            virtual_player,
+            sampler
+                .virtual_pad()
+                .filter(|_| !menu_open)
+                .map(|pad| pad.pressed()),
+        );
+        if pad_state != shown_pad {
+            if (pad_state.0, pad_state.1) != (shown_pad.0, shown_pad.1) {
+                log(&format!(
+                    "input: virtual pad {} player={}",
+                    if pad_state.0 { "on" } else { "off" },
+                    virtual_player.map_or(0, |player| player + 1)
+                ));
+            }
+            if let Ok(bytes) = renderer.storage_mut()
+                && let Some(range) = app.client.draw_virtual_pad(bytes, pad_state.2)
+            {
+                let _ = renderer.flush_page(range);
+            }
+            shown_pad = pad_state;
+        }
         let frame = match renderer
             .storage_mut()
             .ok()
@@ -498,8 +530,12 @@ fn execute(
             ));
             stream.report();
             if let Some((counters, waiting)) = app.take_input_counters() {
+                let virtual_pad = match sampler.virtual_pad_mut() {
+                    Some(pad) => format!("{}", pad.take_presses()),
+                    None => alloc::string::String::from("off"),
+                };
                 log(&format!(
-                    "input: direct records={} rejected={} pad_changes={} pads={:#x} touches={} as_mouse={} mouse_moves={} joycon_mouse={} mouse_sensitivity={}.{:02} sent={} waiting={waiting} send_errors={}",
+                    "input: direct records={} rejected={} pad_changes={} pads={:#x} touches={} as_mouse={} mouse_moves={} joycon_mouse={} mouse_sensitivity={}.{:02} virtual_pad={virtual_pad} sent={} waiting={waiting} send_errors={}",
                     counters.records,
                     counters.rejected,
                     counters.pad_changes,

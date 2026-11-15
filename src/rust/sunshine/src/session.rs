@@ -6,7 +6,7 @@
 use crate::control::{ControlSender, Delivery, HostEvent, SendError, kind};
 use crate::input::{
     self, ARRIVAL_BUTTONS, ARRIVAL_CAPS, FEATURE_CONTROLLER_TOUCH, FEATURE_PEN_TOUCH, MOTION_ACCEL,
-    MOTION_GYRO, Packet, PadValues, TYPE_UNKNOWN,
+    MOTION_GYRO, PLAIN_CAPS, Packet, PadValues, TYPE_UNKNOWN, TYPE_XBOX,
 };
 use alloc::vec::Vec;
 
@@ -101,6 +101,14 @@ impl MotionGate {
     }
 }
 
+/// What a pad is announced as: one with motion sensors, or a plain Xbox controller.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum PadKind {
+    #[default]
+    Motion,
+    Plain,
+}
+
 #[derive(Clone, Copy, Default)]
 struct Motors {
     low: u16,
@@ -117,6 +125,7 @@ pub struct Session {
     rates: Rates,
     gate: MotionGate,
     motors: [Motors; PADS],
+    kinds: [PadKind; PADS],
     mouse_finger: Option<u32>,
 }
 
@@ -131,6 +140,7 @@ impl Session {
             rates: [[0; 2]; PADS],
             gate: MotionGate::default(),
             motors: [Motors::default(); PADS],
+            kinds: [PadKind::Motion; PADS],
             mouse_finger: None,
         }
     }
@@ -182,11 +192,45 @@ impl Session {
         self.active
     }
 
+    /// Sets what pad `index` arrives as from its next arrival. The primary is always on the
+    /// host, so it is released, removed and announced again as the new kind; any other pad
+    /// keeps its device until it leaves.
+    pub fn set_kind(&mut self, index: u8, kind: PadKind) -> Result<(), Error> {
+        let pad = usize::from(index);
+        if pad >= PADS {
+            return Err(Error::Invalid);
+        }
+        if core::mem::replace(&mut self.kinds[pad], kind) == kind {
+            return Ok(());
+        }
+        self.rates[pad] = [0; 2];
+        if self.live && index == 0 {
+            self.queue.push(input::multi_controller(
+                0,
+                self.active & !1,
+                &PadValues::default(),
+            ));
+            self.arrive(0);
+        }
+        Ok(())
+    }
+
+    pub fn kind(&self, index: u8) -> PadKind {
+        self.kinds
+            .get(usize::from(index))
+            .copied()
+            .unwrap_or_default()
+    }
+
     fn arrive(&mut self, index: u8) {
+        let (kind, caps) = match self.kind(index) {
+            PadKind::Motion => (TYPE_UNKNOWN, ARRIVAL_CAPS),
+            PadKind::Plain => (TYPE_XBOX, PLAIN_CAPS),
+        };
         self.queue.push(input::controller_arrival(
             index,
-            TYPE_UNKNOWN,
-            ARRIVAL_CAPS,
+            kind,
+            caps,
             ARRIVAL_BUTTONS,
         ));
         self.queue.push(input::multi_controller(

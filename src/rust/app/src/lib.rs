@@ -25,6 +25,7 @@ pub mod link_probe;
 pub mod media;
 pub mod metrics;
 pub mod netprobe;
+pub mod pad_overlay;
 pub mod pads;
 pub mod pairings;
 pub mod pointer;
@@ -39,6 +40,7 @@ pub mod stream;
 pub mod suspend;
 pub mod system_status;
 pub mod typing;
+pub mod virtual_pad;
 pub mod wake;
 pub mod wake_connect;
 

@@ -126,6 +126,8 @@ Open **Settings** before launching a game. An app can keep its own picture optio
 | Rumble | On / Off |
 | Rumble strength | Strength of the controller vibration |
 | Button layout | Xbox (by position) or Nintendo (by label) |
+| Virtual gamepad | On-screen controls in handheld mode, also in the stream menu |
+| Gamepad opacity | How strongly the on-screen controls show, 20–80 % |
 
 4K streams at 60 fps and needs AV1.
 
@@ -133,6 +135,11 @@ Open **Settings** before launching a game. An app can keep its own picture optio
 
 Touch works in handheld mode, with the Sunshine settings above. If the PC takes no touch,
 the stream says so once on the badge.
+
+With **Virtual gamepad** on, handheld streams show sticks, D-pad, face buttons, shoulders,
+Plus, Minus and stick clicks over the picture. The PC gets it as an Xbox controller without
+motion: player 1 when no controller is attached, otherwise the next free player. A finger
+that lands on a control stays with it until lifted; touches anywhere else still reach the PC.
 
 ## Logs
 

@@ -73,7 +73,7 @@ pub fn auto_bitrate(width: u32, height: u32, fps: u32, codec: crate::request::Co
     (round(factor * (linear / 30.0) * share) as u32).saturating_mul(1000)
 }
 
-fn sqrt(value: f64) -> f64 {
+pub(crate) fn sqrt(value: f64) -> f64 {
     let mut estimate = value.max(1.0);
     for _ in 0..32 {
         estimate = (estimate + value / estimate) * 0.5;

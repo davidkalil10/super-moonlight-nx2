@@ -291,6 +291,13 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
         Some((live.negotiated.clone(), live.outbox()))
     }
 
+    /// Which player the on-screen pad plays, so the live stream announces it as a plain pad.
+    pub fn set_plain_player(&mut self, player: Option<u8>) {
+        if let Some(live) = self.control.as_mut().and_then(|control| control.live()) {
+            live.set_plain_player(player);
+        }
+    }
+
     /// The direct input counters since the last call, while a stream is live.
     pub fn take_input_counters(
         &mut self,

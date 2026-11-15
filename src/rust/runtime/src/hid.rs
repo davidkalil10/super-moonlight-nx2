@@ -293,13 +293,20 @@ fn source_states(sources: &[u8; SOURCES_BYTES]) -> [Source; SOURCES] {
 
 #[cfg(target_os = "none")]
 mod device {
-    use super::{Error, FrameInput, SLOT_BYTES, SOURCE_BYTES, SOURCES_BYTES, change_line, route};
+    use super::{
+        Error, FrameInput, REQUIRED_BYTES, SLOT_BYTES, SOURCE_BYTES, SOURCES_BYTES, TOUCH_OFFSET,
+        change_line, route,
+    };
     use crate::{render::Renderer, sdk};
     use core::{
         marker::PhantomData,
         sync::atomic::{AtomicBool, AtomicU8, Ordering},
     };
-    use moonlight_nx2_app::pads::{self, PLAYERS, Routing, Slots};
+    use moonlight_nx2_app::input::Touches;
+    use moonlight_nx2_app::pads::{
+        self, PLATFORM_SOURCES, PLAYERS, Routing, Slots, VIRTUAL_SOURCE,
+    };
+    use moonlight_nx2_app::virtual_pad::{self, VirtualPad};
 
     const UNROUTED: u8 = u8::MAX;
 
@@ -327,7 +334,7 @@ mod device {
             return;
         };
         let source = route.load(Ordering::Acquire);
-        if source != UNROUTED {
+        if usize::from(source) < PLATFORM_SOURCES {
             unsafe { moonlightPlatformRumble(u32::from(source), low, high) };
         }
     }
@@ -367,6 +374,9 @@ mod device {
         sample: u64,
         routing: Routing,
         sources: [u8; SOURCES_BYTES],
+        virtual_pad: Option<VirtualPad>,
+        held: bool,
+        slots: Slots,
         not_send: PhantomData<*mut ()>,
     }
 
@@ -387,6 +397,9 @@ mod device {
                 sample: 0,
                 routing: Routing::new(),
                 sources: [0; SOURCES_BYTES],
+                virtual_pad: None,
+                held: false,
+                slots: [None; PLAYERS],
                 not_send: PhantomData,
             })
         }
@@ -407,9 +420,51 @@ mod device {
                 return Err(Error::Invalid);
             }
             crate::stream_stats::input_sampled(crate::render_platform::now_ns());
+            let at = usize::from(VIRTUAL_SOURCE) * SOURCE_BYTES;
+            let slot = &mut self.sources[at..at + SOURCE_BYTES];
+            slot.fill(0);
+            if let Some(pad) = &mut self.virtual_pad {
+                if !self.held {
+                    let block = &mut input[TOUCH_OFFSET..REQUIRED_BYTES];
+                    pad.update(&Touches::parse(block));
+                    virtual_pad::retain_touches(block, pad);
+                }
+                slot[..SLOT_BYTES].copy_from_slice(&pad.slot());
+            }
             let slots = route(&mut self.routing, claim, &self.sources, input)?;
             publish_routes(&slots, &self.sources);
+            self.slots = slots;
             FrameInput::decode(input)
+        }
+
+        /// Shows or hides the on-screen pad's controller. While `held` it stays connected but
+        /// reads neutral and takes no touches, as with the stream menu open.
+        pub fn set_virtual_pad(&mut self, on: bool, held: bool) {
+            match (&mut self.virtual_pad, on) {
+                (None, true) => self.virtual_pad = Some(VirtualPad::new()),
+                (Some(_), false) => self.virtual_pad = None,
+                _ => {}
+            }
+            if held && let Some(pad) = &mut self.virtual_pad {
+                pad.release();
+            }
+            self.held = held;
+        }
+
+        pub fn virtual_pad(&self) -> Option<&VirtualPad> {
+            self.virtual_pad.as_ref()
+        }
+
+        pub fn virtual_pad_mut(&mut self) -> Option<&mut VirtualPad> {
+            self.virtual_pad.as_mut()
+        }
+
+        /// The player the on-screen pad plays, 0 for player 1.
+        pub fn virtual_player(&self) -> Option<u8> {
+            self.slots
+                .iter()
+                .position(|slot| *slot == Some(VIRTUAL_SOURCE))
+                .map(|player| player as u8)
         }
     }
 

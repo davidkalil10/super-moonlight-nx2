@@ -12,6 +12,10 @@ pub const UI_OFFSET: usize = 40_030_208;
 pub const UI_INSTANCES: u32 = 128;
 pub const BADGE_INSTANCE: u32 = 128;
 pub const BADGE_OFFSET: usize = 27_492_352;
+/// The on-screen gamepad's two areas, drawn after the badge on a bare stream.
+pub const PAD_INSTANCES: u32 = 2;
+pub const PAD_VISIBLE: usize = 0xb114;
+pub const PAD_OFFSET: usize = BADGE_OFFSET + 960 * 128 * 4;
 pub const VIDEO_BASE: usize = 0xb000;
 pub const VIDEO_SLOT_BYTES: usize = 32;
 pub const TARGET_WIDTH: usize = 0xb120;

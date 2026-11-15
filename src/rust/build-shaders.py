@@ -58,6 +58,10 @@ VIDEO_SLOTS = 2
 # The badge pixels live in the third frame slot.
 BADGE_OFFSET = FRAMES_OFFSET + 2 * FRAME_BYTES
 BADGE_BYTES = 960 * 128 * 4
+# The on-screen gamepad's two areas follow the badge, in display pixels: x, y, width, height.
+PAD_OFFSET = BADGE_OFFSET + BADGE_BYTES
+PAD_AREAS = ((45, 45, 555, 975), (1320, 45, 555, 975))
+PAD_AREA_BYTES = 555 * 975 * 4
 
 # Byte offsets in storage; the shaders index it by word.
 CONTROL = {
@@ -78,6 +82,7 @@ VIDEO_BASE = 0xB000
 VIDEO_SLOT_BYTES = 32
 VIDEO_SLOT = {"sequence": 0, "width": 4, "height": 8, "stride": 12, "sliceHeight": 16, "color": 20}
 BADGE = {"visible": 0xB100, "x": 0xB104, "y": 0xB108, "width": 0xB10C, "height": 0xB110}
+PAD = {"visible": 0xB114}
 TARGET = {"width": 0xB120, "height": 0xB124, "backingWidth": 0xB128, "backingHeight": 0xB12C}
 
 MAGIC = 0x42414C4D
@@ -104,6 +109,10 @@ def layout():
         f"const uint VIDEO_SLOT_WORDS = {VIDEO_SLOT_BYTES // 4}u;",
         f"const uint VIDEO_SLOTS = {VIDEO_SLOTS}u;",
         f"const uint BADGE_PIXELS = {BADGE_OFFSET // 4}u;",
+        *words("PAD_", PAD),
+        f"const uint PAD_PIXELS = {PAD_OFFSET // 4}u;",
+        f"const uint PAD_AREA_WORDS = {PAD_AREA_BYTES // 4}u;",
+        *(f"const uvec4 PAD_AREA_{index} = uvec4{area};" for index, area in enumerate(PAD_AREAS)),
         f"const uint FRAME_BYTES = {FRAME_BYTES}u;",
         f"const uint FRAME_COUNT = {FRAME_COUNT}u;",
         f"const uint FRAMES_OFFSET = {FRAMES_OFFSET}u;",
@@ -128,6 +137,8 @@ def contract():
         "ui": {"offset": UI_OFFSET, "pageBytes": UI_PAGE_BYTES, "pages": UI_PAGES, "vertices": 6,
                "instances": UI_INSTANCES, "blending": "source-alpha"},
         "badge": {"instance": UI_INSTANCES, "words": BADGE, "offset": BADGE_OFFSET, "bytes": BADGE_BYTES},
+        "pad": {"instances": [UI_INSTANCES + 1, UI_INSTANCES + 2], "words": PAD, "offset": PAD_OFFSET,
+                "areas": PAD_AREAS, "areaBytes": PAD_AREA_BYTES},
         "bindings": {"input": 0, "storage": 1, "luma": 2, "chroma": 3},
         "control": CONTROL, "uiControl": UI, "input": INPUT, "initialState": "zero",
     }
