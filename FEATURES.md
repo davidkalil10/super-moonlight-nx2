@@ -16,10 +16,10 @@
 
 ## Video
 - AV1 on the console's hardware decoder, with H.264 as the fallback
-- 120 fps by default on a 120 Hz display, handheld included
+- 120 fps by default on a 120 Hz display, handheld included; docked at 1440p or 1080p
 - Automatic, 720p or 1080p; 1440p and 4K when docked (4K at 60 fps)
 - The stream switches resolution when you dock or undock
-- Bitrate from a network test, or 5–40 Mbps
+- Bitrate from a network test, or 5–150 Mbps
 - Optimise game settings: the PC display follows the stream's size and rate
 - Stream info badge and frame counter, with a latency breakdown in Full stats
 - A warning when the network can't keep up
@@ -43,6 +43,7 @@
 - Hold Plus+Minus to open the stream menu, from any player; the PC never sees the chord
 - L+R+Minus+Plus stops the stream at once
 - On-screen keyboard that types on the PC
+- Power: keep the console's full clocks while streaming, or save battery
 
 ## App
 - Settings saved per app
