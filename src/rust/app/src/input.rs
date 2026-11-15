@@ -1,6 +1,6 @@
 //! Client input recorder: the version-1 JSON input record sent with each video acknowledgement.
 //! Port of dev legacy/src/streamer/input/input-record.js and touch.js; the Pad ABI never
-//! reaches the socket.
+//! reaches the socket. Touches add what touch.js left out: pressure, contact area and rotation.
 
 use moonlight_nx2_core::input::{
     Pad, face_buttons_by_position, map_pad, map_pad_with_start_chord, stop_held,
@@ -25,6 +25,9 @@ const ATTRIBUTES_WORD: usize = 2;
 const FINGER_WORD: usize = 3;
 const X_WORD: usize = 4;
 const Y_WORD: usize = 5;
+const DIAMETER_X_WORD: usize = 6;
+const DIAMETER_Y_WORD: usize = 7;
+const ROTATION_WORD: usize = 8;
 const ATTR_END: u32 = 0x2;
 const UNIT: u16 = 10_000;
 
@@ -181,12 +184,39 @@ impl Extended {
 }
 
 /// One touch point, positions in 1/10000 of the panel (four decimals, as touch.js rounds).
+/// `contact` is `None` when the panel gave the point no size.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct Point {
     pub id: u32,
     pub x: u16,
     pub y: u16,
     pub ended: bool,
+    pub contact: Option<Contact>,
+}
+
+/// The ellipse a finger covers: its x and y diameters over the panel width and height in
+/// 1/10000, which Moonlight takes as the major and minor axes, and its rotation in degrees from
+/// 0 to 359.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct Contact {
+    pub area: [u16; 2],
+    pub rotation: u16,
+}
+
+impl Contact {
+    fn parse(bytes: &[u8], base: usize) -> Option<Self> {
+        let diameter = [DIAMETER_X_WORD, DIAMETER_Y_WORD].map(|at| word(bytes, base + at) as i32);
+        if diameter == [0, 0] {
+            return None;
+        }
+        Some(Self {
+            area: [
+                unit(diameter[0], PANEL_WIDTH),
+                unit(diameter[1], PANEL_HEIGHT),
+            ],
+            rotation: (word(bytes, base + ROTATION_WORD) as i32).rem_euclid(360) as u16,
+        })
+    }
 }
 
 /// Points read from one frame's `nn::hid::TouchScreenState<16>` block.
@@ -211,6 +241,7 @@ impl Touches {
                 x: unit(word(bytes, base + X_WORD) as i32, PANEL_WIDTH),
                 y: unit(word(bytes, base + Y_WORD) as i32, PANEL_HEIGHT),
                 ended: word(bytes, base + ATTRIBUTES_WORD) & ATTR_END != 0,
+                contact: Contact::parse(bytes, base),
             };
         }
         touches
@@ -286,6 +317,8 @@ pub struct TouchEvent {
     pub action: Action,
     pub x: u16,
     pub y: u16,
+    /// Downs and moves only; ups carry none.
+    pub contact: Option<Contact>,
 }
 
 /// Room for a full frame of new fingers while a full set of lost ones still awaits removal.
@@ -347,7 +380,7 @@ impl Tracker {
             let previous = self.find(point.id).map(|index| self.at[index]);
             if point.ended {
                 if previous.is_some() {
-                    events.push(point.id, Action::Up, (point.x, point.y));
+                    events.push(point.id, Action::Up, (point.x, point.y), None);
                     self.delete(point.id);
                 }
                 continue;
@@ -356,9 +389,9 @@ impl Tracker {
             seen[seen_count] = point.id;
             seen_count += 1;
             match previous {
-                None => events.push(point.id, Action::Down, (point.x, point.y)),
+                None => events.push(point.id, Action::Down, (point.x, point.y), point.contact),
                 Some(at) if at != (point.x, point.y) => {
-                    events.push(point.id, Action::Move, (point.x, point.y))
+                    events.push(point.id, Action::Move, (point.x, point.y), point.contact)
                 }
                 Some(_) => {}
             }
@@ -372,14 +405,14 @@ impl Tracker {
                 index += 1;
                 continue;
             }
-            events.push(id, Action::Up, self.at[index]);
+            events.push(id, Action::Up, self.at[index], None);
             self.delete(id);
         }
     }
 
     fn flush(&mut self, events: &mut Events) {
         for index in 0..self.count {
-            events.push(self.ids[index], Action::Up, self.at[index]);
+            events.push(self.ids[index], Action::Up, self.at[index], None);
         }
         self.count = 0;
     }
@@ -400,12 +433,13 @@ impl Events {
                 action: Action::Up,
                 x: 0,
                 y: 0,
+                contact: None,
             }; MAX_TOUCH_EVENTS],
             count: 0,
         }
     }
 
-    fn push(&mut self, id: u32, action: Action, at: (u16, u16)) {
+    fn push(&mut self, id: u32, action: Action, at: (u16, u16), contact: Option<Contact>) {
         if self.count == MAX_TOUCH_EVENTS {
             return;
         }
@@ -414,6 +448,7 @@ impl Events {
             action,
             x: at.0,
             y: at.1,
+            contact,
         };
         self.count += 1;
     }
@@ -652,7 +687,7 @@ impl Recorder {
                 Action::Up => self.forwarded.delete(event.id),
                 _ => self.forwarded.set(event.id, (event.x, event.y)),
             }
-            events.push(event.id, event.action, (event.x, event.y));
+            events.push(event.id, event.action, (event.x, event.y), event.contact);
         }
     }
 
@@ -859,6 +894,18 @@ impl Writer<'_> {
         self.unit(event.x)?;
         self.text(",\"y\":")?;
         self.unit(event.y)?;
-        self.text(",\"pressure\":0}")
+        self.text(match event.action {
+            Action::Up => ",\"pressure\":0",
+            _ => ",\"pressure\":1",
+        })?;
+        if let Some(contact) = event.contact {
+            self.text(",\"area\":[")?;
+            self.unit(contact.area[0])?;
+            self.text(",")?;
+            self.unit(contact.area[1])?;
+            self.text("],\"rotation\":")?;
+            self.unsigned(u32::from(contact.rotation))?;
+        }
+        self.text("}")
     }
 }

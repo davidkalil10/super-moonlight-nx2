@@ -51,6 +51,9 @@ struct Touch {
     x: f64,
     y: f64,
     pressure: f64,
+    #[serde(default)]
+    area: [f64; 2],
+    rotation: Option<u16>,
 }
 
 #[derive(Clone, Copy, Deserialize, PartialEq)]
@@ -285,9 +288,16 @@ impl DirectInput {
         if events.is_empty()
             || events.len() > MAX_TOUCHES
             || events.iter().any(|event| {
-                ![event.x, event.y, event.pressure]
-                    .iter()
-                    .all(|number| (0.0..=1.0).contains(number))
+                ![
+                    event.x,
+                    event.y,
+                    event.pressure,
+                    event.area[0],
+                    event.area[1],
+                ]
+                .iter()
+                .all(|number| (0.0..=1.0).contains(number))
+                    || event.rotation.is_some_and(|degrees| degrees >= 360)
             })
         {
             return Err(Error::Invalid);
@@ -326,9 +336,9 @@ impl DirectInput {
                     event.x as f32,
                     event.y as f32,
                     event.pressure as f32,
-                    0.0,
-                    0.0,
-                    native::LI_ROT_UNKNOWN as u16,
+                    event.area[0] as f32,
+                    event.area[1] as f32,
+                    event.rotation.unwrap_or(native::LI_ROT_UNKNOWN as u16),
                 )
             };
             if result == native::LI_ERR_UNSUPPORTED {

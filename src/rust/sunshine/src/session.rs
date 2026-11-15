@@ -53,7 +53,7 @@ pub enum TouchAction {
     Up,
 }
 
-/// One finger, positions and pressure in 0 to 1.
+/// One finger, positions, pressure and contact area in 0 to 1, as `input::touch` takes them.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Touch {
     pub id: u32,
@@ -61,6 +61,8 @@ pub struct Touch {
     pub x: f32,
     pub y: f32,
     pub pressure: f32,
+    pub area: [f32; 2],
+    pub rotation: u16,
 }
 
 /// What the host asked for, for the console's motors and sensors.
@@ -127,6 +129,7 @@ pub struct Session {
     motors: [Motors; PADS],
     kinds: [PadKind; PADS],
     mouse_finger: Option<u32>,
+    touching: Vec<u32>,
 }
 
 impl Session {
@@ -142,6 +145,7 @@ impl Session {
             motors: [Motors::default(); PADS],
             kinds: [PadKind::Motion; PADS],
             mouse_finger: None,
+            touching: Vec::new(),
         }
     }
 
@@ -301,9 +305,17 @@ impl Session {
     pub fn touch(&mut self, mouse: bool, events: &[Touch]) -> Result<(), Error> {
         let in_range = |value: f32| (0.0..=1.0).contains(&value);
         if events.is_empty()
-            || events
-                .iter()
-                .any(|event| !(in_range(event.x) && in_range(event.y) && in_range(event.pressure)))
+            || events.iter().any(|event| {
+                ![
+                    event.x,
+                    event.y,
+                    event.pressure,
+                    event.area[0],
+                    event.area[1],
+                ]
+                .into_iter()
+                .all(in_range)
+            })
         {
             return Err(Error::Invalid);
         }
@@ -320,17 +332,48 @@ impl Session {
                 TouchAction::Move => input::TOUCH_MOVE,
                 TouchAction::Up => input::TOUCH_UP,
             };
+            let known = self.touching.iter().position(|id| *id == event.id);
+            match (event.action, known) {
+                (TouchAction::Up, Some(at)) => {
+                    self.touching.swap_remove(at);
+                }
+                (TouchAction::Down | TouchAction::Move, None) => self.touching.push(event.id),
+                _ => {}
+            }
             self.queue.push(input::touch(
                 action,
                 event.id.min(i32::MAX as u32),
                 event.x,
                 event.y,
                 event.pressure,
-                [0.0, 0.0],
-                input::ROTATION_UNKNOWN,
+                event.area,
+                event.rotation,
             ));
         }
         Ok(())
+    }
+
+    /// The fingers sent to the host as touches and not lifted yet.
+    pub fn touching(&self) -> &[u32] {
+        &self.touching
+    }
+
+    /// Lifts every finger on the host at once, as Moonlight does on focus loss; nothing is
+    /// sent when none touches.
+    pub fn cancel_touches(&mut self) {
+        if self.touching.is_empty() {
+            return;
+        }
+        self.touching.clear();
+        self.queue.push(input::touch(
+            input::TOUCH_CANCEL_ALL,
+            0,
+            0.0,
+            0.0,
+            0.0,
+            [0.0, 0.0],
+            input::ROTATION_UNKNOWN,
+        ));
     }
 
     fn mouse(&mut self, events: &[Touch]) {

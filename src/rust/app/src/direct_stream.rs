@@ -151,6 +151,11 @@ impl Live {
         self.channel.borrow_mut().input.set_plain_player(player);
     }
 
+    /// See `DirectInput::cancel_touches`; sent ahead of the next record or pump.
+    pub fn cancel_touches(&mut self) {
+        self.channel.borrow_mut().input.cancel_touches();
+    }
+
     /// The input counters since the last call, and the packets still waiting.
     pub fn take_input_counters(&mut self) -> (direct_input::Counters, usize) {
         self.channel.borrow_mut().input.take_counters()

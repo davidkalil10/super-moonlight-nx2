@@ -298,6 +298,13 @@ impl<F: Files + Clone, S: Socket + 'static> Frontend<F, S> {
         }
     }
 
+    /// Lifts the fingers on the host when the stream loses focus or pauses for the menu.
+    pub fn cancel_touches(&mut self) {
+        if let Some(live) = self.control.as_mut().and_then(|control| control.live()) {
+            live.cancel_touches();
+        }
+    }
+
     /// The direct input counters since the last call, while a stream is live.
     pub fn take_input_counters(
         &mut self,

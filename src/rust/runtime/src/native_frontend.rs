@@ -245,6 +245,7 @@ fn execute(
     let (mut publishes, mut busy_publishes) = ([0u32; 2], [0u32; 2]);
     let mut turns = Turns::default();
     let mut shown_pad = (false, None, None);
+    let mut touch_paused = false;
     while unsafe { sdk::appletMainLoop() } && !app.exiting() && !sdk::process_retired() {
         let now = unsafe { sdk::moonlightNowNs() };
         turns.begin(now);
@@ -297,6 +298,11 @@ fn execute(
             streaming && used.virtual_pad() && !dock.current(),
             menu_open,
         );
+        let paused = menu_open || !system.in_focus();
+        if paused && !touch_paused {
+            app.cancel_touches();
+        }
+        touch_paused = paused;
         let virtual_player = sampler.virtual_player();
         app.set_plain_player(virtual_player);
         let pad_state = (

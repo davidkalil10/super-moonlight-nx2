@@ -57,6 +57,7 @@ enum Action {
     Up,
 }
 
+/// `area` and `rotation` come with downs and moves of fingers the panel gave a size.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Touch {
@@ -65,6 +66,20 @@ struct Touch {
     x: f64,
     y: f64,
     pressure: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    area: Option<[f64; 2]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    rotation: Option<u16>,
+}
+
+impl Touch {
+    fn valid(&self) -> bool {
+        let area = self.area.unwrap_or_default();
+        [self.x, self.y, self.pressure, area[0], area[1]]
+            .iter()
+            .all(|value| (0.0..=1.0).contains(value))
+            && self.rotation.is_none_or(|degrees| degrees < 360)
+    }
 }
 
 fn present<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
@@ -199,11 +214,7 @@ impl Forwarder {
         if let Some(touches) = &record.touch
             && (touches.is_empty()
                 || touches.len() > MAX_TOUCH
-                || touches.iter().any(|event| {
-                    ![event.x, event.y, event.pressure]
-                        .iter()
-                        .all(|v| (0.0..=1.0).contains(v))
-                }))
+                || !touches.iter().all(Touch::valid))
         {
             return Err(Error::Invalid);
         }

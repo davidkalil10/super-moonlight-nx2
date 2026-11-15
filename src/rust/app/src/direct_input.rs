@@ -10,7 +10,7 @@ use crate::pointer::{KeyboardSample, MouseSample, Pointer};
 use crate::reply::{RUMBLE_PLAYERS, Rumble};
 use alloc::vec::Vec;
 use moonlight_nx2_sunshine::control::{ControlSender, HostEvent};
-use moonlight_nx2_sunshine::input::{FEATURE_PEN_TOUCH, PadValues};
+use moonlight_nx2_sunshine::input::{FEATURE_PEN_TOUCH, PadValues, ROTATION_UNKNOWN};
 use moonlight_nx2_sunshine::session::{self, Feedback, PADS, PadKind, Session, Touch, TouchAction};
 
 const LIMIT: usize = 3840;
@@ -181,6 +181,14 @@ impl DirectInput {
         }
         self.pointer.release(&mut self.session);
         self.stopped = true;
+    }
+
+    /// Cancels every finger the host holds as a touch, as on focus loss or a pause; the ups the
+    /// recorder sends for them afterwards are dropped. Fingers driving the mouse stay.
+    pub fn cancel_touches(&mut self) {
+        let touching = self.session.touching();
+        self.fingers.retain(|finger| !touching.contains(&finger.id));
+        self.session.cancel_touches();
     }
 
     /// The player the on-screen pad plays, if any: it arrives as a plain Xbox controller and
@@ -397,9 +405,35 @@ fn sample(value: Value<'_>) -> Result<Sample, Error> {
 }
 
 fn decimal(value: Value<'_>, key: &str) -> Result<f32, Error> {
-    let member = value.member(key).ok_or(Error::Invalid)?;
-    let text = core::str::from_utf8(member.raw()).map_err(|_| Error::Invalid)?;
+    number(value.member(key).ok_or(Error::Invalid)?)
+}
+
+fn number(value: Value<'_>) -> Result<f32, Error> {
+    let text = core::str::from_utf8(value.raw()).map_err(|_| Error::Invalid)?;
     text.parse().map_err(|_| Error::Invalid)
+}
+
+/// Records from before the contact area and rotation have neither.
+fn area(value: Value<'_>) -> Result<[f32; 2], Error> {
+    let Some(array) = value.member("area") else {
+        return Ok([0.0, 0.0]);
+    };
+    match list(array, number)?[..] {
+        [major, minor] => Ok([major, minor]),
+        _ => Err(Error::Invalid),
+    }
+}
+
+fn rotation(value: Value<'_>) -> Result<u16, Error> {
+    if value.member("rotation").is_none() {
+        return Ok(ROTATION_UNKNOWN);
+    }
+    let degrees = integer(value, "rotation")?;
+    if degrees < 360 {
+        Ok(degrees)
+    } else {
+        Err(Error::Invalid)
+    }
 }
 
 fn touch(value: Value<'_>) -> Result<Touch, Error> {
@@ -419,6 +453,8 @@ fn touch(value: Value<'_>) -> Result<Touch, Error> {
         x: decimal(value, "x")?,
         y: decimal(value, "y")?,
         pressure: decimal(value, "pressure")?,
+        area: area(value)?,
+        rotation: rotation(value)?,
     })
 }
 

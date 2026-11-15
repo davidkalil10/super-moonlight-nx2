@@ -24,6 +24,7 @@ pub const TOUCH_HOVER: u8 = 0x00;
 pub const TOUCH_DOWN: u8 = 0x01;
 pub const TOUCH_UP: u8 = 0x02;
 pub const TOUCH_MOVE: u8 = 0x03;
+pub const TOUCH_CANCEL_ALL: u8 = 0x07;
 pub const ROTATION_UNKNOWN: u16 = 0xFFFF;
 
 pub const MOUSE_PRESS: u8 = 0x07;
