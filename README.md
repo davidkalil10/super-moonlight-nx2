@@ -113,7 +113,7 @@ Open **Settings** before launching a game. An app can keep its own picture optio
 | --- | --- |
 | Resolution | Automatic, 720p, 1080p; 1440p and 4K when docked |
 | Frame rate | 120 fps (default) while the display runs at 120 Hz, as the handheld screen does, or 60 fps |
-| Bitrate | Auto from the network test, or 5–40 Mbps |
+| Bitrate | Auto from the network test, or 5–40 Mbps in 2.5 Mbps steps, then 50, 60, 80, 100, 120 and 150 Mbps |
 | Codec | AV1, with H.264 as the fallback |
 | Play audio on the PC | On / Off |
 | Optimise game settings | The PC display follows the stream's size and rate |

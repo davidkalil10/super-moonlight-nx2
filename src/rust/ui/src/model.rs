@@ -909,6 +909,15 @@ impl Model {
     }
 
     /// The network test's one line: what it measured and picked, or why it could not run.
+    /// The throughput the network test measured, in kbps, when a fixed bitrate asks for more.
+    pub fn bitrate_over_test(&self) -> Option<u32> {
+        let options = self
+            .stream_settings()
+            .stream_options(self.docked, &self.capabilities);
+        let measured = self.link_choice?.throughput_kbps;
+        (!options.bitrate_auto && options.bitrate_kbps > measured).then_some(measured)
+    }
+
     pub fn link_note(&self) -> &str {
         self.link_note.as_str()
     }

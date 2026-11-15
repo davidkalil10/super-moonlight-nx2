@@ -317,7 +317,7 @@ const ROWS: [Row; Setting::COUNT] = [
     },
     Row {
         former_default: Some(7),
-        ..row("bitrate", "Bitrate", RowKind::Bitrate, 16, AUTO_BITRATE)
+        ..row("bitrate", "Bitrate", RowKind::Bitrate, 22, AUTO_BITRATE)
     },
     Row {
         reset_before: 4,
@@ -366,8 +366,15 @@ fn multiplier(index: u8) -> f64 {
     f64::from(SENSITIVITIES[index as usize]) / 100.0
 }
 
+/// Above 40 Mbps the steps widen up to Moonlight's usual 150 Mbps cap. Sunshine takes any
+/// bitrate unless its own max_bitrate is set.
+const HIGH_BITRATES: [f64; 6] = [50.0, 60.0, 80.0, 100.0, 120.0, 150.0];
+
 fn bitrate_mbps(index: u8) -> f64 {
-    5.0 + (index as f64 - 1.0) * 2.5
+    match index.checked_sub(16) {
+        Some(high) => HIGH_BITRATES[high as usize],
+        None => 5.0 + (index as f64 - 1.0) * 2.5,
+    }
 }
 
 fn known_rate(value: f64) -> bool {

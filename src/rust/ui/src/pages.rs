@@ -4,6 +4,7 @@
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
+use core::fmt::Write as _;
 
 use crate::composer::{
     Builder, CONTENT_WIDTH, Error, Face, Keys, SCREEN_WIDTH, SIDE, home_slot, page_count,
@@ -1369,7 +1370,14 @@ impl Builder<'_> {
         } else {
             &[("Y", "Reset"), ("B", "Back"), ("A", "Change")]
         };
-        let rows = model.settings().rows(model.docked(), model.capabilities());
+        let mut rows = model.settings().rows(model.docked(), model.capabilities());
+        if let Some(kbps) = model.bitrate_over_test() {
+            let _ = write!(
+                rows[Setting::Bitrate as usize].value,
+                " \u{b7} test measured {} Mbps",
+                kbps / 1000
+            );
+        }
         let editing = model.editing().is_some_and(|s| rows[s as usize].adjustable);
         let left = match settings_error.filter(|e| !e.is_empty()) {
             Some(error) => format!("Settings could not be saved: {error}"),
