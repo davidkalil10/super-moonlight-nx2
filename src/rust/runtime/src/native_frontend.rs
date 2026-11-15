@@ -14,6 +14,7 @@ use crate::{
     sdk,
 };
 use alloc::{boxed::Box, format};
+use core::fmt::Write as _;
 use moonlight_nx2_app::{dock::Monitor, input::ExitPress, policy::DisplayCapabilities};
 use moonlight_nx2_core::codec::Capabilities;
 use moonlight_nx2_ui::{
@@ -691,8 +692,16 @@ fn display_context(
         decoder: stream_capabilities(),
         display,
     });
+    let mut modes = alloc::string::String::new();
+    for mode in display.modes() {
+        let gap = if modes.is_empty() { "" } else { ", " };
+        let _ = write!(modes, "{gap}{}x{}@{}", mode.width, mode.height, mode.fps);
+    }
     log(&format!(
         "display: context docked={docked} accepted={accepted}; native decoder capability is runtime gated"
+    ));
+    log(&format!(
+        "display: modes supported=[{modes}] docked={docked}"
     ));
 }
 

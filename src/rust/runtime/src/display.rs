@@ -173,11 +173,16 @@ impl Probe {
         probe
     }
 
-    /// Starts the set of `index` again: the panel's modes handheld, 60 fps up to the output
-    /// docked.
+    /// Starts the set of `index` again: the panel's modes handheld; docked, 60 fps up to the
+    /// output and 120 up to 1440p within it. Docked 120 is offered before the TV has shown it,
+    /// since only a stream chosen at 120 asks the TV for it; `cap_at_60` takes it back when the
+    /// TV stays at 60.
     fn reset(&mut self, index: usize) {
-        use moonlight_nx2_app::policy::{DisplayEvidence, DisplayMode};
-        let (best_width, best_height, fps) = match index {
+        use moonlight_nx2_app::{
+            dock::FAST_HEIGHT,
+            policy::{DisplayEvidence, DisplayMode},
+        };
+        let (best_width, best_height, best_fps) = match index {
             0 => HANDHELD,
             _ => {
                 let (width, height) = moonlight_nx2_app::dock::output_ceiling(self.output);
@@ -187,11 +192,16 @@ impl Probe {
         self.verified[index] = Default::default();
         for (width, height) in Size::largest_first() {
             if width <= best_width && height <= best_height {
+                let fps = if index == 1 && height <= FAST_HEIGHT {
+                    120
+                } else {
+                    best_fps
+                };
                 let mode = DisplayMode { width, height, fps };
                 self.verified[index].record(mode, DisplayEvidence::PresentedAndCloseVerified);
             }
         }
-        self.best[index] = (best_width, best_height, fps);
+        self.best[index] = (best_width, best_height, best_fps);
     }
 
     pub fn set_docked(&mut self, docked: bool) {
@@ -282,8 +292,12 @@ impl Probe {
     pub fn cap_at_60(&mut self, hz: u32) -> bool {
         use moonlight_nx2_app::policy::{DisplayEvidence, DisplayMode};
         let index = usize::from(self.docked);
-        let (best_width, best_height, best_fps) = self.best[index];
-        if hz != 60 || best_fps <= 60 || FAST_STREAM_AT_60HZ || !self.requested {
+        let (best_width, best_height, _) = self.best[index];
+        if hz != 60
+            || self.verified[index].fastest() <= 60
+            || FAST_STREAM_AT_60HZ
+            || !self.requested
+        {
             self.slow_seconds = 0;
             return false;
         }
@@ -374,6 +388,9 @@ mod tests {
             .find(|&height| set.supports(&mode(height * 16 / 9, height, fps)))
     }
 
+    pub(super) fn settle_pub(probe: &mut Probe, w: u32, h: u32) -> bool {
+        settle(probe, w, h)
+    }
     fn settle(probe: &mut Probe, width: u32, height: u32) -> bool {
         probe.observe_output(0, width, height);
         probe.observe_output(OUTPUT_SETTLE_NS, width, height)
@@ -404,15 +421,83 @@ mod tests {
     }
 
     #[test]
-    fn a_withdrawn_docked_request_drops_the_120_fps_it_verified() {
+    fn docked_offers_120_up_to_1440p_until_the_tv_stays_at_60() {
         let mut probe = Probe::new(true, 0, 0);
         settle(&mut probe, 3840, 2160);
+        assert_eq!(largest_at(probe.capabilities(), 120), Some(1440));
+        assert_eq!(largest_at(probe.capabilities(), 60), Some(2160));
+        assert_eq!(probe.verified_fps(), 60);
         assert!(!probe.set_requested(true));
         assert!(probe.verify(2560, 1440, 120, true));
-        assert_eq!(largest_at(probe.capabilities(), 120), Some(1440));
+        assert_eq!(probe.verified_fps(), 120);
         assert!(probe.set_requested(false));
+        assert!(!probe.set_requested(true));
+        for _ in 1..SLOW_SECONDS {
+            assert!(!probe.cap_at_60(60));
+        }
+        assert!(probe.cap_at_60(60));
         assert_eq!(largest_at(probe.capabilities(), 120), None);
         assert_eq!(largest_at(probe.capabilities(), 60), Some(2160));
+        assert!(probe.set_requested(false));
+        assert_eq!(largest_at(probe.capabilities(), 120), Some(1440));
+    }
+
+    #[test]
+    fn auto_on_a_4k60_tv_steps_to_1440p120_and_asks_for_120_hz() {
+        // test2 docked: the TV at 3840x2160@60 level=3, 120 Hz never asked for since 13af459,
+        // so 120 fps was never offered.
+        use moonlight_nx2_ui::settings::{Setting, Settings};
+        let mut probe = Probe::new(true, 0, 0);
+        settle(&mut probe, 3840, 2160);
+        let context = moonlight_nx2_app::policy::Context {
+            docked: true,
+            decoder: crate::sdk_modes::capabilities(),
+            display: probe.capabilities(),
+        };
+        let caps = crate::client::ui_capabilities(&context);
+        let settings = Settings::default();
+        let rows = settings.rows(true, &caps);
+        assert_eq!(rows[Setting::Size as usize].value.as_str(), "Auto (2160p)");
+        assert_eq!(
+            rows[Setting::Fps as usize].value.as_str(),
+            "60 fps \u{b7} 120 below 4K"
+        );
+        assert!(rows[Setting::Fps as usize].can_right);
+        let faster = settings.adjust(Setting::Fps, 1, true, &caps).unwrap();
+        let options = faster.stream_options(true, &caps);
+        assert_eq!((options.height, options.fps), (1440, 120));
+        let size = faster.size();
+        assert!(moonlight_nx2_app::dock::requests_120hz(
+            true,
+            (!faster.size_auto()).then(|| (size.width(), size.height())),
+            faster.fps(),
+            probe.output(),
+        ));
+    }
+
+    #[test]
+    fn docked_h264_1440p_offers_120_before_the_tv_has_shown_it() {
+        // test2 on the console: H.264 saved at 60 from test1, so the TV was never asked for
+        // 120 Hz and 120 fps was never offered to pick.
+        use moonlight_nx2_ui::settings::{Codec, Setting, Settings};
+        let mut probe = Probe::new(true, 0, 0);
+        settle(&mut probe, 2560, 1440);
+        let context = moonlight_nx2_app::policy::Context {
+            docked: true,
+            decoder: crate::sdk_modes::capabilities(),
+            display: probe.capabilities(),
+        };
+        let caps = crate::client::ui_capabilities(&context);
+        let mut settings = Settings::default();
+        while settings.codec() != Codec::H264 {
+            settings = settings.adjust(Setting::Codec, -1, true, &caps).unwrap();
+        }
+        settings = settings.adjust(Setting::Fps, -1, true, &caps).unwrap();
+        let rows = settings.rows(true, &caps);
+        assert_eq!(rows[Setting::Fps as usize].value.as_str(), "60 fps");
+        let faster = settings.adjust(Setting::Fps, 1, true, &caps).unwrap();
+        let options = faster.stream_options(true, &caps);
+        assert_eq!((options.height, options.fps), (1440, 120));
     }
 
     #[test]
@@ -421,7 +506,8 @@ mod tests {
         assert_eq!(largest_at(probe.capabilities(), 120), Some(1080));
         assert_eq!(probe.verified_fps(), 120);
         let mut docked = Probe::new(true, 0, 0);
-        assert_eq!(largest_at(docked.capabilities(), 120), None);
+        assert_eq!(largest_at(docked.capabilities(), 120), Some(1440));
+        assert_eq!(docked.verified_fps(), 60);
         docked.set_docked(false);
         assert_eq!(largest_at(docked.capabilities(), 120), Some(1080));
     }

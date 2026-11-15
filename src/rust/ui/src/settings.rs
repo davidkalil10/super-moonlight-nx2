@@ -769,7 +769,11 @@ impl Settings {
         }
         let mut out = selected?;
         if self.size_auto() && setting != Setting::Size {
+            let picked = out;
             out.value[Setting::Size as usize] = AUTO_SIZE;
+            if setting == Setting::Fps && out.in_use(docked, caps).fps() != picked.fps() {
+                return Some(picked);
+            }
             return Some(out);
         }
         let to_4k = setting == Setting::Size && index == Size::P2160 as i32;
@@ -795,7 +799,7 @@ impl Settings {
         caps: &Capabilities,
         previous: &Settings,
     ) -> Option<Settings> {
-        let mut best: Option<(u8, Settings)> = None;
+        let mut best: Option<((u8, u8), Settings)> = None;
         for size in Size::ALL {
             if (size.docked_only() && (!docked || !caps.docked_sizes))
                 || (changed == Setting::Size && size != self.size())
@@ -809,7 +813,11 @@ impl Settings {
                 {
                     continue;
                 }
-                let score = u8::from(size == previous.size()) * 2 + u8::from(fps == previous.fps());
+                // Closest to the mode in use; between equals, the largest picture.
+                let score = (
+                    u8::from(size == previous.size()) * 2 + u8::from(fps == previous.fps()),
+                    size as u8,
+                );
                 if best.is_none_or(|(old, _)| score > old) {
                     let mut result = *self;
                     result.value[Setting::Size as usize] = size as u8;
@@ -912,11 +920,17 @@ impl Settings {
     }
 
     pub fn rows(&self, docked: bool, caps: &Capabilities) -> [SettingRow; Setting::COUNT] {
+        let used = self.in_use(docked, caps);
         Setting::ALL.map(|setting| {
             let index = setting as usize;
             let moves = |direction| self.adjust(setting, direction, docked, caps);
+            let mode_setting = matches!(setting, Setting::Size | Setting::Fps | Setting::Codec);
             let changes = |out: Option<Settings>| {
-                out.is_some_and(|out| out.value[index] != self.value[index])
+                out.is_some_and(|out| {
+                    out.value[index] != self.value[index]
+                        || (mode_setting
+                            && out.in_use(docked, caps).value[index] != used.value[index])
+                })
             };
             SettingRow {
                 setting,
@@ -958,13 +972,22 @@ impl Settings {
         let mut by_dock = *self;
         by_dock.dock_fallback(docked);
         let dock_only = by_dock.value[setting as usize] != saved && !docked;
+        let below_4k = setting == Setting::Fps
+            && self.size_auto()
+            && used.size() == Size::P2160
+            && Size::ALL
+                .iter()
+                .any(|&size| caps.mode(used.codec(), size, RATES[saved as usize]));
         let mut short = Text::<40>::new();
         let _ = match setting {
             Setting::Size => write!(short, "{}", short_size(saved)),
+            Setting::Fps if below_4k => write!(short, "{}", RATES[saved as usize]),
             _ => write!(short, "{}", value_text(setting, self, saved)),
         };
         let reason = if dock_only {
             "when docked"
+        } else if below_4k {
+            "below 4K"
         } else {
             "unavailable"
         };

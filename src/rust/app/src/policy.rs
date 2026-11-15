@@ -49,6 +49,15 @@ impl DisplayCapabilities {
         self.modes[index] = Some(mode);
         true
     }
+    pub fn modes(&self) -> impl Iterator<Item = DisplayMode> + '_ {
+        self.modes.iter().flatten().copied()
+    }
+
+    /// The highest rate any mode is offered at, 0 for none.
+    pub fn fastest(&self) -> u32 {
+        self.modes().map(|mode| mode.fps).max().unwrap_or(0)
+    }
+
     pub fn supports(&self, options: &Options) -> bool {
         self.modes.iter().flatten().any(|mode| {
             mode.width == options.width
