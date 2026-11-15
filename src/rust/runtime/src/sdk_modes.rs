@@ -17,9 +17,6 @@ pub const SDK_H264_2160P_VERIFIED: bool = false;
 /// 120 units a second were decoded at 1440p on AV1 by a decoder configured at 60, in a real
 /// stream on the console (2026-11-10). The display decides whether 120 is offered.
 pub const FAST_FPS: u32 = 120;
-/// H.264 at 1440p decoded about 96 frames a second in a real stream (2026-11-15), past the
-/// SDK's pixel rate for that tier, so it is offered at 60 only.
-pub const H264_1440P_FPS: u32 = 60;
 const fn offered(verified: bool, fps: u32) -> u32 {
     if verified { fps } else { 0 }
 }
@@ -27,7 +24,7 @@ const fn offered(verified: bool, fps: u32) -> u32 {
 /// comes first and a tier may be offered on it alone: H.264 is the fallback, not a condition.
 const MODES: [(u32, u32, u32, u32); 3] = [
     (1920, 1080, FAST_FPS, FAST_FPS),
-    (2560, 1440, FAST_FPS, H264_1440P_FPS),
+    (2560, 1440, FAST_FPS, FAST_FPS),
     (
         3840,
         2160,

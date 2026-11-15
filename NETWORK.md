@@ -51,8 +51,8 @@ settings, in this order, has the most effect.
   `sunshine.conf`. Without it, keyframes after a scene cut can grow far past the bitrate and
   come out blocky or frozen on the console until the next one.
 - **4K and 120 fps cost latency on the console**: each frame takes longer to decode, so
-  1080p60 or 1440p60 answers faster than 4K or 120 fps on the same link. 1440p on H.264 is
-  offered at 60 fps only.
+  1080p60 or 1440p60 answers faster than 4K or 120 fps on the same link. 1440p120 on H.264
+  is near the decoder's limit: if the frame counter stays under 120, use 60.
 
 ## In the app
 
