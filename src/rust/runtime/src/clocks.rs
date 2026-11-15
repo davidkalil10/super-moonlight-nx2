@@ -45,6 +45,8 @@ pub struct Streaming {
     pub signals: Signals,
     /// The stream menu, the keyboard or another overlay covers the video.
     pub overlay: bool,
+    /// The Power setting's Performance: the clocks stay at the console's stock rates.
+    pub performance: bool,
 }
 
 struct Lowered {
@@ -67,6 +69,8 @@ pub struct Clocks {
     rates: Option<[Vec<u32>; CLOCKS]>,
     seen: Option<(Mode, u64)>,
     lowered: Option<Lowered>,
+    /// The Power profile last logged, until the stream ends.
+    performance: Option<bool>,
     /// The highest rates read under each performance mode and configuration. Rates are only
     /// ever set below them, so no set of ours can raise these.
     stock: Vec<((u32, u32), [u32; CLOCKS])>,
@@ -113,9 +117,24 @@ impl Clocks {
             Err(reason) => {
                 self.release(reason);
                 self.close();
+                self.performance = None;
                 return;
             }
         };
+        if self.performance != Some(stream.performance) {
+            log(&format!(
+                "clocks: profile={}",
+                if stream.performance {
+                    "performance"
+                } else {
+                    "saver"
+                }
+            ));
+            if stream.performance {
+                self.release("profile");
+            }
+            self.performance = Some(stream.performance);
+        }
         let reading = self.read(now_ms);
         if self.seen.is_none_or(|(mode, _)| mode != stream.mode) {
             if let Some(lowered) = self.lowered.as_ref() {
@@ -129,6 +148,7 @@ impl Clocks {
             self.seen = Some((stream.mode, now_ms));
         }
         if self.lowered.is_none()
+            && !stream.performance
             && let Some((mode, since_ms)) = self.seen
             && now_ms.saturating_sub(since_ms) >= SETTLE_MS
         {

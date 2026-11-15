@@ -1569,6 +1569,15 @@ impl Builder<'_> {
                 on_off(model.settings().virtual_pad()),
                 false,
             ),
+            item::TOGGLE_POWER => (
+                "Power",
+                Some(if model.settings().performance(model.docked()) {
+                    "Performance"
+                } else {
+                    "Battery saver"
+                }),
+                false,
+            ),
             item::RETURN_TO_APPS => ("Disconnect", None, false),
             item::QUIT_HOST => ("Quit app on PC", None, true),
             _ => ("Mouse sensitivity", None, false),

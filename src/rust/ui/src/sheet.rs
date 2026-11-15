@@ -25,7 +25,7 @@ pub(crate) fn rows(virtual_pad: bool, sensitivity: Option<u32>) -> Vec<u32> {
     if virtual_pad {
         rows.push(item::TOGGLE_VIRTUAL_PAD);
     }
-    rows.extend([item::RETURN_TO_APPS, item::QUIT_HOST]);
+    rows.extend([item::TOGGLE_POWER, item::RETURN_TO_APPS, item::QUIT_HOST]);
     rows
 }
 
@@ -110,10 +110,13 @@ mod tests {
     #[test]
     fn rows_keep_their_spacing_and_set_leaving_apart() {
         let rows = handheld();
-        assert_eq!(rows.len(), 8);
+        assert_eq!(rows.len(), 9);
         assert_eq!(top(&rows, 1), ROW + GAP);
-        assert_eq!(top(&rows, 6) - top(&rows, 5), ROW + GROUP_GAP);
-        assert_eq!(rows[6..], [item::RETURN_TO_APPS, item::QUIT_HOST]);
+        assert_eq!(top(&rows, 7) - top(&rows, 6), ROW + GROUP_GAP);
+        assert_eq!(
+            rows[6..],
+            [item::TOGGLE_POWER, item::RETURN_TO_APPS, item::QUIT_HOST]
+        );
         assert_eq!(rows[4], item::SETTING);
     }
 
@@ -125,7 +128,7 @@ mod tests {
         assert!(fully_shown(&rows, down, 5));
         assert!(top(&rows, 6) < down + VIEW, "the next row peeks in");
         assert_eq!(reveal(&rows, down, 4), down, "already whole");
-        assert_eq!(reveal(&rows, down, 7), clamp(&rows, u32::MAX));
+        assert_eq!(reveal(&rows, down, 8), clamp(&rows, u32::MAX));
         assert_eq!(reveal(&rows, down, 0), 0);
     }
 
@@ -138,7 +141,7 @@ mod tests {
             scroll = step(&rows, scroll, 1);
             steps += 1;
         }
-        assert!(fully_shown(&rows, scroll, 7));
+        assert!(fully_shown(&rows, scroll, 8));
         assert!(steps >= 2);
         while step(&rows, scroll, -1) != scroll {
             scroll = step(&rows, scroll, -1);

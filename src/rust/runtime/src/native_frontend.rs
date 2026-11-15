@@ -380,6 +380,12 @@ fn execute(
             log(&format!("video: lower the bitrate note shown={shown:?}"));
         }
         let overlay = app.client.bridge.model().overlay() || app.keyboard_covers(now_ms);
+        let performance = app
+            .client
+            .bridge
+            .model()
+            .settings()
+            .performance(dock.current());
         let clocked = stream
             .clock_inputs()
             .map(|((width, height, fps), signals)| crate::clocks::Streaming {
@@ -391,6 +397,7 @@ fn execute(
                 },
                 signals,
                 overlay,
+                performance,
             });
         system.tick(&mut app, renderer, clocked, now_ms);
         app.client

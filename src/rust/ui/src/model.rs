@@ -91,6 +91,7 @@ pub mod item {
     pub const SHOW_KEYBOARD: u32 = 24;
     pub const TOGGLE_JOYCON_MOUSE: u32 = 25;
     pub const TOGGLE_VIRTUAL_PAD: u32 = 26;
+    pub const TOGGLE_POWER: u32 = 27;
     pub const CATEGORY: u32 = 50000;
     pub const HOST: u32 = 10000;
     pub const APP: u32 = 20000;
@@ -1623,6 +1624,13 @@ impl Model {
         }
         if op == Op::A && item == item::TOGGLE_VIRTUAL_PAD && !self.docked {
             self.settings = self.settings.with_virtual_pad(!self.settings.virtual_pad());
+            step.changed = true;
+            step.add(IntentKind::SaveSettings, None);
+            return;
+        }
+        if op == Op::A && item == item::TOGGLE_POWER {
+            let performance = self.settings.performance(self.docked);
+            self.settings = self.settings.with_performance(!performance);
             step.changed = true;
             step.add(IntentKind::SaveSettings, None);
             return;

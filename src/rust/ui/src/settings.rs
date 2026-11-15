@@ -37,10 +37,11 @@ pub enum Setting {
     MouseSensitivity,
     VirtualPad,
     PadOpacity,
+    Power,
 }
 
 impl Setting {
-    pub const COUNT: usize = 19;
+    pub const COUNT: usize = 20;
     pub const ALL: [Setting; Self::COUNT] = [
         Setting::Size,
         Setting::Fps,
@@ -61,6 +62,7 @@ impl Setting {
         Setting::MouseSensitivity,
         Setting::VirtualPad,
         Setting::PadOpacity,
+        Setting::Power,
     ];
 
     pub fn from_index(index: usize) -> Option<Self> {
@@ -79,7 +81,9 @@ impl Setting {
     /// console, in that order.
     pub fn category(self) -> u8 {
         match self {
-            Self::Size | Self::Fps | Self::Bitrate | Self::Codec | Self::Optimise => 0,
+            Self::Size | Self::Fps | Self::Bitrate | Self::Codec | Self::Optimise | Self::Power => {
+                0
+            }
             Self::HostAudio => 1,
             Self::MenuChord
             | Self::TouchMouse
@@ -120,6 +124,7 @@ impl Setting {
             Self::MouseSensitivity => "How far the pointer moves for each move of the Joy-Con",
             Self::VirtualPad => "Touch controls over the stream in handheld mode",
             Self::PadOpacity => "How strongly the touch controls show over the stream",
+            Self::Power => "Auto: full clocks docked, battery saver handheld",
         }
     }
 
@@ -294,6 +299,7 @@ enum RowKind {
     Side,
     Sensitivity,
     Opacity,
+    Power,
 }
 
 struct Row {
@@ -359,6 +365,7 @@ const ROWS: [Row; Setting::COUNT] = [
     ),
     row("virtualPad", "Virtual gamepad", RowKind::Toggle, 2, 0),
     row("padOpacity", "Gamepad opacity", RowKind::Opacity, 5, 2),
+    row("power", "Power", RowKind::Power, 3, POWER_AUTO),
 ];
 
 const STRENGTHS: [u32; 5] = [0, 25, 50, 75, 100];
@@ -373,6 +380,14 @@ const SIDES: [(MouseSide, &str, &str); 3] = [
 ];
 const SENSITIVITIES: [u32; 8] = [25, 50, 75, 100, 125, 150, 200, 300];
 const OPACITIES: [u32; 5] = [20, 35, 50, 65, 80];
+const POWER_AUTO: u8 = 0;
+const POWER_SAVER: u8 = 1;
+const POWER_PERFORMANCE: u8 = 2;
+const POWERS: [(&str, &str); 3] = [
+    ("auto", "Auto"),
+    ("saver", "Battery saver"),
+    ("performance", "Performance"),
+];
 
 fn multiplier(index: u8) -> f64 {
     f64::from(SENSITIVITIES[index as usize]) / 100.0
@@ -629,6 +644,20 @@ impl Settings {
 
     pub fn virtual_pad(&self) -> bool {
         self.on(Setting::VirtualPad)
+    }
+
+    /// Whether a stream keeps the console's stock clocks: Performance, or Auto docked.
+    pub fn performance(&self, docked: bool) -> bool {
+        match self.value[Setting::Power as usize] {
+            POWER_AUTO => docked,
+            value => value == POWER_PERFORMANCE,
+        }
+    }
+
+    /// These settings with Performance on or off, picked by name.
+    pub fn with_performance(mut self, on: bool) -> Settings {
+        self.value[Setting::Power as usize] = if on { POWER_PERFORMANCE } else { POWER_SAVER };
+        self
     }
 
     /// These settings with the on-screen gamepad on or off.
@@ -1021,6 +1050,7 @@ impl Settings {
                 RowKind::Side => write!(out, "\"{}\"", SIDES[value as usize].1),
                 RowKind::Sensitivity => write!(out, "{}", multiplier(value)),
                 RowKind::Opacity => write!(out, "{}", OPACITIES[value as usize]),
+                RowKind::Power => write!(out, "\"{}\"", POWERS[value as usize].0),
             };
         }
         if self.fps_before_4k != 0 {
@@ -1163,6 +1193,10 @@ fn match_value(value: Value<'_>, row: &Row) -> Option<u8> {
             .iter()
             .position(|&percent| number == Some(f64::from(percent)))
             .map(|i| i as u8),
+        RowKind::Power => POWERS
+            .iter()
+            .position(|&(saved, _)| value.string_is(saved))
+            .map(|i| i as u8),
     }
 }
 
@@ -1213,6 +1247,7 @@ impl core::fmt::Display for ValueText<'_> {
             RowKind::Side => f.write_str(SIDES[value as usize].2),
             RowKind::Sensitivity => write!(f, "{}\u{d7}", multiplier(value)),
             RowKind::Opacity => write!(f, "{} %", OPACITIES[value as usize]),
+            RowKind::Power => f.write_str(POWERS[value as usize].1),
         }
     }
 }
