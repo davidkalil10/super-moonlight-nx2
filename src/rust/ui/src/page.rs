@@ -28,6 +28,7 @@ pub const FORMAT_RGBA8: u32 = 1;
 pub const FLAG_OVERLAY: u32 = 1;
 pub const FLAG_HIDE_CURSOR: u32 = 2;
 pub const FLAG_NO_CHORD: u32 = 4;
+pub const FLAG_SCROLLS: u32 = 8;
 
 pub const ITEM_GREYED: u32 = 1;
 pub const ITEM_CURRENT: u32 = 2;

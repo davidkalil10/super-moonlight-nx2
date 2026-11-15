@@ -9,6 +9,7 @@ use crate::link_choice::LinkChoice;
 use crate::presence::{Presence, Table};
 use crate::readout::{Readout, StreamReadout};
 use crate::settings::{Capabilities, MouseSide, Setting, Settings, StreamOptions};
+use crate::sheet;
 use crate::text::Text;
 use crate::theme::Look;
 
@@ -181,6 +182,7 @@ pub enum Op {
     Edit,
     Focus,
     Minus,
+    Scroll,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -405,6 +407,8 @@ pub struct Model {
     overlay: bool,
     /// The side the in-stream menu turns the Joy-Con mouse back on with.
     joycon_side: MouseSide,
+    sheet_focus: u32,
+    sheet_scroll: u32,
     stream_stats: Message,
     settings: Settings,
     docked: bool,
@@ -507,6 +511,8 @@ impl Model {
                 MouseSide::Off => MouseSide::Right,
                 side => side,
             },
+            sheet_focus: item::RESUME_STREAM,
+            sheet_scroll: 0,
             stream_stats: Message::of("FPS --   Bitrate --   Latency --"),
             settings,
             docked: false,
@@ -956,6 +962,27 @@ impl Model {
         self.overlay
     }
 
+    /// The stream menu's rows in order, as item ids.
+    pub fn sheet_rows(&self) -> Vec<u32> {
+        let sensitivity = Setting::MouseSensitivity;
+        sheet::rows(
+            !self.docked,
+            self.settings
+                .shown(sensitivity)
+                .then_some(item::SETTING + sensitivity as u32),
+        )
+    }
+
+    /// How far the stream menu's rows are scrolled, in pixels.
+    pub fn sheet_scroll(&self) -> u32 {
+        sheet::clamp(&self.sheet_rows(), self.sheet_scroll)
+    }
+
+    /// The stream menu row the cursor was last reported on.
+    pub fn sheet_focus(&self) -> u32 {
+        self.sheet_focus
+    }
+
     pub fn docked(&self) -> bool {
         self.docked
     }
@@ -1082,6 +1109,18 @@ impl Model {
                     .filter(|category| *category < CATEGORIES);
                 if let Some(category) = category.filter(|category| *category != self.category) {
                     self.category = category;
+                    step.changed = true;
+                }
+            }
+            Screen::Streaming if self.overlay => {
+                let rows = self.sheet_rows();
+                let Some(index) = rows.iter().position(|&row| row == item) else {
+                    return;
+                };
+                self.sheet_focus = item;
+                let scroll = sheet::reveal(&rows, self.sheet_scroll(), index);
+                if scroll != self.sheet_scroll {
+                    self.sheet_scroll = scroll;
                     step.changed = true;
                 }
             }
@@ -1504,6 +1543,21 @@ impl Model {
 
     /// Leaving the stream menu ends its sensitivity edit. An edit left from Settings stays,
     /// as it always has.
+    fn on_sheet_scroll(&mut self, direction: i32, step: &mut Step) {
+        let rows = self.sheet_rows();
+        let scroll = sheet::step(&rows, self.sheet_scroll(), direction);
+        if scroll == self.sheet_scroll {
+            return;
+        }
+        self.sheet_scroll = scroll;
+        if let Some(focus) = rows.iter().position(|&row| row == self.sheet_focus)
+            && !sheet::fully_shown(&rows, scroll, focus)
+        {
+            self.sheet_focus = rows[sheet::nearest_shown(&rows, scroll, focus)];
+        }
+        step.changed = true;
+    }
+
     fn end_sheet_edit(&mut self) {
         if self.editing == Some(Setting::MouseSensitivity) {
             self.editing = None;
@@ -1521,6 +1575,10 @@ impl Model {
             return;
         }
         if !self.overlay {
+            return;
+        }
+        if op == Op::Scroll {
+            self.on_sheet_scroll(value, step);
             return;
         }
         let sensitivity = Some(Setting::MouseSensitivity);
@@ -1797,6 +1855,8 @@ impl Model {
             Event::StreamStarted if screen == Screen::Launching => {
                 self.screen = Screen::Streaming;
                 self.overlay = false;
+                self.sheet_focus = item::RESUME_STREAM;
+                self.sheet_scroll = 0;
                 step.changed = true;
             }
             Event::Stage { message: text } if screen == Screen::Launching => {

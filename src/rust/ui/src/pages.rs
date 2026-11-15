@@ -20,6 +20,7 @@ use crate::page::{self, Shape};
 use crate::presence::Presence;
 use crate::readout::{Network, Readout};
 use crate::settings::{Setting, SettingRow};
+use crate::sheet;
 
 const TITLE: Face = Face::new(44, 500);
 const STATUS: Face = Face::new(28, 500);
@@ -121,9 +122,7 @@ const SHEET_ALPHA: u32 = 0xf0 << 24;
 const SCREEN_HEIGHT: u32 = 1080;
 const SHEET_GRID_Y: u32 = 186;
 const SHEET_CELL: u32 = 46;
-const SHEET_ITEMS_Y: u32 = 350;
-const SHEET_ITEM: u32 = 64;
-const SHEET_ITEM_GAP: u32 = 12;
+const SHEET_FADE_STEPS: u32 = 4;
 const SHEET_ITEM_RADIUS: u32 = 13;
 const SHEET_FOOT_Y: u32 = 984;
 const BADGE_X: u32 = 58;
@@ -1554,10 +1553,140 @@ impl Builder<'_> {
         }
     }
 
+    fn sheet_row_text(model: &Model, id: u32) -> (&'static str, Option<&'static str>, bool) {
+        let on_off = |on: bool| Some(if on { "On" } else { "Off" });
+        match id {
+            item::RESUME_STREAM => ("Resume", None, false),
+            item::SHOW_KEYBOARD => ("Show keyboard", None, false),
+            item::TOGGLE_STATS => ("Show stats on screen", Some(model.stats().label()), false),
+            item::TOGGLE_JOYCON_MOUSE => (
+                "Joy-Con mouse",
+                Some(model.settings().joycon_mouse().label()),
+                false,
+            ),
+            item::TOGGLE_VIRTUAL_PAD => (
+                "Virtual gamepad",
+                on_off(model.settings().virtual_pad()),
+                false,
+            ),
+            item::RETURN_TO_APPS => ("Disconnect", None, false),
+            item::QUIT_HOST => ("Quit app on PC", None, true),
+            _ => ("Mouse sensitivity", None, false),
+        }
+    }
+
+    /// The stream menu's rows, scrolled so the focused one shows whole. A row cut by an edge
+    /// keeps its item so the cursor can step onto it, and fades into the sheet.
+    fn sheet_rows(&mut self, model: &Model, left: u32, inner: u32) {
+        let pal = self.pal;
+        let sensitivity = Setting::MouseSensitivity;
+        let stepper_id = item::SETTING + sensitivity as u32;
+        let rows = model.sheet_rows();
+        let scroll = model.sheet_scroll();
+        let setting_rows = model.settings().rows(model.docked(), model.capabilities());
+        let setting = &setting_rows[sensitivity as usize];
+        let editing = model.editing() == Some(sensitivity);
+        let mut whole = (sheet::BOTTOM, sheet::TOP);
+        let mut shown = 0;
+        for (index, &id) in rows.iter().enumerate() {
+            let y = sheet::TOP + sheet::top(&rows, index);
+            let top = y.saturating_sub(scroll).max(sheet::TOP);
+            let bottom = (y + sheet::ROW).saturating_sub(scroll).min(sheet::BOTTOM);
+            if bottom <= top {
+                continue;
+            }
+            let stepper = id == stepper_id;
+            let flags = match (stepper, editing) {
+                (true, true) => page::ITEM_ADJUSTABLE | page::ITEM_EDITING,
+                (true, false) => page::ITEM_ADJUSTABLE,
+                _ => 0,
+            } | page::ITEM_REPORTS_FOCUS;
+            let height = bottom - top;
+            let radius = SHEET_ITEM_RADIUS.min(height / 2);
+            if id == model.sheet_focus() {
+                self.cursor_home = shown;
+            }
+            shown += 1;
+            self.item(id, (left, top, inner, height), flags, radius);
+            self.fill(left, top, inner, height, pal.panel, radius);
+            if height < sheet::ROW {
+                continue;
+            }
+            whole = (whole.0.min(top), whole.1.max(bottom));
+            let (label, value, warn) = Self::sheet_row_text(model, id);
+            let ink = if warn { pal.warn } else { pal.ink };
+            let middle = top + sheet::ROW / 2;
+            self.put_middle(
+                left + 27,
+                middle,
+                inner - 54,
+                label,
+                OPTION,
+                ink,
+                Align::Left,
+            );
+            if stepper {
+                let text_top = self.top_for(middle, "H", OPTION);
+                self.stepper(
+                    (left + 27, text_top, inner - 54),
+                    (top, sheet::ROW),
+                    setting.value.as_str(),
+                    OPTION,
+                    if editing { pal.accent } else { pal.dim },
+                    editing && setting.can_left,
+                    editing && setting.can_right,
+                );
+            } else if let Some(value) = value {
+                self.put_middle(
+                    left + 27,
+                    middle,
+                    inner - 54,
+                    value,
+                    OPTION,
+                    pal.dim,
+                    Align::Right,
+                );
+            }
+        }
+        let sheet = (pal.ground & 0x00ff_ffff) | SHEET_ALPHA;
+        if scroll > 0 {
+            let depth = whole.0.saturating_sub(sheet::TOP).min(sheet::EDGE);
+            self.sheet_fade(left, inner, sheet::TOP, depth, sheet, false);
+        }
+        if scroll < sheet::clamp(&rows, u32::MAX) {
+            let depth = sheet::BOTTOM.saturating_sub(whole.1).min(sheet::EDGE);
+            self.sheet_fade(left, inner, sheet::BOTTOM - depth, depth, sheet, true);
+        }
+    }
+
+    /// Bands of the sheet's colour over `depth` pixels from `y`, densest at the list's edge.
+    fn sheet_fade(&mut self, left: u32, inner: u32, y: u32, depth: u32, color: u32, down: bool) {
+        let band = depth / SHEET_FADE_STEPS;
+        if band == 0 {
+            return;
+        }
+        let alpha = color >> 24;
+        for step in 0..SHEET_FADE_STEPS {
+            let strength = if down {
+                step + 1
+            } else {
+                SHEET_FADE_STEPS - step
+            };
+            let shade = (alpha * strength / (SHEET_FADE_STEPS + 2)) << 24;
+            let at = y + step * band;
+            let height = if step + 1 == SHEET_FADE_STEPS {
+                y + depth - at
+            } else {
+                band
+            };
+            self.fill(left, at, inner, height, (color & 0x00ff_ffff) | shade, 0);
+        }
+    }
+
     fn overlay_page(&mut self, model: &Model) {
         let pal = self.pal;
         self.background = pal.scrim;
-        self.flags = page::FLAG_OVERLAY | page::FLAG_NO_CHORD;
+        self.flags = page::FLAG_OVERLAY | page::FLAG_NO_CHORD | page::FLAG_SCROLLS;
         let x = SCREEN_WIDTH - SHEET_WIDTH;
         let sheet = (pal.ground & 0x00ff_ffff) | SHEET_ALPHA;
         self.fill(x, 0, SHEET_WIDTH, SCREEN_HEIGHT, sheet, 0);
@@ -1625,92 +1754,7 @@ impl Builder<'_> {
         }
         self.sheet_status(readout, left, inner / 2);
 
-        let sensitivity = Setting::MouseSensitivity;
-        let mouse = model.settings().shown(sensitivity);
-        let mut items = Vec::from([
-            (item::RESUME_STREAM, "Resume", None, pal.ink),
-            (item::SHOW_KEYBOARD, "Show keyboard", None, pal.ink),
-            (
-                item::TOGGLE_STATS,
-                "Show stats on screen",
-                Some(model.stats().label()),
-                pal.ink,
-            ),
-            (
-                item::TOGGLE_JOYCON_MOUSE,
-                "Joy-Con mouse",
-                Some(model.settings().joycon_mouse().label()),
-                pal.ink,
-            ),
-        ]);
-        if !model.docked() {
-            items.push((
-                item::TOGGLE_VIRTUAL_PAD,
-                "Virtual gamepad",
-                Some(if model.settings().virtual_pad() {
-                    "On"
-                } else {
-                    "Off"
-                }),
-                pal.ink,
-            ));
-        }
-        if mouse {
-            items.push((
-                item::SETTING + sensitivity as u32,
-                "Mouse sensitivity",
-                None,
-                pal.ink,
-            ));
-        }
-        items.push((item::RETURN_TO_APPS, "Disconnect", None, pal.ink));
-        items.push((item::QUIT_HOST, "Quit app on PC", None, pal.warn));
-        let rows = model.settings().rows(model.docked(), model.capabilities());
-        let row = &rows[sensitivity as usize];
-        let editing = model.editing() == Some(sensitivity);
-        for (i, (id, label, value, ink)) in items.into_iter().enumerate() {
-            let y = SHEET_ITEMS_Y + i as u32 * (SHEET_ITEM + SHEET_ITEM_GAP);
-            let stepper = id == item::SETTING + sensitivity as u32;
-            let flags = match (stepper, editing) {
-                (true, true) => page::ITEM_ADJUSTABLE | page::ITEM_EDITING,
-                (true, false) => page::ITEM_ADJUSTABLE,
-                _ => 0,
-            };
-            self.item(id, (left, y, inner, SHEET_ITEM), flags, SHEET_ITEM_RADIUS);
-            self.fill(left, y, inner, SHEET_ITEM, pal.panel, SHEET_ITEM_RADIUS);
-            let middle = y + SHEET_ITEM / 2;
-            self.put_middle(
-                left + 27,
-                middle,
-                inner - 54,
-                label,
-                OPTION,
-                ink,
-                Align::Left,
-            );
-            if stepper {
-                let top = self.top_for(middle, "H", OPTION);
-                self.stepper(
-                    (left + 27, top, inner - 54),
-                    (y, SHEET_ITEM),
-                    row.value.as_str(),
-                    OPTION,
-                    if editing { pal.accent } else { pal.dim },
-                    editing && row.can_left,
-                    editing && row.can_right,
-                );
-            } else if let Some(value) = value {
-                self.put_middle(
-                    left + 27,
-                    middle,
-                    inner - 54,
-                    value,
-                    OPTION,
-                    pal.dim,
-                    Align::Right,
-                );
-            }
-        }
+        self.sheet_rows(model, left, inner);
         self.legend_right(
             SCREEN_WIDTH - SHEET_PAD,
             SHEET_FOOT_Y,

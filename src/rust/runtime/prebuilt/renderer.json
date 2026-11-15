@@ -138,13 +138,13 @@
   },
   "blob": {
     "path": "shaders.bin",
-    "bytes": 124656,
-    "sha256": "ff53fa575d565ed15ab1f93b32d5c6a89819e2e7e86443260fbc1f5047d94296"
+    "bytes": 132688,
+    "sha256": "2b0d4c32eb3482e5544a6aefe579a67c2cf0616fbf37ac549d82feece43db60c"
   },
   "sources": {
     "publish.comp": "9a52f6d19abb08bf7d6f63dccbea17fff490ee03d3b7fb30ee053a4bea93567e",
     "storage.glsl": "0bd45d229c4ffc4c3c37d6338bfbef53fa2c9dc952c0ee1d962c64d60b26ebe8",
-    "ui-control.glsl": "1229563a4d59baf229fdc860536b37386598a83a2c831aebdfcb3aea7084ab0c",
+    "ui-control.glsl": "4defcc5562f2dd3374a863bf7f050cffd038ea624da459084566f5c52dcab449",
     "ui.frag": "41db1ead813bb309c2b41775c4a75f9e7d78db40f9503a9a9ed4ffd0f7a0e8e8",
     "ui.vert": "849f767f0dad358c4a0c4de4b99712f7dad780ba267f664137758a4a032d209a",
     "video-storage.frag": "bd7c0b6877d11fafa3d691d01498d5039651f434d6dcba9fdcf7ed66d0b5fdb9",

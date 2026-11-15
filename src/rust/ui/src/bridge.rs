@@ -43,7 +43,7 @@ pub const APPLY_TIMEOUT_NS: u64 = 5_000_000_000;
 pub const MAX_QUEUED: usize = 16;
 
 const SAVE_FAILED: &str = "Settings write failed";
-const OPS: [Op; 9] = [
+const OPS: [Op; 10] = [
     Op::A,
     Op::B,
     Op::X,
@@ -53,6 +53,7 @@ const OPS: [Op; 9] = [
     Op::Edit,
     Op::Focus,
     Op::Minus,
+    Op::Scroll,
 ];
 
 pub type Storage = [u8; STORAGE_BYTES];

@@ -22,6 +22,7 @@ pub mod png;
 pub mod presence;
 pub mod readout;
 pub mod settings;
+mod sheet;
 pub mod store;
 pub mod text;
 pub mod theme;

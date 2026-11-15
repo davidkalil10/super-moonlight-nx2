@@ -8,13 +8,19 @@ const uint UI_ITEMS = 16u, UI_TEXTS = 272u, UI_IMAGES = 656u, UI_SHAPES = 848u,
            UI_TABLES_END = 1024u, UI_BODY = 1024u;
 const uint UI_MAX_ITEMS = 32u, UI_MAX_TEXTS = 48u, UI_MAX_IMAGES = 24u,
            UI_MAX_SHAPES = 22u, UI_MAX_BODY = UI_PAGE_WORDS * 4u - 4096u;
-const uint UI_FLAG_OVERLAY = 1u, UI_FLAG_HIDE_CURSOR = 2u, UI_FLAG_NO_CHORD = 4u;
+const uint UI_FLAG_OVERLAY = 1u, UI_FLAG_HIDE_CURSOR = 2u, UI_FLAG_NO_CHORD = 4u,
+           UI_FLAG_SCROLLS = 8u;
 const uint UI_ITEM_GREYED = 1u, UI_ITEM_CURRENT = 2u, UI_ITEM_ADJUSTABLE = 4u,
            UI_ITEM_PENDING = 8u, UI_ITEM_EDITING = 16u, UI_ITEM_REPORTS_FOCUS = 32u,
            UI_ITEM_HINT = 64u, UI_ITEM_OPENS = 128u;
 const uint UI_OP_A = 1u, UI_OP_B = 2u, UI_OP_X = 3u, UI_OP_Y = 4u,
-           UI_OP_ADJUST = 5u, UI_OP_CHORD = 6u, UI_OP_EDIT = 7u, UI_OP_FOCUS = 8u, UI_OP_MINUS = 9u;
+           UI_OP_ADJUST = 5u, UI_OP_CHORD = 6u, UI_OP_EDIT = 7u, UI_OP_FOCUS = 8u, UI_OP_MINUS = 9u,
+           UI_OP_SCROLL = 10u;
 const uint UI_CHORD_FRAMES = 60u, UI_STICK_REPEAT = 12u;
+// A touch on a page that scrolls: held flag, the row it went down on plus one
+// (bits 12-17) and where the finger last scrolled from (bits 0-11).
+const uint UI_TOUCH_HELD = 0x80000000u;
+const float UI_DRAG_STEP = 64.0;
 
 uint uiPageBase(uint page) { return UI_BASE + page * UI_PAGE_WORDS; }
 uint uiShownBase() { return uiPageBase(uiWord(UI_SHOWN) & 1u); }
@@ -210,6 +216,8 @@ uint uiPress(uint base, uint index) {
 // Input for the applied page: cursor moves on the console, presses become
 // commands. Scratch: inputState.chordFrames chord frames,
 // inputState.stickRepeat stick repeat, inputState.touchHeld touch held.
+// On a page that scrolls, a row is chosen when the finger lifts, and a drag
+// scrolls a row per step instead.
 void uiInput() {
   uint applied = uiWord(UI_APPLIED);
   if (uiWord(UI_MAGIC) != UI_PROTOCOL_MAGIC || applied == 0u)
@@ -234,7 +242,10 @@ void uiInput() {
   uint items = uiWord(base + UI_HDR_ITEMS),
        cursor = min(uiWord(UI_CURSOR), max(items, 1u) - 1u);
   bool touching = inputState.touch[2] == 1u && (inputState.touch[6] & 2u) == 0u;
-  bool tapped = touching && inputState.touchHeld == 0u;
+  bool scrolls = (uiWord(base + UI_HDR_FLAGS) & UI_FLAG_SCROLLS) != 0u;
+  uint grip = inputState.touchHeld;
+  bool tapped = touching && grip == 0u;
+  bool down = tapped;
   vec2 touch = vec2(inputState.touch[8], inputState.touch[9]) * 1.5;
   inputState.touchHeld = touching ? 1u : 0u;
   // A hint presses its button, through the same path as the pad.
@@ -267,13 +278,46 @@ void uiInput() {
   // down do nothing until A or B ends the edit.
   if (items > 0u && move != vec2(0)) {
     bool editing = uiWord(UI_EDIT) != 0u;
+    uint next = editing ? cursor : uiNeighbour(base, cursor, move);
+    // At the end of what shows, the row is reported again so the page can
+    // scroll the next one in.
+    if (!editing && next == cursor && scrolls && move.y != 0.0 && !sent &&
+        (uiItemFlags(base, cursor) & UI_ITEM_REPORTS_FOCUS) != 0u) {
+      uiCommand(UI_OP_FOCUS, uiItemId(base, cursor), 0u);
+      sent = true;
+    }
     if (!editing)
-      cursor = uiNeighbour(base, cursor, move);
+      cursor = next;
     else if (move.y == 0.0 && !sent) {
       uiCommand(UI_OP_ADJUST, uiWord(UI_EDIT),
                 move.x > 0.0 ? 1u : 0xffffffffu);
       sent = true;
     }
+  }
+  if (scrolls) {
+    uint pending = (grip >> 12u) & 63u;
+    if (down) {
+      pending = 0u;
+      for (uint i = 0u; i < items; i++)
+        if ((uiItemFlags(base, i) & (UI_ITEM_GREYED | UI_ITEM_HINT)) == 0u &&
+            uiInside(touch, uiRect(base, UI_ITEMS, i, 1u)))
+          pending = i + 1u;
+      grip = UI_TOUCH_HELD | (pending << 12u) | uint(touch.y);
+    } else if (touching && (grip & UI_TOUCH_HELD) != 0u) {
+      float dy = float(grip & 0xfffu) - touch.y;
+      if (abs(dy) >= UI_DRAG_STEP && !sent) {
+        uiCommand(UI_OP_SCROLL, 0u, dy > 0.0 ? 1u : 0xffffffffu);
+        sent = true;
+        grip = UI_TOUCH_HELD | uint(touch.y);
+      }
+    } else if (!touching && pending != 0u && pending <= items && !sent) {
+      cursor = pending - 1u;
+      storage.words[UI_TOUCH_ITEM] = cursor;
+      cursor = uiPress(base, cursor);
+      sent = true;
+    }
+    inputState.touchHeld = touching ? grip : 0u;
+    tapped = false;
   }
   for (uint i = 0u; tapped && i < items; i++)
     if ((uiItemFlags(base, i) & (UI_ITEM_GREYED | UI_ITEM_HINT)) == 0u &&
