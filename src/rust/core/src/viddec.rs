@@ -34,6 +34,17 @@ pub struct Session {
 const FRAME_RATE_MAX: u32 = 60;
 const FRAME_RATE_MAX_2160P: u32 = 30;
 
+/// The rate a session asks for first, above `Session::frame_rate`: 120 up to 1440p, 60 at
+/// 2160p. libounce's decoder.h has the service cap each decoder at 60 and all of them at
+/// 3840x2160x30 pixels a second, so these are expected to be refused; the console says.
+pub fn frame_rate_hint(display: Size) -> u32 {
+    if display.width() > 2560 || display.height() > 1440 {
+        FRAME_RATE_MAX
+    } else {
+        2 * FRAME_RATE_MAX
+    }
+}
+
 fn frame_rate(display: Size, fps: u32) -> u32 {
     if display.width() > 2560 || display.height() > 1440 {
         fps.min(FRAME_RATE_MAX_2160P)

@@ -12,6 +12,7 @@ use crate::{
     stream_stats::{self, DecoderEvent, Stage},
 };
 use alloc::format;
+use core::sync::atomic::{AtomicBool, Ordering};
 use moonlight_nx2_core::{
     annexb,
     codec::{Capabilities, Codec},
@@ -27,6 +28,10 @@ const SDK_BUFFERS: u32 = SURFACES as u32 + 2;
 const SUBMIT_BUSY: u32 = (3603 << 9) | 111;
 const TIMED_OUT: u32 = 0xea01;
 const STAGE_POOL_CLOSE: u32 = 13;
+
+/// A refused fps hint costs a create, so it is asked once a process for each rate.
+static HINT_120_REFUSED: AtomicBool = AtomicBool::new(false);
+static HINT_60_REFUSED: AtomicBool = AtomicBool::new(false);
 
 #[repr(C)]
 #[derive(Default)]
@@ -343,21 +348,45 @@ impl SdkVideo {
         let took_ms = || (unsafe { sdk::moonlightNowNs() } - start_ns) / 1_000_000;
         if self.high_level() {
             let input_max = decoder::input_max(config.display);
-            let result = unsafe {
-                moonlightSdkDecoderStart(
-                    session.codec,
-                    session.frame_rate,
-                    codec_config.as_ptr(),
-                    bytes,
-                    input_max as u64,
-                )
+            let create = |frame_rate: u32| {
+                let result = unsafe {
+                    moonlightSdkDecoderStart(
+                        session.codec,
+                        frame_rate,
+                        codec_config.as_ptr(),
+                        bytes,
+                        input_max as u64,
+                    )
+                };
+                log(&format!(
+                    "sdk-decoder: start codec={:?} result=0x{result:x} codec_config_bytes={bytes} fps={frame_rate} stream_fps={} max_input={input_max} took_ms={}",
+                    config.codec,
+                    self.fps,
+                    took_ms()
+                ));
+                result
             };
+            let hint = viddec::frame_rate_hint(config.display);
+            let refused = match hint {
+                120 => &HINT_120_REFUSED,
+                _ => &HINT_60_REFUSED,
+            };
+            let mut accepted = session.frame_rate;
+            let mut result = u32::MAX;
+            if !refused.load(Ordering::Relaxed) {
+                result = create(hint);
+                if result == 0 {
+                    accepted = hint;
+                } else {
+                    refused.store(true, Ordering::Relaxed);
+                }
+            }
+            if result != 0 {
+                result = create(session.frame_rate);
+            }
             log(&format!(
-                "sdk-decoder: start codec={:?} result=0x{result:x} codec_config_bytes={bytes} fps={} stream_fps={} max_input={input_max} took_ms={}",
-                config.codec,
-                session.frame_rate,
-                self.fps,
-                took_ms()
+                "sdk-decoder: fps hint requested={hint} accepted={}",
+                if result == 0 { accepted } else { 0 }
             ));
             check("start", result)?;
             self.started = true;
