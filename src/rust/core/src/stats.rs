@@ -96,6 +96,36 @@ impl DecoderQueue {
     }
 }
 
+/// Refreshes in a row that may show a frame held back behind finished ones before those are
+/// dropped: longer than a burst takes to clear while the stream leaves refreshes spare.
+pub const BACKLOG_TURNS: u32 = 8;
+
+/// Whether finished frames queue up in the decoder. With the stream at the display's rate one
+/// unit goes in and one frame comes out each refresh, so the units a burst queued are never
+/// worked off: every frame is shown as many refreshes late as the burst was deep.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct Backlog {
+    turns: u32,
+}
+
+impl Backlog {
+    /// One refresh, showing a frame that waited `waited_ns` in the decoder, `behind` when
+    /// another finished frame waits after it. True on the `BACKLOG_TURNS`th such refresh in a
+    /// row whose frame waited over `refresh_ns`, when the frames behind should be dropped.
+    pub fn turn(&mut self, waited_ns: u64, refresh_ns: u64, behind: bool) -> bool {
+        if !behind || waited_ns <= refresh_ns {
+            self.turns = 0;
+            return false;
+        }
+        self.turns += 1;
+        if self.turns < BACKLOG_TURNS {
+            return false;
+        }
+        self.turns = 0;
+        true
+    }
+}
+
 fn mean_us(sum_ns: u64, count: u32) -> Option<u32> {
     sum_ns
         .checked_div(u64::from(count))

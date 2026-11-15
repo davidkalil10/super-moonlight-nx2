@@ -17,7 +17,7 @@ use moonlight_nx2_core::{
     frame::{Frame, Layout, Matrix, Plane},
     media::Header,
     recovery::{self, Decision, Recovery},
-    stats::{DecoderQueue, Stages, StreamStats},
+    stats::{Backlog, DecoderQueue, Stages, StreamStats},
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -93,6 +93,13 @@ struct DecoderTiming {
     submitted: u64,
     started: u64,
     decoded: u64,
+}
+
+impl DecoderTiming {
+    /// How long the frame was in the decoder before it was taken.
+    fn waited_ns(&self) -> u64 {
+        self.decoded.saturating_sub(self.submitted)
+    }
 }
 
 #[derive(Default)]
@@ -232,6 +239,11 @@ impl Turns {
         self.waited = false;
     }
 
+    /// Lets the turn wait again, up to what is left of its share.
+    fn resume(&mut self) {
+        self.waited = false;
+    }
+
     /// What is left of this turn's wait, None when the turn already waited or its length is
     /// not known yet.
     fn budget_ns(&mut self, now_ns: u64) -> Option<u64> {
@@ -260,6 +272,7 @@ pub struct Video<'a, B: Backend<N>, const N: usize = SURFACES> {
     queue: DecoderQueue,
     /// Presents in a row that found a frame waiting and the decoder full.
     late_turns: u32,
+    backlog: Backlog,
     last_present_ns: u64,
     timing: Timing,
     presentation: Option<Presentation>,
@@ -314,6 +327,7 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
             kept: None,
             queue: DecoderQueue::default(),
             late_turns: 0,
+            backlog: Backlog::default(),
             last_present_ns: 0,
             timing: Timing::default(),
             presentation: None,
@@ -1012,6 +1026,9 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
     /// in the decoder for the unit after it, or else in the decoder, holding that unit in the
     /// network. Only when the decoder stays full for `CATCH_UP_TURNS` refreshes has latency
     /// built up: `submit_draining` then replaces the waiting frame, and so does one taken here.
+    /// A decoder that stays full at the display's rate never turns up empty for that, so once
+    /// finished frames queue behind the shown one for `BACKLOG_TURNS` refreshes, the queue is
+    /// drained to its newest frame.
     /// With VRR the display refreshes on a present, so a frame is presented once it is ready
     /// and a turn without one presents nothing, up to `HOLD_NS`: a late frame then delays one
     /// refresh instead of repeating the previous picture for a whole one.
@@ -1046,10 +1063,56 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
                 }
             }
         }
+        if self.backed_up()? {
+            self.drain(renderer, audio)?;
+        }
         if vrr && !self.pending && !self.hold_ended(interactive) {
             return Ok(false);
         }
         self.present_pumping(renderer, interactive, audio)
+    }
+
+    /// Whether the frame about to be shown is part of a backlog `Backlog` says to drain: it
+    /// waited over a refresh and another finished frame waits behind it.
+    fn backed_up(&mut self) -> Result<bool, Error> {
+        let Some(refresh_ns) = stream_stats::frame_ns() else {
+            return Ok(false);
+        };
+        let waited_ns = match (self.pending, self.pending_timing) {
+            (true, Some(timing)) => timing.waited_ns(),
+            _ => 0,
+        };
+        let behind = waited_ns > refresh_ns
+            && (self.kept.is_some()
+                || self
+                    .decoder
+                    .wait(0)
+                    .map_err(|error| self.fail(Error::Decoder(error)))?);
+        Ok(self.backlog.turn(waited_ns, refresh_ns, behind))
+    }
+
+    /// Shows the newest frame in place of the finished ones queued before it, waiting for the
+    /// last unit up to what is left of the turn's share, so the decoder is left empty and the
+    /// next unit is shown on the refresh it arrives in.
+    fn drain(&mut self, renderer: &mut Renderer, audio: &mut dyn Pump) -> Result<(), Error> {
+        let waited_ns = self.pending_timing.map_or(0, |timing| timing.waited_ns());
+        let mut frames = 0;
+        while self.kept.is_some() || self.decoder.pending_units() != 0 {
+            self.turns.resume();
+            if !self.take(renderer, audio, false)? {
+                break;
+            }
+            frames += 1;
+        }
+        self.late_turns = 0;
+        if frames != 0 {
+            platform::log(&format!(
+                "video: drained queue frames={frames} wait_ms={}.{}",
+                waited_ns / 1_000_000,
+                waited_ns / 100_000 % 10
+            ));
+        }
+        Ok(())
     }
 
     /// Whether a present without a new frame is due: the UI redraws at most once a refresh,
