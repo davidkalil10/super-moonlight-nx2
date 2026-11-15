@@ -364,6 +364,14 @@ fn execute(
         stream.pump(&mut app.client, renderer, now_ms);
         let compute = app.client.needs_ui_compute(&input, &frame);
         let presented = stream.step(&mut app.client, renderer, &input, now_ms, compute);
+        if crate::stream_stats::take_oversize_warning() {
+            let shown = renderer.storage_mut().ok().and_then(|bytes| {
+                app.client
+                    .stream_note(bytes, now_ms, moonlight_nx2_ui::badge::OVERSIZE_NOTE)
+                    .ok()
+            });
+            log(&format!("video: lower the bitrate note shown={shown:?}"));
+        }
         let overlay = app.client.bridge.model().overlay() || app.keyboard_covers(now_ms);
         let clocked = stream
             .clock_inputs()

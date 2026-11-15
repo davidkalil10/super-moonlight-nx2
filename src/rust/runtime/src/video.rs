@@ -416,7 +416,13 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
                 bytes.len(),
                 input_max
             ));
-            self.recovery.lose(submitted_ns / 1_000_000);
+            if self.recovery.oversized(submitted_ns / 1_000_000) {
+                platform::log(&format!(
+                    "video: oversize units in a row, idr requests every {} ms or more",
+                    self.recovery.retry_ms()
+                ));
+                stream_stats::warn_oversize();
+            }
             self.forward_idr_request();
             return Ok(());
         }
@@ -424,6 +430,7 @@ impl<'a, B: Backend<N>, const N: usize> Video<'a, B, N> {
         stream_stats::stage(Stage::Submit, submitted_ns, platform::now_ns());
         match submitted {
             Ok(()) => {
+                self.recovery.fitted();
                 let Some(index) = self.arrivals.iter().position(Option::is_none) else {
                     return Err(self.fail(Error::Decoder(decoder::Error::Uncertain)));
                 };

@@ -275,6 +275,17 @@ pub fn take_idr_request() -> bool {
     IDR_WANTED.swap(false, Ordering::AcqRel)
 }
 
+static OVERSIZE_WARNING: AtomicBool = AtomicBool::new(false);
+
+/// Keyframes keep arriving too big for the decoder; the user is asked to lower the bitrate.
+pub fn warn_oversize() {
+    OVERSIZE_WARNING.store(true, Ordering::Release);
+}
+
+pub fn take_oversize_warning() -> bool {
+    OVERSIZE_WARNING.swap(false, Ordering::AcqRel)
+}
+
 static DECODER_SDK: AtomicBool = AtomicBool::new(false);
 static DECODER_SUBMITS: AtomicU32 = AtomicU32::new(0);
 static DECODER_BUSY: AtomicU32 = AtomicU32::new(0);

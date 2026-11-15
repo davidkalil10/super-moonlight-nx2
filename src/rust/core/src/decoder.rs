@@ -17,15 +17,16 @@ pub const FRAMES: usize = 2;
 pub const UNITS: usize = 3;
 /// The largest unit any decoder takes; see `input_max`.
 pub const INPUT_MAX: usize = 4 << 20;
-const INPUT_MAX_BELOW_2160P: usize = 1 << 20;
+const INPUT_MAX_TO_1080P: usize = 1 << 20;
 
-/// The largest unit a decoder for `display` takes. Big scene changes at 4K reach past 1 MiB,
-/// but the SDK decoder fails its first frame at 1080p (0xfa66f) when told 4 MiB.
+/// The largest unit a decoder for `display` takes. Big scene changes reach past 1 MiB at 4K
+/// and at 1440p, which the SDK decodes in its 2160p tier, but the SDK decoder fails its first
+/// frame at 1080p (0xfa66f) when told 4 MiB.
 pub fn input_max(display: Size) -> usize {
-    if display.height() >= 2160 {
+    if display.height() > 1080 {
         INPUT_MAX
     } else {
-        INPUT_MAX_BELOW_2160P
+        INPUT_MAX_TO_1080P
     }
 }
 static NEXT_OWNER: AtomicU64 = AtomicU64::new(1);

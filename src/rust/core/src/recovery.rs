@@ -4,6 +4,10 @@
 use crate::codec::Codec;
 
 pub const IDR_RETRY_MS: u64 = 500;
+/// Units in a row too big for the decoder before IDR requests back off. Each request makes
+/// the PC send another large keyframe, so asking every `IDR_RETRY_MS` only repeats the drop.
+pub const OVERSIZE_STREAK: u32 = 3;
+pub const OVERSIZE_RETRY_MAX_MS: u64 = 8_000;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Decision {
@@ -24,6 +28,7 @@ pub struct Recovery {
     resume_pts_us: Option<u64>,
     requested_ms: Option<u64>,
     wanted: bool,
+    oversized: u32,
     counters: Counters,
 }
 
@@ -66,13 +71,35 @@ impl Recovery {
         self.tick(now_ms);
     }
 
+    /// A unit too big for the decoder was dropped. Returns true on the drop that starts the
+    /// backoff, so the user can be told once to lower the bitrate.
+    pub fn oversized(&mut self, now_ms: u64) -> bool {
+        self.oversized = self.oversized.saturating_add(1);
+        self.lose(now_ms);
+        self.oversized == OVERSIZE_STREAK
+    }
+
+    /// A unit went into the decoder, ending any run of oversize drops.
+    pub fn fitted(&mut self) {
+        self.oversized = 0;
+    }
+
+    /// How long to wait between IDR requests: doubling from the third oversize drop in a row.
+    pub fn retry_ms(&self) -> u64 {
+        match self.oversized.checked_sub(OVERSIZE_STREAK - 1) {
+            Some(steps) if steps > 0 => (IDR_RETRY_MS << steps.min(8)).min(OVERSIZE_RETRY_MAX_MS),
+            _ => IDR_RETRY_MS,
+        }
+    }
+
     pub fn tick(&mut self, now_ms: u64) {
         if !self.awaiting {
             return;
         }
+        let retry_ms = self.retry_ms();
         let due = self
             .requested_ms
-            .is_none_or(|last| now_ms.saturating_sub(last) >= IDR_RETRY_MS);
+            .is_none_or(|last| now_ms.saturating_sub(last) >= retry_ms);
         if !due {
             return;
         }
