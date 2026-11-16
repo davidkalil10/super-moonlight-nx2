@@ -312,7 +312,7 @@ fn execute(
             sampler
                 .virtual_pad()
                 .filter(|_| !menu_open)
-                .map(|pad| pad.pressed()),
+                .map(|pad| (pad.pressed(), pad.knobs())),
         );
         if pad_state != shown_pad {
             if (pad_state.0, pad_state.1) != (shown_pad.0, shown_pad.1) {

@@ -140,6 +140,7 @@ With **Virtual gamepad** on, handheld streams show sticks, D-pad, face buttons, 
 Plus, Minus and stick clicks over the picture. The PC gets it as an Xbox controller without
 motion: player 1 when no controller is attached, otherwise the next free player. A finger
 that lands on a control stays with it until lifted; touches anywhere else still reach the PC.
+The sticks are analog: the knob follows the finger inside its ring and springs back on lift.
 
 ## Logs
 

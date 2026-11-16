@@ -1,6 +1,7 @@
 //! The on-screen gamepad for handheld play: touches on its controls become a pad slot routed
 //! like any other controller. A finger belongs to the control it went down on for its whole
-//! life; fingers that start elsewhere are left to the host.
+//! life; fingers that start elsewhere are left to the host. A stick's knob sits under its
+//! finger, held inside the ring, and reads as a proportional vector from the ring's centre.
 
 use crate::input::{MAX_POINTS, PANEL_HEIGHT, PANEL_WIDTH, Point, Touches};
 
@@ -25,9 +26,11 @@ pub const DOWN: u64 = 1 << 15;
 pub const SLOT_BYTES: usize = 32;
 
 const AXIS_MAX: f32 = 32767.0;
-/// Panel pixels a finger moves from where it went down for a full stick.
-const STICK_TRAVEL: f32 = 70.0;
-const STICK_DEADZONE: f32 = 0.12;
+const STICK_RADIUS: i16 = 100;
+pub const KNOB_RADIUS: i16 = 40;
+/// Panel pixels the knob's centre moves from the ring's centre for a full stick.
+pub const STICK_TRAVEL: f32 = (STICK_RADIUS - KNOB_RADIUS) as f32;
+const STICK_DEADZONE: f32 = 0.08;
 /// Buttons take touches a little outside what is drawn.
 const HIT_SLACK: f32 = 1.4;
 
@@ -92,9 +95,9 @@ pub const CONTROLS: [Control; 15] = [
     button(PLUS, PANEL_WIDTH as i16 - 290, 72, 26),
     button(LS, 300, 236, 28),
     button(RS, PANEL_WIDTH as i16 - 300, 236, 28),
-    round(Kind::Stick(0), 150, 340, 100),
+    round(Kind::Stick(0), 150, 340, STICK_RADIUS),
     round(Kind::Dpad, 270, 560, 96),
-    round(Kind::Stick(1), RIGHT_STICK_X, 560, 100),
+    round(Kind::Stick(1), RIGHT_STICK_X, 560, STICK_RADIUS),
     button(X, 1130, 340 - FACE_GAP, FACE_RADIUS),
     button(B, 1130, 340 + FACE_GAP, FACE_RADIUS),
     button(Y, 1130 - FACE_GAP, 340, FACE_RADIUS),
@@ -110,7 +113,6 @@ pub const REGIONS: [(i16, i16, i16, i16); 2] = [(30, 30, 370, 650), (880, 30, 37
 struct Finger {
     id: u32,
     control: usize,
-    down: (f32, f32),
 }
 
 /// Per-frame state of the on-screen pad.
@@ -121,6 +123,7 @@ pub struct VirtualPad {
     seen: [Option<u32>; MAX_POINTS],
     buttons: u64,
     sticks: [i32; 4],
+    knobs: [(i16, i16); 2],
     pressed: u32,
     revision: u32,
     presses: u32,
@@ -199,21 +202,27 @@ fn dpad(control: &Control, at: (f32, f32)) -> u64 {
     }
 }
 
-fn stick(down: (f32, f32), at: (f32, f32)) -> [i32; 2] {
-    let (dx, dy) = (
-        (at.0 - down.0) / STICK_TRAVEL,
-        (down.1 - at.1) / STICK_TRAVEL,
-    );
+/// The stick's axes, y up, and where its knob sits from the ring's centre in panel pixels.
+fn stick(centre: (f32, f32), at: (f32, f32)) -> ([i32; 2], (i16, i16)) {
+    let (dx, dy) = (at.0 - centre.0, at.1 - centre.1);
     let length = distance((0.0, 0.0), (dx, dy));
-    if length < STICK_DEADZONE {
-        return [0, 0];
+    if length <= f32::EPSILON {
+        return ([0, 0], (0, 0));
     }
-    let scale = length.min(1.0) / length;
+    let reach = length.min(STICK_TRAVEL);
+    let (ux, uy) = (dx / length, dy / length);
+    let pixel = |value: f32| (value + value.signum() * 0.5) as i16;
+    let knob = (pixel(ux * reach), pixel(uy * reach));
+    let tilt = reach / STICK_TRAVEL;
+    if tilt < STICK_DEADZONE {
+        return ([0, 0], knob);
+    }
+    let tilt = (tilt - STICK_DEADZONE) / (1.0 - STICK_DEADZONE);
     let axis = |value: f32| {
-        let scaled = (value * scale * AXIS_MAX).clamp(-AXIS_MAX, AXIS_MAX);
+        let scaled = (value * tilt * AXIS_MAX).clamp(-AXIS_MAX, AXIS_MAX);
         (scaled + scaled.signum() * 0.5) as i32
     };
-    [axis(dx), axis(dy)]
+    ([axis(ux), axis(-uy)], knob)
 }
 
 impl VirtualPad {
@@ -224,6 +233,7 @@ impl VirtualPad {
             seen: [None; MAX_POINTS],
             buttons: 0,
             sticks: [0; 4],
+            knobs: [(0, 0); 2],
             pressed: 0,
             revision: 0,
             presses: 0,
@@ -266,7 +276,6 @@ impl VirtualPad {
                 *slot = Some(Finger {
                     id: point.id,
                     control,
-                    down: at,
                 });
                 if let Some(out) = owned.iter_mut().find(|out| out.is_none()) {
                     *out = Some(point.id);
@@ -276,6 +285,7 @@ impl VirtualPad {
 
         let mut buttons = 0;
         let mut sticks = [0; 4];
+        let mut knobs = [(0, 0); 2];
         let mut pressed = 0;
         for finger in self.fingers.iter().flatten() {
             let Some(point) = points.iter().find(|point| point.id == finger.id) else {
@@ -295,19 +305,21 @@ impl VirtualPad {
                     pressed |= (((held >> 12) & 0xf) as u32) << DPAD_PRESSED_SHIFT;
                 }
                 Kind::Stick(index) => {
-                    let [x, y] = stick(finger.down, at);
+                    let ([x, y], knob) = stick(center(&control.shape), at);
                     sticks[index * 2] = x;
                     sticks[index * 2 + 1] = y;
+                    knobs[index] = knob;
                     pressed |= 1 << finger.control;
                 }
             }
         }
         self.presses += (buttons & !self.buttons).count_ones();
-        if pressed != self.pressed {
+        if pressed != self.pressed || knobs != self.knobs {
             self.revision = self.revision.wrapping_add(1);
         }
         self.buttons = buttons;
         self.sticks = sticks;
+        self.knobs = knobs;
         self.pressed = pressed;
         self.owned = owned;
         self.seen = [None; MAX_POINTS];
@@ -343,13 +355,19 @@ impl VirtualPad {
         self.sticks
     }
 
+    /// Where each stick's knob sits from its ring's centre, in panel pixels; centred when
+    /// nothing holds it.
+    pub fn knobs(&self) -> [(i16, i16); 2] {
+        self.knobs
+    }
+
     /// One bit per entry of `CONTROLS` that is held; the D-pad's directions instead take the bits
     /// from `DPAD_PRESSED_SHIFT` on, Left, Up, Right and Down in that order.
     pub fn pressed(&self) -> u32 {
         self.pressed
     }
 
-    /// Changes whenever `pressed` does, so a drawing can be kept until then.
+    /// Changes whenever `pressed` or `knobs` does, so a drawing can be kept until then.
     pub fn revision(&self) -> u32 {
         self.revision
     }
