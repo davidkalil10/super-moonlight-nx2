@@ -1,11 +1,11 @@
-# moonlight-nx2 1.1.0-test3
+# moonlight-nx2 1.1.0-test4
 
 Test build for 1.1.0. Changes since 1.0.1. Needs kaiHEN release `20261114c` or later.
 
 ## Streaming
 - Cuts about 33 ms of latency docked at 60 Hz and about 17 ms handheld at 120 Hz when the decoder got stuck three frames behind after a burst. The queue now drains back to one frame in flight, skipping at most one frame at a time and at most once every 30 frames, so a long backlog no longer stutters.
 - 120 fps is offered docked again on TVs that do 1440p120 or 1080p120, even when the console's output is 4K60. On a 4K60 output Auto stays at 2160p60 and the Frame rate row reads "120 below 4K"; picking 120 streams 1440p120 and switches the TV to 120 Hz.
-- The decoder is first opened at 120 fps (60 at 4K) and falls back to the stream's rate if the console refuses.
+- The decoder is first asked for 120 fps (60 at 4K) and falls back to the stream's rate when the console refuses. It does refuse (`requested=120 accepted=60`) and the hint has no effect: frames are serviced at the display's refresh, about 8.3 ms at 120 Hz, either way. Only the log line and the fallback remain.
 - Keyframes up to 4 MiB now decode above 1080p, not only at 4K. 1440p H.264 is decoded in the same tier as 4K, and big scene cuts there were dropped.
 - When the PC keeps sending keyframes too big for the console, the app asks for new ones less often and shows a note to lower the bitrate, instead of asking every half second.
 - 1440p120 H.264 stays offered; with the queue drained it should keep up better. If the frame counter stays well under 120, use 60.
@@ -14,10 +14,12 @@ Test build for 1.1.0. Changes since 1.0.1. Needs kaiHEN release `20261114c` or l
 ## Touch
 - Touches now carry pressure, contact size and rotation, so two-finger scrolling and pinching work on hosts that read them, such as Sunshine on Linux.
 - Opening the stream menu or leaving the app cancels the fingers on the PC, so no touch stays stuck down.
-- Virtual gamepad: on-screen controls in handheld mode, sent as an extra Xbox controller. Turn it on in Settings > Controls or the stream menu.
+- Virtual gamepad: on-screen controls in handheld mode, sent as an extra Xbox controller. Turn it on in Settings > Controls or the stream menu. The face buttons wear the Xbox colours (A green, B red, X blue, Y yellow), and the sticks are analog: the knob follows the finger inside its ring, reads any direction in proportion and springs back on lift.
 
 ## Settings
 - Power: Auto, Battery saver or Performance, in Settings > Picture and the stream menu. Performance keeps the console's full clocks while streaming; Auto uses it docked and Battery saver handheld.
+- Battery saver keeps the stock clocks docked at 120 fps, where lowering them dropped frames at 1440p120. Handheld 120 fps still saves.
+- When a stream falls behind on lowered clocks, they go straight back to stock instead of one step every few seconds, which dropped frames for tens of seconds. They stay there until the stream ends or its mode changes.
 - The stream menu's rows are full size again and the list scrolls, with Disconnect and Quit at the bottom. Drag to scroll, tap to pick.
 - Manual bitrate goes past 40 Mbps: 50, 60, 80, 100, 120 and 150 Mbps. The Bitrate row notes when the network test measured less than the chosen rate.
 
@@ -28,6 +30,7 @@ Test build for 1.1.0. Changes since 1.0.1. Needs kaiHEN release `20261114c` or l
 - `video: drained queue frames=N wait_ms=…` when the decode queue drains.
 - `sdk-decoder: fps hint requested=N accepted=M` when the decoder opens.
 - `clocks: profile=performance|saver` when a stream starts or the profile changes.
+- `clocks: set cpu= gpu= emc= MHz reason=keep-stock` docked at 120 fps, and `reason=behind` now sets all three clocks at once.
 - `display: modes supported=[…]` with each display context.
 - `input: virtual pad on|off player=N`, and `virtual_pad=` on the input line.
 

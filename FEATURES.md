@@ -33,7 +33,7 @@
 - Motion: Sunshine emulates a DualShock 4 or DualSense, so games get gyro
 - Rumble, with adjustable strength
 - Touchscreen, or touch as mouse
-- Virtual gamepad: on-screen controls in handheld mode, sent as an extra Xbox controller
+- Virtual gamepad: on-screen controls in handheld mode with analog sticks, sent as an extra Xbox controller
 - Tap a button hint on screen to press it
 - Button layout: Xbox (by position) or Nintendo (by label)
 - USB keyboard and mouse
