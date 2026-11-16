@@ -27,12 +27,12 @@
     "ui-text.frag": "5ff2e11dac239ca17d6efea62392dbda8638f71a9a2c70b6ff7ec576f82efe7c",
     "ui.frag": "41db1ead813bb309c2b41775c4a75f9e7d78db40f9503a9a9ed4ffd0f7a0e8e8",
     "storage.glsl": "0bd45d229c4ffc4c3c37d6338bfbef53fa2c9dc952c0ee1d962c64d60b26ebe8",
-    "layout.glsl": "d80692b294f13d50e9f6148f3afbee8e667e52f1251a36fa7bf098c76305da4f"
+    "layout.glsl": "6a5d9a56fabf0d00811462872fa950676ff7c0150f8dd44678c79b627a60839e"
   },
   "shader": {
     "path": "ui-text.spv",
     "bytes": 65532,
-    "sha256": "e87ff2dd6ce34d50edd9034693d10b44dbc97141706996d3d1021581e5d2957a"
+    "sha256": "fdefc5598929ea27a750d0baac03b478190ad8d59dfe87076576bca1ee5c9638"
   },
   "scope": "Text branch separated; original colors, sampled alpha and blending retained"
 }

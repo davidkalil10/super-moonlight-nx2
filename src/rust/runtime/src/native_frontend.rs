@@ -551,6 +551,9 @@ fn execute(
                 app.stats().media_opened
             ));
             stream.report();
+            if let Some((redraws, updates, us)) = app.client.take_pad_stats() {
+                log(&format!("pad: redraws={redraws} updates={updates} us={us}"));
+            }
             if let Some((counters, waiting)) = app.take_input_counters() {
                 let virtual_pad = match sampler.virtual_pad_mut() {
                     Some(pad) => format!("{}", pad.take_presses()),

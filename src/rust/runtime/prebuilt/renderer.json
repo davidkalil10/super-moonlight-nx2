@@ -55,10 +55,14 @@
     "pad": {
       "instances": [
         129,
-        130
+        130,
+        131,
+        132
       ],
       "words": {
-        "visible": 45332
+        "visible": 45332,
+        "knob0": 45336,
+        "knob1": 45340
       },
       "offset": 27983872,
       "areas": [
@@ -75,7 +79,9 @@
           975
         ]
       ],
-      "areaBytes": 2164500
+      "areaBytes": 2164500,
+      "knobOffset": 32312872,
+      "knobSize": 132
     },
     "bindings": {
       "input": 0,
@@ -138,19 +144,19 @@
   },
   "blob": {
     "path": "shaders.bin",
-    "bytes": 132688,
-    "sha256": "2b0d4c32eb3482e5544a6aefe579a67c2cf0616fbf37ac549d82feece43db60c"
+    "bytes": 133248,
+    "sha256": "de65307d808263d7d6259d3b81bab8cda71194581201afba81cdbca4a9008a86"
   },
   "sources": {
     "publish.comp": "9a52f6d19abb08bf7d6f63dccbea17fff490ee03d3b7fb30ee053a4bea93567e",
     "storage.glsl": "0bd45d229c4ffc4c3c37d6338bfbef53fa2c9dc952c0ee1d962c64d60b26ebe8",
     "ui-control.glsl": "4defcc5562f2dd3374a863bf7f050cffd038ea624da459084566f5c52dcab449",
     "ui.frag": "41db1ead813bb309c2b41775c4a75f9e7d78db40f9503a9a9ed4ffd0f7a0e8e8",
-    "ui.vert": "849f767f0dad358c4a0c4de4b99712f7dad780ba267f664137758a4a032d209a",
+    "ui.vert": "83f91528ac397a2f3d68f8848d90db18e3a4c2bdfaae942af279c6adb7dab4d6",
     "video-storage.frag": "bd7c0b6877d11fafa3d691d01498d5039651f434d6dcba9fdcf7ed66d0b5fdb9",
     "video.frag": "eb48b715e2c0bbfa9591cf40c0757dbd65b166ca1e8effed1b4cd53cb0f880d5",
     "video.glsl": "b9748f2bee45f9cb4f0d86d461f607322db3d62de8892359138aba4e65bc2890",
     "video.vert": "6bf1beac8ff8cf14422a4e067278918a1e86f682addcff09a9070be8c49490a7",
-    "layout.glsl": "d80692b294f13d50e9f6148f3afbee8e667e52f1251a36fa7bf098c76305da4f"
+    "layout.glsl": "6a5d9a56fabf0d00811462872fa950676ff7c0150f8dd44678c79b627a60839e"
   }
 }

@@ -1,6 +1,7 @@
-//! Draws the on-screen gamepad into two RGBA areas the renderer shows over the stream. A
-//! control is drawn again only when its pressed state or its knob changes, so a held button or
-//! a stick at rest costs nothing per frame.
+//! Draws the on-screen gamepad into two RGBA areas the renderer shows over the stream, and each
+//! stick's knob into a small sprite of its own. A control is drawn again only when its pressed
+//! state changes; a moving knob is only its sprite's position, two words the renderer reads, so
+//! a stick in motion costs nothing per frame.
 
 extern crate alloc;
 
@@ -33,7 +34,11 @@ pub const AREAS: [(u32, u32, u32, u32); 2] = [
     ),
 ];
 pub const AREA_BYTES: usize = (AREAS[0].2 * AREAS[0].3 * 4) as usize;
-pub const BYTES: usize = 2 * AREA_BYTES;
+/// A knob sprite's side in display pixels, its knob centred with room for the shadow.
+pub const KNOB_SIZE: u32 = 132;
+pub const KNOB_BYTES: usize = (KNOB_SIZE * KNOB_SIZE * 4) as usize;
+/// The two areas, then the two knob sprites.
+pub const BYTES: usize = 2 * AREA_BYTES + 2 * KNOB_BYTES;
 
 /// The D-pad's cross in panel pixels: how far each arm reaches, its width and its corners.
 const DPAD_REACH: f32 = 90.0;
@@ -42,9 +47,11 @@ const DPAD_CORNER: f32 = 12.0;
 const ARROW: f32 = 9.0;
 const OUTLINE: f32 = 2.5;
 
-/// Shares of the opacity setting every control uses alike.
+/// Shares of the opacity setting every control uses alike. A held control fills in brightly
+/// even at a low opacity, so a press always shows.
 const FILL: f32 = 0.55;
-const HELD_FILL: f32 = 0.95;
+const HELD_FLOOR: f32 = 0.6;
+const HELD_FILL: f32 = 0.35;
 const EDGE: f32 = 0.9;
 const INK: f32 = 1.0;
 
@@ -57,6 +64,22 @@ const YELLOW: [f32; 3] = [0.96, 0.74, 0.12];
 
 type Knobs = [(i16, i16); 2];
 
+/// Where the renderer puts each knob sprite for `knobs`, from `virtual_pad::knobs`: x in the low
+/// half of the word and y in the high half, in display pixels.
+pub fn knob_words(knobs: Knobs) -> [u32; 2] {
+    let mut words = [0; 2];
+    for control in &CONTROLS {
+        if let (Kind::Stick(stick), Shape::Circle { x, y, .. }) = (control.kind, control.shape) {
+            let (dx, dy) = knobs[stick];
+            let half = KNOB_SIZE as i32 / 2;
+            let left = (i32::from(x + dx) * 3 / 2 - half).max(0) as u32;
+            let top = (i32::from(y + dy) * 3 / 2 - half).max(0) as u32;
+            words[stick] = left | top << 16;
+        }
+    }
+    words
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct Look {
     opacity: u32,
@@ -65,9 +88,10 @@ struct Look {
 
 #[derive(Default)]
 pub struct Overlay {
-    drawn: Option<(Look, u32, Knobs)>,
+    drawn: Option<(Look, u32)>,
     labels: Vec<Option<Bitmap>>,
     faces: Vec<Option<[f32; 3]>>,
+    redraws: u32,
 }
 
 fn label(control: &Control, nintendo: bool) -> Option<&'static str> {
@@ -157,6 +181,10 @@ fn shade(rgb: [f32; 3], top: f32, height: f32, py: f32) -> [f32; 3] {
     rgb.map(|channel| (channel * light).min(1.0))
 }
 
+fn held_alpha(strength: f32) -> f32 {
+    HELD_FLOOR + HELD_FILL * strength
+}
+
 fn mix(a: [f32; 3], b: [f32; 3], share: f32) -> [f32; 3] {
     [0, 1, 2].map(|index| a[index] + (b[index] - a[index]) * share)
 }
@@ -179,12 +207,15 @@ struct Brush {
 }
 
 impl Brush {
+    /// The fill's colour and its alpha, opacity included.
     fn fill(&self) -> ([f32; 3], f32) {
+        let held = held_alpha(self.strength);
+        let rest = FILL * self.strength;
         match (self.face, self.held) {
-            (Some(face), false) => (face, FILL),
-            (Some(face), true) => (mix(face, LIGHT, 0.45), HELD_FILL),
-            (None, false) => (DARK, FILL),
-            (None, true) => (LIGHT, HELD_FILL),
+            (Some(face), false) => (face, rest),
+            (Some(face), true) => (mix(face, LIGHT, 0.5), held),
+            (None, false) => (DARK, rest),
+            (None, true) => (LIGHT, held),
         }
     }
 
@@ -204,7 +235,7 @@ impl Brush {
     fn disc(&self, color: [f32; 4], d2: f32, radius: f32, top: f32, py: f32) -> [f32; 4] {
         let (rgb, alpha) = self.fill();
         let rgb = shade(rgb, top, 2.0 * radius, py);
-        let color = over(color, rgb, alpha * self.strength, disc(d2, radius));
+        let color = over(color, rgb, alpha, disc(d2, radius));
         over(color, self.edge(), EDGE * self.strength, ring(d2, radius))
     }
 }
@@ -219,14 +250,18 @@ impl Overlay {
         self.drawn = None;
     }
 
-    /// Brings `area` (both areas, left then right) up to `pressed` with the sticks' `knobs`.
+    /// Controls drawn again since the last call.
+    pub fn take_redraws(&mut self) -> u32 {
+        core::mem::take(&mut self.redraws)
+    }
+
+    /// Brings `area` (both areas, left then right, then the knob sprites) up to `pressed`.
     /// Returns the bytes written, or None when nothing changed.
     pub fn draw(
         &mut self,
         glyphs: &mut Glyphs,
         area: &mut [u8],
         pressed: u32,
-        knobs: Knobs,
         opacity: u32,
         nintendo: bool,
     ) -> Option<Range<usize>> {
@@ -234,18 +269,8 @@ impl Overlay {
             return None;
         }
         let look = Look { opacity, nintendo };
-        let changed = match self.drawn {
-            Some((drawn, was, moved)) if drawn == look => {
-                let mut changed = was ^ pressed;
-                for (index, control) in CONTROLS.iter().enumerate() {
-                    if let Kind::Stick(stick) = control.kind
-                        && moved[stick] != knobs[stick]
-                    {
-                        changed |= 1 << index;
-                    }
-                }
-                changed
-            }
+        let (changed, full) = match self.drawn {
+            Some((drawn, was)) if drawn == look => (was ^ pressed, false),
             _ => {
                 self.labels = CONTROLS
                     .iter()
@@ -258,10 +283,10 @@ impl Overlay {
                     .map(|control| face(label(control, nintendo)))
                     .collect();
                 area[..BYTES].fill(0);
-                u32::MAX
+                (u32::MAX, true)
             }
         };
-        self.drawn = Some((look, pressed, knobs));
+        self.drawn = Some((look, pressed));
         if changed == 0 {
             return None;
         }
@@ -274,7 +299,15 @@ impl Overlay {
             if changed & bits == 0 {
                 continue;
             }
-            let range = self.draw_control(area, index, pressed, knobs, opacity);
+            self.redraws += 1;
+            let range = match control.kind {
+                Kind::Stick(stick) if !full => self.draw_knob(area, index, stick, pressed, opacity),
+                Kind::Stick(stick) => {
+                    self.draw_knob(area, index, stick, pressed, opacity);
+                    self.draw_control(area, index, pressed, opacity)
+                }
+                _ => self.draw_control(area, index, pressed, opacity),
+            };
             touched = Some(match touched {
                 Some(was) => was.start.min(range.start)..was.end.max(range.end),
                 None => range,
@@ -288,7 +321,6 @@ impl Overlay {
         area: &mut [u8],
         index: usize,
         pressed: u32,
-        knobs: Knobs,
         opacity: u32,
     ) -> Range<usize> {
         let control = &CONTROLS[index];
@@ -309,15 +341,20 @@ impl Overlay {
                     (Kind::Dpad, Shape::Circle { x, y, .. }) => {
                         dpad(&brush, (px, py), (x, y), pressed)
                     }
-                    (Kind::Stick(stick), Shape::Circle { x, y, radius }) => {
-                        let knob = knobs.get(stick).copied().unwrap_or_default();
-                        draw_stick(&brush, (px, py), (x, y, radius), knob)
+                    (Kind::Stick(_), Shape::Circle { x, y, radius }) => {
+                        draw_ring(&brush, (px, py), (x, y, radius))
                     }
                     (_, Shape::Circle { x, y, radius }) => {
                         let (cx, cy) = (f32::from(x) * SCALE, f32::from(y) * SCALE);
                         let d2 = (px - cx) * (px - cx) + (py - cy) * (py - cy);
-                        let r = f32::from(radius) * SCALE * if brush.held { 0.94 } else { 1.0 };
-                        brush.disc([0.0; 4], d2, r, cy - r, py)
+                        let full = f32::from(radius) * SCALE;
+                        let r = full * if brush.held { 0.9 } else { 1.0 };
+                        let color = brush.disc([0.0; 4], d2, r, cy - r, py);
+                        if brush.held {
+                            over(color, LIGHT, EDGE * brush.strength, ring(d2, full))
+                        } else {
+                            color
+                        }
                     }
                     (_, Shape::Rect { x, y, w, h }) => shoulder(&brush, (px, py), (x, y, w, h)),
                 };
@@ -369,7 +406,7 @@ fn shoulder(brush: &Brush, (px, py): (f32, f32), (x, y, w, h): (i16, i16, i16, i
     let (rgb, alpha) = brush.fill();
     let rgb = shade(rgb, rect.1, rect.3, py);
     let outer = rounded(px, py, rect, corner, 0.0);
-    let color = over([0.0; 4], rgb, alpha * brush.strength, outer);
+    let color = over([0.0; 4], rgb, alpha, outer);
     let edge = (outer - rounded(px, py, rect, corner, OUTLINE)).max(0.0);
     over(color, brush.edge(), EDGE * brush.strength, edge)
 }
@@ -397,7 +434,7 @@ fn dpad(brush: &Brush, (px, py): (f32, f32), (x, y): (i16, i16), pressed: u32) -
     let mut color = over(
         [0.0; 4],
         shade(rgb, cy - reach, 2.0 * reach, py),
-        alpha * brush.strength,
+        alpha,
         outer,
     );
     let arms = [(-1.0, 0.0), (0.0, -1.0), (1.0, 0.0), (0.0, 1.0)];
@@ -406,7 +443,7 @@ fn dpad(brush: &Brush, (px, py): (f32, f32), (x, y): (i16, i16), pressed: u32) -
         let (dx, dy): (f32, f32) = towards;
         let on_arm = dx * (px - cx) + dy * (py - cy) > half;
         if held && on_arm {
-            color = over(color, LIGHT, HELD_FILL * brush.strength, inner);
+            color = over(color, LIGHT, held_alpha(brush.strength), inner);
         }
         let tip = (cx + dx * reach * 0.66, cy + dy * reach * 0.66);
         let ink = if held { DARK } else { LIGHT };
@@ -425,29 +462,46 @@ fn dpad(brush: &Brush, (px, py): (f32, f32), (x, y): (i16, i16), pressed: u32) -
     )
 }
 
-/// The ring, sunk a little, and its knob where the finger holds it.
-fn draw_stick(
-    brush: &Brush,
-    (px, py): (f32, f32),
-    (x, y, radius): (i16, i16, i16),
-    knob: (i16, i16),
-) -> [f32; 4] {
+/// The ring, sunk a little; its knob is a sprite of its own.
+fn draw_ring(brush: &Brush, (px, py): (f32, f32), (x, y, radius): (i16, i16, i16)) -> [f32; 4] {
     let (cx, cy) = (f32::from(x) * SCALE, f32::from(y) * SCALE);
     let r = f32::from(radius) * SCALE;
     let d2 = (px - cx) * (px - cx) + (py - cy) * (py - cy);
     let sunk = shade(DARK, cy - r, 2.0 * r, 2.0 * cy - py);
     let color = over([0.0; 4], sunk, FILL * brush.strength, disc(d2, r));
-    let color = over(color, LIGHT, EDGE * brush.strength, ring(d2, r));
-    let (kx, ky) = (
-        cx + f32::from(knob.0) * SCALE,
-        cy + f32::from(knob.1) * SCALE,
-    );
-    let kr = f32::from(KNOB_RADIUS) * SCALE;
-    let k2 = (px - kx) * (px - kx) + (py - ky) * (py - ky);
-    let shadow = disc(
-        (px - kx) * (px - kx) + (py - ky - 4.0) * (py - ky - 4.0),
-        kr + 2.0,
-    );
-    let color = over(color, DARK, 0.35 * brush.strength, shadow);
-    brush.disc(color, k2, kr, ky - kr, py)
+    over(color, LIGHT, EDGE * brush.strength, ring(d2, r))
+}
+
+impl Overlay {
+    /// The knob of `stick`, held or not, centred in its sprite with a soft shadow below.
+    fn draw_knob(
+        &self,
+        area: &mut [u8],
+        index: usize,
+        stick: usize,
+        pressed: u32,
+        opacity: u32,
+    ) -> Range<usize> {
+        let brush = Brush {
+            strength: opacity as f32 / 100.0,
+            held: pressed & (1 << index) != 0,
+            face: None,
+        };
+        let base = 2 * AREA_BYTES + stick * KNOB_BYTES;
+        let centre = KNOB_SIZE as f32 / 2.0;
+        let kr = f32::from(KNOB_RADIUS) * SCALE;
+        for row in 0..KNOB_SIZE {
+            for column in 0..KNOB_SIZE {
+                let (px, py) = (column as f32 + 0.5, row as f32 + 0.5);
+                let (dx, dy) = (px - centre, py - centre);
+                let shadow = disc(dx * dx + (dy - 4.0) * (dy - 4.0), kr + 2.0);
+                let color = over([0.0; 4], DARK, 0.35 * brush.strength, shadow);
+                let color = brush.disc(color, dx * dx + dy * dy, kr, centre - kr, py);
+                let at = base + ((row * KNOB_SIZE + column) * 4) as usize;
+                let byte = |value: f32| (value.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
+                area[at..at + 4].copy_from_slice(&color.map(byte));
+            }
+        }
+        base..base + KNOB_BYTES
+    }
 }

@@ -142,6 +142,9 @@ pub struct Client<F> {
     badge: crate::policy_badge::Badge,
     pad_overlay: moonlight_nx2_app::pad_overlay::Overlay,
     pad_shown: bool,
+    /// Updates of the shown gamepad this second and the time they took.
+    pad_updates: u32,
+    pad_ns: u64,
 }
 
 pub(crate) fn ui_capabilities(context: &moonlight_nx2_app::policy::Context) -> Capabilities {
@@ -325,25 +328,52 @@ impl<F: Files + Clone> Client<F> {
             session_us: 0,
             badge: crate::policy_badge::Badge::default(),
             pad_overlay: moonlight_nx2_app::pad_overlay::Overlay::new(),
+            pad_updates: 0,
+            pad_ns: 0,
             pad_shown: false,
         })
     }
 
     /// Shows the on-screen gamepad with `pressed` held and its sticks' knobs, or hides it.
-    /// Returns the storage bytes drawn, to flush.
+    /// Returns the storage bytes drawn, to flush; a knob that only moved writes its word.
     pub fn draw_virtual_pad(
         &mut self,
         bytes: &mut [u8],
         pad: Option<(u32, [(i16, i16); 2])>,
     ) -> Option<core::ops::Range<usize>> {
-        use moonlight_nx2_app::pad_overlay::BYTES;
-        use moonlight_nx2_core::frame::{PAD_OFFSET, PAD_VISIBLE};
+        let started = crate::render_platform::now_ns();
+        let drawn = self.update_virtual_pad(bytes, pad);
+        self.pad_updates += 1;
+        self.pad_ns += crate::render_platform::now_ns().saturating_sub(started);
+        drawn
+    }
+
+    /// Controls redrawn, updates and the microseconds they took since the last call; None when
+    /// the gamepad did nothing.
+    pub fn take_pad_stats(&mut self) -> Option<(u32, u32, u64)> {
+        let updates = core::mem::take(&mut self.pad_updates);
+        let us = core::mem::take(&mut self.pad_ns) / 1000;
+        let redraws = self.pad_overlay.take_redraws();
+        (updates != 0).then_some((redraws, updates, us))
+    }
+
+    fn update_virtual_pad(
+        &mut self,
+        bytes: &mut [u8],
+        pad: Option<(u32, [(i16, i16); 2])>,
+    ) -> Option<core::ops::Range<usize>> {
+        use moonlight_nx2_app::pad_overlay::{BYTES, knob_words};
+        use moonlight_nx2_core::frame::{PAD_KNOBS, PAD_OFFSET, PAD_VISIBLE};
         let visible = bytes.get_mut(PAD_VISIBLE..PAD_VISIBLE + 4)?;
         visible.copy_from_slice(&u32::from(pad.is_some()).to_le_bytes());
         if !core::mem::replace(&mut self.pad_shown, pad.is_some()) {
             self.pad_overlay.reset();
         }
         let (pressed, knobs) = pad?;
+        let words = bytes.get_mut(PAD_KNOBS..PAD_KNOBS + 8)?;
+        for (word, value) in words.chunks_exact_mut(4).zip(knob_words(knobs)) {
+            word.copy_from_slice(&value.to_le_bytes());
+        }
         let settings = self.bridge.model().stream_settings();
         let nintendo =
             settings.button_layout() == moonlight_nx2_ui::settings::ButtonLayout::Nintendo;
@@ -353,7 +383,6 @@ impl<F: Files + Clone> Client<F> {
                 self.composer.glyphs_mut(),
                 area,
                 pressed,
-                knobs,
                 settings.pad_opacity(),
                 nintendo,
             )

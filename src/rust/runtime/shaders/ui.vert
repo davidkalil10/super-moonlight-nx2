@@ -64,8 +64,15 @@ void main() {
   } else {
     uint side = instance - 129u;
     visible = word(PAD_VISIBLE) != 0u;
-    rect = side == 0u ? PAD_AREA_0 : PAD_AREA_1;
-    info.xy = uvec2(5u, PAD_PIXELS + side * PAD_AREA_WORDS);
+    if (side < 2u) {
+      rect = side == 0u ? PAD_AREA_0 : PAD_AREA_1;
+      info.xy = uvec2(5u, PAD_PIXELS + side * PAD_AREA_WORDS);
+    } else {
+      uint knob = word(side == 2u ? PAD_KNOB0 : PAD_KNOB1);
+      visible = visible && knob != 0u;
+      rect = uvec4(knob & 65535u, knob >> 16u, PAD_KNOB_SIZE, PAD_KNOB_SIZE);
+      info.xy = uvec2(5u, PAD_KNOB_PIXELS + (side - 2u) * PAD_KNOB_WORDS);
+    }
   }
   if (instance != 0u) {
     origin = vec2(rect.xy);
