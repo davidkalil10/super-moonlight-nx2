@@ -1,4 +1,4 @@
-# moonlight-nx2 1.1.0-test4
+# moonlight-nx2 1.1.0-test5
 
 Test build for 1.1.0. Changes since 1.0.1. Needs kaiHEN release `20261114c` or later.
 
@@ -14,7 +14,7 @@ Test build for 1.1.0. Changes since 1.0.1. Needs kaiHEN release `20261114c` or l
 ## Touch
 - Touches now carry pressure, contact size and rotation, so two-finger scrolling and pinching work on hosts that read them, such as Sunshine on Linux.
 - Opening the stream menu or leaving the app cancels the fingers on the PC, so no touch stays stuck down.
-- Virtual gamepad: on-screen controls in handheld mode, sent as an extra Xbox controller. Turn it on in Settings > Controls or the stream menu. The face buttons wear the Xbox colours (A green, B red, X blue, Y yellow), and the sticks are analog: the knob follows the finger inside its ring, reads any direction in proportion and springs back on lift.
+- Virtual gamepad: on-screen controls in handheld mode, sent as an extra Xbox controller. Turn it on in Settings > Controls or the stream menu. The face buttons wear the Xbox colours (A green, B red, X blue, Y yellow), and the sticks are analog: the knob follows the finger inside its ring, reads any direction in proportion and springs back on lift. Moving a stick no longer costs frames: each knob is its own small picture the GPU places, so only pressing a control redraws it. A held control lights up brightly with a ring at any opacity.
 
 ## Settings
 - Power: Auto, Battery saver or Performance, in Settings > Picture and the stream menu. Performance keeps the console's full clocks while streaming; Auto uses it docked and Battery saver handheld.
@@ -33,6 +33,7 @@ Test build for 1.1.0. Changes since 1.0.1. Needs kaiHEN release `20261114c` or l
 - `clocks: set cpu= gpu= emc= MHz reason=keep-stock` docked at 120 fps, and `reason=behind` now sets all three clocks at once.
 - `display: modes supported=[…]` with each display context.
 - `input: virtual pad on|off player=N`, and `virtual_pad=` on the input line.
+- `pad: redraws=N updates=N us=N` each second the virtual gamepad changed.
 
 # moonlight-nx2 1.0.1
 
