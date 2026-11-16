@@ -1,5 +1,5 @@
 //! Stream clocks through `nro/clocks.c`: readings every few seconds, the lower rates of the
-//! stream's mode once it has settled, a notch up when it falls behind, and the clocks handed
+//! stream's mode once it has settled, stock again when it falls behind, and the clocks handed
 //! back to the system when the stream ends, the console docks or undocks, the app leaves
 //! focus or stops.
 
@@ -224,11 +224,12 @@ impl Clocks {
             .rates
             .get_or_insert_with(|| core::array::from_fn(rates));
         let targets = plan::plan(mode);
+        let keep = plan::keeps_stock(mode);
         let mut current = stock;
         let mut changed = [false; CLOCKS];
         let mut results = [0u32; CLOCKS];
         for clock in 0..CLOCKS {
-            if stock[clock] == 0 {
+            if stock[clock] == 0 || keep {
                 continue;
             }
             let target = plan::snap(targets[clock] * 1_000_000, stock[clock], &rates[clock]);
@@ -241,10 +242,11 @@ impl Clocks {
             }
         }
         log(&format!(
-            "clocks: set cpu={} gpu={} emc={} MHz reason=start mode={}x{}@{} docked={} stock={}/{}/{} results={results:x?}",
+            "clocks: set cpu={} gpu={} emc={} MHz reason={} mode={}x{}@{} docked={} stock={}/{}/{} results={results:x?}",
             mhz(current[0]),
             mhz(current[1]),
             mhz(current[2]),
+            if keep { "keep-stock" } else { "start" },
             mode.width,
             mode.height,
             mode.fps,
@@ -288,33 +290,28 @@ impl Clocks {
             "presented={} arrived={} dropped={} link_lost={} wake_misses={}",
             behind.presented, behind.arrived, behind.dropped, behind.link_lost, behind.wake_misses
         );
-        let Some(clock) = plan::pick(lowered.current, lowered.stock) else {
+        let targets = plan::catch_up(lowered.current, lowered.stock);
+        if targets.iter().all(Option::is_none) {
             if !core::mem::replace(&mut lowered.exhausted, true) {
                 log(&format!(
                     "clocks: set nothing reason=behind {trouble}; every clock is at its stock rate"
                 ));
             }
             return;
-        };
-        let rates = self
-            .rates
-            .as_ref()
-            .map_or(&[][..], |rates| &rates[clock][..]);
-        let Some(hz) = plan::notch_up(lowered.current[clock], lowered.stock[clock], rates) else {
-            return;
-        };
-        let result = set(clock, hz);
+        }
+        let mut results = [0u32; CLOCKS];
+        for (clock, target) in targets.into_iter().enumerate() {
+            if let Some(hz) = target {
+                results[clock] = set(clock, hz);
+                lowered.current[clock] = hz;
+            }
+        }
         log(&format!(
-            "clocks: set {}={} MHz reason=behind {trouble} result=0x{result:x}",
-            NAMES[clock],
-            mhz(hz)
+            "clocks: set cpu={} gpu={} emc={} MHz reason=behind {trouble} results={results:x?}",
+            mhz(lowered.current[0]),
+            mhz(lowered.current[1]),
+            mhz(lowered.current[2])
         ));
-        lowered.current[clock] = if result == 0 {
-            hz
-        } else {
-            lowered.stock[clock]
-        };
-        lowered.changed[clock] |= result == 0;
     }
 
     /// Sets a lowered clock again when the reading shows the system put its own rate back.

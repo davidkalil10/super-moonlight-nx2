@@ -1,5 +1,5 @@
 //! Stream clocks: the CPU, GPU and memory rates each stream mode starts at, and the governor
-//! that raises one of them a notch when the stream falls behind. Rates only go up during a
+//! that puts them back to stock as soon as the stream falls behind. Rates only go up during a
 //! stream; the runtime hands the clocks back to the system when the stream ends.
 
 pub const CPU: usize = 0;
@@ -8,7 +8,7 @@ pub const EMC: usize = 2;
 pub const CLOCKS: usize = 3;
 pub const NAMES: [&str; CLOCKS] = ["cpu", "gpu", "emc"];
 
-/// Seconds in a row the stream has to fall behind before a clock goes up.
+/// Seconds in a row the stream has to fall behind before the clocks go back to stock.
 pub const BEHIND_SECONDS: u32 = 3;
 /// A second falls behind when it presents fewer than this share of the stream rate, in
 /// percent, while the PC is sending.
@@ -54,6 +54,12 @@ const DOCKED: [[u32; CLOCKS]; 4] = [
     [1020, 614, 3200],
 ];
 
+/// Docked at 120 fps the TV output, the decoder and the GPU all need close to their stock
+/// rates, so even the battery saver keeps them there.
+pub fn keeps_stock(mode: Mode) -> bool {
+    mode.docked && mode.fps >= 120
+}
+
 /// The rates, in MHz, a stream of this mode starts at.
 pub fn plan(mode: Mode) -> [u32; CLOCKS] {
     if mode.docked {
@@ -77,34 +83,11 @@ pub fn snap(target_hz: u32, stock_hz: u32, rates: &[u32]) -> u32 {
         .unwrap_or(stock_hz)
 }
 
-/// The next rate above `current_hz`, up to `stock_hz`. Without a list it is an eighth of the
-/// stock rate higher. None once the clock is back at its stock rate.
-pub fn notch_up(current_hz: u32, stock_hz: u32, rates: &[u32]) -> Option<u32> {
-    if current_hz >= stock_hz {
-        return None;
-    }
-    if rates.is_empty() {
-        return Some(current_hz.saturating_add(stock_hz / 8).min(stock_hz));
-    }
-    Some(
-        rates
-            .iter()
-            .copied()
-            .filter(|&rate| rate > current_hz && rate <= stock_hz)
-            .min()
-            .unwrap_or(stock_hz),
-    )
-}
-
-/// The clock to raise: the one furthest below its stock rate, memory first on a tie, since
-/// the decoder, the readback and the GPU all share it. None when every clock is at stock.
-pub fn pick(current_hz: [u32; CLOCKS], stock_hz: [u32; CLOCKS]) -> Option<usize> {
-    [EMC, CPU, GPU]
-        .into_iter()
-        .filter(|&clock| current_hz[clock] < stock_hz[clock])
-        .min_by_key(|&clock| {
-            u64::from(current_hz[clock]) * 1000 / u64::from(stock_hz[clock].max(1))
-        })
+/// The rates to set once the stream falls behind: every lowered clock goes straight back to
+/// its stock rate, since stepping one notch at a time drops frames for tens of seconds. None
+/// for a clock already there.
+pub fn catch_up(current_hz: [u32; CLOCKS], stock_hz: [u32; CLOCKS]) -> [Option<u32>; CLOCKS] {
+    core::array::from_fn(|clock| (current_hz[clock] < stock_hz[clock]).then_some(stock_hz[clock]))
 }
 
 /// Running totals of what the stream received, showed and lost.
@@ -177,8 +160,8 @@ impl Governor {
         self.window = Signals::default();
     }
 
-    /// Takes this second's totals. Some(the seconds behind, added up) when a clock should go
-    /// up now; the count starts over after each step.
+    /// Takes this second's totals. Some(the seconds behind, added up) when the clocks should
+    /// go back to stock now; the count starts over after each time.
     pub fn second(&mut self, totals: Signals, fps: u32) -> Option<Signals> {
         let last = self.last.replace(totals)?;
         let second = totals.since(last);
