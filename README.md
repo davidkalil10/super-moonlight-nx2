@@ -1,5 +1,7 @@
 # Super Moonlight NX2 (with Built-in Tailscale VPN)
 
+[![Ko-fi](https://img.shields.io/badge/Ko--fi-Support%20this%20project-FF5E5B?logo=ko-fi&logoColor=white)](https://ko-fi.com/davidkalil10)
+
 Stream PC games from Sunshine to **Nintendo Switch 2** over your local network or **anywhere in the world over Tailscale**, with controller, touch, 120 Hz / 4K hardware video decoding (AV1 / H.264), and stereo audio — all inside a single `.nro` without needing any background sysmodule.
 
 > **Super Moonlight NX2 (`moonlight-nx2` + `tailscale-nx` integration):** Created and maintained by **David Kalil Braga** ([@davidkalil10](https://github.com/davidkalil10)).
@@ -202,4 +204,12 @@ Civilization VII payload, Node service and C helper this app replaced.
 ## Licence
 
 See [LICENSE](LICENSE) and the [font licence](src/rust/ui/fonts/OFL.txt).
+
+## Support
+
+If you find **Super Moonlight NX2** and our Nintendo Switch 2 homebrew ports useful, consider buying me a coffee to support continued development and maintenance:
+
+[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/davidkalil10)
+
+👉 **[https://ko-fi.com/davidkalil10](https://ko-fi.com/davidkalil10)**
 
