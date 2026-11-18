@@ -98,11 +98,17 @@ never collides with the old entry.
 
 For router, PC and Sunshine settings that keep the stream smooth, see [NETWORK.md](NETWORK.md).
 
-- **Codec**: AV1 needs a GPU that encodes it. If Sunshine cannot, pick H.264 in Settings.
+- **Codec (`H.264` recommended)**: By default the codec selector starts on **AV1**, which may fail to start or decode depending on the host GPU / Sunshine encoder setup. If a stream fails to start with **AV1**, go to **Settings -> Picture -> Video codec** and switch it to **H.264**.
 - **Touch**: enable **Native Pen/Touch Support** under Input
   ([`native_pen_touch`](https://docs.lizardbyte.dev/projects/sunshine/latest/md_docs_2configuration.html#native_pen_touch)).
   On Linux Sunshine also needs access to uinput, for touch and for the controllers.
 - **Controllers**: leave the gamepad type on automatic to get motion (see below).
+
+## Known issues
+
+- **AV1 codec stream failure (use H.264 instead):**
+  - On hardware testing, launching a stream with the default **AV1** codec can fail to connect or decode.
+  - **Workaround:** Open **Settings -> Picture -> Video codec** and change it from **AV1** to **H.264** before starting a stream.
 
 ## Stream controls
 
