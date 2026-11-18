@@ -1,10 +1,23 @@
-# moonlight-nx2
+# Super Moonlight NX2 (with Built-in Tailscale VPN)
 
-Stream PC games from Sunshine to Nintendo Switch 2, with controller, touch and stereo audio.
+Stream PC games from Sunshine to **Nintendo Switch 2** over your local network or **anywhere in the world over Tailscale**, with controller, touch, 120 Hz / 4K hardware video decoding (AV1 / H.264), and stereo audio — all inside a single `.nro` without needing any background sysmodule.
 
-The app is a homebrew NRO written in Rust (`src/rust`). It talks to Sunshine itself over
-the Moonlight protocol and decodes AV1 or H.264 with the console's video decoder. Nothing
-else runs on the PC.
+> **Super Moonlight NX2 (`moonlight-nx2` + `tailscale-nx` integration):** Created and maintained by **David Kalil Braga** ([@davidkalil10](https://github.com/davidkalil10)).
+> Built upon **[moonlight-nx2](https://gitlab.com/Azkali/moonlight-nx2)** by **[Azkali](https://gitlab.com/Azkali)** and **[tailscale-nx](https://github.com/UnderwaterOverground/tailscale-nx)** by **[UnderwaterOverground](https://github.com/UnderwaterOverground)**.
+
+---
+
+## Built-in Tailscale VPN (Userspace WireGuard + `smoltcp`)
+
+Because Nintendo Switch 2 homebrew (`kaiHEN`) runs one homebrew `.nro` at a time without background `sysmodules`, **Super Moonlight NX2** embeds the full `tailscale-nx` (`tsnx`) userspace engine directly inside the Moonlight process:
+
+- **In-App `Settings -> Tailscale` Panel:**
+  - **Tailscale VPN Toggle:** Enable or pause the in-process Tailscale tunnel at any time.
+  - **Interactive Login with On-Screen QR Code:** Generate a Tailscale login URL (`https://login.tailscale.com/a/...`) and scan the rendered **QR Code** directly from your Nintendo Switch 2 screen using your phone.
+  - **Auth Key Support (`swkbd`):** Enter a reusable or ephemeral `tskey-auth-...` key directly using the native Switch 2 software keyboard (or via `sdmc:/switch/moonlight-nx2/tailscale.ini`).
+  - **One-Click "Import Tailnet PCs":** Automatically imports online peers (`100.x.y.z`) from your Tailnet straight into the Moonlight **PCs** screen.
+  - **Custom Control Server & Hostname:** Supports both official Tailscale (`https://controlplane.tailscale.com`) and self-hosted **Headscale** servers.
+  - **Zero-Overhead Split Routing (`VSock`):** Traffic to Tailnet addresses (`100.64.0.0/10` and subnet routes) goes through the userspace WireGuard + `smoltcp` tunnel (Direct UDP P2P or DERP relay), while local LAN addresses (`192.168.x.x`) bypass the tunnel and use raw Horizon BSD sockets directly.
 
 ## Build
 
@@ -172,6 +185,9 @@ Civilization VII payload, Node service and C helper this app replaced.
 
 ## Credits
 
+- **Super Moonlight NX2 Integration (In-Process Tailscale + UI)**: **David Kalil Braga** ([@davidkalil10](https://github.com/davidkalil10)).
+- **[moonlight-nx2](https://gitlab.com/Azkali/moonlight-nx2)**: Created by **[Azkali](https://gitlab.com/Azkali)**.
+- **[tailscale-nx](https://github.com/UnderwaterOverground/tailscale-nx)**: Created by **[UnderwaterOverground](https://github.com/UnderwaterOverground)** (built on [tailscale-rs](https://github.com/tailscale/tailscale-rs), [smoltcp](https://github.com/smoltcp-rs/smoltcp), [rustls](https://github.com/rustls/rustls), and [qrcodegen](https://www.nayuki.io/page/qr-code-generator-library)).
 - [Moonlight](https://moonlight-stream.org/) — [moonlight-common-c](https://github.com/moonlight-stream/moonlight-common-c) and [moonlight-embedded](https://github.com/moonlight-stream/moonlight-embedded).
 - [Sunshine](https://github.com/LizardByte/Sunshine) — game streaming host.
 - [ENet](https://github.com/cgutman/enet) — networking.

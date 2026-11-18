@@ -705,7 +705,13 @@ impl Service {
                 self.act(Action::ResumeInput)
             }
             IntentKind::Exit => self.act(Action::Exit),
-            IntentKind::Covers => {}
+            IntentKind::Covers
+            | IntentKind::TailscaleToggle
+            | IntentKind::TailscaleQrLogin
+            | IntentKind::TailscaleAuthKey
+            | IntentKind::TailscaleControlUrl
+            | IntentKind::TailscaleHostname
+            | IntentKind::TailscaleImportPeers => {}
         }
     }
 

@@ -844,6 +844,48 @@ impl Builder<'_> {
         self.image(x, y, serial, (w, h), radius);
     }
 
+    pub(crate) fn qr_code(&mut self, x: u32, y: u32, qr_size: u8, modules: &[u8], url: &str) -> u32 {
+        let n = u32::from(qr_size);
+        if n == 0 || n > 64 {
+            return 0;
+        }
+        let quiet = 3u32;
+        let padded = n + 2 * quiet;
+        let scale = (220 / padded).max(3);
+        let px_size = padded * scale;
+        let key = format!("qr\x1f{url}");
+        let serial = self.composer.lookup(&key).unwrap_or_else(|| {
+            let total_bytes = (px_size * px_size * 4) as usize;
+            let mut bytes = alloc::vec![0xffu8; total_bytes];
+            for my in 0..n {
+                for mx in 0..n {
+                    if modules[(my * n + mx) as usize] != 0 {
+                        let start_x = (mx + quiet) * scale;
+                        let start_y = (my + quiet) * scale;
+                        for py in start_y..start_y + scale {
+                            for px in start_x..start_x + scale {
+                                let idx = ((py * px_size + px) * 4) as usize;
+                                bytes[idx] = 0x10;
+                                bytes[idx + 1] = 0x12;
+                                bytes[idx + 2] = 0x18;
+                                bytes[idx + 3] = 0xff;
+                            }
+                        }
+                    }
+                }
+            }
+            let bitmap = Bitmap {
+                width: px_size,
+                height: px_size,
+                channels: 4,
+                bytes,
+            };
+            self.composer.store_sized(key, bitmap, 0, 0, total_bytes)
+        });
+        self.image(x, y, serial, (px_size, px_size), 12);
+        px_size
+    }
+
     /// The tile for `app`: its box art, or a letter tile on a colour taken from its name.
     pub(crate) fn cover_tile(&mut self, id: u32, name: &str) -> Option<u64> {
         let art = self

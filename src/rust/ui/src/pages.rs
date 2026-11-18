@@ -55,6 +55,7 @@ const DIALOG_BUTTON: u32 = 88;
 const PAIRING_HEIGHT: u32 = 520;
 const CATEGORY_WIDTH: u32 = 460;
 const CONSOLE_CATEGORY: u8 = 3;
+const TAILSCALE_CATEGORY: u8 = 4;
 const CATEGORY_HEIGHT: u32 = 80;
 const PANE_GAP: u32 = 58;
 const PANE_X: u32 = SIDE + CATEGORY_WIDTH + PANE_GAP;
@@ -1097,7 +1098,7 @@ impl Builder<'_> {
 
     fn category_list(&mut self, model: &Model) {
         let pal = self.pal;
-        let names = ["Picture", "Sound", "Controls", "This console"];
+        let names = ["Picture", "Sound", "Controls", "This console", "Tailscale"];
         for (i, name) in (0u32..).zip(names) {
             let y = BODY_Y + 16 + i * (CATEGORY_HEIGHT + 12);
             self.item(
@@ -1259,11 +1260,19 @@ impl Builder<'_> {
         }
     }
 
-    fn export_row(&mut self, slot: u32) {
+    fn action_row(
+        &mut self,
+        id: u32,
+        slot: u32,
+        label: &str,
+        hint: &str,
+        action_text: &str,
+        action_color: u32,
+    ) {
         let pal = self.pal;
         let y = BODY_Y + 16 + slot * (ROW_HEIGHT + ROW_GAP);
         self.item(
-            item::EXPORT_LOGS,
+            id,
             (PANE_X, y, PANE_WIDTH, ROW_HEIGHT),
             0,
             PANEL_RADIUS,
@@ -1280,12 +1289,11 @@ impl Builder<'_> {
             PANE_X + ROW_PAD,
             y + 14,
             520,
-            "Export log",
+            label,
             OPTION,
             pal.ink,
             Align::Left,
         );
-        let hint = "Copy the newest log to the logs folder on the SD card";
         self.put(
             PANE_X + ROW_PAD,
             y + 54,
@@ -1300,11 +1308,161 @@ impl Builder<'_> {
             value_x - 38,
             y + ROW_HEIGHT / 2,
             VALUE_WIDTH,
-            "Copy",
+            action_text,
             VALUE,
-            pal.accent,
+            action_color,
             Align::Right,
         );
+    }
+
+    fn export_row(&mut self, slot: u32) {
+        let pal = self.pal;
+        self.action_row(
+            item::EXPORT_LOGS,
+            slot,
+            "Export log",
+            "Copy the newest log to the logs folder on the SD card",
+            "Copy",
+            pal.accent,
+        );
+    }
+
+    fn tailscale_pane(&mut self, model: &Model) {
+        let pal = self.pal;
+        let ts = model.tailscale();
+        let (status_text, status_color) = match (ts.enabled, ts.state) {
+            (false, _) => ("Off", pal.dim),
+            (true, 3) => ("Connected", pal.ok),
+            (true, 2) => ("Needs login", pal.warn),
+            (true, 4) => ("Error", pal.warn),
+            (true, _) => ("Connecting...", pal.accent),
+        };
+        let status_hint = if !ts.enabled {
+            String::from("Enable userspace WireGuard tunnel to stream from Tailnet PCs (100.x.y.z)")
+        } else if ts.state == 3 {
+            let path = if ts.peer_path.as_str().is_empty() {
+                "Ready for 100.x.y.z streams"
+            } else {
+                ts.peer_path.as_str()
+            };
+            format!("IP {} \u{b7} {path}", ts.self_ip.as_str())
+        } else if ts.state == 4 && !ts.last_error.as_str().is_empty() {
+            format!("Error: {}", ts.last_error.as_str())
+        } else if ts.state == 2 {
+            String::from("Scan the QR code below or sign in with an auth key")
+        } else {
+            String::from("Connecting to Tailscale control plane...")
+        };
+        self.action_row(
+            item::TAILSCALE_TOGGLE,
+            0,
+            "Tailscale VPN",
+            &status_hint,
+            status_text,
+            status_color,
+        );
+
+        let qr_hint = if !ts.login_url.as_str().is_empty() {
+            ts.login_url.as_str()
+        } else {
+            "Generate a login URL and on-screen QR code to authorize this console"
+        };
+        self.action_row(
+            item::TAILSCALE_QR_LOGIN,
+            1,
+            "Interactive login (QR code)",
+            qr_hint,
+            if ts.qr_size > 0 { "Scan below" } else { "Start QR" },
+            pal.accent,
+        );
+
+        self.action_row(
+            item::TAILSCALE_AUTH_KEY,
+            2,
+            "Auth key",
+            "Enter a reusable or ephemeral key (tskey-auth-...) with the keyboard",
+            if ts.has_auth_key { "Configured" } else { "Set key" },
+            pal.accent,
+        );
+
+        if ts.qr_size > 0 {
+            self.action_row(
+                item::TAILSCALE_CONTROL_URL,
+                3,
+                "Control server",
+                ts.control_url.as_str(),
+                "Edit",
+                pal.accent,
+            );
+            let qr_y = BODY_Y + 16 + 4 * (ROW_HEIGHT + ROW_GAP) + 12;
+            let px = self.qr_code(
+                PANE_X + ROW_PAD,
+                qr_y,
+                ts.qr_size,
+                &ts.qr_modules,
+                ts.login_url.as_str(),
+            );
+            let text_x = PANE_X + ROW_PAD + px + 32;
+            let text_w = PANE_WIDTH.saturating_sub(ROW_PAD * 2 + px + 32);
+            self.put(
+                text_x,
+                qr_y + 24,
+                text_w,
+                "Scan with your phone to sign in",
+                OPTION,
+                pal.ink,
+                Align::Left,
+            );
+            self.put(
+                text_x,
+                qr_y + 76,
+                text_w,
+                ts.login_url.as_str(),
+                HINT,
+                pal.accent,
+                Align::Left,
+            );
+            self.put(
+                text_x,
+                qr_y + 122,
+                text_w,
+                "Once authorized, your Tailnet IP and peers appear automatically.",
+                HINT,
+                pal.dim,
+                Align::Left,
+            );
+        } else {
+            let import_label = format!("Import ({})", ts.peer_count);
+            self.action_row(
+                item::TAILSCALE_IMPORT_PEERS,
+                3,
+                "Import Tailnet PCs",
+                "Add online devices from your Tailnet (100.x.y.z) to the PCs screen",
+                &import_label,
+                pal.accent,
+            );
+            self.action_row(
+                item::TAILSCALE_HOSTNAME,
+                4,
+                "Console hostname",
+                "Name shown for this Nintendo Switch 2 on your Tailnet",
+                ts.hostname.as_str(),
+                pal.accent,
+            );
+            let ctrl_short = if ts.control_url.as_str() == "https://controlplane.tailscale.com" {
+                "Tailscale"
+            } else {
+                "Custom"
+            };
+            self.action_row(
+                item::TAILSCALE_CONTROL_URL,
+                5,
+                "Control server",
+                ts.control_url.as_str(),
+                ctrl_short,
+                pal.accent,
+            );
+        }
     }
 
     /// A choice this console cannot make now: greyed, with the reason at the right.
@@ -1406,6 +1564,9 @@ impl Builder<'_> {
         }
         if model.category() == CONSOLE_CATEGORY {
             self.export_row(count);
+        }
+        if model.category() == TAILSCALE_CATEGORY {
+            self.tailscale_pane(model);
         }
         if model.category() == 0 {
             self.unavailable_picture(model, PANE_X, PANE_WIDTH, count);

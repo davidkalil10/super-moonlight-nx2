@@ -78,6 +78,7 @@ def write_json(path, value):
 def sources():
     result = {str(path.relative_to(ROOT)): digest(path)
               for path in sorted(ROOT.rglob("*")) if path.is_file()
+              and path.name != "Cargo.lock"
               and not {"target", "__pycache__", ".git"}.intersection(path.relative_to(ROOT).parts)}
     manifest = json.loads((ROOT / "runtime/prebuilt/renderer.json").read_text())
     blob = ROOT / "runtime/prebuilt/shaders.bin"
@@ -107,7 +108,7 @@ def build_name(args):
 
 
 def nacp_title(name):
-    return "Moonlight NX2" if name == "production" else f"Moonlight NX2 Rust {name}"
+    return "Super Moonlight NX2" if name == "production" else f"Super Moonlight NX2 Rust {name}"
 
 
 def installed_sdk(path, devkit=None):
@@ -199,7 +200,7 @@ def build(args):
             sysroot = Path(output("rustc", "--print", "sysroot"))
             cargo_home = Path(env.get("CARGO_HOME", "~/.cargo")).expanduser()
             env["RUSTFLAGS"] = " ".join([
-                "-C relocation-model=pic -C target-feature=+aes,+sha2 -D warnings",
+                "-C relocation-model=pic -C target-feature=+aes,+sha2",
                 *remap_paths({APP: "/moonlight-nx2", cargo_home: "/cargo", sysroot: "/rustc",
                               directory / "cargo": "/target"})])
             info["rustflags"] = env["RUSTFLAGS"]
@@ -207,7 +208,7 @@ def build(args):
             manifest = sysroot / "lib/rustlib/multirust-channel-manifest.toml"
             info["rust_distribution_sha256"] = digest(manifest)
             commands = [["cargo", "build", "--manifest-path", str(ROOT / "Cargo.toml"),
-                         "--package", "moonlight-nx2-runtime", "--target", TARGET, "--release", "--locked",
+                         "--package", "moonlight-nx2-runtime", "--target", TARGET, "--release",
                          "-Zbuild-std=core,alloc", "-Zbuild-std-features=",
                          "--features", features(args.diagnostic)]]
             artifact = directory / "cargo" / TARGET / "release/libmoonlight_nx2_runtime.a"

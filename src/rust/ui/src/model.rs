@@ -7,7 +7,7 @@ use core::fmt::Write;
 use crate::extras::{AppOverride, Extras, INHERIT, MAX_OVERRIDES, OVERRIDABLE};
 use crate::link_choice::LinkChoice;
 use crate::presence::{Presence, Table};
-use crate::readout::{Readout, StreamReadout};
+use crate::readout::{Readout, StreamReadout, TailscaleReadout};
 use crate::settings::{Capabilities, MouseSide, Setting, Settings, StreamOptions};
 use crate::sheet;
 use crate::text::Text;
@@ -92,6 +92,12 @@ pub mod item {
     pub const TOGGLE_JOYCON_MOUSE: u32 = 25;
     pub const TOGGLE_VIRTUAL_PAD: u32 = 26;
     pub const TOGGLE_POWER: u32 = 27;
+    pub const TAILSCALE_TOGGLE: u32 = 28;
+    pub const TAILSCALE_QR_LOGIN: u32 = 29;
+    pub const TAILSCALE_AUTH_KEY: u32 = 30;
+    pub const TAILSCALE_CONTROL_URL: u32 = 31;
+    pub const TAILSCALE_HOSTNAME: u32 = 32;
+    pub const TAILSCALE_IMPORT_PEERS: u32 = 33;
     pub const CATEGORY: u32 = 50000;
     pub const HOST: u32 = 10000;
     pub const APP: u32 = 20000;
@@ -275,6 +281,12 @@ pub enum IntentKind {
     SaveExtras,
     ExportLogs,
     ShowKeyboard,
+    TailscaleToggle,
+    TailscaleQrLogin,
+    TailscaleAuthKey,
+    TailscaleControlUrl,
+    TailscaleHostname,
+    TailscaleImportPeers,
 }
 
 impl IntentKind {
@@ -302,6 +314,12 @@ impl IntentKind {
             "saveExtras",
             "exportLogs",
             "showKeyboard",
+            "tailscaleToggle",
+            "tailscaleQrLogin",
+            "tailscaleAuthKey",
+            "tailscaleControlUrl",
+            "tailscaleHostname",
+            "tailscaleImportPeers",
         ][self as usize]
     }
 }
@@ -344,7 +362,7 @@ impl Step {
 /// How many PCs remember the app last started on them.
 const PLAYED: usize = MAX_HOSTS;
 /// Settings categories, in the order the page lists them.
-pub const CATEGORIES: u8 = 4;
+pub const CATEGORIES: u8 = 5;
 
 /// What the badge over the video shows: nothing, the stream mode, or the mode with the live
 /// frame counter.
@@ -423,6 +441,7 @@ pub struct Model {
     console_dark: Option<bool>,
     readout: Readout,
     stream: StreamReadout,
+    tailscale: TailscaleReadout,
     resume: Option<Resume>,
     resume_pending: bool,
     forgetting: bool,
@@ -527,6 +546,7 @@ impl Model {
             console_dark: None,
             readout: Readout::default(),
             stream: StreamReadout::default(),
+            tailscale: TailscaleReadout::default(),
             resume: None,
             resume_pending: false,
             forgetting: false,
@@ -677,6 +697,16 @@ impl Model {
     pub fn set_readout(&mut self, readout: Readout) -> bool {
         let changed = self.readout != readout;
         self.readout = readout;
+        changed
+    }
+
+    pub fn tailscale(&self) -> &TailscaleReadout {
+        &self.tailscale
+    }
+
+    pub fn set_tailscale(&mut self, tailscale: TailscaleReadout) -> bool {
+        let changed = self.tailscale != tailscale;
+        self.tailscale = tailscale;
         changed
     }
 
@@ -1538,6 +1568,12 @@ impl Model {
             }
             Op::X if self.network_test => step.add(IntentKind::TestNetwork, self.host),
             Op::A if item == item::EXPORT_LOGS => step.add(IntentKind::ExportLogs, None),
+            Op::A if item == item::TAILSCALE_TOGGLE => step.add(IntentKind::TailscaleToggle, None),
+            Op::A if item == item::TAILSCALE_QR_LOGIN => step.add(IntentKind::TailscaleQrLogin, None),
+            Op::A if item == item::TAILSCALE_AUTH_KEY => step.add(IntentKind::TailscaleAuthKey, None),
+            Op::A if item == item::TAILSCALE_CONTROL_URL => step.add(IntentKind::TailscaleControlUrl, None),
+            Op::A if item == item::TAILSCALE_HOSTNAME => step.add(IntentKind::TailscaleHostname, None),
+            Op::A if item == item::TAILSCALE_IMPORT_PEERS => step.add(IntentKind::TailscaleImportPeers, None),
             _ => {}
         }
     }

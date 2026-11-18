@@ -18,6 +18,8 @@
 #include <sys/socket.h>
 #include <switch.h>
 
+#include "tailscale/tsnx_moonlight.h"
+
 #define LOG_DIRECTORY "sdmc:/switch/moonlight-nx2/rust"
 #define PATH_BYTES 320
 #define EXPORT_DIRECTORY "sdmc:/switch/moonlight-nx2/logs"
@@ -172,6 +174,7 @@ bool moonlightPlatformNetStart(void)
         if (error == 0) {
             udp_receive_limit = config.udp_rx_buf_size;
             note_attempt(&used, udp_receive_limit, "ok");
+            moonlightTailscaleInit();
             return true;
         }
         snprintf(outcome, sizeof(outcome), "errno=%d", error);
@@ -179,7 +182,10 @@ bool moonlightPlatformNetStart(void)
         socketExit();
     }
     udp_receive_limit = fallback->udp_rx_buf_size;
-    return R_SUCCEEDED(socketInitializeDefault());
+    bool ok = R_SUCCEEDED(socketInitializeDefault());
+    if (ok)
+        moonlightTailscaleInit();
+    return ok;
 }
 
 uint32_t moonlightPlatformUdpReceiveLimit(void) { return udp_receive_limit; }
@@ -204,7 +210,11 @@ void moonlightPlatformRandom(uint8_t *out, size_t bytes)
     memset(extra, 0, sizeof(extra));
     csrngExit();
 }
-void moonlightPlatformNetStop(void) { socketExit(); }
+void moonlightPlatformNetStop(void)
+{
+    moonlightTailscaleStop();
+    socketExit();
+}
 
 static HidNpadIdType source_id(int source)
 {

@@ -701,11 +701,15 @@ impl<F: Files + Clone> Client<F> {
         effect: &mut impl FnMut(Effect),
     ) -> Result<Frame, Error> {
         let bytes = storage(bytes)?;
+        self.poll_tailscale();
         self.bridge.poll(bytes, now_ms.saturating_mul(1_000_000));
         let intents: Vec<_> = self.bridge.take_intents(bridge::MAX_QUEUED).collect();
         for intent in intents {
             if intent.kind == moonlight_nx2_ui::model::IntentKind::SaveExtras {
                 self.save_extras();
+                continue;
+            }
+            if self.handle_tailscale_intent(intent.kind) {
                 continue;
             }
             self.driver
@@ -753,6 +757,149 @@ impl<F: Files + Clone> Client<F> {
         self.badge.stop(badge_storage(bytes)?);
         self.bridge.close(bytes);
         Ok(())
+    }
+
+    #[cfg(target_os = "none")]
+    fn poll_tailscale(&mut self) {
+        #[repr(C)]
+        struct CSnapshot {
+            enabled: u8,
+            state: u8,
+            has_auth_key: u8,
+            qr_size: u8,
+            peer_count: u32,
+            self_ip: [u8; 48],
+            hostname: [u8; 64],
+            control_url: [u8; 128],
+            login_url: [u8; 192],
+            peer_path: [u8; 96],
+            last_error: [u8; 128],
+            qr_modules: [u8; 64 * 64],
+        }
+        unsafe extern "C" {
+            fn moonlightTailscaleGetSnapshot(out: *mut CSnapshot);
+        }
+        fn c_str<const N: usize>(buf: &[u8]) -> moonlight_nx2_ui::text::Text<N> {
+            let end = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
+            let s = core::str::from_utf8(&buf[..end]).unwrap_or("");
+            moonlight_nx2_ui::text::Text::of(s)
+        }
+        let mut snap = CSnapshot {
+            enabled: 0,
+            state: 0,
+            has_auth_key: 0,
+            qr_size: 0,
+            peer_count: 0,
+            self_ip: [0; 48],
+            hostname: [0; 64],
+            control_url: [0; 128],
+            login_url: [0; 192],
+            peer_path: [0; 96],
+            last_error: [0; 128],
+            qr_modules: [0; 64 * 64],
+        };
+        unsafe { moonlightTailscaleGetSnapshot(&mut snap) };
+        let readout = moonlight_nx2_ui::readout::TailscaleReadout {
+            enabled: snap.enabled != 0,
+            state: snap.state,
+            has_auth_key: snap.has_auth_key != 0,
+            qr_size: snap.qr_size,
+            peer_count: snap.peer_count,
+            self_ip: c_str(&snap.self_ip),
+            hostname: c_str(&snap.hostname),
+            control_url: c_str(&snap.control_url),
+            login_url: c_str(&snap.login_url),
+            peer_path: c_str(&snap.peer_path),
+            last_error: c_str(&snap.last_error),
+            qr_modules: snap.qr_modules,
+        };
+        self.bridge.set_tailscale(readout);
+    }
+
+    #[cfg(not(target_os = "none"))]
+    fn poll_tailscale(&mut self) {}
+
+    #[cfg(target_os = "none")]
+    fn handle_tailscale_intent(&mut self, kind: moonlight_nx2_ui::model::IntentKind) -> bool {
+        use moonlight_nx2_ui::model::{Address, Host, IntentKind, Name};
+        #[repr(C)]
+        #[derive(Clone, Copy)]
+        struct CPeer {
+            ip: [u8; 4],
+            address: [u8; 32],
+            name: [u8; 64],
+        }
+        unsafe extern "C" {
+            fn moonlightTailscaleToggle();
+            fn moonlightTailscaleStartQrLogin();
+            fn moonlightTailscalePromptAuthKey() -> bool;
+            fn moonlightTailscalePromptControlUrl() -> bool;
+            fn moonlightTailscalePromptHostname() -> bool;
+            fn moonlightTailscaleGetPeers(out: *mut CPeer, max_peers: usize) -> usize;
+        }
+        fn peer_str(buf: &[u8]) -> &str {
+            let end = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
+            core::str::from_utf8(&buf[..end]).unwrap_or("")
+        }
+        match kind {
+            IntentKind::TailscaleToggle => {
+                unsafe { moonlightTailscaleToggle() };
+                self.poll_tailscale();
+                true
+            }
+            IntentKind::TailscaleQrLogin => {
+                unsafe { moonlightTailscaleStartQrLogin() };
+                self.poll_tailscale();
+                true
+            }
+            IntentKind::TailscaleAuthKey => {
+                unsafe { moonlightTailscalePromptAuthKey() };
+                self.poll_tailscale();
+                true
+            }
+            IntentKind::TailscaleControlUrl => {
+                unsafe { moonlightTailscalePromptControlUrl() };
+                self.poll_tailscale();
+                true
+            }
+            IntentKind::TailscaleHostname => {
+                unsafe { moonlightTailscalePromptHostname() };
+                self.poll_tailscale();
+                true
+            }
+            IntentKind::TailscaleImportPeers => {
+                let mut peers = [CPeer {
+                    ip: [0; 4],
+                    address: [0; 32],
+                    name: [0; 64],
+                }; 32];
+                let count = unsafe { moonlightTailscaleGetPeers(peers.as_mut_ptr(), peers.len()) };
+                let mut found = Vec::new();
+                for peer in &peers[..count.min(peers.len())] {
+                    let addr = peer_str(&peer.address);
+                    let name = peer_str(&peer.name);
+                    if !addr.is_empty() {
+                        found.push(Host {
+                            name: Name::of(if name.is_empty() { addr } else { name }),
+                            address: Address::of(addr),
+                            uniqueid: Address::new(),
+                            mac: None,
+                        });
+                    }
+                }
+                if !found.is_empty() {
+                    let _ = self.discovered(&found);
+                }
+                self.poll_tailscale();
+                true
+            }
+            _ => false,
+        }
+    }
+
+    #[cfg(not(target_os = "none"))]
+    fn handle_tailscale_intent(&mut self, _kind: moonlight_nx2_ui::model::IntentKind) -> bool {
+        false
     }
 }
 

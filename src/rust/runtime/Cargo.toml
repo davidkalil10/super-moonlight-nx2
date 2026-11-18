@@ -27,7 +27,8 @@ moonlight-nx2-core = { path = "../core" }
 moonlight-nx2-io = { path = "../io" }
 moonlight-nx2-app = { path = "../app" }
 moonlight-nx2-ui = { path = "../ui" }
-ash = { git = "ssh://git@github.com/ash-rs/ash.git", rev = "8844f6b4eefb16d08cd73c8f3d340e1ac12deb16", default-features = false }
+tsnx-ffi = { path = "../tsnx-ffi" }
+ash = { git = "https://github.com/ash-rs/ash.git", rev = "8844f6b4eefb16d08cd73c8f3d340e1ac12deb16", default-features = false }
 
 [lints]
 workspace = true

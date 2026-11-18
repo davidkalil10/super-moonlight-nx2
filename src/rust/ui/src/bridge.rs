@@ -269,6 +269,12 @@ impl<F: Files> Bridge<F> {
         }
     }
 
+    pub fn set_tailscale(&mut self, tailscale: crate::readout::TailscaleReadout) {
+        if self.model.set_tailscale(tailscale) {
+            self.revision += 1;
+        }
+    }
+
     pub fn set_stream(&mut self, stream: crate::readout::StreamReadout) {
         if self.model.set_stream(stream) {
             self.revision += 1;

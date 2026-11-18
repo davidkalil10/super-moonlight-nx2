@@ -25,9 +25,15 @@ CFLAGS := $(ARCH) -std=gnu11 -O2 -g -Wall -Wextra -Werror -ffunction-sections -f
 LDFLAGS := $(ARCH) -specs=$(LIBNX)/switch.specs -Wl,-Map,$(OUTPUT).map -Wl,--wrap=gsvRegisterFrame
 MIMALLOC ?= 1
 NX_LIBRARY := $(if $(filter 0,$(MIMALLOC)),-lounce_core,-lnx)
-LIBS := -L$(PORTLIBS_SWITCH2)/lib -L$(LIBNX)/lib -lvulkan $(NX_LIBRARY) -lm
+LIBS := -L$(PORTLIBS_SWITCH2)/lib -L$(LIBNX)/lib -lvulkan -lstdc++ $(NX_LIBRARY) -lm
+TS_CFLAGS := $(ARCH) -std=gnu11 -O2 -g -Wall -Wno-error -ffunction-sections -fdata-sections \
+             -D__SWITCH__ -D__SWITCH2__ -DTSNX_BUILD_UNIX=1794960000 -I$(SOURCE_DIR)/tailscale -I$(LIBNX)/include
+TS_CXXFLAGS := $(ARCH) -std=gnu++17 -O2 -g -Wall -Wno-error -fno-exceptions -fno-rtti -ffunction-sections -fdata-sections \
+               -D__SWITCH__ -D__SWITCH2__ -DTSNX_BUILD_UNIX=1794960000 -I$(SOURCE_DIR)/tailscale -I$(LIBNX)/include
 OBJECTS := $(BUILD_DIR)/platform.o $(BUILD_DIR)/io_adapter.o $(BUILD_DIR)/system.o $(BUILD_DIR)/sdk_viddec.o \
-           $(BUILD_DIR)/software_keyboard.o $(BUILD_DIR)/opus.o $(BUILD_DIR)/sdk_decoder.o $(BUILD_DIR)/clocks.o
+           $(BUILD_DIR)/software_keyboard.o $(BUILD_DIR)/opus.o $(BUILD_DIR)/sdk_decoder.o $(BUILD_DIR)/clocks.o \
+           $(BUILD_DIR)/tsnx_driver.o $(BUILD_DIR)/tsnx_app.o $(BUILD_DIR)/tsnx_dns.o $(BUILD_DIR)/tsnx_drop.o \
+           $(BUILD_DIR)/qrcodegen.o $(BUILD_DIR)/runtime.o $(BUILD_DIR)/vsock.o $(BUILD_DIR)/tsnx_moonlight.o
 
 .PHONY: all
 all: $(OUTPUT).nro
@@ -56,11 +62,35 @@ $(BUILD_DIR)/sdk_decoder.o: $(SOURCE_DIR)/sdk_decoder.c
 $(BUILD_DIR)/clocks.o: $(SOURCE_DIR)/clocks.c
 	$(CC) $(CPPFLAGS) $(CFLAGS) -MMD -MP -c $< -o $@
 
+$(BUILD_DIR)/tsnx_driver.o: $(SOURCE_DIR)/tailscale/tsnx_driver.c
+	$(CC) $(TS_CFLAGS) -MMD -MP -c $< -o $@
+
+$(BUILD_DIR)/tsnx_app.o: $(SOURCE_DIR)/tailscale/tsnx_app.c
+	$(CC) $(TS_CFLAGS) -MMD -MP -c $< -o $@
+
+$(BUILD_DIR)/tsnx_dns.o: $(SOURCE_DIR)/tailscale/tsnx_dns.c
+	$(CC) $(TS_CFLAGS) -MMD -MP -c $< -o $@
+
+$(BUILD_DIR)/tsnx_drop.o: $(SOURCE_DIR)/tailscale/tsnx_drop.c
+	$(CC) $(TS_CFLAGS) -MMD -MP -c $< -o $@
+
+$(BUILD_DIR)/qrcodegen.o: $(SOURCE_DIR)/tailscale/qrcodegen.c
+	$(CC) $(TS_CFLAGS) -MMD -MP -c $< -o $@
+
+$(BUILD_DIR)/runtime.o: $(SOURCE_DIR)/tailscale/runtime.cpp
+	$(CXX) $(TS_CXXFLAGS) -MMD -MP -c $< -o $@
+
+$(BUILD_DIR)/vsock.o: $(SOURCE_DIR)/tailscale/vsock.cpp
+	$(CXX) $(TS_CXXFLAGS) -MMD -MP -c $< -o $@
+
+$(BUILD_DIR)/tsnx_moonlight.o: $(SOURCE_DIR)/tailscale/tsnx_moonlight.cpp
+	$(CXX) $(TS_CXXFLAGS) -MMD -MP -c $< -o $@
+
 $(OUTPUT).elf: $(OBJECTS) $(RUST_LIBRARY)
-	$(CC) $(LDFLAGS) $(OBJECTS) $(RUST_LIBRARY) $(LIBS) -o $@
+	$(CXX) $(LDFLAGS) $(OBJECTS) $(RUST_LIBRARY) $(LIBS) -o $@
 
 $(OUTPUT).nacp:
-	nacptool --create "$(NACP_TITLE)" "Azkali" "$(NACP_VERSION)" $@
+	nacptool --create "$(NACP_TITLE)" "Azkali / UnderwaterOverground / David Kalil Braga" "$(NACP_VERSION)" $@
 
 $(OUTPUT).nro: $(OUTPUT).elf $(OUTPUT).nacp $(ICON_PATH)
 	elf2nro $< $@ --nacp=$(OUTPUT).nacp --icon="$(ICON_PATH)"

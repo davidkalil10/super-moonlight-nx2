@@ -14,6 +14,8 @@
 #include <sys/socket.h>
 #include <switch.h>
 
+#include "tailscale/tsnx_moonlight.h"
+
 #define AUDIO_SLOTS 16u
 
 enum {
@@ -75,16 +77,16 @@ static uint32_t classify(int error)
 
 static void open_socket(const uint8_t address[4], uint16_t port, int type, int protocol, MoonlightIoStatus *status)
 {
-    int fd = socket(AF_INET, type, protocol);
+    int fd = tsnx_ml_socket(AF_INET, type, protocol);
     if (fd < 0) {
         set(status, -1, IO_FAILED, errno);
         return;
     }
 
-    int flags = fcntl(fd, F_GETFL, 0);
-    if (flags < 0 || fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0) {
+    int flags = tsnx_ml_fcntl(fd, F_GETFL, 0);
+    if (flags < 0 || tsnx_ml_fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0) {
         int error = errno;
-        set(status, -1, close(fd) == 0 ? IO_FAILED : IO_CLOSE_FAILED, error);
+        set(status, -1, tsnx_ml_close(fd) == 0 ? IO_FAILED : IO_CLOSE_FAILED, error);
         return;
     }
 
@@ -92,7 +94,7 @@ static void open_socket(const uint8_t address[4], uint16_t port, int type, int p
      * leaves the socket usable. */
     if (type == SOCK_STREAM) {
         int value = 1;
-        setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &value, sizeof(value));
+        tsnx_ml_setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &value, sizeof(value));
     }
 
     struct sockaddr_in endpoint;
@@ -103,7 +105,7 @@ static void open_socket(const uint8_t address[4], uint16_t port, int type, int p
     endpoint.sin_port = htons(port);
     memcpy(&endpoint.sin_addr, address, 4);
 
-    if (connect(fd, (const struct sockaddr *)&endpoint, sizeof(endpoint)) == 0) {
+    if (tsnx_ml_connect(fd, (const struct sockaddr *)&endpoint, sizeof(endpoint)) == 0) {
         set(status, fd, IO_OK, 0);
         return;
     }
@@ -133,7 +135,7 @@ void moonlightIoDatagramReceiveBuffer(int fd, int32_t limit, int32_t *requested,
     *requested = 0;
     *error = 0;
     for (int size = limit; size >= 64 * 1024; size /= 2) {
-        if (setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &size, sizeof(size)) == 0) {
+        if (tsnx_ml_setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &size, sizeof(size)) == 0) {
             *requested = size;
             break;
         }
@@ -141,7 +143,7 @@ void moonlightIoDatagramReceiveBuffer(int fd, int32_t limit, int32_t *requested,
     }
     int value = 0;
     socklen_t length = sizeof(value);
-    if (getsockopt(fd, SOL_SOCKET, SO_RCVBUF, &value, &length) == 0) {
+    if (tsnx_ml_getsockopt(fd, SOL_SOCKET, SO_RCVBUF, &value, &length) == 0) {
         *granted = value;
     } else {
         *granted = -1;
@@ -153,15 +155,15 @@ void moonlightIoDatagramReceiveBuffer(int fd, int32_t limit, int32_t *requested,
  * come back by unicast (QU question) from any responder, so it is not connected to a peer. */
 void moonlightIoDiscoveryOpen(MoonlightIoStatus *status)
 {
-    int fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    int fd = tsnx_ml_socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
     if (fd < 0) {
         set(status, -1, IO_FAILED, errno);
         return;
     }
-    int flags = fcntl(fd, F_GETFL, 0);
-    if (flags < 0 || fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0) {
+    int flags = tsnx_ml_fcntl(fd, F_GETFL, 0);
+    if (flags < 0 || tsnx_ml_fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0) {
         int error = errno;
-        set(status, -1, close(fd) == 0 ? IO_FAILED : IO_CLOSE_FAILED, error);
+        set(status, -1, tsnx_ml_close(fd) == 0 ? IO_FAILED : IO_CLOSE_FAILED, error);
         return;
     }
     set(status, fd, IO_OK, 0);
@@ -176,8 +178,8 @@ void moonlightIoDiscoverySend(int32_t fd, const uint8_t address[4], uint16_t por
     endpoint.sin_family = AF_INET;
     endpoint.sin_port = htons(port);
     memcpy(&endpoint.sin_addr, address, 4);
-    ssize_t count = sendto(fd, data, bytes, MSG_DONTWAIT, (const struct sockaddr *)&endpoint,
-                           sizeof(endpoint));
+    ssize_t count = tsnx_ml_sendto(fd, data, bytes, MSG_DONTWAIT, (const struct sockaddr *)&endpoint,
+                                   sizeof(endpoint));
     if (count < 0)
         set(status, -1, classify(errno), errno);
     else
@@ -187,7 +189,7 @@ void moonlightIoDiscoverySend(int32_t fd, const uint8_t address[4], uint16_t por
 void moonlightIoSocketPollConnect(int32_t fd, MoonlightIoStatus *status)
 {
     struct pollfd entry = {.fd = fd, .events = POLLOUT};
-    int ready = poll(&entry, 1, 0);
+    int ready = tsnx_ml_poll(&entry, 1, 0);
     if (ready < 0) {
         set(status, 0, classify(errno), errno);
         return;
@@ -199,7 +201,7 @@ void moonlightIoSocketPollConnect(int32_t fd, MoonlightIoStatus *status)
 
     int error = 0;
     socklen_t length = sizeof(error);
-    if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &error, &length) < 0) {
+    if (tsnx_ml_getsockopt(fd, SOL_SOCKET, SO_ERROR, &error, &length) < 0) {
         set(status, 0, IO_FAILED, errno);
         return;
     }
@@ -212,7 +214,7 @@ void moonlightIoSocketPollConnect(int32_t fd, MoonlightIoStatus *status)
 
 void moonlightIoSocketSend(int32_t fd, const void *data, size_t bytes, MoonlightIoStatus *status)
 {
-    ssize_t count = send(fd, data, bytes, MSG_DONTWAIT);
+    ssize_t count = tsnx_ml_send(fd, data, bytes, MSG_DONTWAIT);
     if (count < 0)
         set(status, -1, classify(errno), errno);
     else
@@ -221,7 +223,7 @@ void moonlightIoSocketSend(int32_t fd, const void *data, size_t bytes, Moonlight
 
 void moonlightIoSocketRecv(int32_t fd, void *data, size_t bytes, MoonlightIoStatus *status)
 {
-    ssize_t count = recv(fd, data, bytes, MSG_DONTWAIT);
+    ssize_t count = tsnx_ml_recv(fd, data, bytes, MSG_DONTWAIT);
     if (count < 0)
         set(status, -1, classify(errno), errno);
     else
@@ -230,7 +232,7 @@ void moonlightIoSocketRecv(int32_t fd, void *data, size_t bytes, MoonlightIoStat
 
 void moonlightIoSocketClose(int32_t fd, MoonlightIoStatus *status)
 {
-    if (close(fd) < 0)
+    if (tsnx_ml_close(fd) < 0)
         set(status, -1, IO_FAILED, errno);
     else
         set(status, 0, IO_OK, 0);

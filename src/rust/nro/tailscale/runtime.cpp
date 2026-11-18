@@ -1,0 +1,361 @@
+#include "runtime.hpp"
+
+#include <arpa/inet.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <netinet/in.h>
+#include <poll.h>
+#include <sys/socket.h>
+#include <unistd.h>
+
+#include <algorithm>
+#include <cstdio>
+#include <ctime>
+#include <vector>
+
+#include "tsnx_app.h"
+#include "vsock.hpp"
+
+namespace tsnx {
+
+thread_local int Runtime::internal_depth_ = 0;
+
+namespace {
+
+#ifndef TSNX_NO_STDIO
+std::vector<uint8_t> ReadFile(const std::string &path) {
+    std::vector<uint8_t> out;
+    FILE *f = std::fopen(path.c_str(), "rb");
+    if (!f) return out;
+    uint8_t buf[4096];
+    size_t n;
+    while ((n = std::fread(buf, 1, sizeof buf, f)) > 0) out.insert(out.end(), buf, buf + n);
+    std::fclose(f);
+    return out;
+}
+#endif
+
+// A loopback UDP pair used to interrupt the engine thread's poll().
+bool MakeWakePair(int *rx, int *tx) {
+    *rx = socket(AF_INET, SOCK_DGRAM, 0);
+    *tx = socket(AF_INET, SOCK_DGRAM, 0);
+    sockaddr_in a{};
+    a.sin_family = AF_INET;
+    a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    socklen_t len = sizeof a;
+    if (*rx < 0 || *tx < 0 || bind(*rx, reinterpret_cast<sockaddr *>(&a), sizeof a) != 0 ||
+        getsockname(*rx, reinterpret_cast<sockaddr *>(&a), &len) != 0 ||
+        connect(*tx, reinterpret_cast<sockaddr *>(&a), sizeof a) != 0) {
+        if (*rx >= 0) close(*rx);
+        if (*tx >= 0) close(*tx);
+        *rx = *tx = -1;
+        return false;
+    }
+    fcntl(*rx, F_SETFL, fcntl(*rx, F_GETFL, 0) | O_NONBLOCK);
+    fcntl(*tx, F_SETFL, fcntl(*tx, F_GETFL, 0) | O_NONBLOCK);
+    return true;
+}
+
+// A socket the system has taken away (Horizon drops them all when the
+// network goes away without a sleep), as opposed to one that is just busy.
+bool SocketGone(int e) { return e == EPIPE || e == EBADF || e == ENOTSOCK || e == ENOTCONN || e == ECONNREFUSED; }
+
+constexpr uint64_t kWakeRemakeEveryNs = 1'000'000'000;
+
+}  // namespace
+
+#ifndef TSNX_NO_STDIO  // reads state/root files with stdio; embedders without it use Adopt()
+std::unique_ptr<Runtime> Runtime::Start(RuntimeConfig cfg, std::string *error) {
+    InternalScope internal;
+    std::unique_ptr<Runtime> rt(new Runtime());
+    rt->cfg_ = std::move(cfg);
+    const RuntimeConfig &c = rt->cfg_;
+
+    uint8_t seed[32];
+    tsnx_platform_random(seed, sizeof seed);
+    tsnx_seed_rng(seed);
+    uint8_t machine[32], node[32], disco[32];
+    if (tsnx_state_load_or_create(c.state_path.c_str(), machine, node, disco) != 0) {
+        *error = "cannot read/write state " + c.state_path;
+        return nullptr;
+    }
+    std::vector<uint8_t> root;
+    if (!c.extra_root_path.empty() && (root = ReadFile(c.extra_root_path)).empty()) {
+        *error = "cannot read " + c.extra_root_path;
+        return nullptr;
+    }
+    TsnxConfig ec{};
+    ec.control_url = c.control_url.c_str();
+    ec.auth_key = c.auth_key.empty() ? nullptr : c.auth_key.c_str();
+    ec.hostname = c.hostname.c_str();
+    ec.machine_key = machine;
+    ec.node_key = node;
+    ec.disco_key = disco;
+    ec.extra_root_der = root.empty() ? nullptr : root.data();
+    ec.extra_root_len = root.size();
+    bool corrected = false;
+    uint64_t unix_time = tsnx_sane_unix_time(static_cast<uint64_t>(std::time(nullptr)), c.control_url.c_str(), &corrected);
+    if (unix_time == 0) unix_time = static_cast<uint64_t>(std::time(nullptr));
+    rt->engine_ = tsnx_engine_new(&ec, tsnx_driver_now_ns(), unix_time);
+    if (!rt->engine_) {
+        *error = "tsnx_engine_new failed (bad control URL?)";
+        return nullptr;
+    }
+    tsnx_engine_set_accept_routes(rt->engine_, c.accept_routes);
+    Runtime *self = rt.get();
+    rt->driver_ = tsnx_driver_new(
+        rt->engine_,
+        [](void *ctx, const TsnxEvent *ev) {
+            auto *r = static_cast<Runtime *>(ctx);
+            if (ev->kind == TSNX_EVENT_NODE_KEY) {
+                uint8_t node[32];
+                tsnx_engine_node_key(r->engine_, node);
+                tsnx_state_set_node(r->cfg_.state_path.c_str(), node);
+            }
+            if (ev->kind == TSNX_EVENT_PEERS && r->cfg_.accept_routes) {
+                TsnxPrefix routes[VSock::MaxRoutes];
+                const size_t n = tsnx_engine_routes(r->engine_, routes, VSock::MaxRoutes);
+                VSock::SetRoutes(routes, std::min(n, VSock::MaxRoutes));
+            }
+            if (r->cfg_.on_event) r->cfg_.on_event(*ev);
+        },
+        self);
+    if (!c.connect_map.empty()) tsnx_driver_set_connect_map(rt->driver_, c.connect_map.c_str());
+    tsnx_driver_open_udp(rt->driver_, c.udp_port);  // failure: DERP only
+    if (!c.taildrop_dir.empty()) {
+        rt->drop_.reset(new TsnxDropDir());
+        TsnxDropSink sink = tsnx_drop_dir(rt->drop_.get(), &tsnx_posix_fs, c.taildrop_dir.c_str(), nullptr, nullptr);
+        if (tsnx_driver_set_taildrop(rt->driver_, &sink, c.taildrop_port) != 0) {
+            *error = "cannot listen for Taildrop on port " + std::to_string(c.taildrop_port);
+            return nullptr;
+        }
+    }
+    if (!MakeWakePair(&rt->wake_rx_, &rt->wake_tx_)) {
+        *error = "cannot create wake sockets";
+        return nullptr;
+    }
+    rt->thread_ = std::thread([self] { self->Loop(nullptr, nullptr); });
+    return rt;
+}
+#endif
+
+std::unique_ptr<Runtime> Runtime::Adopt(TsnxEngine *engine, TsnxDriver *driver, std::string *error) {
+    std::unique_ptr<Runtime> rt(new Runtime());
+    rt->engine_ = engine;
+    rt->driver_ = driver;
+    rt->owned_ = false;
+    if (!MakeWakePair(&rt->wake_rx_, &rt->wake_tx_)) {
+        *error = "cannot create wake sockets";
+        return nullptr;
+    }
+    return rt;
+}
+
+void Runtime::Run(const std::function<void(TsnxDriver *)> &on_tick, const std::function<void()> &after_tick) {
+    Loop(&on_tick, &after_tick);
+}
+
+void Runtime::Stop() {
+    {
+        std::lock_guard<std::mutex> lock(mu_);
+        stop_ = true;
+    }
+    Wake();
+    cv_.notify_all();
+}
+
+Runtime::~Runtime() {
+    Stop();
+    if (thread_.joinable()) thread_.join();
+    if (owned_) {
+        tsnx_driver_free(driver_);
+        tsnx_engine_free(engine_);
+    }
+    if (wake_rx_ >= 0) close(wake_rx_);
+    if (wake_tx_ >= 0) close(wake_tx_);
+}
+
+void Runtime::Wake() {
+    if (wake_tx_ < 0) return;
+    char b = 0;
+    if (send(wake_tx_, &b, 1, 0) < 0 && SocketGone(errno)) wake_gone_.store(true, std::memory_order_relaxed);
+}
+
+void Runtime::AfterCall() {
+    if (suspended_) return;  // I/O resumes (and gets pumped) on Resume()
+    tsnx_driver_pump(driver_);
+    // A wake-up costs the loop a round of socket calls, and most calls (a
+    // datagram sent or read, a readiness check) leave its poll as good as
+    // it was. A loop that isn't in poll() prepares a new one anyway.
+    if (polling_ && tsnx_driver_poll_stale(driver_, poll_until_ns_)) Wake();
+}
+
+bool Runtime::Suspend(SuspendReason why, std::chrono::milliseconds timeout) {
+    std::unique_lock<std::mutex> lock(mu_);
+    suspend_reasons_ |= why;
+    Wake();
+    return cv_.wait_for(lock, timeout, [&] { return suspended_ || stop_; });
+}
+
+void Runtime::Resume(SuspendReason why) {
+    std::lock_guard<std::mutex> lock(mu_);
+    async_suspend_.fetch_and(~static_cast<uint32_t>(why));
+    suspend_reasons_ &= ~static_cast<uint32_t>(why);
+    cv_.notify_all();
+}
+
+void Runtime::RequestSuspended(SuspendReason why, bool suspended) {
+    uint32_t cur = async_wanted_.load();
+    uint32_t next;
+    do {
+        next = (cur | (static_cast<uint32_t>(why) << 16)) & ~static_cast<uint32_t>(why);
+        if (suspended) next |= why;
+    } while (!async_wanted_.compare_exchange_weak(cur, next));
+    // No Wake(): the wake pair is the loop's, and it may be closing it.
+    cv_.notify_all();
+}
+
+// With the lock held.
+void Runtime::ApplyRequests() {
+    const uint32_t w = async_wanted_.exchange(0);
+    const uint32_t asked = w >> 16;
+    suspend_reasons_ = (suspend_reasons_ & ~asked) | (w & asked);
+}
+
+void Runtime::WaitForLoop() {
+    std::unique_lock<std::mutex> gate(gate_mu_);
+    gate_cv_.wait(gate, [&] { return !loop_wants_lock_.load(std::memory_order_acquire); });
+}
+
+bool Runtime::WaitFor(const std::function<bool(TsnxEngine *)> &ready, const Clock::time_point *deadline) {
+    std::unique_lock<std::mutex> lock(mu_);
+    for (;;) {
+        if (ready(engine_)) return true;
+        if (stop_) return false;
+        if (deadline) {
+            if (cv_.wait_until(lock, *deadline) == std::cv_status::timeout) return ready(engine_);
+        } else {
+            cv_.wait(lock);
+        }
+    }
+}
+
+// With the lock held (Wake() uses the pair under it): replaces a wake pair
+// the system dropped, or one that couldn't be made, once a second at most.
+void Runtime::RepairWake() {
+    const uint64_t now = tsnx_driver_now_ns();
+    if (wake_gone_.exchange(false, std::memory_order_relaxed)) {
+        // Closed now, so that poll() stops returning at once for it.
+        if (wake_rx_ >= 0) close(wake_rx_);
+        if (wake_tx_ >= 0) close(wake_tx_);
+        wake_rx_ = wake_tx_ = -1;
+        wake_remake_at_ns_ = std::max(now, wake_made_ns_ + kWakeRemakeEveryNs);
+    }
+    if (wake_rx_ >= 0 || wake_remake_at_ns_ == 0 || now < wake_remake_at_ns_) return;
+    wake_made_ns_ = now;
+    if (MakeWakePair(&wake_rx_, &wake_tx_)) {
+        wake_remake_at_ns_ = 0;
+        wake_remakes_.fetch_add(1, std::memory_order_relaxed);
+    } else {
+        wake_remake_at_ns_ = now + kWakeRemakeEveryNs;  // e.g. still offline
+    }
+}
+
+void Runtime::Loop(const std::function<void(TsnxDriver *)> *on_tick, const std::function<void()> *after_tick) {
+    InternalScope internal;  // this thread only ever does engine work
+    pollfd fds[TSNX_DRIVER_MAX_FDS + 1];
+    std::unique_lock<std::mutex> lock(mu_);
+    constexpr uint64_t kTickEveryNs = 50'000'000;
+    uint64_t last_tick = 0;
+    while (!stop_) {
+        suspend_reasons_ |= async_suspend_.exchange(0);
+        ApplyRequests();
+        if (suspend_reasons_ != 0) {
+            tsnx_driver_suspend(driver_);
+            if (wake_rx_ >= 0) close(wake_rx_);
+            if (wake_tx_ >= 0) close(wake_tx_);
+            wake_rx_ = wake_tx_ = -1;
+            wake_gone_.store(false, std::memory_order_relaxed);  // made anew at resume
+            if (on_suspend_) on_suspend_();
+            suspended_ = true;
+            suspended_flag_ = true;
+            cv_.notify_all();
+            // RequestSuspended notifies without the lock, so a wake-up can
+            // be missed: look again every second.
+            while (!stop_) {
+                ApplyRequests();
+                if (suspend_reasons_ == 0) break;
+                cv_.wait_for(lock, std::chrono::seconds(1));
+            }
+            if (stop_) break;  // stopping: keep everything closed
+            // Without a wake pair the loop still runs, just with up to a
+            // second of latency for new overlay sockets.
+            if (on_resume_) on_resume_();
+            MakeWakePair(&wake_rx_, &wake_tx_);
+            wake_made_ns_ = tsnx_driver_now_ns();
+            wake_remake_at_ns_ = wake_rx_ < 0 ? wake_made_ns_ + kWakeRemakeEveryNs : 0;
+            tsnx_driver_resume(driver_);
+            suspended_ = false;
+            suspended_flag_ = false;
+            cv_.notify_all();
+            continue;
+        }
+        RepairWake();
+        rounds_.fetch_add(1, std::memory_order_relaxed);
+        // Housekeeping at most every kTickEveryNs: under load the loop runs
+        // hundreds of rounds a second, and the embedder's tick (status,
+        // logs, heap stats) would hold the lock through every one.
+        const uint64_t tick_now = tsnx_driver_now_ns();
+        bool ticked = false;
+        if (on_tick && *on_tick && tick_now - last_tick >= kTickEveryNs) {
+            last_tick = tick_now;
+            (*on_tick)(driver_);
+            ticked = true;
+        }
+        int wait = 0;
+        int n = tsnx_driver_prepare(driver_, fds, TSNX_DRIVER_MAX_FDS, 1000, &wait);
+        fds[n].fd = wake_rx_;
+        fds[n].events = POLLIN;
+        fds[n].revents = 0;
+        const int nfds = n + (wake_rx_ >= 0 ? 1 : 0);
+        polling_ = true;
+        poll_until_ns_ = tsnx_driver_now_ns() + static_cast<uint64_t>(wait) * 1000000;
+        lock.unlock();
+        if (ticked && after_tick && *after_tick) (*after_tick)();
+        int rc = poll(fds, static_cast<nfds_t>(nfds), wait);
+        // Socket reads without the lock: each is an IPC on the Switch, and
+        // callers (an app reading video) would otherwise wait them out.
+        if (rc > 0) tsnx_driver_prefetch(driver_, fds);
+        {
+            std::lock_guard<std::mutex> gate(gate_mu_);
+            loop_wants_lock_.store(true, std::memory_order_release);
+        }
+        lock.lock();
+        {
+            std::lock_guard<std::mutex> gate(gate_mu_);
+            loop_wants_lock_.store(false, std::memory_order_release);
+        }
+        gate_cv_.notify_all();
+        polling_ = false;
+        if (nfds > n) {
+            // Only this thread closes the pair (under the lock, which
+            // callers need to send on it), so it is still the one polled.
+            if (fds[n].revents & (POLLERR | POLLHUP | POLLNVAL)) {
+                wake_gone_.store(true, std::memory_order_relaxed);
+            } else if (fds[n].revents & POLLIN) {
+                char buf[64];
+                for (;;) {
+                    const ssize_t r = recv(wake_rx_, buf, sizeof buf, 0);
+                    if (r > 0) continue;
+                    if (r < 0 && SocketGone(errno)) wake_gone_.store(true, std::memory_order_relaxed);
+                    break;
+                }
+            }
+        }
+        if (rc > 0) tsnx_driver_dispatch(driver_, fds);
+        // Socket readiness may have changed; let waiters re-check.
+        cv_.notify_all();
+    }
+}
+
+}  // namespace tsnx

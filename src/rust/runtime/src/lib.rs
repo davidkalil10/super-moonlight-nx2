@@ -71,6 +71,7 @@ pub mod upstream;
 pub mod video;
 
 pub use moonlight_nx2_core::frame_registration;
+pub use tsnx_ffi::*;
 
 #[unsafe(export_name = "moonlightMapPad")]
 pub extern "C" fn map_pad(

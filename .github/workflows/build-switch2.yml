@@ -1,0 +1,81 @@
+name: Build Super Moonlight NX2 (.nro)
+
+on:
+  push:
+    branches: [ main, master ]
+    tags: [ 'v*' ]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build-switch2:
+    name: Switch 2 (Moonlight NX2 + Tailscale)
+    runs-on: ubuntu-latest
+    container:
+      image: devkitpro/devkita64:20260219
+
+    steps:
+      - name: Install host utilities
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends python3 git ca-certificates curl xz-utils
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Cache Rust toolchain, Cargo registry, and ounce-devkit
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.rustup
+            ~/.cache/ounce-devkit
+          key: super-moonlight-nx2-rust-2026-02-09-v1
+
+      - name: Build Super Moonlight NX2 with integrated Tailscale
+        run: |
+          set -euo pipefail
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git config --global url."https://github.com/".insteadOf ssh://git@github.com/
+          rm -rf /tmp/super-moonlight-out
+          python3 -B src/rust/build-devkit.py --directory /tmp/super-moonlight-out
+          cp -f /tmp/super-moonlight-out/nro/moonlight-nx2.nro super-moonlight-nx2.nro
+          cp -f /tmp/super-moonlight-out/nro/moonlight-nx2.nro moonlight-nx2.nro
+          cp -f /tmp/super-moonlight-out/nro/moonlight-nx2.map super-moonlight-nx2.map
+
+      - name: Upload Super Moonlight NX2 NRO artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: super-moonlight-nx2-nro
+          path: |
+            super-moonlight-nx2.nro
+            moonlight-nx2.nro
+            super-moonlight-nx2.map
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub Release
+    needs: [ build-switch2 ]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download NRO artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: super-moonlight-nx2-nro
+          path: release-assets
+
+      - name: Publish Release Assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release-assets/super-moonlight-nx2.nro
+            release-assets/moonlight-nx2.nro
