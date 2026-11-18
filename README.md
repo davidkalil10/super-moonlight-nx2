@@ -195,15 +195,11 @@ Civilization VII payload, Node service and C helper this app replaced.
 
 ## Special thanks
 
-To [ave](https://gitlab.com/a), who made this possible.
-
-Thanks to kurumuz for [kaiHEN](https://github.com/ouncebrew/kaihen) and the
-[ounce SDK](https://github.com/ouncebrew/ounce-devkit), which make this app possible.
+- **[Azkali](https://gitlab.com/Azkali)** for creating [moonlight-nx2](https://gitlab.com/Azkali/moonlight-nx2).
+- **[UnderwaterOverground](https://github.com/UnderwaterOverground)** for creating [tailscale-nx](https://github.com/UnderwaterOverground/tailscale-nx).
+- **[ave](https://gitlab.com/a)** and **kurumuz** for [kaiHEN](https://github.com/ouncebrew/kaihen) and the [ounce SDK](https://github.com/ouncebrew/ounce-devkit), which make Nintendo Switch 2 homebrew possible.
 
 ## Licence
 
 See [LICENSE](LICENSE) and the [font licence](src/rust/ui/fonts/OFL.txt).
 
-## Support
-
-If you enjoy moonlight-nx2, you can support my work on [Ko-fi](https://ko-fi.com/azkali).
