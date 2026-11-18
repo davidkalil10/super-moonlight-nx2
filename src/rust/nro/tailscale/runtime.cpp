@@ -122,6 +122,7 @@ std::unique_ptr<Runtime> Runtime::Start(RuntimeConfig cfg, std::string *error) {
         self);
     if (!c.connect_map.empty()) tsnx_driver_set_connect_map(rt->driver_, c.connect_map.c_str());
     tsnx_driver_open_udp(rt->driver_, c.udp_port);  // failure: DERP only
+#ifndef __SWITCH__
     if (!c.taildrop_dir.empty()) {
         rt->drop_.reset(new TsnxDropDir());
         TsnxDropSink sink = tsnx_drop_dir(rt->drop_.get(), &tsnx_posix_fs, c.taildrop_dir.c_str(), nullptr, nullptr);
@@ -130,6 +131,7 @@ std::unique_ptr<Runtime> Runtime::Start(RuntimeConfig cfg, std::string *error) {
             return nullptr;
         }
     }
+#endif
     if (!MakeWakePair(&rt->wake_rx_, &rt->wake_tx_)) {
         *error = "cannot create wake sockets";
         return nullptr;
